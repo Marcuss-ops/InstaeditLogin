@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -173,6 +174,53 @@ func TestThumbnailProjects_SnapshotConflictHonorsIfMatch(t *testing.T) {
 	var body map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["code"] != "PROJECT_VERSION_CONFLICT" {
 		t.Fatalf("unexpected conflict body: %s", w.Body.String())
+	}
+}
+
+func TestThumbnailProjects_SnapshotConflictCarriesCurrentVersion(t *testing.T) {
+	store := &thumbnailProjectTestStore{snapshotErr: fmt.Errorf("%w: expected=8 current=9", repository.ErrThumbnailProjectConflict)}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/thumbnail-projects/thumbproj_test/snapshot?workspace_id=7", bytes.NewBufferString(`{"schema_version":1,"snapshot":{"canvas":{},"objects":[]},"renderer_version":"r1","base_version":8}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "PROJECT_VERSION_CONFLICT" {
+		t.Fatalf("unexpected conflict body: %s", w.Body.String())
+	}
+	if body["current_version"] != float64(9) {
+		t.Fatalf("want current_version=9, got %v", body["current_version"])
+	}
+}
+
+func TestThumbnailProjects_UpdateConflictOmitsUnknownCurrentVersion(t *testing.T) {
+	store := &thumbnailProjectTestStore{
+		project:   &models.ThumbnailProject{ID: "thumbproj_test", WorkspaceID: 7, CreatedBy: 1, Name: "Old", CanvasWidth: 1920, CanvasHeight: 1080, Status: models.ThumbnailProjectStatusDraft, Version: 4},
+		updateErr: fmt.Errorf("%w: project_id=thumbproj_test expected_version=3", repository.ErrThumbnailProjectConflict),
+	}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/thumbnail-projects/thumbproj_test?workspace_id=7", bytes.NewBufferString(`{"name":"New","version":3}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "PROJECT_VERSION_CONFLICT" {
+		t.Fatalf("unexpected conflict body: %s", w.Body.String())
+	}
+	if _, present := body["current_version"]; present {
+		t.Fatalf("current_version must be omitted when unknown, got %v", body["current_version"])
 	}
 }
 

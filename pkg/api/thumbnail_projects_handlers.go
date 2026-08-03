@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -89,10 +90,30 @@ func parseVersionPrecondition(w http.ResponseWriter, req *http.Request, bodyVers
 	return version, true
 }
 
+// conflictCurrentVersionRe extracts the live project version from
+// repository conflict errors of the form
+// "thumbnail project version conflict: expected=N current=M".
+var conflictCurrentVersionRe = regexp.MustCompile(`current=(\d+)`)
+
+// thumbnailConflictBody renders the 409 PROJECT_VERSION_CONFLICT body.
+// The live version is surfaced as structured `current_version` so the
+// editor can offer "reload latest version"; lifecycle CAS paths whose
+// errors do not report the current version omit the field rather than
+// sending a wrong value.
+func thumbnailConflictBody(err error) map[string]any {
+	body := map[string]any{"code": "PROJECT_VERSION_CONFLICT", "error": err.Error()}
+	if m := conflictCurrentVersionRe.FindStringSubmatch(err.Error()); len(m) == 2 {
+		if v, parseErr := strconv.ParseInt(m[1], 10, 64); parseErr == nil {
+			body["current_version"] = v
+		}
+	}
+	return body
+}
+
 func mapThumbnailRevisionError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, repository.ErrThumbnailProjectConflict):
-		writeJSON(w, http.StatusConflict, map[string]any{"code": "PROJECT_VERSION_CONFLICT", "error": err.Error()})
+		writeJSON(w, http.StatusConflict, thumbnailConflictBody(err))
 	case errors.Is(err, repository.ErrThumbnailProjectNotFound), errors.Is(err, repository.ErrThumbnailProjectRevisionNotFound):
 		writeError(w, http.StatusNotFound, "thumbnail project revision not found")
 	case errors.Is(err, repository.ErrThumbnailProjectInvalid):
@@ -246,7 +267,7 @@ func (r *Router) handleUpdateThumbnailProject(w http.ResponseWriter, req *http.R
 	if err := r.thumbnailProjectStore.UpdateCAS(req.Context(), project, body.Version); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrThumbnailProjectConflict):
-			writeJSON(w, http.StatusConflict, map[string]any{"code": "PROJECT_VERSION_CONFLICT", "error": err.Error()})
+			writeJSON(w, http.StatusConflict, thumbnailConflictBody(err))
 		default:
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 		}
@@ -419,7 +440,7 @@ func (r *Router) changeThumbnailProjectStatus(w http.ResponseWriter, req *http.R
 	if err := r.thumbnailProjectStore.UpdateStatusCAS(req.Context(), workspaceID, id, status, version); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrThumbnailProjectConflict):
-			writeJSON(w, http.StatusConflict, map[string]any{"code": "PROJECT_VERSION_CONFLICT", "error": err.Error()})
+			writeJSON(w, http.StatusConflict, thumbnailConflictBody(err))
 		case errors.Is(err, repository.ErrThumbnailProjectNotFound):
 			writeError(w, http.StatusNotFound, "thumbnail project not found")
 		case errors.Is(err, repository.ErrThumbnailProjectInvalid):

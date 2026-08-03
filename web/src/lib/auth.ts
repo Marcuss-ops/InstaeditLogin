@@ -82,10 +82,19 @@ export class AuthError extends Error {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /**
+   * Parsed JSON error body when the server replied with JSON, so
+   * callers can read structured fields (e.g. the 409
+   * `PROJECT_VERSION_CONFLICT` `current_version`). Undefined when the
+   * body was not JSON. Additive — existing `new ApiError(status,
+   * message)` call sites are unaffected.
+   */
+  data?: unknown;
+  constructor(status: number, message: string, data?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -168,17 +177,21 @@ export async function authedFetch(
 
   if (!response.ok) {
     let message = `request failed (status ${response.status})`;
+    let data: unknown;
     try {
-      const data = (await response.json()) as { error?: string };
-      if (data?.error) message = data.error;
+      data = await response.json();
+      if (data && typeof data === "object" && "error" in data) {
+        const errorField = (data as { error?: unknown }).error;
+        if (typeof errorField === "string" && errorField) message = errorField;
+      }
     } catch {
-      // body wasn't JSON
+      // body wasn't JSON — data stays undefined
     }
     // Auto-emit BEFORE the throw so the global toast viewport
     // picks up errors even on pages that forget to render a
     // bespoke error state.
     toastBus.push("error", message);
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, data);
   }
 
   return response;
