@@ -329,19 +329,30 @@ func TestHandleGetAccount_NoSession_401(t *testing.T) {
 	}
 }
 
-// TestHandleDeleteAccount_Happy_204 verifies: 204 No Content + vault.Revoke
-// was called + account row was updated to status='disconnected' +
-// auditLogStore fired (when present).
+// TestHandleDeleteAccount_Happy_204 verifies: 204 No Content + the
+// shared-grant check ran (count == 0 → last channel on the grant) +
+// vault.Revoke was called + account row was updated to
+// status='disconnected' + auditLogStore fired (when present).
 func TestHandleDeleteAccount_Happy_204(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	owner := ownedAccountFixture(1, "instagram")
+	connID := int64(55)
+	owner.OAuthConnectionID = &connID
 
 	var revokeCalled bool
 	var revokeAccountID int64
+	var countConnection, countExclude int64
+	var countCalled bool
 	var updatedAccount *models.PlatformAccount
 	store := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
 			return owner, nil
+		},
+		countActiveOnConnectionFn: func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+			countCalled = true
+			countConnection = oauthConnectionID
+			countExclude = excludeAccountID
+			return 0, nil // last active channel on the grant → revoke is safe
 		},
 		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
 			updatedAccount = a
@@ -364,6 +375,12 @@ func TestHandleDeleteAccount_Happy_204(t *testing.T) {
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("want 204 No Content, got %d: %s", w.Code, w.Body.String())
+	}
+	if !countCalled {
+		t.Fatal("CountActiveAccountsOnConnection was NOT called — shared-grant check skipped")
+	}
+	if countConnection != 55 || countExclude != 21 {
+		t.Errorf("CountActiveAccountsOnConnection: want (55, 21), got (%d, %d)", countConnection, countExclude)
 	}
 	if !revokeCalled {
 		t.Fatal("vault.Revoke was NOT called — local token cleanup skipped")
@@ -391,9 +408,15 @@ func TestHandleDeleteAccount_Happy_204(t *testing.T) {
 func TestHandleDeleteAccount_VaultRevokeError_500(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	owner := ownedAccountFixture(1, "instagram")
+	connID := int64(55)
+	owner.OAuthConnectionID = &connID
 	store := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
 			return owner, nil
+		},
+		// Last active channel on the grant → vault.Revoke runs and fails.
+		countActiveOnConnectionFn: func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+			return 0, nil
 		},
 		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
 			t.Errorf("UpdatePlatformAccount MUST NOT be called when vault.Revoke fails (transaction consistency); got status=%s", a.Status)
@@ -491,12 +514,18 @@ func TestHandleDeleteAccount_NoSession_401(t *testing.T) {
 func TestHandleDeleteAccount_YouTube_RemoteRevoke_BeforeLocalCleanup(t *testing.T) {
 	svc := &mockProvider{platform: "youtube"}
 	owner := ownedAccountFixture(1, "youtube")
+	connID := int64(55)
+	owner.OAuthConnectionID = &connID
 
 	var remoteRevokeCalls int
 	var revokedToken string
 	store := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
 			return owner, nil
+		},
+		// Last active channel on the grant → remote + local revoke run.
+		countActiveOnConnectionFn: func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+			return 0, nil
 		},
 		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
 			return nil
@@ -541,11 +570,17 @@ func TestHandleDeleteAccount_YouTube_RemoteRevoke_BeforeLocalCleanup(t *testing.
 func TestHandleDeleteAccount_YouTube_RemoteRevokeFailure_Still204(t *testing.T) {
 	svc := &mockProvider{platform: "youtube"}
 	owner := ownedAccountFixture(1, "youtube")
+	connID := int64(55)
+	owner.OAuthConnectionID = &connID
 
 	var localRevokeCalled bool
 	store := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
 			return owner, nil
+		},
+		// Last active channel on the grant → remote revoke attempted.
+		countActiveOnConnectionFn: func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+			return 0, nil
 		},
 		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
 			return nil
@@ -577,6 +612,174 @@ func TestHandleDeleteAccount_YouTube_RemoteRevokeFailure_Still204(t *testing.T) 
 	}
 	if !localRevokeCalled {
 		t.Error("local vault.Revoke must run even when the remote revoke fails")
+	}
+}
+
+// TestHandleDeleteAccount_SharedGrant_SiblingActive_KeepsGrant pins the
+// P0 shared-grant fix: disconnecting ONE channel of a grant still used by
+// an active sibling MUST NOT revoke the grant — neither the remote
+// provider revoke (which would kill the sibling's refresh token at Google)
+// nor the local vault.Revoke (which would delete the sibling's token rows).
+// The account still soft-disconnects (status='disconnected') so the row
+// drops out of every publishable surface.
+func TestHandleDeleteAccount_SharedGrant_SiblingActive_KeepsGrant(t *testing.T) {
+	svc := &mockProvider{platform: "youtube"}
+	owner := ownedAccountFixture(1, "youtube")
+	connID := int64(55)
+	owner.OAuthConnectionID = &connID
+
+	var revokeCalled, remoteRevokeCalled bool
+	var countConnection, countExclude int64
+	var updatedAccount *models.PlatformAccount
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		countActiveOnConnectionFn: func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+			countConnection = oauthConnectionID
+			countExclude = excludeAccountID
+			return 1, nil // one active sibling (e.g. WWE France) still uses the grant
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			updatedAccount = a
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			revokeCalled = true
+			return nil
+		},
+		getRefreshTokenFn: func(ctx context.Context, platformAccountID int64) (string, error) {
+			return "yt-decoded-refresh-token", nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	r.youtubeRevoker = &fakeYouTubeRevoker{
+		revokeFn: func(ctx context.Context, token string) error {
+			remoteRevokeCalled = true
+			return nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204 No Content, got %d: %s", w.Code, w.Body.String())
+	}
+	if countConnection != 55 || countExclude != 21 {
+		t.Errorf("CountActiveAccountsOnConnection: want (55, 21), got (%d, %d)", countConnection, countExclude)
+	}
+	if revokeCalled {
+		t.Error("vault.Revoke MUST NOT be called when an active sibling still uses the grant")
+	}
+	if remoteRevokeCalled {
+		t.Error("remote YouTube revoke MUST NOT be called when an active sibling still uses the grant (would kill the sibling's refresh token)")
+	}
+	if updatedAccount == nil || updatedAccount.Status != models.AccountStatusDisconnected {
+		t.Errorf("account must still soft-disconnect: got %+v", updatedAccount)
+	}
+}
+
+// TestHandleDeleteAccount_CountError_FailClosed_500 pins the fail-closed
+// branch: if the shared-grant inspection itself errors, the handler must
+// refuse the disconnect (500) and MUST NOT touch the vault or the account
+// row — deleting (or keeping) grant tokens on a guess is never safe.
+func TestHandleDeleteAccount_CountError_FailClosed_500(t *testing.T) {
+	svc := &mockProvider{platform: "youtube"}
+	owner := ownedAccountFixture(1, "youtube")
+	connID := int64(55)
+	owner.OAuthConnectionID = &connID
+
+	var revokeCalled, updateCalled bool
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		countActiveOnConnectionFn: func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+			return 0, fmt.Errorf("db unreachable")
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			updateCalled = true
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			revokeCalled = true
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("count error: want 500 (fail-closed), got %d: %s", w.Code, w.Body.String())
+	}
+	if revokeCalled {
+		t.Error("vault.Revoke MUST NOT be called when the shared-grant check fails")
+	}
+	if updateCalled {
+		t.Error("UpdatePlatformAccount MUST NOT be called when the shared-grant check fails")
+	}
+}
+
+// TestHandleDeleteAccount_NoConnection_SkipsGrantWork_204 pins the
+// pre-043 / already-revoked legacy path: an account without an
+// oauth_connection has no grant to revoke, so the disconnect must
+// complete without touching the vault or the sibling-count query
+// (previously vault.Revoke 500'd on its no-connection error).
+func TestHandleDeleteAccount_NoConnection_SkipsGrantWork_204(t *testing.T) {
+	svc := &mockProvider{platform: "youtube"}
+	owner := ownedAccountFixture(1, "youtube") // OAuthConnectionID nil
+
+	var revokeCalled, countCalled bool
+	var updatedAccount *models.PlatformAccount
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		countActiveOnConnectionFn: func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+			countCalled = true
+			return 0, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			updatedAccount = a
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			revokeCalled = true
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	r.youtubeRevoker = &fakeYouTubeRevoker{}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204 No Content, got %d: %s", w.Code, w.Body.String())
+	}
+	if countCalled {
+		t.Error("CountActiveAccountsOnConnection MUST NOT be called for an account without oauth_connection_id")
+	}
+	if revokeCalled {
+		t.Error("vault.Revoke MUST NOT be called for an account without oauth_connection_id (nothing to revoke)")
+	}
+	if updatedAccount == nil || updatedAccount.Status != models.AccountStatusDisconnected {
+		t.Errorf("account must still soft-disconnect: got %+v", updatedAccount)
 	}
 }
 

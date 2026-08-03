@@ -57,6 +57,29 @@ func (r *UserRepository) MarkReauthRequired(ctx context.Context, id int64, code,
 	return nil
 }
 
+// CountActiveAccountsOnConnection returns the number of platform_accounts
+// with status='active' that share the supplied OAuth grant
+// (oauth_connection_id), excluding excludeAccountID (the account being
+// disconnected). The disconnect orchestrator (pkg/api handleDeleteAccount)
+// uses this to decide whether the grant tokens may be deleted: migrations
+// 084/085 let several channels share one oauth_connection, so vault.Revoke
+// + remote provider revoke may only run when this count is 0 — otherwise
+// the sibling channels would be left 'active' with no usable credentials.
+func (r *UserRepository) CountActiveAccountsOnConnection(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+	var n int64
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*)
+		   FROM platform_accounts
+		  WHERE oauth_connection_id = $1
+		    AND id <> $2
+		    AND status = 'active'`,
+		oauthConnectionID, excludeAccountID,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count active accounts on connection %d: %w", oauthConnectionID, err)
+	}
+	return n, nil
+}
+
 // MarkOAuthConnectionAccountsReauthRequired marks every YouTube channel
 // attached to the supplied OAuth grant. The caller passes the canonical
 // oauth_connections.id directly; no platform-account lookup is needed and

@@ -280,6 +280,10 @@ type mockUserStore struct {
 	// Tests that exercise the 422/409 path override this; the others
 	// get the default (no-op) below.
 	markReauthRequiredFn func(ctx context.Context, accountID int64, code, message string) error
+	// countActiveOnConnectionFn (P0 — shared-grant disconnect) returns
+	// the number of still-active sibling channels sharing the account's
+	// grant. Default 0 (single-account grants) unless overridden.
+	countActiveOnConnectionFn func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error)
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -363,6 +367,17 @@ func (m *mockUserStore) MarkReauthRequired(ctx context.Context, accountID int64,
 		return m.markReauthRequiredFn(ctx, accountID, code, message)
 	}
 	return nil
+}
+
+// CountActiveAccountsOnConnection (P0 — shared-grant disconnect)
+// returns the number of still-active sibling channels sharing the
+// account's OAuth grant. Default 0 (single-account grant → the
+// disconnect may revoke) unless a test overrides countActiveOnConnectionFn.
+func (m *mockUserStore) CountActiveAccountsOnConnection(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error) {
+	if m.countActiveOnConnectionFn != nil {
+		return m.countActiveOnConnectionFn(ctx, oauthConnectionID, excludeAccountID)
+	}
+	return 0, nil
 }
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.

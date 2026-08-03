@@ -110,6 +110,13 @@ type UserStore interface {
 	// blocked_auth on them independently. Idempotent on the DB
 	// side (re-flips with a fresh reauth_required_at on each call).
 	MarkReauthRequired(ctx context.Context, accountID int64, code, message string) error
+	// CountActiveAccountsOnConnection (P0 — shared-grant disconnect)
+	// returns the number of still-active sibling channels sharing the
+	// account's OAuth grant (oauth_connection_id), excluding the account
+	// being disconnected. 0 → the disconnect may safely revoke the grant
+	// (remote provider revoke + local token delete); >0 → the grant
+	// tokens MUST be preserved for the siblings (migrations 084/085).
+	CountActiveAccountsOnConnection(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error)
 }
 
 type WorkspaceStore interface {

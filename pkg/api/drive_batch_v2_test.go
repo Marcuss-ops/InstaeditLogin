@@ -145,6 +145,10 @@ func (m *stubUserStoreV2) MarkReauthRequired(context.Context, int64, string, str
 	return nil
 }
 
+func (m *stubUserStoreV2) CountActiveAccountsOnConnection(context.Context, int64, int64) (int64, error) {
+	return 0, nil // not exercised by handleDriveBatchImportV2; satisfies UserStore contract
+}
+
 func (m *stubUserStoreV2) ListFilteredYouTubeAccounts(int64, *int64, string, string, string) ([]*models.PlatformAccount, error) {
 	return nil, nil
 }

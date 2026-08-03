@@ -49,6 +49,56 @@ func TestUserRepository_MarkOAuthConnectionAccountsReauthRequired_UsesGrantID(t 
 	}
 }
 
+func TestUserRepository_CountActiveAccountsOnConnection_CountsActiveSiblings(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+
+	mock.ExpectQuery(
+		`SELECT COUNT(*)
+		   FROM platform_accounts
+		  WHERE oauth_connection_id = $1
+		    AND id <> $2
+		    AND status = 'active'`,
+	).WithArgs(int64(55), int64(21)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	got, err := repo.CountActiveAccountsOnConnection(context.Background(), 55, 21)
+	if err != nil {
+		t.Fatalf("CountActiveAccountsOnConnection: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("count: want 1 (one active sibling), got %d", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUserRepository_CountActiveAccountsOnConnection_ZeroWhenLastChannel(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+
+	mock.ExpectQuery(
+		`SELECT COUNT(*)
+		   FROM platform_accounts
+		  WHERE oauth_connection_id = $1
+		    AND id <> $2
+		    AND status = 'active'`,
+	).WithArgs(int64(55), int64(21)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	got, err := repo.CountActiveAccountsOnConnection(context.Background(), 55, 21)
+	if err != nil {
+		t.Fatalf("CountActiveAccountsOnConnection: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("count: want 0 (last channel on the grant), got %d", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 // TestUserRepository_Update_Success locks in the happy path: 1 row
 // affected → nil error. The updated_at argument is non-deterministic
 // (time.Now() in prod code), so sqlmock.AnyArg absorbs it.

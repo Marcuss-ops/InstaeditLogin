@@ -215,6 +215,10 @@ func (f *fakeUserStore) MarkReauthRequired(ctx context.Context, accountID int64,
 	return nil
 }
 
+func (f *fakeUserStore) CountActiveAccountsOnConnection(context.Context, int64, int64) (int64, error) {
+	return 0, nil // single-account grants in this suite; never exercised
+}
+
 func (f *fakeUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error) {
 	return nil, nil
 }

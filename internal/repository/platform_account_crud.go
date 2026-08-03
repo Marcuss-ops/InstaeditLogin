@@ -65,21 +65,30 @@ func (r *UserRepository) CreatePlatformAccount(account *models.PlatformAccount) 
 //
 // Used by background workers (publish worker) that need to look up an
 // account knowing only its id, typically from a post_targets join row.
+//
+// The row's oauth_connection_id (the OAuth grant lineage, migrations
+// 084/085) is populated too — the shared-grant disconnect flow
+// (pkg/api handleDeleteAccount) gates its grant revocation on it.
+// Legacy rows attached before migration 043 (or with a revoked grant)
+// carry NULL and surface as OAuthConnectionID == nil.
 func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
 	account := &models.PlatformAccount{}
 	var metadata []byte
+	var oauthConnectionID int64
 	err := r.db.QueryRow(
 		`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
 		        last_validated_at, last_refresh_at, reauth_required_at,
 		        COALESCE(last_error_code, '') AS last_error_code,
 		        COALESCE(last_error_message, '') AS last_error_message,
-		        metadata, created_at, updated_at
+		        metadata, created_at, updated_at,
+		        COALESCE(oauth_connection_id, 0) AS oauth_connection_id
 		 FROM platform_accounts
 		 WHERE id = $1`, id,
 	).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
 		&account.Username, &account.Status, &account.ConnectedAt, &account.LastValidatedAt,
 		&account.LastRefreshAt, &account.ReauthRequiredAt, &account.LastErrorCode,
-		&account.LastErrorMessage, &metadata, &account.CreatedAt, &account.UpdatedAt)
+		&account.LastErrorMessage, &metadata, &account.CreatedAt, &account.UpdatedAt,
+		&oauthConnectionID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -87,6 +96,9 @@ func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAcco
 		return nil, fmt.Errorf("failed to find platform account by id: %w", err)
 	}
 	account.Metadata = scanMetadata(metadata)
+	if oauthConnectionID != 0 {
+		account.OAuthConnectionID = &oauthConnectionID
+	}
 	return account, nil
 }
 

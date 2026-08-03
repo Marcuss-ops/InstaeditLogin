@@ -45,6 +45,9 @@ func (*browserSmokeUserStore) FinalizeAttach(context.Context, int64, []string) (
 func (*browserSmokeUserStore) MarkReauthRequired(context.Context, int64, string, string) error {
 	return nil
 }
+func (*browserSmokeUserStore) CountActiveAccountsOnConnection(context.Context, int64, int64) (int64, error) {
+	return 0, nil // not exercised by the browser smoke suite
+}
 
 // -----------------------------------------------------------------------------
 // schemaCopyFromProductionSessionsRow — bootstrap the e2e container's

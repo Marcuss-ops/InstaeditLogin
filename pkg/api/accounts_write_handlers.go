@@ -42,8 +42,18 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 // handleDeleteAccount soft-disconnects a platform account. Steps:
 //
 //  1. loadOwnAccountByID (auth + ownership + 404 on cross-tenant).
-//  2. vault.Revoke → deletes every encrypted token row for the
-//     account. Idempotent: the vault swallows ErrTokenNotFound.
+//  2. Shared-grant awareness (P0): migrations 084/085 let several
+//     platform_accounts share one oauth_connection (one Google grant,
+//     many channels). Count the still-active sibling channels on the
+//     same grant, excluding this account. Only when this is the LAST
+//     active channel (count == 0) do we revoke the grant:
+//     a. best-effort remote revoke at the provider (YouTube only) —
+//     revoking the refresh token on Google would otherwise kill
+//     every sibling channel, so it is gated on last-on-grant too;
+//     b. vault.Revoke → deletes every encrypted token row for the
+//     connection. Idempotent: the vault swallows ErrTokenNotFound.
+//     When siblings remain active, BOTH revokes are skipped so the
+//     grant keeps working for them.
 //  3. Soft-disconnect: status='disconnected' on the account row +
 //     last_error_code='DISCONNECTED' for operator dashboards. The
 //     row stays so the audit trail (user_id, platform, platform_user_id,
@@ -59,12 +69,28 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 // transition is needed (Taglio 1.4 contract is implicit failure via
 // worker, not synchronous transition via handler).
 //
-// Best-effort remote revoke at the provider: for YouTube the Router's
-// youtubeRevoker (discovered from the concrete provider at wiring time)
-// revokes the decoded refresh token on Google's
-// https://oauth2.googleapis.com/revoke endpoint BEFORE the local
-// vault.Revoke deletes the token material. Remote-revoke failure is
-// non-fatal — the local disconnect still completes.
+// Accounts without an oauth_connection (pre-043 legacy attach or an
+// already-revoked grant) skip the grant work entirely — there is
+// nothing to revoke — and disconnect cleanly.
+//
+// Workspace unlinking is implicit in the status flip: the workspace
+// channel listings and the delivery target resolver treat
+// 'disconnected' like 'deleted' (accounts_state.go /
+// target_resolver_group.go), so the channel disappears from every
+// publishable surface without touching workspace_channels rows (the
+// audit row stays for compliance).
+//
+// The sibling-count → revoke decision is NOT atomic with the later
+// vault.Revoke (a small TOCTOU window). The failure direction is
+// SAFE: two concurrent disconnects of sibling channels both see the
+// other as an active sibling and both skip the revoke — the grant
+// tokens are orphaned but never deleted out from under a live
+// channel. Do NOT turn this into "revoke on a stale count" without
+// taking the per-grant advisory lock (the one vault.Renew uses)
+// around the count + revoke pair.
+//
+// Remote-revoke failure is non-fatal: the local disconnect still
+// completes (the account row flips to 'disconnected' either way).
 func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
@@ -74,25 +100,46 @@ func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	// Best-effort remote revocation at the provider BEFORE the local
-	// vault.Revoke (which deletes the token material needed to revoke).
-	// Google's oauth2.googleapis.com/revoke accepts the refresh token;
-	// the YouTubeRevoker contract requires exactly that decoded value.
-	// A remote-revoke failure must not block the disconnect.
-	if account.Platform == models.PlatformYouTube && r.youtubeRevoker != nil {
-		if reader, ok := r.vault.(RefreshTokenReader); ok {
-			if refreshToken, rerr := reader.GetRefreshToken(req.Context(), account.ID); rerr == nil && refreshToken != "" {
-				if revErr := r.youtubeRevoker.Revoke(req.Context(), refreshToken); revErr != nil {
-					slog.WarnContext(req.Context(), "best-effort remote YouTube token revoke failed (continuing with local disconnect)",
-						"platform_account_id", account.ID, "error", revErr)
+	ctx := req.Context()
+
+	// Shared-grant awareness: only revoke the grant when this account
+	// is the LAST active channel on it. A count error is a fail-closed
+	// 500 — we must never delete (or keep) grant tokens on a guess.
+	lastOnGrant := false
+	if account.OAuthConnectionID != nil {
+		activeSiblings, err := r.userRepo.CountActiveAccountsOnConnection(ctx, *account.OAuthConnectionID, account.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to inspect shared grant: "+err.Error())
+			return
+		}
+		lastOnGrant = activeSiblings == 0
+	}
+
+	if lastOnGrant {
+		// Best-effort remote revocation at the provider BEFORE the
+		// local vault.Revoke (which deletes the token material needed
+		// to revoke). Google's oauth2.googleapis.com/revoke accepts
+		// the refresh token; the YouTubeRevoker contract requires
+		// exactly that decoded value. Gated on last-on-grant: revoking
+		// the refresh token at Google would also kill every sibling
+		// channel still using the grant. A remote-revoke failure must
+		// not block the disconnect.
+		if account.Platform == models.PlatformYouTube && r.youtubeRevoker != nil {
+			if reader, ok := r.vault.(RefreshTokenReader); ok {
+				if refreshToken, rerr := reader.GetRefreshToken(ctx, account.ID); rerr == nil && refreshToken != "" {
+					if revErr := r.youtubeRevoker.Revoke(ctx, refreshToken); revErr != nil {
+						slog.WarnContext(ctx, "best-effort remote YouTube token revoke failed (continuing with local disconnect)",
+							"platform_account_id", account.ID, "error", revErr)
+					}
 				}
 			}
 		}
+		if err := r.vault.Revoke(ctx, account.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "vault revoke failed: "+err.Error())
+			return
+		}
 	}
-	if err := r.vault.Revoke(req.Context(), account.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "vault revoke failed: "+err.Error())
-		return
-	}
+
 	account.Status = models.AccountStatusDisconnected
 	account.ConnectedAt = nil
 	account.LastErrorCode = "DISCONNECTED"
@@ -101,6 +148,6 @@ func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update account: "+err.Error())
 		return
 	}
-	r.auditAccountEvent(req.Context(), "account.disconnected", identity, account)
+	r.auditAccountEvent(ctx, "account.disconnected", identity, account)
 	w.WriteHeader(http.StatusNoContent)
 }

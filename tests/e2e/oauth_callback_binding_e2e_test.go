@@ -200,6 +200,9 @@ func (s *mockUserStore) MarkReauthRequired(_ context.Context, _ int64, code, _ s
 	s.markReauth.record(code)
 	return nil
 }
+func (s *mockUserStore) CountActiveAccountsOnConnection(context.Context, int64, int64) (int64, error) {
+	return 0, nil // not exercised by the callback bind suite
+}
 
 // ---------------------------------------------------------------------------
 // jwtIssuer — minimal HS256 JWT signer. Mirrors what
