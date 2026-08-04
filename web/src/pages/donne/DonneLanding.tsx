@@ -22,7 +22,7 @@ import { SEO } from "./content";
  *   riusano quelli del sito principale, così la pagina resta isolata.
  * - Gli screenshot dei risultati riusano le stesse foto della landing
  *   principale InstaEdit tramite `components/landing/ResultsGallery.tsx`.
- * - Route: /donne (vedi App.tsx).
+ * - Route: /donnetube (vedi App.tsx).
  */
 export function DonneLanding() {
   return (

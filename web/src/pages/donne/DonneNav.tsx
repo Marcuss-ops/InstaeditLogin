@@ -38,7 +38,7 @@ export function DonneNav() {
     <nav className="fixed top-0 left-0 right-0 z-50">
       <div className="surface-glass border-b border-white/10">
         <div className="mx-auto max-w-7xl h-16 px-6 flex items-center justify-between">
-          <Link to="/donne" className="flex items-center gap-2 group" onClick={close}>
+          <Link to="/donnetube" className="flex items-center gap-2 group" onClick={close}>
             <span className="inline-flex w-7 h-7 items-center justify-center rounded-md bg-gradient-to-br from-pink-500 to-rose-500 text-white shadow-[0_0_24px_-6px_rgba(244,63,94,0.5)] group-hover:shadow-[0_0_32px_-4px_rgba(244,63,94,0.7)] transition-shadow">
               <Bot className="w-4 h-4" />
             </span>

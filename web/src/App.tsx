@@ -138,7 +138,12 @@ function App() {
             {/* Landing indipendente per donne (contenuti in italiano).
                 Va prima del fallback /:slug per non essere catturata
                 dal router delle piattaforme. */}
-            <Route path="/donne" element={<DonneLanding />} />
+            <Route path="/donnetube" element={<DonneLanding />} />
+            {/* Redirect dei vecchi link /donne verso /donnetube. */}
+            <Route
+              path="/donne"
+              element={<Navigate to="/donnetube" replace />}
+            />
 
             <Route
               path="/connections"

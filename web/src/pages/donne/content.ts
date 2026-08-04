@@ -14,7 +14,7 @@ export const SEO = {
   title: "DonneTube — I Tuoi Primi $2.000/Mese Con I Video Faceless",
   description:
     "Trasforma YouTube in un flusso di cassa semi-automatico da casa. Pipeline 90% eseguita dall'AI, monetizzazione sbloccata in pochi giorni e affiancamento 1-on-1 per donne che partono da zero.",
-  canonical: "https://app.instaedit.org/donne",
+  canonical: "https://app.instaedit.org/donnetube",
 } as const;
 
 export const NAV = {

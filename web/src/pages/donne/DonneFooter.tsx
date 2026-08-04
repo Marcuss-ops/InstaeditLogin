@@ -11,7 +11,7 @@ export function DonneFooter() {
     <footer id="contatti" className="relative border-t border-white/10 bg-[#08080d]">
       <div className="mx-auto max-w-7xl px-6 py-16 grid gap-12 lg:grid-cols-12">
         <div className="lg:col-span-6">
-          <Link to="/donne" className="flex items-center gap-2">
+          <Link to="/donnetube" className="flex items-center gap-2">
             <span className="inline-flex w-8 h-8 items-center justify-center rounded-lg bg-gradient-to-br from-pink-500 to-rose-500 text-white">
               <Bot className="w-4 h-4" />
             </span>

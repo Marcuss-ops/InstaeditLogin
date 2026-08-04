@@ -12,7 +12,7 @@ const COLS: Array<{ heading: string; links: Array<{ l: string; to?: string; href
       { l: "For agencies", href: "/#agency" },
       { l: "Programs", to: "/programs" },
       { l: "Mentoring", to: "/mentoring" },
-      { l: "For women", to: "/donne" },
+      { l: "For women", to: "/donnetube" },
     ],
   },
   {

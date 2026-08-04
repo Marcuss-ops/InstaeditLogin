@@ -27,7 +27,7 @@ const NAV_LINKS = [
   { label: "Agencies", href: "/#agency" },
   { label: "Programs", to: "/programs" },
   { label: "Mentoring", to: "/mentoring" },
-  { label: "For women", to: "/donne" },
+  { label: "For women", to: "/donnetube" },
   { label: "About us", href: "/#who-are-we" },
 ];
 
