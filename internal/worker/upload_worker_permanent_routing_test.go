@@ -212,6 +212,43 @@ func TestHandleProcessingError_TransientError_HonorsRetryBudget(t *testing.T) {
 // (errors.Is(err, repository.ErrUploadJobLeaseLost) → return, no
 // Mark* call) and serves as a tripwire if a future change accidentally
 // routes lease-loss into the dead-letter or retry branch.
+func TestHandleProcessingError_RetryAfterOverridesBackoff(t *testing.T) {
+	store := &fakeUploadJobStoreForRouting{}
+	w := &UploadWorker{
+		jobRepo: store,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	const retryAfter = 90 * time.Second
+	before := time.Now()
+	w.handleProcessingError(context.Background(), "upload", "upload-test-worker", &models.UploadJob{
+		ID: 9004, AttemptCount: 2, MaxAttempts: 8,
+	}, &services.RateLimitError{RetryAfter: retryAfter})
+	after := time.Now()
+
+	if got := store.markRetryCalls.Load(); got != 1 {
+		t.Fatalf("MarkRetry was called %d times; want 1", got)
+	}
+	if got := store.markDeadLetterCalls.Load(); got != 0 {
+		t.Fatalf("MarkDeadLetter was called %d times; want 0", got)
+	}
+	if got := store.lastRetryArgs.nextAt; got.Before(before.Add(retryAfter)) || got.After(after.Add(retryAfter)) {
+		t.Fatalf("nextAttemptAt = %v; want now + Retry-After (%v..%v)", got, before.Add(retryAfter), after.Add(retryAfter))
+	}
+}
+
+func TestComputeUploadBackoff_IsJitteredWithinBounds(t *testing.T) {
+	const attempt = 3
+	const base = 5 * time.Second
+	const upper = 45 * time.Second
+	for i := 0; i < 100; i++ {
+		got := computeUploadBackoff(attempt)
+		if got < base || got > upper {
+			t.Fatalf("sample %d: backoff = %v; want [%v, %v]", i, got, base, upper)
+		}
+	}
+}
+
 func TestHandleProcessingError_UploadLeaseLost_DropsSilently(t *testing.T) {
 	store := &fakeUploadJobStoreForRouting{}
 	w := &UploadWorker{

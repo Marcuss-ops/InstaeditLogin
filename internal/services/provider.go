@@ -132,6 +132,54 @@ type RateLimitError struct {
 	RetryAfter time.Duration
 }
 
+// RetryAfterDuration exposes the provider-supplied delay through the
+// common retry-after carrier used by workers. Keeping this method on
+// the typed error preserves the existing public fields and callers.
+func (e *RateLimitError) RetryAfterDuration() time.Duration {
+	if e == nil {
+		return 0
+	}
+	return e.RetryAfter
+}
+
+// RetryAfterError preserves a Retry-After hint from an HTTP operation
+// that is not necessarily a rate-limit response (for example a 503).
+// The worker can reschedule the durable job without guessing from the
+// error string, while Unwrap keeps the original failure available.
+type RetryAfterError struct {
+	Err   error
+	Delay time.Duration
+}
+
+func (e *RetryAfterError) Error() string {
+	if e == nil {
+		return "retryable provider error"
+	}
+	if e.Err == nil {
+		return fmt.Sprintf("retryable provider error: retry after %s", e.Delay)
+	}
+	return fmt.Sprintf("%s: retry after %s", e.Err, e.Delay)
+}
+
+func (e *RetryAfterError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *RetryAfterError) RetryAfterDuration() time.Duration {
+	if e == nil || e.Delay <= 0 {
+		return 0
+	}
+	return e.Delay
+}
+
+// ErrPermanentUpload marks an upload response that cannot be fixed by
+// retrying the same request (for example YouTube resumable-upload 4xx,
+// excluding 429). The worker maps it to its durable dead-letter path.
+var ErrPermanentUpload = errors.New("permanent upload error")
+
 // Error implements the error interface. Includes the RetryAfter so
 // the worker's log line on rate-limit-hit is self-describing.
 func (e *RateLimitError) Error() string {
@@ -171,13 +219,9 @@ func RetryAfterFromError(err error) time.Duration {
 	if err == nil {
 		return 0
 	}
-	var rle *RateLimitError
-	if errors.As(err, &rle) {
-		return rle.RetryAfter
-	}
-	var pe *ProviderError
-	if errors.As(err, &pe) && pe.Code == ErrorCodeRateLimited {
-		return pe.RetryAfter
+	var carrier interface{ RetryAfterDuration() time.Duration }
+	if errors.As(err, &carrier) {
+		return carrier.RetryAfterDuration()
 	}
 	return 0
 }

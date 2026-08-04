@@ -242,24 +242,28 @@ func (s *YouTubeOAuthService) putChunk(ctx context.Context, uploadURL string, da
 
 	case resp.StatusCode == http.StatusTooManyRequests:
 		// 429 — always retryable. The server's Retry-After (if
-		// any) is parsed above; when > 0 the caller honors it.
-		return "", retryAfter, true, fmt.Errorf("rate limited (status 429, retry_after=%s)", retryAfter)
+		// any) is used inside the chunk loop and also propagated to
+		// the durable upload-job retry scheduler after exhaustion.
+		return "", retryAfter, true, &RetryAfterError{
+			Err:   fmt.Errorf("rate limited (status 429, retry_after=%s)", retryAfter),
+			Delay: retryAfter,
+		}
 
 	case resp.StatusCode >= 500:
 		// 5xx — retryable. Honor Retry-After when present, fall
 		// back to the configured exp backoff otherwise.
-		if retryAfter > 0 {
-			return "", retryAfter, true, fmt.Errorf("server error (status %d, retry_after=%s)", resp.StatusCode, retryAfter)
+		return "", retryAfter, true, &RetryAfterError{
+			Err:   fmt.Errorf("server error (status %d, retry_after=%s)", resp.StatusCode, retryAfter),
+			Delay: retryAfter,
 		}
-		return "", 0, true, fmt.Errorf("server error (status %d)", resp.StatusCode)
 
 	default:
 		// 4xx (excluding 429) — permanent client error. YouTube's
 		// docs are clear: bad metadata, body validation errors, etc.
-		// won't fix themselves on retry. Bubble up so the outer
-		// upload-job worker can MarkDeadLetter on attempt 1 with
-		// error_code = 'youtube_error'.
-		return "", 0, false, fmt.Errorf("unexpected PUT response (status %d)", resp.StatusCode)
+		// won't fix themselves on retry. Bubble up with a typed
+		// sentinel so the outer upload-job worker dead-letters the
+		// job on the first claim instead of burning its retry budget.
+		return "", 0, false, fmt.Errorf("%w: unexpected PUT response (status %d)", ErrPermanentUpload, resp.StatusCode)
 	}
 }
 

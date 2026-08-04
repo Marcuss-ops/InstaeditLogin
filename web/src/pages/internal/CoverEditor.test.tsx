@@ -508,13 +508,32 @@ describe("CoverEditorPage", () => {
     expect(snapshotBody.snapshot.objects).toHaveLength(1); // the Testo object
   });
 
-  it("Collega a un video opens the assignment dialog from a ready export", async () => {
+  it("Collega a un video: Gruppo → Canale → Video → Lingua → Preview → Conferma, senza toccare il progetto", async () => {
     setEditorEndpoints(vi.fn());
     const originalImpl = authedFetchMock.getMockImplementation();
 
     // Stateful mock: after the assignment POST, the list endpoint returns it.
     let createdAssignment: unknown[] = [];
+    // Any write against the PROJECT (snapshot PUT / PATCH / POST lifecycle)
+    // would violate "il progetto resta valido con 0 assignment": the link
+    // must only insert a thumbnail_assignments row.
+    let projectWrites = 0;
     const assignmentsImpl = async (url: string, init?: RequestInit) => {
+      if (
+        url.startsWith("/api/v1/thumbnail-projects/thumbproj_1") &&
+        !url.includes("/media/resolve") &&
+        (init?.method === "PUT" || init?.method === "PATCH" || init?.method === "POST")
+      ) {
+        projectWrites += 1;
+      }
+      if (url === "/api/v1/groups/aggregate") {
+        return jsonResponse({
+          groups: [
+            { id: 1, workspace_id: 1, name: "WWE", account_ids: [2] },
+            { id: 2, workspace_id: 1, name: "Vuoto", account_ids: [] },
+          ],
+        });
+      }
       if (url === "/api/v1/accounts") {
         return jsonResponse({
           accounts: [
@@ -527,12 +546,34 @@ describe("CoverEditorPage", () => {
               is_publishable: true,
               created_at: "2026-08-01T00:00:00Z",
             },
+            {
+              id: 3,
+              platform: "youtube",
+              platform_user_id: "UCother",
+              username: "altro_demo",
+              status: "connected",
+              is_publishable: true,
+              created_at: "2026-08-01T00:00:00Z",
+            },
           ],
         });
       }
       if (url === "/api/v1/accounts/2/content?limit=50&privacy=private") {
         return jsonResponse({
           items: [{ external_id: "video_1", title: "Riservata", privacy: "private" }],
+        });
+      }
+      if (url === "/api/v1/thumbnail-projects/thumbproj_1/media/resolve?workspace_id=1") {
+        // Resolve the rendered export so the dialog can show its preview.
+        const body = JSON.parse(String(init?.body ?? "{}")) as { media_ids?: string[] };
+        return jsonResponse({
+          items: (body.media_ids ?? []).map((id) => ({
+            media_id: id,
+            url: `https://cdn.example/preview/${id}`,
+            content_type: "image/png",
+            size_bytes: 2048,
+            created_at: "2026-08-04T10:00:00Z",
+          })),
         });
       }
       if (url === "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=1") {
@@ -566,18 +607,42 @@ describe("CoverEditorPage", () => {
     // Generate an export first (the dialog requires a ready export).
     await userEvent.click(screen.getByRole("button", { name: "Genera copertina" }));
     await screen.findByText("thumbexp_1");
-    await userEvent.click(screen.getByRole("button", { name: "Collega a un video" }));
+    // Before any link: the project is valid with 0 assignments.
+    expect(
+      screen.getByText(/Nessun collegamento — la copertina esiste in modo autonomo/),
+    ).toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole("button", { name: "Collega a un video" }));
     expect(
       await screen.findByRole("dialog", { name: "Collega a un video" }),
     ).toBeInTheDocument();
+
+    // Passo 1 — Gruppo: seleziona "WWE" → il canale "altro_demo" (fuori
+    // dal gruppo) sparisce dalle opzioni.
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Gruppo" }), "1");
     await screen.findByText("wwe_demo");
+    expect(screen.queryByText("altro_demo")).not.toBeInTheDocument();
+
+    // Passo 2 — Canale (filtrato dal gruppo).
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Canale YouTube" }), "2");
     await screen.findByText("Riservata");
+
+    // Passo 3 — Video privato.
     await userEvent.selectOptions(
       screen.getByRole("combobox", { name: "Video privato" }),
       "video_1",
     );
+
+    // Passo 4 — Lingua + Passo 5 — Preview (il file renderizzato dal server).
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Lingua del testo" }), "it");
+    const preview = await screen.findByTestId("link-preview");
+    expect(preview).toHaveAttribute(
+      "src",
+      "https://cdn.example/preview/00000000-0000-4000-8000-000000000001",
+    );
+
+    // Passo 6 — Conferma: crea l'assignment, non tocca il progetto.
+    const snapshotBefore = projectWrites;
     await userEvent.click(screen.getByRole("button", { name: "Conferma collegamento" }));
 
     await waitFor(
@@ -588,6 +653,8 @@ describe("CoverEditorPage", () => {
     );
     // The assignments panel refreshes with the new link.
     expect(await screen.findByText("video_1")).toBeInTheDocument();
+    // Zero writes against the project itself — only the assignment row.
+    expect(projectWrites).toBe(snapshotBefore);
   });
 
   it("Salva progetto flushes pending edits immediately (senza attendere il debounce)", async () => {

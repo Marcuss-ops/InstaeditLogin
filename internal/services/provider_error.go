@@ -142,6 +142,15 @@ func (e *ProviderError) Unwrap() error {
 	return e.Cause
 }
 
+// RetryAfterDuration exposes the provider-supplied delay through the
+// common retry-after carrier used by durable worker scheduling.
+func (e *ProviderError) RetryAfterDuration() time.Duration {
+	if e == nil || e.RetryAfter <= 0 {
+		return 0
+	}
+	return e.RetryAfter
+}
+
 // IsProviderError reports whether err is (or wraps) a *ProviderError.
 // Returns the *ProviderError + true on success, (nil, false) otherwise.
 // Convenience wrapper for the canonical `errors.As(err, &pe)` pattern.

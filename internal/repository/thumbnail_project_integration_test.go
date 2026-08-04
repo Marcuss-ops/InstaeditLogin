@@ -4,6 +4,7 @@ package repository_test
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"testing"
 
@@ -138,6 +139,150 @@ func TestThumbnailProjectRepository_IntegrationSnapshotRegistersAssets(t *testin
 	}
 	if len(assets) != 1 || assets[0].MediaID != "00000000-0000-0000-0000-000000000931" {
 		t.Fatalf("foreign media leaked into assets: %+v", assets)
+	}
+}
+
+// TestThumbnailProjectRepository_IntegrationRestartPersistence certifies
+// DoD Test 2 "Riavvio completo" at the persistence layer: after a full
+// API/worker restart the project, its current revision (with the image
+// object), and the registered assets must all be re-readable from
+// Postgres alone — nothing lives in process memory. MinIO media is
+// re-resolvable because presigned URLs are minted per request from the
+// persisted upload_key (covered by the media resolver handler tests).
+func TestThumbnailProjectRepository_IntegrationRestartPersistence(t *testing.T) {
+	db, cleanup := postgres.StartTestPostgres(t)
+	defer cleanup()
+	if err := database.RunMigrationsUpTo(db, 97); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO users (id, email, name) VALUES (9951, 'thumb-restart@example.test', 'Thumb Restart')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO workspaces (id, name, owner_id) VALUES (9951, 'Thumb Restart WS', 9951)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO media_assets (id, user_id, upload_key, content_type, size_bytes, status, sha256, expires_at)
+		VALUES ('00000000-0000-0000-0000-000000000951', 9951, 'uploads/9951/restart.png', 'image/png', 32, 'ready', repeat('c', 64), NOW() + INTERVAL '1 day')
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	// "Process 1": create the project and persist a snapshot with media.
+	repo := repository.NewThumbnailProjectRepository(db)
+	project := &models.ThumbnailProject{ID: "thumbproj_restart", WorkspaceID: 9951, CreatedBy: 9951, Name: "Restart", CanvasWidth: 1920, CanvasHeight: 1080}
+	if err := repo.Create(context.Background(), project); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := repo.SaveSnapshot(context.Background(), 9951, project.ID, models.ThumbnailProjectSnapshot{
+		SchemaVersion: 1, SnapshotJSON: []byte(`{"canvas":{"background":"#30305a"},"objects":[{"id":"img-r","type":"image","media_id":"00000000-0000-0000-0000-000000000951","x":0,"y":0,"width":480,"height":270,"scale_x":1,"scale_y":1,"rotation":0}]}`),
+		RendererVersion: "go-canvas-v1", BaseVersion: 1,
+	}, 9951)
+	if err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+
+	// "Restart": a brand-new repository instance — no in-memory state is
+	// carried over; every read below comes from Postgres.
+	repo2 := repository.NewThumbnailProjectRepository(db)
+	proj, err := repo2.FindByID(context.Background(), 9951, project.ID)
+	if err != nil || proj == nil {
+		t.Fatalf("restart: FindByID = %+v err=%v", proj, err)
+	}
+	if proj.Version != 2 || proj.CurrentRevisionID == nil || *proj.CurrentRevisionID != saved.RevisionID {
+		t.Fatalf("restart: project state not persisted: %+v", proj)
+	}
+	rev, err := repo2.FindRevision(context.Background(), 9951, proj.ID, *proj.CurrentRevisionID)
+	if err != nil {
+		t.Fatalf("restart: FindRevision: %v", err)
+	}
+	if string(rev.SnapshotJSON) == "" || rev.SnapshotSHA256 == nil || len(rev.SnapshotSHA256) != 32 {
+		t.Fatalf("restart: revision not fully persisted: %+v", rev)
+	}
+	assets, err := repo2.ListAssets(context.Background(), 9951, proj.ID)
+	if err != nil {
+		t.Fatalf("restart: ListAssets: %v", err)
+	}
+	if len(assets) != 1 || assets[0].MediaID != "00000000-0000-0000-0000-000000000951" || assets[0].Role != models.ThumbnailProjectAssetRoleForeground {
+		t.Fatalf("restart: assets not persisted: %+v", assets)
+	}
+	// The media row is still ready in the workspace, so the resolver can
+	// mint a fresh presigned URL after the restart (stateless per request).
+	var status string
+	if err := db.QueryRow(`SELECT status FROM media_assets WHERE id = '00000000-0000-0000-0000-000000000951'`).Scan(&status); err != nil || status != "ready" {
+		t.Fatalf("restart: media not ready after restart: status=%q err=%v", status, err)
+	}
+}
+
+// TestThumbnailProjectRepository_IntegrationVersionHistoryRestore certifies
+// DoD Test 7 "Versioni": save A → B → C, then restore A. The restore must
+// create a NEW revision D whose content equals A, while the history (A, B,
+// C) is preserved untouched.
+func TestThumbnailProjectRepository_IntegrationVersionHistoryRestore(t *testing.T) {
+	db, cleanup := postgres.StartTestPostgres(t)
+	defer cleanup()
+	if err := database.RunMigrationsUpTo(db, 97); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO users (id, email, name) VALUES (9952, 'thumb-versions@example.test', 'Thumb Versions')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO workspaces (id, name, owner_id) VALUES (9952, 'Thumb Versions WS', 9952)`); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := repository.NewThumbnailProjectRepository(db)
+	project := &models.ThumbnailProject{ID: "thumbproj_versions", WorkspaceID: 9952, CreatedBy: 9952, Name: "Versions", CanvasWidth: 1920, CanvasHeight: 1080}
+	if err := repo.Create(context.Background(), project); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshotFor := func(background string, version int64) *models.ThumbnailProjectSnapshotResult {
+		result, err := repo.SaveSnapshot(context.Background(), 9952, project.ID, models.ThumbnailProjectSnapshot{
+			SchemaVersion: 1, SnapshotJSON: []byte(`{"canvas":{"background":"` + background + `"},"objects":[]}`),
+			RendererVersion: "go-canvas-v1", BaseVersion: version,
+		}, 9952)
+		if err != nil {
+			t.Fatalf("save %s: %v", background, err)
+		}
+		return result
+	}
+
+	a := snapshotFor("#aaa111", 1) // version 2
+	b := snapshotFor("#bbb222", 2) // version 3
+	c := snapshotFor("#ccc333", 3) // version 4
+
+	restored, err := repo.RestoreRevision(context.Background(), 9952, project.ID, a.RevisionID, 4, 9952, "go-canvas-v1")
+	if err != nil {
+		t.Fatalf("restore A: %v", err)
+	}
+	// D is a NEW revision with content equal to A.
+	if restored.RevisionID == a.RevisionID || restored.RevisionNumber != 4 || restored.Version != 5 {
+		t.Fatalf("restore did not create revision D: %+v", restored)
+	}
+	if restored.SnapshotSHA256 != a.SnapshotSHA256 {
+		t.Fatalf("restored content differs from A: d=%s a=%s", restored.SnapshotSHA256, a.SnapshotSHA256)
+	}
+
+	// History preserved: A, B, C, D all present with their original hashes.
+	revisions, err := repo.ListRevisions(context.Background(), 9952, project.ID)
+	if err != nil {
+		t.Fatalf("ListRevisions: %v", err)
+	}
+	if len(revisions) != 4 {
+		t.Fatalf("expected 4 revisions (A,B,C,D), got %d", len(revisions))
+	}
+	hashes := map[string]string{}
+	for _, r := range revisions {
+		hashes[r.ID] = hex.EncodeToString(r.SnapshotSHA256)
+	}
+	if hashes[a.RevisionID] != a.SnapshotSHA256 ||
+		hashes[b.RevisionID] != b.SnapshotSHA256 ||
+		hashes[c.RevisionID] != c.SnapshotSHA256 {
+		t.Fatalf("history mutated by restore: got A=%q B=%q C=%q", hashes[a.RevisionID], hashes[b.RevisionID], hashes[c.RevisionID])
+	}
+	if revisions[0].ID != restored.RevisionID {
+		t.Fatalf("newest revision should be D, got %s", revisions[0].ID)
 	}
 }
 

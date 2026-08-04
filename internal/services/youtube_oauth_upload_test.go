@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -127,6 +128,9 @@ func TestYouTubeUpload_PutChunk_4xx_NotRetried(t *testing.T) {
 	}
 	if retryable {
 		t.Errorf("400 must NOT be retryable (bubble up to MarkDeadLetter)")
+	}
+	if !errors.Is(err, ErrPermanentUpload) {
+		t.Errorf("400 error must wrap ErrPermanentUpload; got %v", err)
 	}
 }
 

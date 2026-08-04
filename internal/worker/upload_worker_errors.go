@@ -3,10 +3,12 @@ package worker
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // handleProcessingError classifies the error and routes MarkRetry
@@ -45,7 +47,7 @@ func (w *UploadWorker) handleProcessingError(
 	// so a single canDownload=false rejection lands the row in
 	// 'dead_letter' (= 'perm_error' per the docs/OPERATIONS.md
 	// runbook) on the very first failed tick.
-	if errors.Is(processErr, ErrPermanent) {
+	if errors.Is(processErr, ErrPermanent) || errors.Is(processErr, services.ErrPermanentUpload) {
 		if markErr := w.jobRepo.MarkDeadLetter(ctx, job.ID, workerID, errorCode, processErr.Error()); markErr != nil {
 			w.logger.Error("upload worker: MarkDeadLetter (permanent) failed",
 				"pool", poolName, "job_id", job.ID, "error", markErr)
@@ -61,6 +63,9 @@ func (w *UploadWorker) handleProcessingError(
 	}
 
 	backoff := computeUploadBackoff(job.AttemptCount)
+	if retryAfter := services.RetryAfterFromError(processErr); retryAfter > 0 {
+		backoff = retryAfter
+	}
 	if markErr := w.jobRepo.MarkRetry(ctx, job.ID, workerID, errorCode, processErr.Error(), time.Now().Add(backoff)); markErr != nil {
 		w.logger.Error("upload worker: MarkRetry failed",
 			"pool", poolName, "job_id", job.ID, "error", markErr)
@@ -104,11 +109,10 @@ func containsAny(s string, needles ...string) bool {
 	return false
 }
 
-// computeUploadBackoff implements a deterministic decorrelated-jitter
-// curve for the upload worker. AWS-style: temp = min(cap, prev * 3),
-// sleep = base + (temp - base) / 2. Capped at 1h. Production polish
-// in a follow-up commit replaces this with math/rand-based uniform
-// sampling (mirroring internal/outbox/dispatcher.go::computeBackoff).
+// computeUploadBackoff implements exponential backoff with full jitter
+// for the upload worker. The lower bound remains base and the upper
+// bound grows as min(cap, base*3^(attempt-1)); this spreads workers
+// instead of scheduling every retry at the same deterministic instant.
 func computeUploadBackoff(attempt int) time.Duration {
 	const (
 		base = 5 * time.Second
@@ -129,9 +133,9 @@ func computeUploadBackoff(attempt int) time.Duration {
 	if temp > cap {
 		temp = cap
 	}
-	jitter := time.Duration(int64(temp) - int64(base))
-	if jitter < 0 {
-		jitter = 0
+	span := int64(temp) - int64(base)
+	if span <= 0 {
+		return base
 	}
-	return base + jitter/2
+	return base + time.Duration(rand.Int63n(span+1))
 }

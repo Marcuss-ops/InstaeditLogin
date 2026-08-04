@@ -1009,6 +1009,7 @@ export function CoverEditorPage() {
           <LinkToVideoDialog
             workspaceId={loadState.workspaceId}
             exportId={exportState.export.id}
+            previewUrl={exportPreviewUrl}
             onClose={() => setShowLinkDialog(false)}
             onLinked={handleAssignmentsCreated}
           />

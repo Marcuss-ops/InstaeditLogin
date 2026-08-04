@@ -201,6 +201,17 @@ export function handleDemoRequest(
     return json({ accounts: demoAccounts });
   }
 
+  // Groups aggregate (group → member account_ids) for the Link-to-video
+  // dialog's Gruppo → Canale filter. Mirrors GET /api/v1/groups/aggregate.
+  if (path === "/api/v1/groups/aggregate") {
+    return json({
+      groups: [
+        { id: 1, workspace_id: 1, name: "WWE", account_ids: [2] },
+        { id: 2, workspace_id: 1, name: "Marketing", account_ids: [] },
+      ],
+    });
+  }
+
   if (path === "/api/v1/workspaces") {
     return json({ workspaces: demoWorkspaces });
   }

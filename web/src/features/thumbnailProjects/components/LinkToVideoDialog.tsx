@@ -1,17 +1,20 @@
 /**
  * LinkToVideoDialog — assign a READY export to a YouTube video.
  *
- * Flow (DoD "Collegamento successivo"): Canale → Video privato → Lingua
- * → Conferma. The export already exists before this dialog opens; the
- * assignment never modifies the original project.
+ * Flow (DoD "Collegamento successivo"): Gruppo → Canale → Video privato →
+ * Lingua → Preview → Conferma. The export already exists before this
+ * dialog opens; the assignment only inserts a thumbnail_assignments row —
+ * the original project (and its snapshot/revisions) is NEVER modified,
+ * so the project stays valid with 0 assignments until a link is made.
  *
- * Data comes from the existing YouTube account/content APIs:
- *   GET /api/v1/accounts → filter platform==="youtube"
+ * Data comes from the existing workspace APIs:
+ *   GET /api/v1/groups/aggregate   → groups + member account_ids (one call)
+ *   GET /api/v1/accounts           → YouTube channels (filtered by group)
  *   GET /api/v1/accounts/{id}/content?privacy=private → private videos
- *   POST /api/v1/thumbnail-exports/{export_id}/assignments → link
+ *   POST /api/v1/thumbnail-exports/{export_id}/assignments → the link
  */
-import { useEffect, useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { FolderTree, ImageIcon, Loader2, X } from "lucide-react";
 import { authedFetch } from "../../../lib/auth";
 import { filterYouTube, type PlatformAccount } from "../../channels/api/channelsApi";
 import { createThumbnailAssignments } from "../api/thumbnailProjectsApi";
@@ -20,9 +23,22 @@ import type { ContentItem } from "../../../pages/internal/calendarTypes";
 export interface LinkToVideoDialogProps {
   workspaceId: number;
   exportId: string;
+  /** Presigned URL of the export's rendered preview (server file). */
+  previewUrl?: string | null;
   onClose: () => void;
   /** Called after at least one assignment was created (parent refreshes). */
   onLinked: () => void;
+}
+
+type GroupsState =
+  | { kind: "loading" }
+  | { kind: "ready"; groups: GroupWithMembers[] }
+  | { kind: "error"; message: string };
+
+interface GroupWithMembers {
+  id: number;
+  name: string;
+  account_ids: number[];
 }
 
 type ChannelsState =
@@ -49,9 +65,12 @@ const LANGUAGES = [
 export function LinkToVideoDialog({
   workspaceId,
   exportId,
+  previewUrl,
   onClose,
   onLinked,
 }: LinkToVideoDialogProps) {
+  const [groupsState, setGroupsState] = useState<GroupsState>({ kind: "loading" });
+  const [selectedGroupId, setSelectedGroupId] = useState<string>("");
   const [channelsState, setChannelsState] = useState<ChannelsState>({ kind: "loading" });
   const [selectedChannel, setSelectedChannel] = useState<PlatformAccount | null>(null);
   const [videosState, setVideosState] = useState<VideosState>({ kind: "idle" });
@@ -63,27 +82,64 @@ export function LinkToVideoDialog({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      setChannelsState({ kind: "loading" });
       try {
-        const resp = await authedFetch("/api/v1/accounts");
-        const data = (await resp.json()) as { accounts?: PlatformAccount[] };
-        if (!cancelled) {
-          const channels = filterYouTube(data.accounts ?? []);
-          setChannelsState({ kind: "ready", channels });
-        }
+        // Group memberships + channels load in parallel (one aggregate
+        // call, no per-group fan-out — mirrors useGroupsData).
+        const [groupsResp, accountsResp] = await Promise.all([
+          authedFetch("/api/v1/groups/aggregate"),
+          authedFetch("/api/v1/accounts"),
+        ]);
+        const groupsData = (await groupsResp.json()) as {
+          groups?: Array<{ id: number; name: string; account_ids?: number[] }>;
+        };
+        const accountsData = (await accountsResp.json()) as {
+          accounts?: PlatformAccount[];
+        };
+        if (cancelled) return;
+        setGroupsState({
+          kind: "ready",
+          groups: (groupsData.groups ?? []).map((g) => ({
+            id: g.id,
+            name: g.name,
+            account_ids: g.account_ids ?? [],
+          })),
+        });
+        setChannelsState({
+          kind: "ready",
+          channels: filterYouTube(accountsData.accounts ?? []),
+        });
       } catch (err) {
-        if (!cancelled) {
-          setChannelsState({
-            kind: "error",
-            message: err instanceof Error ? err.message : "Impossibile caricare i canali.",
-          });
-        }
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : "Impossibile caricare gruppi e canali.";
+        setGroupsState({ kind: "error", message });
+        setChannelsState({ kind: "error", message });
       }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Channels filtered by the chosen group: with "Tutti i gruppi" (empty)
+  // every connected YouTube channel is offered; otherwise only channels
+  // that are members of the selected group.
+  const visibleChannels = useMemo(() => {
+    if (channelsState.kind !== "ready") return [];
+    if (selectedGroupId === "") return channelsState.channels;
+    const memberIds = new Set(
+      (groupsState.kind === "ready"
+        ? groupsState.groups.find((g) => String(g.id) === selectedGroupId)?.account_ids
+        : undefined) ?? [],
+    );
+    return channelsState.channels.filter((c) => memberIds.has(c.id));
+  }, [channelsState, groupsState, selectedGroupId]);
+
+  const handleGroupChange = (value: string) => {
+    setSelectedGroupId(value);
+    setSelectedChannel(null);
+    setSelectedVideo(null);
+    setVideosState({ kind: "idle" });
+  };
 
   const loadVideos = async (channel: PlatformAccount) => {
     setVideosState({ kind: "loading" });
@@ -124,6 +180,8 @@ export function LinkToVideoDialog({
     }
   };
 
+  const showPreview = selectedChannel !== null && selectedVideo !== null;
+
   return (
     <div
       role="dialog"
@@ -155,7 +213,39 @@ export function LinkToVideoDialog({
         </p>
 
         <div className="mt-5 space-y-4">
-          {/* Canale */}
+          {/* Gruppo (opzionale) — primo passo: filtra i canali per gruppo */}
+          <div>
+            <label htmlFor="link-group" className="text-[12px] font-semibold text-[#9aa0aa]">
+              Gruppo
+            </label>
+            {groupsState.kind === "loading" && (
+              <div className="mt-2 flex items-center gap-2 text-[12px] text-[#9aa0aa]">
+                <Loader2 size={14} className="animate-spin" /> Caricamento gruppi…
+              </div>
+            )}
+            {groupsState.kind === "error" && (
+              <p className="mt-2 text-[12px] text-red-400">{groupsState.message}</p>
+            )}
+            {groupsState.kind === "ready" && (
+              <select
+                id="link-group"
+                value={selectedGroupId}
+                onChange={(e) => handleGroupChange(e.target.value)}
+                className="mt-2 w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-[13px] text-white focus:outline-none focus:border-white/[0.20]"
+              >
+                <option value="" className="bg-[#1f1f2e]">
+                  Tutti i gruppi
+                </option>
+                {groupsState.groups.map((group) => (
+                  <option key={group.id} value={group.id} className="bg-[#1f1f2e]">
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Canale (filtrato dal gruppo) */}
           <div>
             <label htmlFor="link-channel" className="text-[12px] font-semibold text-[#9aa0aa]">
               Canale YouTube
@@ -168,18 +258,20 @@ export function LinkToVideoDialog({
             {channelsState.kind === "error" && (
               <p className="mt-2 text-[12px] text-red-400">{channelsState.message}</p>
             )}
-            {channelsState.kind === "ready" && channelsState.channels.length === 0 && (
+            {channelsState.kind === "ready" && visibleChannels.length === 0 && (
               <p className="mt-2 text-[12px] text-[#9aa0aa]">
-                Nessun canale YouTube collegato. Collega un canale prima di assegnare la copertina.
+                {selectedGroupId === ""
+                  ? "Nessun canale YouTube collegato. Collega un canale prima di assegnare la copertina."
+                  : "Nessun canale YouTube in questo gruppo."}
               </p>
             )}
-            {channelsState.kind === "ready" && channelsState.channels.length > 0 && (
+            {channelsState.kind === "ready" && visibleChannels.length > 0 && (
               <select
                 id="link-channel"
                 value={selectedChannel?.id ?? ""}
                 onChange={(e) => {
                   const channel =
-                    channelsState.channels.find((c) => c.id === Number(e.target.value)) ?? null;
+                    visibleChannels.find((c) => c.id === Number(e.target.value)) ?? null;
                   setSelectedChannel(channel);
                   if (channel) void loadVideos(channel);
                 }}
@@ -188,7 +280,7 @@ export function LinkToVideoDialog({
                 <option value="" className="bg-[#1f1f2e]">
                   Seleziona un canale…
                 </option>
-                {channelsState.channels.map((channel) => (
+                {visibleChannels.map((channel) => (
                   <option key={channel.id} value={channel.id} className="bg-[#1f1f2e]">
                     {channel.username || `Canale #${channel.id}`}
                   </option>
@@ -258,6 +350,41 @@ export function LinkToVideoDialog({
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {/* Preview — il file renderizzato dal server, prima di confermare */}
+          {showPreview && (
+            <div>
+              <span className="flex items-center gap-1.5 text-[12px] font-semibold text-[#9aa0aa]">
+                <FolderTree size={12} />
+                Anteprima
+              </span>
+              <div className="mt-2 overflow-hidden rounded-xl border border-white/[0.10] bg-black/40">
+                {previewUrl ? (
+                  <img
+                    src={previewUrl}
+                    alt="Anteprima copertina da applicare"
+                    data-testid="link-preview"
+                    className="w-full"
+                  />
+                ) : (
+                  <div className="flex aspect-video w-full items-center justify-center">
+                    <ImageIcon size={24} className="text-white/25" />
+                  </div>
+                )}
+              </div>
+              <p className="mt-2 text-[12px] text-[#9aa0aa]">
+                Verrà applicata a{" "}
+                <span className="font-semibold text-white">
+                  {selectedVideo?.title ?? selectedVideo?.external_id}
+                </span>{" "}
+                su{" "}
+                <span className="font-semibold text-white">
+                  {selectedChannel?.username ?? `canale #${selectedChannel?.id}`}
+                </span>
+                {language ? ` in ${LANGUAGES.find((l) => l.code === language)?.label ?? language}` : ""}.
+              </p>
             </div>
           )}
         </div>
