@@ -2,7 +2,7 @@ import { CheckCircle2 } from "lucide-react";
 import { SHORTCUT } from "./content";
 
 /**
- * Sezione "La Scorciatoia" — la soluzione in 4 punti chiave.
+ * Sezione "Il Metodo" — la soluzione in 4 punti chiave.
  * Contro-altare del problema: stesso layout, segno opposto (verde salvia).
  */
 export function Shortcut() {

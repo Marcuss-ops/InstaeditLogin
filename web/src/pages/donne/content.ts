@@ -13,7 +13,7 @@
 export const SEO = {
   title: "DonneTube — I Tuoi Primi $2.000/Mese Con I Video Senza Volto",
   description:
-    "Trasforma YouTube in un flusso di cassa semi-automatico da casa. Pipeline 90% eseguita dall'AI, monetizzazione sbloccata in pochi giorni e affiancamento 1-on-1 per donne che partono da zero.",
+    "Un percorso guidato per costruire un'entrata tua con i video senza volto: strumenti che riducono il lavoro tecnico, metodo chiaro e affiancamento 1-on-1 fino al tuo primo guadagno reale.",
   canonical: "https://app.instaedit.org/donnetube",
 } as const;
 
@@ -27,27 +27,27 @@ export const NAV = {
     { label: "Contatti", href: "#contatti" },
   ],
   badge: {
-    pipeline: "Quasi tutto automatico — l'AI fa il lavoro pesante per te",
+    pipeline: "Metodo guidato, con supporto 1-on-1",
     limited: "Posti limitati — Solo 10 nuove studentesse questo mese",
   },
   cta: "Pronta a Iniziare?",
 } as const;
 
 export const HERO = {
-  badge: "Quasi tutto automatico • l'AI fa il lavoro pesante per te",
+  badge: "Metodo guidato, con supporto 1-on-1",
   badgeLimited: "Limitata a 10 donne questo mese",
   titleStart: "I Tuoi Primi $2.000/Mese Con I Video Senza Volto,",
-  titleAccent: "In Pilota Automatico.",
+  titleAccent: "Con Un Percorso Che Ti Guida.",
   subtitleTop:
     "Nessuna Telecamera. Nessun Montaggio. Nessuno Stress Da Orari.",
   subtitle:
-    "Smettila di sprecare mesi cercando di capire gli algoritmi o registrando video la sera dopo lavoro. La nostra AI produce i video per te, il nostro setup ti sblocca subito la monetizzazione e il nostro affiancamento 1-on-1 ti guida fino al tuo primo guadagno reale.",
+    "Questo percorso è per te se vuoi un'entrata tua, da casa, senza mostrare il volto e senza rincorrere gli algoritmi. Ti diamo una direzione chiara, strumenti che riducono il lavoro tecnico e un affiancamento 1-on-1 che ti segue fino al primo guadagno reale.",
   ctaPrimary: "Prenota La Tua Chiamata Strategica",
   ctaSecondary: "Vedi I Risultati Reali",
   stats: [
     { value: "$2.150/mese", label: "Guadagno medio delle studentesse" },
     { value: "14 Giorni", label: "Tempo medio per il primo incasso" },
-    { value: "90%", label: "Esecuzione automatizzata tramite AI" },
+    { value: "90%", label: "Attività tecniche gestite dagli strumenti" },
   ],
 } as const;
 
@@ -81,10 +81,10 @@ export const PROBLEM = {
 } as const;
 
 export const SHORTCUT = {
-  eyebrow: "La Scorciatoia",
-  title: "La via più semplice verso la tua indipendenza finanziaria.",
+  eyebrow: "Il Metodo",
+  title: "Un percorso chiaro verso la tua indipendenza economica.",
   subtitle:
-    "Ti consegniamo le chiavi in mano: un sistema con indicizzazione algoritmica immediata, un'AI che genera video professionali partendo da una singola riga di testo e una mentor che ti dice esattamente cosa fare, senza farti perdere tempo.",
+    "Un sistema ordinato che ti accompagna dal primo video alla monetizzazione: strumenti che riducono il lavoro tecnico e una mentor che ti indica i passi giusti al momento giusto.",
   items: [
     {
       title: "Setup Velocizzato Monetizzazione",
@@ -94,17 +94,17 @@ export const SHORTCUT = {
     {
       title: "ChronoN AI",
       description:
-        "Scrivi una frase e ottieni un video pronto per essere monetizzato. Nessun montaggio, nessuna competenza tecnica.",
+        "Scrive la sceneggiatura, sincronizza il voiceover e genera i filmati: da una tua idea ottieni un video pronto per la pubblicazione, senza montaggio.",
     },
     {
       title: "1 Video = 7 Piattaforme",
       description:
-        "Un singolo contenuto viene distribuito automaticamente su 7 social, moltiplicando la tua visibilità.",
+        "Un singolo contenuto viene adattato e distribuito su 7 social, moltiplicando la tua visibilità.",
     },
     {
-      title: "Pipeline Semi-Automatica",
+      title: "Ritmo Costante Sostenibile",
       description:
-        "Contenuto giornaliero garantito dedicando solo ~3 ore a settimana. Tu approvi, il sistema lavora.",
+        "Contenuti regolari dedicando circa 3 ore a settimana: tu approvi, gli strumenti preparano il resto.",
     },
   ],
 } as const;
@@ -139,47 +139,47 @@ export const EARNINGS = {
   mathTitle: "💡 Come funziona la matematica dei guadagni:",
   mathParagraphs: [
     "Calcolato su una base di 300.000 visualizzazioni mensili con un RPM medio di $3.50 – $5.00 in nicchie ad alto valore. Il caso mediano è 300k × $4 ≈ $1.200/mese per singolo canale.",
-    "L'RPM è la quota netta pagata da YouTube ai creator. Scali semplicemente aumentando il numero di canali gestiti dall'AI, non lavorando più ore.",
+    "L'RPM è la quota netta pagata da YouTube ai creator. Scali semplicemente aumentando il numero di canali gestiti dagli strumenti, non lavorando più ore.",
   ],
 } as const;
 
 export const HOW_IT_WORKS = {
   eyebrow: "Come Funziona",
-  title: "Semi-automatico. Massimo guadagno.",
+  title: "Un metodo chiaro, un percorso guidato.",
   subtitle:
-    "Nessuna telecamera. Nessun software di montaggio. Zero esperienza pregressa. Il nostro sistema eseguito al 90% dall'AI trasforma un'idea in contenuti giornalieri su 7 piattaforme — progettati per generare entrate.",
+    "Niente telecamera, niente montaggio, zero esperienza pregressa. Gli strumenti riducono il lavoro tecnico e tu mantieni il controllo di ogni decisione.",
   steps: [
     {
       step: "1",
-      title: "L'AI Crea, Tu Incassi.",
+      title: "ChronoN AI Prepara Il Video.",
       description:
-        "Digita una riga di testo e ChronoN AI genera un video professionale pronto per la monetizzazione. Niente microfono, niente webcam. L'AI gestisce tutto: dalla sceneggiatura al rendering finale.",
+        "Scrivi la tua idea: ChronoN AI scrive la sceneggiatura, sincronizza il voiceover e genera i filmati. Niente microfono, niente webcam, niente montaggio.",
     },
     {
       step: "2",
       title: "7 Piattaforme con 1 Solo Video.",
       description:
-        "Un video generato dall'AI viene convertito e pubblicato automaticamente su YouTube Shorts, TikTok, Instagram Reels, Facebook, X e altre — moltiplicando la tua visibilità per 7x.",
+        "Un video generato con ChronoN AI viene convertito e pubblicato automaticamente su YouTube Shorts, TikTok, Instagram Reels, Facebook e altre — moltiplicando la tua visibilità per 7x.",
     },
     {
       step: "3",
-      title: "Monetizzazione dal Primo Giorno.",
+      title: "Verso Il Programma Partner.",
       description:
-        "Il nostro percorso rapido per il Programma Partner fa superare la revisione al tuo canale in pochi giorni, non mesi — permettendoti di incassare subito da pubblicità, sponsorizzazioni e affiliazioni.",
+        "Il nostro percorso ti guida nella revisione del canale e nell'attivazione del Programma Partner, così inizi a incassare da pubblicità, sponsorizzazioni e affiliazioni.",
     },
   ],
 } as const;
 
 export const RESULTS = {
   eyebrow: "I Risultati",
-  title: "Donne reali. Entrate reali.",
+  title: "Donne reali.",
   subtitle:
     "La maggior parte delle persone prova a creare contenuti per mesi senza guadagnare un centesimo. Le nostre studentesse arrivano al loro primo incasso in meno di due settimane, costruendo un secondo stipendio ricorrente. Clicca su qualsiasi screenshot per verificare i numeri.",
   stats: [
     { v: "$1.940", l: "Guadagno mediano mensile", d: "per studentessa attiva", color: "text-emerald-400" },
     { v: "14 Giorni", l: "Tempo medio per il primo incasso", d: "dal lancio del canale", color: "text-blue-400" },
     { v: "50+", l: "Canali attivi monetizzati", d: "gestiti dalle nostre studentesse", color: "text-violet-400" },
-    { v: "90%", l: "Pipeline eseguita dall'AI", d: "tu approvi, il sistema lavora", color: "text-amber-400" },
+    { v: "90%", l: "Attività tecniche gestite dagli strumenti", d: "tu approvi, il sistema prepara il resto", color: "text-amber-400" },
   ],
   screenshots: [
     { img: "/results/result-1.jpg", alt: "Risultato canale YouTube — crescita primi 90 giorni", caption: "Crescita giorno per giorno su un canale di finanza" },
@@ -223,7 +223,7 @@ export const FOUNDER = {
   stats: [
     { v: "1", l: "Fondato da una donna" },
     { v: "7", l: "Piattaforme" },
-    { v: "90%", l: "Eseguito dall'AI" },
+    { v: "90%", l: "Attività tecniche gestite dagli strumenti" },
   ],
 } as const;
 
@@ -234,12 +234,16 @@ export const FAQ = {
     "Tutto quello che ti serve sapere prima di iniziare. Altre domande? Scrivici, siamo qui per te.",
   items: [
     {
+      q: "A chi è rivolto il programma?",
+      a: "A donne che vogliono un'entrata propria, da casa, e sono disposte a dedicarci circa 3 ore a settimana con costanza. Che tu parta da zero iscritti o da zero esperienza, il percorso è pensato per te.",
+    },
+    {
       q: "Devo mostrare la mia faccia o usare la mia voce?",
-      a: "Assolutamente no. Il sistema è progettato al 100% per canali senza volto. L'AI genera immagini, filmati di repertorio e voci sintetiche iper-realistiche.",
+      a: "Assolutamente no. Il sistema è progettato al 100% per canali senza volto. ChronoN AI genera immagini, filmati di repertorio e voci sintetiche iper-realistiche.",
     },
     {
       q: "Quanto tempo devo dedicarci a settimana?",
-      a: "Circa 3 ore a settimana. L'AI fa il 90% del lavoro pesante; il tuo unico compito è revisionare i testi e approvare la pubblicazione.",
+      a: "Circa 3 ore a settimana. Gli strumenti riducono il lavoro tecnico; il tuo compito è revisionare i testi e approvare la pubblicazione.",
     },
     {
       q: "E se non capisco nulla di tecnologia o montaggio?",
@@ -267,8 +271,8 @@ export const FINAL_CTA = {
 export const FOOTER = {
   brand: "DonneTube",
   description:
-    "Trasforma YouTube in un flusso di cassa semi-automatico da casa. La nostra AI produce i contenuti e gestisce le pubblicazioni — tu approvi e incassi.",
-  badge: "Pipeline Semi-Automatica • 90% Eseguita dall'AI",
+    "Un percorso guidato per costruire un'entrata tua con i video senza volto: strumenti che riducono il lavoro tecnico e affiancamento 1-on-1 fino al tuo primo guadagno.",
+  badge: "Metodo guidato • Supporto 1-on-1",
   productHeading: "Prodotto",
   productLinks: [
     { label: "Come funziona", href: "#come-funziona" },
@@ -282,7 +286,6 @@ export const FOOTER = {
     { label: "Termini di Servizio", to: "/terms" },
     { label: "Gestione Dati", href: "/data-deletion.html" },
   ],
-  mainSite: { label: "InstaEdit — sito principale", to: "/" },
   copyright:
-    "Creato per le donne che vogliono una vera macchina da rendita, non un passatempo.",
+    "Per le donne che vogliono costruire un'entrata loro, con un metodo serio.",
 } as const;

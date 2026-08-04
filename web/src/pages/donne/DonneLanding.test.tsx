@@ -38,7 +38,7 @@ describe("DonneLanding", () => {
       name: /Stai perdendo tempo ed energie/i,
     });
     const metodo = screen.getByRole("heading", {
-      name: /Semi-automatico\. Massimo guadagno\./i,
+      name: /Un metodo chiaro, un percorso guidato\./i,
     });
     const risultati = screen.getByRole("heading", {
       name: /Entrate reali\./i,

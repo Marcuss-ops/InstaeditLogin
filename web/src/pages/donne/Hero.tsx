@@ -4,8 +4,8 @@ import { HERO } from "./content";
 
 /**
  * Hero della landing "DonneTube" — promessa al centro: i primi
- * $2.000/mese con video faceless, in pilota automatico. Tema chiaro,
- * accenti caldi (corallo/terracotta) e serif per il titolo.
+ * $2.000/mese con video senza volto, con un percorso guidato. Tema
+ * chiaro, accenti caldi (corallo/terracotta) e serif per il titolo.
  */
 export function Hero() {
   const { open: openBooking } = useBooking();

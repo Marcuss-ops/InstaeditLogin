@@ -66,9 +66,6 @@ export function DonneFooter() {
         <div className="mx-auto max-w-7xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#7A7280]">
           <div className="flex flex-wrap items-center gap-4">
             <span>© {new Date().getFullYear()} {FOOTER.brand}, Inc.</span>
-            <Link to={FOOTER.mainSite.to} className="text-[#8A8290] hover:text-[#4A3E56] transition-colors">
-              {FOOTER.mainSite.label}
-            </Link>
           </div>
           <div>{FOOTER.copyright}</div>
         </div>
