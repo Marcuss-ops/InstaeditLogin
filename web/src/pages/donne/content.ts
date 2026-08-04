@@ -56,8 +56,7 @@ export const PROBLEM = {
   title: "La vita di oggi è diventata troppo cara.",
   subtitle:
     "Un solo stipendio non basta più: affitto, bollette, spesa, scuola dei figli. Ogni mese arrivi a fine mese con il conto quasi a zero e zero tempo per te stessa. Riconosci questa situazione?",
-  bgVideo:
-    "https://drive.usercontent.google.com/download?id=1MbUpRn-T0LcYyoFQiyoY16NssYjGGt3m&export=download",
+  bgVideo: "/videos/harsh.mp4",
   items: [
     {
       title: "Uno stipendio non basta più",
@@ -87,8 +86,7 @@ export const SHORTCUT = {
   title: "Un percorso chiaro verso la tua indipendenza economica.",
   subtitle:
     "Un sistema ordinato che ti accompagna dal primo video alla monetizzazione: strumenti che riducono il lavoro tecnico e una mentor che ti indica i passi giusti al momento giusto.",
-  bgVideo:
-    "https://drive.usercontent.google.com/download?id=1k5leHR3eQohWVm_k-vT8clMCgwNksLEw&export=download",
+  bgVideo: "/videos/relax1.mp4",
   items: [
     {
       title: "Setup Velocizzato Monetizzazione",
@@ -118,8 +116,7 @@ export const EARNINGS = {
   title: "Quanto puoi guadagnare realisticamente?",
   subtitle:
     "Tabelle di guadagno basate sulle nostre attuali studentesse (mamme, lavoratrici e donne che partivano da zero). Più canali automatizzi, più flussi di cassa ricorrenti crei.",
-  bgVideo:
-    "https://drive.usercontent.google.com/download?id=1hzK3q2AZ77DYVsvuQTPh3K7nuGwZNf9n&export=download",
+  bgVideo: "/videos/relax-background.mp4",
   disclaimer:
     "I risultati mostrati non sono una garanzia di guadagno. Dipendono dal tuo impegno, dalla nicchia e dal mercato.",
   rows: [
