@@ -1,9 +1,9 @@
-import { Sparkles } from "lucide-react";
+import { MessageCircleHeart, Sparkles } from "lucide-react";
 import { FOUNDER } from "./content";
 
 /**
  * Sezione "Dalla Fondatrice" — la storia di come è nato DonneTube.
- * Posizionata prima delle testimonianze.
+ * Il messaggio della fondatrice è seguito dal video racconto orizzontale.
  */
 export function FounderStory() {
   return (
@@ -40,6 +40,26 @@ export function FounderStory() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+
+        <div className="mt-14 animate-fade-up">
+          <div className="max-w-3xl mx-auto bg-white rounded-2xl border border-[#E8D8DB] p-2.5 shadow-[0_18px_44px_-24px_rgba(122,95,110,0.45)] transition-all duration-300 hover:border-[#D8A0A5] hover:shadow-[0_24px_50px_-24px_rgba(180,100,105,0.5)]">
+            <div className="relative aspect-video rounded-xl overflow-hidden bg-[#F6F3F7]">
+              <iframe
+                src={`https://www.youtube.com/embed/${FOUNDER.videoId}?playsinline=1`}
+                title="Video racconto: come è nato DonneTube"
+                className="absolute inset-0 w-full h-full"
+                loading="lazy"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+            <div className="flex items-center justify-center gap-1.5 py-2.5 text-xs text-[#7A7280]">
+              <MessageCircleHeart className="w-4 h-4 text-[#C4696F]" />
+              <span>La storia di come è nato DonneTube</span>
+            </div>
           </div>
         </div>
       </div>

@@ -215,6 +215,7 @@ export const FOUNDER = {
   eyebrow: "Dalla Fondatrice",
   titleStart: "Come è nato",
   titleAccent: "DonneTube.",
+  videoId: "ZhEOYF8t-G8",
   paragraphs: [
     "“Ho iniziato esattamente dove ti trovi tu ora: niente studio, niente competenze di montaggio, niente budget — solo la voglia di creare un'entrata mia che mi permettesse di passare più tempo con la mia famiglia senza la costante ansia del lavoro 9-5.",
     "Dover creare contenuti ovunque significava un incubo di 14 schede aperte sul computer, sottotitoli manuali, stress quotidiano... Sembrava un secondo lavoro a tempo pieno solo per premere 'pubblica'.",
