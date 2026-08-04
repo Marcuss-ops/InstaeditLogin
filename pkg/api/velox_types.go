@@ -180,111 +180,22 @@ type VeloxValidateDestinationResponse struct {
 	Platform      string `json:"platform"`
 }
 
-// VeloxGetDeliveryResponse is the body returned by
-// GET /internal/v1/deliveries/{id}. Mirrors the user's spec
-// verbatim:
-//
-//	{
-//	  "id":                 "sdel_01JABCDEX..."  // mirrors the URL path id (canonical social_delivery_id)
-//	  "status":             "queued"|"published"|"failed"|"dead_letter"|...
-//	  "retry_wait_reason":  "auth_token_expired"        // populated only when status == retry_wait
-//	  "last_error_code":    "auth_error"                // typed code from classifyUploadError
-//	  "last_error_message": "401 Unauthorized: invalid_grant"
-//	  "platform_media_id":  "dQw4w9WgXcQ"               // e.g. YouTube video id, set on terminal publish
-//	  "platform_url":       "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-//	  "published_at":       "2026-07-20T18:03:21Z"      // set ONLY when status == published
-//	  "created_at":         "2026-07-20T17:59:42Z"      // row insert time (always set on a real row)
-//	  "updated_at":         "2026-07-20T18:03:21Z"      // last UpdateStatus time (always set on a real row)
-//	}
-//
-// Field taxonomy:
-//   - id                  : mirrors the URL path id (the canonical sdel_01J...
-//     social_delivery_id). Surrendering the same id on
-//     the response body lets Velox correlate the round
-//     trip without remembering which path it queried —
-//     useful for client-side cache-key generation and
-//     log aggregation where the response body is the
-//     canonical record (NOT the URL).
-//   - status              : mirrors models.ExternalDeliveryStatus string rep
-//   - retry_wait_reason   : derived from last_error_code when status == retry_wait;
-//     empty string in all other states (operators reading
-//     the GET body know to ignore the field unless status is
-//     retry_wait)
-//   - last_error_code     : whatever UpdateStatus most recently stamped; empty
-//     before any error transition
-//   - last_error_message  : human-readable counterpart to last_error_code
-//   - platform_media_id   : populated from platform_provider after publish
-//   - platform_url        : same
-//   - published_at        : populated from completed_at IF status == published;
-//     empty for any other state (failed/deleted/completed-but-
-//     not-published are not "published_at")
-//   - created_at          : row's INSERT time (set by repo: NOW() at insert).
-//     Always present on a real row because the migration
-//     timestamp column is NOT NULL.
-//   - updated_at          : row's last UpdateStatus stamp (set by repo:
-//     NOW() on every UpdateStatus). Always present on a
-//     real row for the same reason; diverges from created_at
-//     after the worker's first transition.
-//
-// The id + created_at + updated_at trio pin the response to the
-// row's audit reality (when did this row arrive, when was it last
-// touched). Velox's reconciliation/poll endpoint needs these so it
-// can SKIP a payload whose (id, status) tuple matches an earlier
-// poll without re-fetching auxiliary tables — the timestamps let
-// the peer implement a "ignore stale updates older than X" filter
-// in O(1) without an extra database round trip.
-//
-// The omitempty tags keep the JSON shape minimal: a brand-new row
-// returns {"id":"...","status":"accepted","created_at":"...","created_at":"..."}.
-// The shape is forward-compat: future fields (e.g.,
-// "scheduled_publish_at" from PublishAt) slot in without breaking
-// existing consumers.
+// VeloxGetDeliveryResponse is the canonical body returned by
+// GET /internal/v1/deliveries/{id}. It contains only the v1 delivery
+// identity/state fields and canonical remote media ID; v0 aliases are
+// deliberately not represented.
 type VeloxGetDeliveryResponse struct {
-	ID string `json:"id"`
-	// DeliveryID is the spec §8 canonical field; kept alongside the
-	// legacy ID field for backward compat with v0 clients (which
-	// read `id`). Velox clients built against the contract doc read
-	// `delivery_id`. Both fields carry the SAME value (the row's
-	// primary key) so any reference reads work.
-	DeliveryID string `json:"delivery_id"`
-	VeloxJobID string `json:"velox_job_id,omitempty"`
-	// Target is the resolved FK-chain block per spec §8. Always set
-	// (no omitempty) so the operator UI sees a consistent envelope;
-	// partial-fidelity resolutions return zero values for the
-	// fields whose lookups failed.
-	Target VeloxGetDeliveryTarget `json:"target"`
-	Status string                 `json:"status"`
-	// PublishStatus is the spec §8 derived 6-value enum
-	// (waiting_thumbnail | ready_to_publish | scheduled | published |
-	// failed). Mapped from models.ExternalDeliveryStatus via
-	// mapExternalDeliveryStatusToPublishStatus in
-	// velox_handlers.go.
-	PublishStatus string `json:"publish_status"`
-	// ThumbnailStatus mirrors spec §9's 4-value enum (pending |
-	// applied | failed). Defaults to "pending" for in-flight rows
-	// and "applied" only after the row reaches published terminal.
-	// "skipped" is reserved for when metadata.require_thumbnail
-	// is explicitly false in a future schema iteration.
-	ThumbnailStatus string `json:"thumbnail_status"`
-	// YouTubeVideoID is the spec §8 canonical name for the row's
-	// youtube-side id. Same value as PlatformMediaID when the
-	// status has crossed PRIVATE_UPLOADED; omitted otherwise.
-	YouTubeVideoID string `json:"youtube_video_id,omitempty"`
-	// Privacy is the publisher-side privacy_status mirrored from
-	// the metadata JSONB envelope (private | unlisted | public).
-	// Empty string when metadata is missing or malformed.
-	Privacy          string `json:"privacy,omitempty"`
-	RetryWaitReason  string `json:"retry_wait_reason,omitempty"`
-	LastErrorCode    string `json:"last_error_code,omitempty"`
-	LastErrorMessage string `json:"last_error_message,omitempty"`
-	// PlatformMediaID is the legacy alias for youtube_video_id
-	// (kept for v0 clients). Always tied to YouTubeVideoID — the
-	// handler populates both from the same source column.
-	PlatformMediaID string     `json:"platform_media_id,omitempty"`
-	PlatformURL     string     `json:"platform_url,omitempty"`
-	PublishedAt     *time.Time `json:"published_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	DeliveryID       string                 `json:"delivery_id"`
+	VeloxJobID       string                 `json:"velox_job_id,omitempty"`
+	Target           VeloxGetDeliveryTarget `json:"target"`
+	PublishStatus    string                 `json:"publish_status"`
+	ThumbnailStatus  string                 `json:"thumbnail_status"`
+	YouTubeVideoID   string                 `json:"youtube_video_id,omitempty"`
+	Privacy          string                 `json:"privacy,omitempty"`
+	LastErrorCode    string                 `json:"last_error_code,omitempty"`
+	LastErrorMessage string                 `json:"last_error_message,omitempty"`
+	CreatedAt        time.Time              `json:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at"`
 }
 
 // VeloxGetDeliveryTarget is the resolved channel-info block on

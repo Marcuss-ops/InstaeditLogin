@@ -155,11 +155,14 @@ func TestGetInternalDelivery_ExtendedShape_Accepted(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.ID != "sdel_01JNEW" {
-		t.Errorf("ID = %q; want sdel_01JNEW", got.ID)
+	if got.DeliveryID != "sdel_01JNEW" {
+		t.Errorf("DeliveryID = %q; want sdel_01JNEW", got.DeliveryID)
 	}
-	if got.Status != "accepted" {
-		t.Errorf("Status = %q; want accepted", got.Status)
+	if got.PublishStatus != "waiting_thumbnail" {
+		t.Errorf("PublishStatus = %q; want waiting_thumbnail", got.PublishStatus)
+	}
+	if got.ThumbnailStatus != "pending" {
+		t.Errorf("ThumbnailStatus = %q; want pending", got.ThumbnailStatus)
 	}
 	if !got.CreatedAt.Equal(createdAt) {
 		t.Errorf("CreatedAt = %v; want %v", got.CreatedAt, createdAt)
@@ -167,11 +170,13 @@ func TestGetInternalDelivery_ExtendedShape_Accepted(t *testing.T) {
 	if !got.UpdatedAt.Equal(updatedAt) {
 		t.Errorf("UpdatedAt = %v; want %v", got.UpdatedAt, updatedAt)
 	}
-	if got.PublishedAt != nil {
-		t.Errorf("PublishedAt = %v; want nil for non-published row", got.PublishedAt)
-	}
 	body := w.Body.String()
-	for _, want := range []string{`"id":"sdel_01JNEW"`, `"created_at":"2026-07-20T17:59:42Z"`, `"updated_at":"2026-07-20T17:59:42Z"`} {
+	for _, legacy := range []string{"\"id\"", "\"status\"", "retry_wait_reason", "platform_media_id", "platform_url", "published_at"} {
+		if strings.Contains(body, legacy) {
+			t.Errorf("canonical response must not contain legacy field %q; body=%s", legacy, body)
+		}
+	}
+	for _, want := range []string{`"delivery_id":"sdel_01JNEW"`, `"created_at":"2026-07-20T17:59:42Z"`, `"updated_at":"2026-07-20T17:59:42Z"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing substring %q; body=%s", want, body)
 		}
@@ -207,11 +212,14 @@ func TestGetInternalDelivery_ExtendedShape_Published(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.ID != "sdel_01JPUB" {
-		t.Errorf("ID = %q; want sdel_01JPUB", got.ID)
+	if got.DeliveryID != "sdel_01JPUB" {
+		t.Errorf("DeliveryID = %q; want sdel_01JPUB", got.DeliveryID)
 	}
-	if got.Status != "published" {
-		t.Errorf("Status = %q; want published", got.Status)
+	if got.PublishStatus != "published" {
+		t.Errorf("PublishStatus = %q; want published", got.PublishStatus)
+	}
+	if got.ThumbnailStatus != "applied" {
+		t.Errorf("ThumbnailStatus = %q; want applied", got.ThumbnailStatus)
 	}
 	if !got.CreatedAt.Equal(createdAt) {
 		t.Errorf("CreatedAt = %v; want %v (3 min before completed)", got.CreatedAt, createdAt)
@@ -227,17 +235,14 @@ func TestGetInternalDelivery_ExtendedShape_Published(t *testing.T) {
 		t.Errorf("CreatedAt == UpdatedAt (%v); want updated_at > created_at for published row",
 			got.UpdatedAt)
 	}
-	if got.PublishedAt == nil {
-		t.Fatal("PublishedAt = nil; want completedAt timestamp for published row")
+	if got.YouTubeVideoID != "dQw4w9WgXcQ" {
+		t.Errorf("YouTubeVideoID = %q; want dQw4w9WgXcQ", got.YouTubeVideoID)
 	}
-	if got.PublishedAt != nil && !got.PublishedAt.Equal(completedAt) {
-		t.Errorf("PublishedAt = %v; want %v", got.PublishedAt, completedAt)
-	}
-	if got.PlatformMediaID != "dQw4w9WgXcQ" {
-		t.Errorf("PlatformMediaID = %q; want dQw4w9WgXcQ", got.PlatformMediaID)
-	}
-	if got.PlatformURL != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
-		t.Errorf("PlatformURL = %q; want youtube url", got.PlatformURL)
+	body := w.Body.String()
+	for _, legacy := range []string{"\"id\"", "\"status\"", "retry_wait_reason", "platform_media_id", "platform_url", "published_at"} {
+		if strings.Contains(body, legacy) {
+			t.Errorf("canonical response must not contain legacy field %q; body=%s", legacy, body)
+		}
 	}
 }
 
@@ -437,8 +442,8 @@ func TestGetInternalDelivery_RowIDRoundtripsThroughResponse(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if got.ID != id {
-				t.Errorf("response ID = %q; want %q (must match URL path)", got.ID, id)
+			if got.DeliveryID != id {
+				t.Errorf("response DeliveryID = %q; want %q (must match URL path)", got.DeliveryID, id)
 			}
 		})
 	}

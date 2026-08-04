@@ -18,14 +18,8 @@ import (
 // NOTE — handleCreateInternalDelivery lives in deliveries_handler.go.
 // This file contains the GET delivery and destination-validation handlers.
 //
-// NOTE — handleGetInternalDelivery has been extended in-place
-// (NOT relocated) to populate the spec §8 fields
-// (target{platform_account_id,channel_id,channel_name,enabled},
-// youtube_video_id, privacy, thumbnail_status, publish_status,
-// velox_job_id). The legacy id|status|retry_wait_reason|platform_*
-// fields stay for backward compat with v0 clients; v1 / §8 clients
-// read the new fields. The handler still returns a single
-// composite body so a single GET gives both views.
+// The GET delivery response is canonical-only. Legacy v0 aliases are
+// intentionally not emitted so every Velox consumer reads one contract.
 //
 // The package-level helpers resolveDeliveryTarget /
 // mapExternalDeliveryStatusToPublishStatus /
@@ -41,11 +35,12 @@ import (
 // webhook 5xx storm).
 //
 // Wire shape — see VeloxGetDeliveryResponse in velox_types.go.
-// The handler populates the reconciliation fields (delivery_id|velox_job_id|target{
+// The handler populates the canonical fields (delivery_id|velox_job_id|target{
 // platform_account_id,channel_id,channel_name,enabled}|
 // publish_status|thumbnail_status|youtube_video_id|privacy).
 //
-// Velox clients read `delivery_id` + `target` + `publish_status`.
+// Velox clients read `delivery_id` + `publish_status` + `thumbnail_status`
+// and the canonical `youtube_video_id` when publication has produced one.
 //
 // 404 is reserved for "id never accepted" — distinct from "we
 // accepted then lost it" semantics. We deliberately collapse
@@ -77,15 +72,12 @@ func (m *VeloxModule) handleGetInternalDelivery(w http.ResponseWriter, req *http
 
 	youtubeVideoID := strFromPtr(delivery.PlatformMediaID)
 	resp := VeloxGetDeliveryResponse{
-		ID:              delivery.ID,
 		DeliveryID:      delivery.ID,
 		VeloxJobID:      delivery.ExternalDeliveryID,
 		Target:          m.resolveDeliveryTarget(req.Context(), delivery),
-		Status:          string(delivery.Status),
 		PublishStatus:   mapExternalDeliveryStatusToPublishStatus(delivery.Status),
 		ThumbnailStatus: mapExternalDeliveryStatusToThumbnailStatus(delivery.Status),
 		YouTubeVideoID:  youtubeVideoID,
-		PlatformMediaID: youtubeVideoID,
 		Privacy:         privacyStatusFromMetadata(delivery.Metadata),
 		CreatedAt:       delivery.CreatedAt,
 		UpdatedAt:       delivery.UpdatedAt,
@@ -95,29 +87,10 @@ func (m *VeloxModule) handleGetInternalDelivery(w http.ResponseWriter, req *http
 	// yet (the brand-new accepted row).
 	if delivery.LastErrorCode != nil {
 		resp.LastErrorCode = *delivery.LastErrorCode
-		// retry_wait_reason mirrors last_error_code ONLY when
-		// status == retry_wait — the operator's "why is this
-		// sitting in retry?" question is answered by this field.
-		// In any other state the field is empty.
-		if delivery.Status == models.ExternalDeliveryStatusRetryWait {
-			resp.RetryWaitReason = *delivery.LastErrorCode
-		}
 	}
 	if delivery.LastErrorMessage != nil {
 		resp.LastErrorMessage = *delivery.LastErrorMessage
 	}
-	if delivery.PlatformURL != nil {
-		resp.PlatformURL = *delivery.PlatformURL
-	}
-	// published_at is ONLY set when the row reached the published
-	// terminal state. For other terminal states (failed,
-	// dead_letter) the user spec explicitly maps "published_at"
-	// to the success path.
-	if delivery.Status == models.ExternalDeliveryStatusPublished &&
-		delivery.CompletedAt != nil {
-		resp.PublishedAt = delivery.CompletedAt
-	}
-
 	slog.Info("velox get delivery",
 		"social_delivery_id", delivery.ID,
 		"status", delivery.Status,
@@ -266,8 +239,8 @@ func privacyStatusFromMetadata(raw json.RawMessage) string {
 
 // strFromPtr is a tiny helper that returns the dereferenced
 // string from a *string pointer, or "" when the pointer is nil.
-// Centralised so the YouTubeVideoID ⇄ PlatformMediaID alias
-// populates both fields consistently from the same source.
+// Centralised so the canonical YouTubeVideoID is populated consistently
+// from the source delivery column.
 func strFromPtr(p *string) string {
 	if p == nil {
 		return ""

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,10 +248,8 @@ func TestHandleGetInternalDelivery_Spec8_Privacy_MalformedMetadata(t *testing.T)
 	}
 }
 
-// TestHandleGetInternalDelivery_Spec8_PublishedAlias_YoutubeVideoID
-// pins that published rows populate BOTH the new youtube_video_id
-// field AND the legacy platform_media_id field with the same
-// value (they alias the same source column).
+// TestHandleGetInternalDelivery_Spec8_PublishedRemoteID
+// pins the canonical youtube_video_id emitted for published rows.
 func TestHandleGetInternalDelivery_Spec8_PublishedAlias_YoutubeVideoID(t *testing.T) {
 	completedAt := time.Date(2026, 7, 29, 9, 4, 12, 0, time.UTC)
 	store := newFakeDeliveryStorage()
@@ -275,21 +274,17 @@ func TestHandleGetInternalDelivery_Spec8_PublishedAlias_YoutubeVideoID(t *testin
 	if got.YouTubeVideoID != "AbCd1234" {
 		t.Errorf("YouTubeVideoID: want AbCd1234, got %q", got.YouTubeVideoID)
 	}
-	if got.PlatformMediaID != "AbCd1234" {
-		t.Errorf("PlatformMediaID (legacy alias): want AbCd1234, got %q", got.PlatformMediaID)
-	}
-	if got.PlatformMediaID != got.YouTubeVideoID {
-		t.Errorf("PlatformMediaID (%q) and YouTubeVideoID (%q) must alias the same value",
-			got.PlatformMediaID, got.YouTubeVideoID)
+	body := w.Body.String()
+	for _, legacy := range []string{"\"id\"", "\"status\"", "retry_wait_reason", "platform_media_id", "platform_url", "published_at"} {
+		if strings.Contains(body, legacy) {
+			t.Errorf("canonical response must not contain legacy field %q; body=%s", legacy, body)
+		}
 	}
 	if got.PublishStatus != "published" {
 		t.Errorf("PublishStatus: want published, got %q", got.PublishStatus)
 	}
 	if got.ThumbnailStatus != "applied" {
 		t.Errorf("ThumbnailStatus: want applied, got %q", got.ThumbnailStatus)
-	}
-	if got.PublishedAt == nil || !got.PublishedAt.Equal(completedAt) {
-		t.Errorf("PublishedAt: want %v (from completedAt), got %v", completedAt, got.PublishedAt)
 	}
 }
 

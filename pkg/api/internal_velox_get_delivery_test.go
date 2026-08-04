@@ -36,27 +36,30 @@ func TestHandleGetInternalDelivery_Happy_Accepted(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Status != "accepted" {
-		t.Errorf("Status = %q; want accepted", got.Status)
+	if got.DeliveryID != "sdel_01JABC" {
+		t.Errorf("DeliveryID = %q; want sdel_01JABC", got.DeliveryID)
 	}
-	if got.RetryWaitReason != "" {
-		t.Errorf("RetryWaitReason = %q; want empty for accepted row", got.RetryWaitReason)
+	if got.PublishStatus != "waiting_thumbnail" {
+		t.Errorf("PublishStatus = %q; want waiting_thumbnail", got.PublishStatus)
+	}
+	if got.ThumbnailStatus != "pending" {
+		t.Errorf("ThumbnailStatus = %q; want pending", got.ThumbnailStatus)
 	}
 	if got.LastErrorCode != "" || got.LastErrorMessage != "" {
 		t.Errorf("LastError* = %q/%q; want empty for accepted row",
 			got.LastErrorCode, got.LastErrorMessage)
 	}
-	if got.PublishedAt != nil {
-		t.Errorf("PublishedAt = %v; want nil for non-published row", got.PublishedAt)
-	}
 	body := w.Body.String()
-	if strings.Contains(body, "retry_wait_reason") {
-		t.Errorf("body should NOT contain retry_wait_reason for accepted row; got %s", body)
+	for _, legacy := range []string{"\"id\"", "\"status\"", "retry_wait_reason", "platform_media_id", "platform_url", "published_at"} {
+		if strings.Contains(body, legacy) {
+			t.Errorf("canonical response must not contain legacy field %q; body=%s", legacy, body)
+		}
 	}
 }
 
 // TestHandleGetInternalDelivery_Happy_RetryWait — populated row
-// in retry_wait state. retry_wait_reason mirrors last_error_code.
+// in retry_wait state; only canonical publish/thumbnail status fields
+// and error diagnostics are exposed.
 func TestHandleGetInternalDelivery_Happy_RetryWait(t *testing.T) {
 	store := newFakeDeliveryStorage()
 	store.seedRow("sdel_01JABC", models.ExternalDeliveryStatusRetryWait,
@@ -72,11 +75,11 @@ func TestHandleGetInternalDelivery_Happy_RetryWait(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Status != "retry_wait" {
-		t.Errorf("Status = %q; want retry_wait", got.Status)
+	if got.PublishStatus != "retry_wait" {
+		t.Errorf("PublishStatus = %q; want retry_wait", got.PublishStatus)
 	}
-	if got.RetryWaitReason != "auth_error" {
-		t.Errorf("RetryWaitReason = %q; want auth_error", got.RetryWaitReason)
+	if got.ThumbnailStatus != "pending" {
+		t.Errorf("ThumbnailStatus = %q; want pending", got.ThumbnailStatus)
 	}
 	if got.LastErrorCode != "auth_error" {
 		t.Errorf("LastErrorCode = %q; want auth_error", got.LastErrorCode)
@@ -107,25 +110,20 @@ func TestHandleGetInternalDelivery_Happy_Published(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Status != "published" {
-		t.Errorf("Status = %q; want published", got.Status)
+	if got.PublishStatus != "published" {
+		t.Errorf("PublishStatus = %q; want published", got.PublishStatus)
 	}
-	if got.PlatformMediaID != "dQw4w9WgXcQ" {
-		t.Errorf("PlatformMediaID = %q; want dQw4w9WgXcQ", got.PlatformMediaID)
+	if got.ThumbnailStatus != "applied" {
+		t.Errorf("ThumbnailStatus = %q; want applied", got.ThumbnailStatus)
 	}
-	if got.PlatformURL != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
-		t.Errorf("PlatformURL = %q; want youtube url", got.PlatformURL)
+	if got.YouTubeVideoID != "dQw4w9WgXcQ" {
+		t.Errorf("YouTubeVideoID = %q; want dQw4w9WgXcQ", got.YouTubeVideoID)
 	}
-	if got.PublishedAt == nil {
-		t.Fatal("PublishedAt = nil; want completedAt timestamp for published row")
-	}
-	if got.PublishedAt != nil && !got.PublishedAt.Equal(completedAt) {
-		t.Errorf("PublishedAt = %v; want %v", got.PublishedAt, completedAt)
-	}
-	// retry_wait_reason must be empty for published row even
-	// though the same column is the reason source.
-	if got.RetryWaitReason != "" {
-		t.Errorf("RetryWaitReason = %q; want empty for published row", got.RetryWaitReason)
+	body := w.Body.String()
+	for _, legacy := range []string{"\"id\"", "\"status\"", "retry_wait_reason", "platform_media_id", "platform_url", "published_at"} {
+		if strings.Contains(body, legacy) {
+			t.Errorf("canonical response must not contain legacy field %q; body=%s", legacy, body)
+		}
 	}
 }
 
