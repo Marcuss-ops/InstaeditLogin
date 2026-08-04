@@ -89,6 +89,7 @@ export function Nav() {
     { label: "How it works", href: "#features" },
     { label: "Programs", to: "/programs" },
     { label: "Results", href: "#results" },
+    { label: "For women", to: "/donne" },
     { label: "FAQ", href: "#faq" },
     { label: "Contact", href: "#contact" },
   ];

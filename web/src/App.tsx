@@ -13,6 +13,7 @@ import { PrivacyPolicy } from "./pages/PrivacyPolicy";
 import { TermsOfService } from "./pages/TermsOfService";
 import { Programs } from "./pages/Programs";
 import { Mentoring } from "./pages/Mentoring";
+import { DonneLanding } from "./pages/donne/DonneLanding";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
 // Keep the account performance route separate from the dashboard redirect.
@@ -134,6 +135,10 @@ function App() {
             <Route path="/terms" element={<TermsOfService />} />
             <Route path="/programs" element={<Programs />} />
             <Route path="/mentoring" element={<Mentoring />} />
+            {/* Landing indipendente per donne (contenuti in italiano).
+                Va prima del fallback /:slug per non essere catturata
+                dal router delle piattaforme. */}
+            <Route path="/donne" element={<DonneLanding />} />
 
             <Route
               path="/connections"

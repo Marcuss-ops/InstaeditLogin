@@ -16,6 +16,7 @@ const DEFAULT_LINKS: NavLink[] = [
   { label: "Agencies", to: "/#agency" },
   { label: "Programs", to: "/programs" },
   { label: "Mentoring", to: "/mentoring" },
+  { label: "For women", to: "/donne" },
   { label: "About us", to: "/#who-are-we" },
 ];
 

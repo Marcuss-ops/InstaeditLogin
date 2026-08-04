@@ -20,6 +20,7 @@ export function Footer() {
         { l: "How it works", href: "#features" },
         { l: "Programs", to: "/programs" },
         { l: "Results", href: "#results" },
+        { l: "For women", to: "/donne" },
         { l: "FAQ", href: "#faq" },
       ],
     },
