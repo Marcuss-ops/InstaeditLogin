@@ -16,7 +16,7 @@ import (
 // additionally filters the returned rows by WorkspaceID as
 // defense-in-depth.
 //
-// Permission: velox:jobs:read.
+// Permission: jobs.read.
 func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter veloxapi.ListJobsFilter) ([]veloxapi.Job, error) {
 	q := url.Values{}
 	if filter.Status != "" {
@@ -54,7 +54,7 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter
 // canonical Velox job contract; workspace_id and user_id are signed into
 // the control JWT and are not duplicated in the strict body.
 //
-// Permission: velox:jobs:write.
+// Permission: jobs.write.
 func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req veloxapi.CreateJobRequest) (*veloxapi.Job, error) {
 	body := createJobRequest{
 		ContractVersion: req.ContractVersion,
@@ -100,7 +100,7 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 // JobDetail (job + deliveries) so the BFF renders rendering +
 // publishing status as a single view.
 //
-// Permission: editor.project.read.
+// Permission: jobs.read.
 func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID string) (*veloxapi.JobDetail, error) {
 	var resp jobDetailResponse
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s", url.PathEscape(jobID))
@@ -133,7 +133,7 @@ func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID st
 // CancelJob implements veloxapi.Client.CancelJob. Returns nil on
 // success (Velox responds 204 No Content).
 //
-// Permission: editor.project.write.
+// Permission: jobs.write.
 func (c *Client) CancelJob(ctx context.Context, workspaceID, userID int64, jobID string) error {
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/cancel", url.PathEscape(jobID))
 	return c.doNoBody(ctx, "POST", path, userID, workspaceID, []string{ScopeVeloxJobsWrite})
@@ -141,7 +141,7 @@ func (c *Client) CancelJob(ctx context.Context, workspaceID, userID int64, jobID
 
 // ListJobDeliveries implements veloxapi.Client.ListJobDeliveries.
 //
-// Permission: editor.project.read.
+// Permission: jobs.read.
 func (c *Client) ListJobDeliveries(ctx context.Context, workspaceID, userID int64, jobID string) ([]veloxapi.Delivery, error) {
 	var resp listDeliveriesResponse
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/deliveries", url.PathEscape(jobID))

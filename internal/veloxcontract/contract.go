@@ -246,25 +246,20 @@ var (
 // values are duplicated here so a drift between the two repos
 // surfaces as a 403 at the first call, not at deploy time.
 //
-//	editor.project.read      : read a dark-editor project (Velox
-//	                           GET /internal/v1/editor/projects/*,
-//	                           list-jobs, list-deliveries, list-workers,
-//	                           get-asset)
-//	editor.project.write     : mutate a dark-editor project (Velox
-//	                           POST/PATCH/DELETE on projects/cancel)
-//	editor.asset.upload      : upload a render asset (Velox
-//	                           PUT/POST /internal/v1/editor/assets/*)
-//	youtube.session.publish  : publish a thumbnail update to YouTube
-//	                           (Velox POST
-//	                           /internal/v1/editor/sessions/.../publish)
+//	jobs.read    : read rendering jobs and their deliveries (Velox
+//	                 GET /api/v1/instaedit/jobs,
+//	                 GET .../jobs/{id}, GET .../jobs/{id}/deliveries)
+//	jobs.write   : mutate the job lifecycle (Velox POST .../jobs,
+//	                 POST .../jobs/{id}/cancel)
+//	workers.read : read compute workers (Velox GET .../workers,
+//	                 GET .../workers/{id})
+//	assets.read  : read render assets (Velox GET .../assets/{id})
+//	assets.write : upload a render asset (Velox
+//	                 PUT/POST .../assets/*)
 const (
-	ScopeVeloxJobsRead    = "velox:jobs:read"
-	ScopeVeloxJobsWrite   = "velox:jobs:write"
-	ScopeVeloxWorkersRead = "velox:workers:read"
-	ScopeVeloxAssetsRead  = "velox:assets:read"
-
-	ScopeEditorProjectRead     = "editor.project.read"
-	ScopeEditorProjectWrite    = "editor.project.write"
-	ScopeEditorAssetUpload     = "editor.asset.upload"
-	ScopeYouTubeSessionPublish = "youtube.session.publish"
+	ScopeVeloxJobsRead    = "jobs.read"
+	ScopeVeloxJobsWrite   = "jobs.write"
+	ScopeVeloxWorkersRead = "workers.read"
+	ScopeVeloxAssetsRead  = "assets.read"
+	ScopeVeloxAssetsWrite = "assets.write"
 )

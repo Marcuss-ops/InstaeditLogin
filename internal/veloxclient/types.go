@@ -10,10 +10,10 @@
 //     endpoints listed below; every call is scoped by workspace_id
 //     signed into the JWT so Velox can enforce tenant isolation.
 //   - The JWT carries iss=instaedit, aud=velox, sub=<userID>,
-//     workspace_id=<int>, scopes=[velox:jobs:read, velox:jobs:write,
-//     velox:workers:read, velox:assets:read], exp (3 minutes), jti
-//     (random). Velox's instaeditauth.Verifier checks signature,
-//     issuer, audience, expiry, and scope.
+//     workspace_id=<int>, scopes=[jobs.read, jobs.write,
+//     workers.read, assets.read], exp (3 minutes), jti (random).
+//     Velox's instaeditauth.Verifier checks signature, issuer,
+//     audience, expiry, and scope.
 //   - user_id and workspace_id NEVER come from the request body.
 //     They are signed into the JWT so Velox trusts the signature,
 //     not caller-supplied headers.

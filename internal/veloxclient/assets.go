@@ -10,9 +10,9 @@ import (
 
 // GetAsset implements veloxapi.Client.GetAsset.
 //
-// Permission: editor.project.read (per the scope architect verdict;
+// Permission: assets.read (per the scope architect verdict;
 // an asset exists only by virtue of having been uploaded, but the GET
-// itself is a read operation against a project resource).
+// itself is a read operation against a render resource).
 func (c *Client) GetAsset(ctx context.Context, workspaceID, userID int64, assetID string) (*veloxapi.Asset, error) {
 	var resp assetResponse
 	path := fmt.Sprintf("/api/v1/instaedit/assets/%s", url.PathEscape(assetID))

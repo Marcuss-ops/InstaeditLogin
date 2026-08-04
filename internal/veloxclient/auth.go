@@ -38,17 +38,16 @@ const (
 // values are duplicated here so a drift between the two repos
 // surfaces as a 403 at the first call, not at deploy time.
 //
-//	editor.project.read      : read a dark-editor project (Velox
-//	                           GET /internal/v1/editor/projects/*,
-//	                           list-jobs, list-deliveries, list-workers,
-//	                           get-asset)
-//	editor.project.write     : mutate a dark-editor project (Velox
-//	                           POST/PATCH/DELETE on projects/cancel)
-//	editor.asset.upload      : upload a render asset (Velox
-//	                           PUT/POST /internal/v1/editor/assets/*)
-//	youtube.session.publish  : publish a thumbnail update to YouTube
-//	                           (Velox POST
-//	                           /internal/v1/editor/sessions/.../publish)
+//	jobs.read    : read rendering jobs and their deliveries (Velox
+//	                 GET /api/v1/instaedit/jobs,
+//	                 GET .../jobs/{id}, GET .../jobs/{id}/deliveries)
+//	jobs.write   : mutate the job lifecycle (Velox POST .../jobs,
+//	                 POST .../jobs/{id}/cancel)
+//	workers.read : read compute workers (Velox GET .../workers,
+//	                 GET .../workers/{id})
+//	assets.read  : read render assets (Velox GET .../assets/{id})
+//	assets.write : upload a render asset (Velox
+//	                 PUT/POST .../assets/*)
 //
 // The canonical definitions moved to internal/veloxcontract (the
 // shared InstaEdit⇄Velox BFF contract package); the aliases below
@@ -59,11 +58,7 @@ const (
 	ScopeVeloxJobsWrite   = veloxcontract.ScopeVeloxJobsWrite
 	ScopeVeloxWorkersRead = veloxcontract.ScopeVeloxWorkersRead
 	ScopeVeloxAssetsRead  = veloxcontract.ScopeVeloxAssetsRead
-
-	ScopeEditorProjectRead     = veloxcontract.ScopeEditorProjectRead
-	ScopeEditorProjectWrite    = veloxcontract.ScopeEditorProjectWrite
-	ScopeEditorAssetUpload     = veloxcontract.ScopeEditorAssetUpload
-	ScopeYouTubeSessionPublish = veloxcontract.ScopeYouTubeSessionPublish
+	ScopeVeloxAssetsWrite = veloxcontract.ScopeVeloxAssetsWrite
 )
 
 // signControlToken issues a short-lived HS256 JWT for the InstaEdit→
@@ -72,7 +67,7 @@ const (
 // from the reverse-direction VELOX_API_TOKEN). userID becomes the
 // JWT subject (sub); workspaceID becomes the workspace_id claim.
 // scopes is the list of authorization grants the caller needs
-// (subslice of the 4 valid scopes above); the JWT carries ONLY
+// (subslice of the 5 valid scopes above); the JWT carries ONLY
 // these scopes — a Velox route demanding a scope not in this list
 // will 403.
 //

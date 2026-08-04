@@ -39,20 +39,18 @@ type ProxyClient interface {
 
 // scopesForMethod maps the proxied HTTP method to the control-JWT
 // scopes signed into the outbound request (per-operation grants,
-// architect verdict Q2). Reads carry only editor.project.read;
-// mutating methods carry the write-side grants. Velox's per-route
-// middleware accepts "exact OR superset" (HasAllScopes), so a write
-// route needing only editor.project.write is satisfied while a read
-// token can never mutate.
+// architect verdict Q2). Reads carry only jobs.read; mutating methods
+// carry the write-side grants. Velox's per-route middleware accepts
+// "exact OR superset" (HasAllScopes), so a write route needing only
+// jobs.write is satisfied while a read token can never mutate.
 func scopesForMethod(method string) []string {
 	switch method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return []string{veloxcontract.ScopeEditorProjectRead}
+		return []string{veloxcontract.ScopeVeloxJobsRead}
 	default:
 		return []string{
-			veloxcontract.ScopeEditorProjectWrite,
-			veloxcontract.ScopeEditorAssetUpload,
-			veloxcontract.ScopeYouTubeSessionPublish,
+			veloxcontract.ScopeVeloxJobsWrite,
+			veloxcontract.ScopeVeloxAssetsWrite,
 		}
 	}
 }

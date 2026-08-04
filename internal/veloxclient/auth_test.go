@@ -57,7 +57,7 @@ func TestSignControlToken_RejectsEmptyScopes(t *testing.T) {
 	if err == nil {
 		t.Fatal("signControlToken([\"\"]) = nil err; want non-nil (empty string scope is programmer error)")
 	}
-	_, err = signControlToken(secret, 1, 2, []string{ScopeEditorProjectRead, ""})
+	_, err = signControlToken(secret, 1, 2, []string{ScopeVeloxJobsRead, ""})
 	if err == nil {
 		t.Fatal("signControlToken with one empty-string element should reject")
 	}
@@ -68,15 +68,15 @@ func TestSignControlToken_RejectsEmptyScopes(t *testing.T) {
 // workspaceID validation.
 func TestSignControlToken_RejectsInvalidIdentity(t *testing.T) {
 	secret := makeSecret()
-	_, err := signControlToken(secret, 0, 2, []string{ScopeEditorProjectRead})
+	_, err := signControlToken(secret, 0, 2, []string{ScopeVeloxJobsRead})
 	if err == nil {
 		t.Fatal("signControlToken(0, _, _) should reject zero userID")
 	}
-	_, err = signControlToken(secret, 1, 0, []string{ScopeEditorProjectRead})
+	_, err = signControlToken(secret, 1, 0, []string{ScopeVeloxJobsRead})
 	if err == nil {
 		t.Fatal("signControlToken(_, 0, _) should reject zero workspaceID")
 	}
-	_, err = signControlToken(nil, 1, 2, []string{ScopeEditorProjectRead})
+	_, err = signControlToken(nil, 1, 2, []string{ScopeVeloxJobsRead})
 	if err == nil {
 		t.Fatal("signControlToken(nil secret) should reject empty secret")
 	}
@@ -89,7 +89,7 @@ func TestSignControlToken_ClaimsCarryScopes(t *testing.T) {
 	secret := makeSecret()
 	userID := int64(123)
 	workspaceID := int64(45)
-	scopes := []string{ScopeEditorProjectRead}
+	scopes := []string{ScopeVeloxJobsRead}
 
 	tok, err := signControlToken(secret, userID, workspaceID, scopes)
 	if err != nil {
@@ -123,8 +123,8 @@ func TestSignControlToken_ClaimsCarryScopes(t *testing.T) {
 	if !ok {
 		t.Fatalf("scopes type: got %T, want array", got["scopes"])
 	}
-	if len(scopesOut) != 1 || scopesOut[0] != ScopeEditorProjectRead {
-		t.Fatalf("scopes: got %v, want [%q]", scopesOut, ScopeEditorProjectRead)
+	if len(scopesOut) != 1 || scopesOut[0] != ScopeVeloxJobsRead {
+		t.Fatalf("scopes: got %v, want [%q]", scopesOut, ScopeVeloxJobsRead)
 	}
 	// exp — int64 within tokenTTL of now.
 	if v, ok := got["exp"].(float64); !ok {
@@ -141,18 +141,19 @@ func TestSignControlToken_ClaimsCarryScopes(t *testing.T) {
 	}
 }
 
-// TestSignControlToken_AllFourScopesRoundTrip — exercise the four
-// scope values in the new taxonomy so a future rename of any of them
-// fails fast.
-func TestSignControlToken_AllFourScopesRoundTrip(t *testing.T) {
+// TestSignControlToken_AllScopesRoundTrip — exercise the scope
+// values in the taxonomy so a future rename of any of them fails
+// fast.
+func TestSignControlToken_AllScopesRoundTrip(t *testing.T) {
 	secret := makeSecret()
 	cases := [][]string{
-		{ScopeEditorProjectRead},
-		{ScopeEditorProjectWrite},
-		{ScopeEditorAssetUpload},
-		{ScopeYouTubeSessionPublish},
-		{ScopeEditorProjectRead, ScopeEditorProjectWrite},
-		{ScopeEditorProjectRead, ScopeEditorProjectWrite, ScopeEditorAssetUpload, ScopeYouTubeSessionPublish},
+		{ScopeVeloxJobsRead},
+		{ScopeVeloxJobsWrite},
+		{ScopeVeloxWorkersRead},
+		{ScopeVeloxAssetsRead},
+		{ScopeVeloxAssetsWrite},
+		{ScopeVeloxJobsRead, ScopeVeloxJobsWrite},
+		{ScopeVeloxJobsRead, ScopeVeloxJobsWrite, ScopeVeloxWorkersRead, ScopeVeloxAssetsRead, ScopeVeloxAssetsWrite},
 	}
 	for _, scopes := range cases {
 		t.Run(strings.Join(scopes, ","), func(t *testing.T) {
