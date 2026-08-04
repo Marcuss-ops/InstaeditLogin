@@ -114,7 +114,11 @@ describe("InternalPosts", () => {
       expect(screen.getByRole("heading", { name: /Posts/i })).toBeInTheDocument();
     });
 
-    expect(screen.getByText("No posts yet")).toBeInTheDocument();
+    // L'heading è statico e appare subito: aspettiamo che i fetch async
+    // si risolvano prima di verificare lo stato vuoto (fix anti-flakiness).
+    await waitFor(() => {
+      expect(screen.getByText("No posts yet")).toBeInTheDocument();
+    });
     expect(screen.getByText("Create post")).toBeInTheDocument();
   });
 
