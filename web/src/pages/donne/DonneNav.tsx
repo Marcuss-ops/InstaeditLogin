@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Menu, X, Calendar, Bot, Users } from "lucide-react";
+import { Menu, X, Calendar, Bot, Sparkles } from "lucide-react";
 import { useBooking } from "../../components/booking/BookingProvider";
 import { NAV } from "./content";
 
@@ -8,6 +8,10 @@ import { NAV } from "./content";
  * Navigazione autonoma della landing "DonneTube".
  * Volutamente separata da `MarketingNav` e `Nav`: la landing è un
  * progetto indipendente con la propria identità e la propria lingua.
+ *
+ * Palette calda e femminile (rosa / corallo / ambra) e layout pulito:
+ * barra principale (logo + menu + CTA) con una sottile "trust bar"
+ * sotto, dove vivono i due badge di fiducia.
  */
 export function DonneNav() {
   const [open, setOpen] = useState(false);
@@ -37,42 +41,32 @@ export function DonneNav() {
   return (
     <nav className="fixed top-0 left-0 right-0 z-50">
       <div className="surface-glass border-b border-white/10">
+        {/* Main bar: logo + links + CTA */}
         <div className="mx-auto max-w-7xl h-16 px-6 flex items-center justify-between">
           <Link to="/donnetube" className="flex items-center gap-2 group" onClick={close}>
-            <span className="inline-flex w-7 h-7 items-center justify-center rounded-md bg-gradient-to-br from-pink-500 to-rose-500 text-white shadow-[0_0_24px_-6px_rgba(244,63,94,0.5)] group-hover:shadow-[0_0_32px_-4px_rgba(244,63,94,0.7)] transition-shadow">
+            <span className="inline-flex w-7 h-7 items-center justify-center rounded-md bg-gradient-to-br from-rose-400 to-orange-400 text-white shadow-[0_0_24px_-6px_rgba(251,113,133,0.6)] group-hover:shadow-[0_0_32px_-4px_rgba(251,146,60,0.7)] transition-shadow">
               <Bot className="w-4 h-4" />
             </span>
             <span className="font-bold tracking-tight text-white text-sm">{NAV.brand}</span>
           </Link>
 
-          <div className="hidden md:flex items-center gap-7 text-sm font-medium text-zinc-400">
+          <div className="hidden md:flex items-center gap-7 text-sm font-medium text-zinc-300">
             {NAV.links.map((l) => (
               <a
                 key={l.label}
                 href={l.href}
                 onClick={close}
-                className="hover:text-white transition-colors relative after:absolute after:bottom-[-2px] after:left-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-pink-400 after:to-rose-400 after:transition-all after:duration-300 hover:after:w-full"
+                className="hover:text-white transition-colors relative after:absolute after:bottom-[-2px] after:left-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-rose-400 after:to-orange-400 after:transition-all after:duration-300 hover:after:w-full"
               >
                 {l.label}
               </a>
             ))}
           </div>
 
-          <div className="hidden lg:flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full surface-glass border border-emerald-400/30 text-[11px] font-medium text-emerald-200">
-              <Bot className="w-3 h-3" />
-              <span>{NAV.badge.pipeline}</span>
-            </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full surface-glass border border-red-400/30 text-[11px] font-medium text-red-300">
-              <Users className="w-3 h-3" />
-              <span>{NAV.badge.limited}</span>
-            </span>
-          </div>
-
           <button
             type="button"
             onClick={() => openBooking("general")}
-            className="hidden md:inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-gradient-to-r from-pink-500 to-rose-500 text-white text-sm font-semibold shadow-[0_4px_20px_-6px_rgba(244,63,94,0.55)] hover:shadow-[0_0_40px_-6px_rgba(244,63,94,0.55)] hover:scale-[1.02] active:scale-100 transition-all"
+            className="hidden md:inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-gradient-to-r from-rose-500 to-orange-500 text-white text-sm font-semibold shadow-[0_4px_20px_-6px_rgba(244,63,94,0.55)] hover:shadow-[0_0_40px_-6px_rgba(251,146,60,0.5)] hover:scale-[1.02] active:scale-100 transition-all"
           >
             <Calendar className="w-3.5 h-3.5" />
             {NAV.cta}
@@ -87,6 +81,18 @@ export function DonneNav() {
           >
             {open ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
+        </div>
+
+        {/* Trust bar: badges di fiducia, centrati, toni caldi */}
+        <div className="hidden md:flex items-center justify-center gap-2 border-t border-white/[0.06] py-2.5 px-6">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-400/10 border border-rose-400/25 text-[11px] font-medium text-rose-200">
+            <Bot className="w-3 h-3 text-rose-300" />
+            <span>{NAV.badge.pipeline}</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/10 border border-amber-400/25 text-[11px] font-medium text-amber-200">
+            <Sparkles className="w-3 h-3 text-amber-300" />
+            <span>{NAV.badge.limited}</span>
+          </span>
         </div>
 
         {open && (
@@ -114,7 +120,7 @@ export function DonneNav() {
                   close();
                   openBooking("general");
                 }}
-                className="w-full block py-3 text-sm font-semibold text-center text-white bg-gradient-to-r from-pink-500 to-rose-500 rounded-xl shadow-[0_4px_20px_-6px_rgba(244,63,94,0.55)] hover:scale-[1.02] active:scale-100 transition-all"
+                className="w-full block py-3 text-sm font-semibold text-center text-white bg-gradient-to-r from-rose-500 to-orange-500 rounded-xl shadow-[0_4px_20px_-6px_rgba(244,63,94,0.55)] hover:scale-[1.02] active:scale-100 transition-all"
               >
                 {NAV.cta}
               </button>

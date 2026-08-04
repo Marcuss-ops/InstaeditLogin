@@ -80,4 +80,31 @@ describe("DonneLanding", () => {
       expect(img, `missing screenshot ${id}`).not.toBeNull();
     }
   });
+
+  it("renders the video testimonials with the provided shorts", () => {
+    render(
+      <MemoryRouter>
+        <BookingProvider>
+          <DonneLanding />
+        </BookingProvider>
+      </MemoryRouter>,
+    );
+
+    const testimonialIds = [
+      "nHjJXnnf65o",
+      "0ThcbcZlb5k",
+      "CVCnF2JNwBI",
+      "BbCpSok2H1o",
+      "Uscs_mH1MiQ",
+      "Wmq2r8xRaQg",
+      "3BnyG5N3wbw",
+      "VngvA7PpveQ",
+    ];
+    for (const id of testimonialIds) {
+      const iframe = document.querySelector(
+        `iframe[src*="youtube.com/embed/${id}"]`,
+      );
+      expect(iframe, `missing testimonial short ${id}`).not.toBeNull();
+    }
+  });
 });

@@ -321,6 +321,17 @@ html {
     color: transparent;
   }
 
+  /* =====================================================================
+   * WARM FEMININE GRADIENT TEXT — rose → coral → amber. Used by the
+   * DonneTube landing ("Le Loro Storie") for warm feminine accents.
+   * ================================================================== */
+  .text-gradient-warm {
+    background: linear-gradient(135deg, #fb7185 0%, #f43f5e 40%, #fb923c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
   @keyframes gold-breathe {
     0%, 100% { filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.30)); }
     50%      { filter: drop-shadow(0 0 20px rgba(251, 146, 60, 0.55)); }

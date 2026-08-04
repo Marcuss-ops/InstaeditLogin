@@ -8,6 +8,7 @@ import { Earnings } from "./Earnings";
 import { HowItWorks } from "./HowItWorks";
 import { Results } from "./Results";
 import { FounderStory } from "./FounderStory";
+import { Testimonials } from "./Testimonials";
 import { FAQSection } from "./FAQSection";
 import { FinalCTA } from "./FinalCTA";
 import { SEO } from "./content";
@@ -37,6 +38,7 @@ export function DonneLanding() {
         <HowItWorks />
         <Results />
         <FounderStory />
+        <Testimonials />
         <FAQSection />
         <FinalCTA />
       </main>

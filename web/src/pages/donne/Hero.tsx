@@ -50,7 +50,7 @@ export function Hero() {
           <button
             type="button"
             onClick={() => openBooking("general")}
-            className="group inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 text-white font-semibold text-sm shadow-[0_4px_24px_-8px_rgba(244,63,94,0.6)] hover:shadow-[0_0_50px_-8px_rgba(244,63,94,0.55)] hover:scale-[1.02] active:scale-100 transition-all"
+            className="group inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-gradient-to-r from-rose-500 to-orange-500 text-white font-semibold text-sm shadow-[0_4px_24px_-8px_rgba(251,146,60,0.55)] hover:shadow-[0_0_50px_-8px_rgba(251,146,60,0.55)] hover:scale-[1.02] active:scale-100 transition-all"
           >
             <Calendar className="w-4 h-4" />
             {HERO.ctaPrimary}

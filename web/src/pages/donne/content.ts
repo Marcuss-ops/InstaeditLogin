@@ -30,7 +30,7 @@ export const NAV = {
     pipeline: "Pipeline semi-automatizzata — 90% eseguita dall'AI",
     limited: "Posti limitati — Solo 10 nuove studentesse questo mese",
   },
-  cta: "Prenota La Tua Chiamata",
+  cta: "Pronta a Iniziare?",
 } as const;
 
 export const HERO = {
@@ -188,6 +188,24 @@ export const RESULTS = {
     { img: "/results/result-4.jpg", alt: "Risultato performance video — ricavi 28 giorni", caption: "Ricavi a 28 giorni per singolo video" },
     { img: "/results/result-5.jpg", alt: "Risultato crescita creator — iscritti", caption: "Curva iscritti che supera i 1.000" },
     { img: "/results/result-6.jpg", alt: "Risultato multi-piattaforma — cross-post", caption: "Guadagni cross-post su 7 piattaforme" },
+  ],
+} as const;
+
+export const TESTIMONIALS = {
+  eyebrow: "Le Loro Storie",
+  title: "Donne vere. ",
+  titleAccent: "Parole vere.",
+  subtitle:
+    "Storie di studentesse che sono partite da zero e hanno costruito il loro primo flusso di cassa con i video faceless. Guarda e ascolta la loro esperienza:",
+  videos: [
+    "nHjJXnnf65o",
+    "0ThcbcZlb5k",
+    "CVCnF2JNwBI",
+    "BbCpSok2H1o",
+    "Uscs_mH1MiQ",
+    "Wmq2r8xRaQg",
+    "3BnyG5N3wbw",
+    "VngvA7PpveQ",
   ],
 } as const;
 
