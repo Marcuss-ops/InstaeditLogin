@@ -45,6 +45,11 @@ type ThumbnailProjectStore interface {
 	// (export, platform_account, video) tuples surface
 	// ErrThumbnailAssignmentConflict.
 	CreateAssignment(ctx context.Context, assignment *models.ThumbnailAssignment) error
+	// ListAssignments returns the workspace-scoped project's destination
+	// assignments, newest-first. Powers the library's "Collegate" filter:
+	// a project with zero rows is unlinked, one or more means it is
+	// assigned to at least one video.
+	ListAssignments(ctx context.Context, workspaceID int64, projectID string) ([]models.ThumbnailAssignment, error)
 }
 
 type createThumbnailProjectRequest struct {

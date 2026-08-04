@@ -46,6 +46,8 @@ type thumbnailProjectTestStore struct {
 	// Assignment surfaces for the assignment endpoint.
 	assignmentErr      error
 	createdAssignments []models.ThumbnailAssignment
+	assignments        []models.ThumbnailAssignment
+	listAssignmentsErr error
 }
 
 func (s *thumbnailProjectTestStore) Create(_ context.Context, project *models.ThumbnailProject) error {
@@ -140,6 +142,9 @@ func (s *thumbnailProjectTestStore) CreateAssignment(_ context.Context, assignme
 	}
 	s.createdAssignments = append(s.createdAssignments, *assignment)
 	return nil
+}
+func (s *thumbnailProjectTestStore) ListAssignments(_ context.Context, _ int64, _ string) ([]models.ThumbnailAssignment, error) {
+	return s.assignments, s.listAssignmentsErr
 }
 
 func thumbnailProjectRouter(t *testing.T, store *thumbnailProjectTestStore, ws *mockWorkspaceStore) *Router {
@@ -552,6 +557,56 @@ func TestThumbnailProjects_AddAssignmentExportNotFoundIs404(t *testing.T) {
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+func TestThumbnailProjects_ListAssignmentsReturnsItems(t *testing.T) {
+	assignment := models.ThumbnailAssignment{ID: "thumbassign_1", WorkspaceID: 7, ProjectID: "thumbproj_test", ExportID: "thumbexp_1", PlatformAccountID: 381, Platform: "youtube", YouTubeVideoID: "abc123", Status: "draft"}
+	store := &thumbnailProjectTestStore{assignments: []models.ThumbnailAssignment{assignment}}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/thumbnail-projects/thumbproj_test/assignments?workspace_id=7", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response thumbnailAssignmentListResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 1 || response.Items[0].ID != "thumbassign_1" || response.Items[0].YouTubeVideoID != "abc123" {
+		t.Fatalf("unexpected assignments: %+v", response.Items)
+	}
+}
+
+func TestThumbnailProjects_ListAssignmentsEmptyIsEmptyArray(t *testing.T) {
+	store := &thumbnailProjectTestStore{}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/thumbnail-projects/thumbproj_test/assignments?workspace_id=7", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response thumbnailAssignmentListResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Items == nil || len(response.Items) != 0 {
+		t.Fatalf("want empty items array, got %#v", response.Items)
+	}
+}
+
+func TestThumbnailProjects_ListAssignmentsCrossWorkspaceIs404(t *testing.T) {
+	r := thumbnailProjectRouter(t, &thumbnailProjectTestStore{}, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 99}, nil }})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/thumbnail-projects/thumbproj_test/assignments?workspace_id=7", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for cross-workspace assignment list, got %d", w.Code)
 	}
 }
 

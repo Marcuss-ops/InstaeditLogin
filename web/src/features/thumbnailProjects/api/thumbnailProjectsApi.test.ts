@@ -35,6 +35,7 @@ import {
   getThumbnailExport,
   getThumbnailProject,
   getThumbnailRevision,
+  listThumbnailAssignments,
   listThumbnailProjects,
   listThumbnailRevisions,
   parseProjectVersionConflict,
@@ -180,12 +181,12 @@ describe("updateThumbnailProject", () => {
 });
 
 describe("archiveThumbnailProject / deleteThumbnailProject", () => {
-  it("archive POSTs with workspace_id + version and resolves on 204", async () => {
+  it("archive POSTs /archive with workspace_id + version and resolves on 204", async () => {
     authedFetchMock.mockResolvedValue(jsonResponse(undefined, { status: 204 }));
     await archiveThumbnailProject(7, "thumbproj_1", 3);
     const [path, init] = authedFetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe(
-      "/api/v1/thumbnail-projects/thumbproj_1?workspace_id=7&version=3",
+      "/api/v1/thumbnail-projects/thumbproj_1/archive?workspace_id=7&version=3",
     );
     expect(init.method).toBe("POST");
   });
@@ -350,6 +351,23 @@ describe("createThumbnailAssignments", () => {
       targets: [{ platform_account_id: 1, youtube_video_id: "v" }],
     });
     expect(assignments).toEqual([ASSIGNMENT]);
+  });
+});
+
+describe("listThumbnailAssignments", () => {
+  it("GETs /api/v1/thumbnail-projects/{id}/assignments with workspace_id", async () => {
+    authedFetchMock.mockResolvedValue(jsonResponse({ items: [ASSIGNMENT] }));
+    const assignments = await listThumbnailAssignments(7, "thumbproj_1");
+    const [path] = authedFetchMock.mock.calls[0] as [string];
+    expect(path).toBe(
+      "/api/v1/thumbnail-projects/thumbproj_1/assignments?workspace_id=7",
+    );
+    expect(assignments).toEqual([ASSIGNMENT]);
+  });
+
+  it("returns [] when the server omits items (unlinked project)", async () => {
+    authedFetchMock.mockResolvedValue(jsonResponse({}));
+    await expect(listThumbnailAssignments(1, "thumbproj_1")).resolves.toEqual([]);
   });
 });
 

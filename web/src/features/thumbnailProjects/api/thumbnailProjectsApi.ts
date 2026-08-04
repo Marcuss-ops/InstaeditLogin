@@ -143,7 +143,7 @@ export async function archiveThumbnailProject(
   init: RequestInit = {},
 ): Promise<void> {
   await authedFetch(
-    withVersion(withWorkspace(projectPath(projectId), workspaceId), version),
+    withVersion(withWorkspace(`${projectPath(projectId)}/archive`, workspaceId), version),
     { method: "POST", ...init },
   );
 }
@@ -343,6 +343,24 @@ export async function createThumbnailAssignments(
     | undefined;
   if (Array.isArray(data)) return data;
   return data?.items ?? [];
+}
+
+/**
+ * GET /api/v1/thumbnail-projects/{id}/assignments — workspace-scoped
+ * destination list for a project (newest-first). The Copertine library
+ * uses it to classify a project as "Collegata" (≥1 row) vs unlinked.
+ */
+export async function listThumbnailAssignments(
+  workspaceId: number,
+  projectId: string,
+  init: RequestInit = {},
+): Promise<ThumbnailProjectAssignment[]> {
+  const resp = await authedFetch(
+    withWorkspace(`${projectPath(projectId)}/assignments`, workspaceId),
+    init,
+  );
+  const data = (await resp.json()) as { items?: ThumbnailProjectAssignment[] };
+  return data.items ?? [];
 }
 
 // ─── Media resolver ────────────────────────────────────────────────

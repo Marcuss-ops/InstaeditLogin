@@ -56,6 +56,37 @@ func mapThumbnailAssignmentError(w http.ResponseWriter, err error) {
 	}
 }
 
+// handleListThumbnailAssignments returns the workspace-scoped destination
+// assignments of a project (GET /api/v1/thumbnail-projects/{id}/assignments).
+// Empty array when the project has no assignments yet — the library uses
+// this to classify a project as "Collegata" (≥1 row) vs unlinked.
+func (r *Router) handleListThumbnailAssignments(w http.ResponseWriter, req *http.Request) {
+	if r.thumbnailProjectStore == nil {
+		writeError(w, http.StatusNotImplemented, "thumbnail projects not configured on this server")
+		return
+	}
+	workspaceID, ok := parseThumbnailWorkspaceQuery(w, req)
+	if !ok {
+		return
+	}
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+		return
+	}
+	projectID, ok := parseThumbnailProjectID(w, req)
+	if !ok {
+		return
+	}
+	items, err := r.thumbnailProjectStore.ListAssignments(req.Context(), workspaceID, projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list thumbnail assignments: "+err.Error())
+		return
+	}
+	if items == nil {
+		items = []models.ThumbnailAssignment{}
+	}
+	writeJSON(w, http.StatusOK, thumbnailAssignmentListResponse{Items: items})
+}
+
 // handleCreateThumbnailAssignments links an EXISTING ready export to one or
 // more YouTube videos. The export must be ready and visible in the caller's
 // workspace; each platform account must be linked to that workspace as a

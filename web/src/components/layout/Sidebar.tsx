@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Radio,
+  ImageIcon,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -31,6 +32,7 @@ const baseNavItems: NavItem[] = [
   { to: "/app/calendar", label: "Calendar", icon: Calendar },
   { to: "/app/groups", label: "Groups", icon: FolderTree },
   { to: "/app/livestreams", label: "Live streaming", icon: Radio, liveCountBadge: true },
+  { to: "/app/covers", label: "Copertine", icon: ImageIcon },
   { to: "/app/linking", label: "Linking", icon: Link2 },
 ];
 

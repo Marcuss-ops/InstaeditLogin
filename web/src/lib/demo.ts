@@ -43,6 +43,66 @@ export const demoWorkspaces = [
   },
 ];
 
+type DemoThumbnailProject = {
+  id: string;
+  workspace_id: number;
+  created_by: number;
+  name: string;
+  description: string;
+  canvas_width: number;
+  canvas_height: number;
+  status: "draft" | "ready";
+  current_revision_id: string | null;
+  preview_media_id: string | null;
+  latest_export_id: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export const demoThumbnailProjects: DemoThumbnailProject[] = [
+  {
+    id: "thumbproj_demo_1",
+    workspace_id: 1,
+    created_by: 1,
+    name: "WWE Breaking News",
+    description: "Copertina demo autonoma",
+    canvas_width: 1920,
+    canvas_height: 1080,
+    status: "draft" as const,
+    current_revision_id: "thumbrev_demo_1",
+    preview_media_id: null,
+    latest_export_id: null,
+    version: 3,
+    created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+    updated_at: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
+  },
+  {
+    id: "thumbproj_demo_2",
+    workspace_id: 1,
+    created_by: 1,
+    name: "Summer Short",
+    description: "",
+    canvas_width: 1080,
+    canvas_height: 1920,
+    status: "ready" as const,
+    current_revision_id: "thumbrev_demo_2",
+    preview_media_id: null,
+    latest_export_id: "thumbexp_demo_2",
+    version: 5,
+    created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+    updated_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+  },
+];
+
+let nextThumbnailProjectVersion = 10;
+
+function thumbnailProjectPathMatch(path: string): { id: string; rest: string } | null {
+  const match = /^\/api\/v1\/thumbnail-projects\/([^/]+)(\/.*)?$/.exec(path);
+  if (!match) return null;
+  return { id: decodeURIComponent(match[1]!), rest: match[2] ?? "" };
+}
+
 export const demoPosts = [
   {
     id: 1,
@@ -113,6 +173,93 @@ export function handleDemoRequest(
 
   if (path === "/api/v1/workspaces") {
     return json({ workspaces: demoWorkspaces });
+  }
+
+  if (path === "/api/v1/thumbnail-projects") {
+    if (method === "GET") {
+      return json({ items: demoThumbnailProjects });
+    }
+    if (method === "POST") {
+      try {
+        const body = JSON.parse((init.body as string) ?? "{}") as {
+          workspace_id?: number;
+          name?: string;
+          description?: string;
+          canvas_width?: number;
+          canvas_height?: number;
+        };
+        const now = new Date().toISOString();
+        const project: DemoThumbnailProject = {
+          id: `thumbproj_demo_${nextThumbnailProjectVersion++}`,
+          workspace_id: Number(body.workspace_id ?? 1),
+          created_by: 1,
+          name: String(body.name ?? "Untitled"),
+          description: String(body.description ?? ""),
+          canvas_width: Number(body.canvas_width ?? 1920),
+          canvas_height: Number(body.canvas_height ?? 1080),
+          status: "draft",
+          current_revision_id: null,
+          preview_media_id: null,
+          latest_export_id: null,
+          version: 1,
+          created_at: now,
+          updated_at: now,
+        };
+        demoThumbnailProjects.unshift(project);
+        return json(project, 201);
+      } catch {
+        return json({ error: "demo: invalid project body" }, 400);
+      }
+    }
+  }
+
+  const thumbMatch = thumbnailProjectPathMatch(path);
+  if (thumbMatch) {
+    const project = demoThumbnailProjects.find((p) => p.id === thumbMatch.id);
+    if (!project) return json({ error: "demo: project not found" }, 404);
+    if (thumbMatch.rest === "/snapshot" && method === "PUT") {
+      project.version += 1;
+      project.current_revision_id = `thumbrev_demo_${project.version}`;
+      project.updated_at = new Date().toISOString();
+      return json({
+        project_id: project.id,
+        revision_id: project.current_revision_id,
+        revision_number: project.version,
+        version: project.version,
+        saved_at: new Date().toISOString(),
+        snapshot_sha256: "demo",
+      });
+    }
+    if (thumbMatch.rest.startsWith("/revisions")) {
+      return json({ items: [] });
+    }
+    if (thumbMatch.rest === "/assignments") {
+      return json({ items: [] });
+    }
+    if (thumbMatch.rest === "/render" && method === "POST") {
+      project.status = "ready";
+      project.latest_export_id = `thumbexp_demo_${project.version}`;
+      project.updated_at = new Date().toISOString();
+      return json({
+        id: project.latest_export_id,
+        project_id: project.id,
+        revision_id: project.current_revision_id,
+        media_id: null,
+        content_type: "image/png",
+        width: project.canvas_width,
+        height: project.canvas_height,
+        file_size: 0,
+        sha256: "demo",
+        renderer_version: "go-canvas-v1",
+        status: "ready",
+        last_error: "",
+        created_at: new Date().toISOString(),
+      });
+    }
+    if (thumbMatch.rest === "/media/resolve" && method === "POST") {
+      return json({ items: [] });
+    }
+    return json(project);
   }
 
   if (path === "/api/v1/posts") {

@@ -29,11 +29,12 @@ type ThumbnailProjectsModule struct {
 	listAssets       http.HandlerFunc
 	deleteAsset      http.HandlerFunc
 	createAssignment http.HandlerFunc
+	listAssignments  http.HandlerFunc
 	resolveMedia     http.HandlerFunc
 }
 
-func NewThumbnailProjectsModule(protected func(http.HandlerFunc) http.HandlerFunc, create, list, get, update, snapshot, revisions, revision, restore, archive, delete, render, getExport, addAsset, listAssets, deleteAsset, createAssignment, resolveMedia http.HandlerFunc) RouteModule {
-	return &ThumbnailProjectsModule{protected: protected, create: create, list: list, get: get, update: update, snapshot: snapshot, revisions: revisions, revision: revision, restore: restore, archive: archive, delete: delete, render: render, getExport: getExport, addAsset: addAsset, listAssets: listAssets, deleteAsset: deleteAsset, createAssignment: createAssignment, resolveMedia: resolveMedia}
+func NewThumbnailProjectsModule(protected func(http.HandlerFunc) http.HandlerFunc, create, list, get, update, snapshot, revisions, revision, restore, archive, delete, render, getExport, addAsset, listAssets, deleteAsset, createAssignment, listAssignments, resolveMedia http.HandlerFunc) RouteModule {
+	return &ThumbnailProjectsModule{protected: protected, create: create, list: list, get: get, update: update, snapshot: snapshot, revisions: revisions, revision: revision, restore: restore, archive: archive, delete: delete, render: render, getExport: getExport, addAsset: addAsset, listAssets: listAssets, deleteAsset: deleteAsset, createAssignment: createAssignment, listAssignments: listAssignments, resolveMedia: resolveMedia}
 }
 
 var _ RouteModule = (*ThumbnailProjectsModule)(nil)
@@ -66,6 +67,9 @@ func (m *ThumbnailProjectsModule) Register(mux chi.Router) {
 	// export exists before any assignment and the original project is
 	// never modified; the workspace guard is enforced handler-side.
 	mux.Method(http.MethodPost, "/api/v1/thumbnail-exports/{export_id}/assignments", m.protected(m.createAssignment))
+	// GET project assignments — workspace-scoped destination list used
+	// by the Copertine library to compute the "Collegate" filter.
+	mux.Method(http.MethodGet, "/api/v1/thumbnail-projects/{id}/assignments", m.protected(m.listAssignments))
 	// Media resolver: resolves the snapshot's media_id references to
 	// short-lived presigned GET URLs, workspace-scoped. This is the
 	// server-authoritative source for the editor canvas — local blobs
