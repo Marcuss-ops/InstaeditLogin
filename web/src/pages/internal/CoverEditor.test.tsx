@@ -421,6 +421,12 @@ describe("CoverEditorPage", () => {
     // Export result panel appears with the export id.
     expect(await screen.findByText("thumbexp_1")).toBeInTheDocument();
     expect(screen.getByText("Scarica PNG")).toBeInTheDocument();
+    // The flush advanced latestRevisionId to thumbrev_2 while this mock
+    // export is pinned to thumbrev_1 → the panel HONESTLY flags the
+    // mismatch (mai revisioni stantie presentate come fresche).
+    expect(screen.getByTestId("export-origin-check")).toHaveTextContent(
+      /Export da revisione stantia/,
+    );
   });
 
   it("Salva come copia creates a NEW autonomous project with the local snapshot", async () => {
@@ -582,5 +588,63 @@ describe("CoverEditorPage", () => {
     );
     // The assignments panel refreshes with the new link.
     expect(await screen.findByText("video_1")).toBeInTheDocument();
+  });
+
+  it("Salva progetto flushes pending edits immediately (senza attendere il debounce)", async () => {
+    const snapshotMock = vi.fn();
+    setEditorEndpoints(snapshotMock);
+    renderPage();
+    await screen.findByTestId("canvas-surface");
+
+    await userEvent.click(screen.getByRole("button", { name: "Testo" }));
+    // Click "Salva progetto" BEFORE the 1.5s debounce would fire.
+    await userEvent.click(screen.getByRole("button", { name: "Salva progetto" }));
+
+    await waitFor(
+      () => {
+        expect(snapshotMock).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 4000 },
+    );
+    const [, init] = snapshotMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as {
+      snapshot: { objects: unknown[] };
+    };
+    expect(payload.snapshot.objects).toHaveLength(1);
+    // The indicator reports "Salvato" only after the server ack.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("save-indicator")).toHaveTextContent(/salvato/i);
+      },
+      { timeout: 4000 },
+    );
+  });
+
+  it("export shows media_id/sha256/status and proves same-snapshot origin", async () => {
+    setEditorEndpoints(vi.fn());
+    renderPage();
+    await screen.findByTestId("canvas-surface");
+
+    // No edits: flush has nothing to save, so the latest persisted
+    // revision stays thumbrev_1 — matching the mock export's revision.
+    await userEvent.click(screen.getByRole("button", { name: "Genera copertina" }));
+
+    expect(await screen.findByTestId("export-id")).toHaveTextContent("thumbexp_1");
+    // media_id (truncated in view, full value in the title tooltip).
+    const mediaSpan = screen.getByTitle(/^media /);
+    expect(mediaSpan.title).toContain("00000000-0000-4000-8000");
+    // sha256 truncated in view, full hex value in the title tooltip.
+    const shaSpan = screen.getByTitle(/^abcdef/);
+    expect(shaSpan.title.length).toBeGreaterThan(40);
+    // Status badge is explicit.
+    expect(screen.getByTestId("export-status")).toHaveTextContent("pronto");
+    // Same-origin proof: export revision == latest revision, dims == canvas.
+    expect(screen.getByTestId("export-origin-check")).toHaveTextContent(
+      /Stessa revisione dell'ultimo snapshot/,
+    );
+    expect(screen.getByTestId("export-origin-check")).toHaveTextContent(
+      /1920×1080 identiche al canvas/,
+    );
+    expect(screen.getByText("Scarica PNG")).toBeInTheDocument();
   });
 });

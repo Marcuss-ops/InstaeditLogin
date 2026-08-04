@@ -40,6 +40,7 @@ import {
   RefreshCw,
   CopyPlus,
   Loader2,
+  Save,
 } from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { Skeleton, ErrorState } from "../../components/feedback";
@@ -678,6 +679,11 @@ export function CoverEditorPage() {
   const [exportPreviewUrl, setExportPreviewUrl] = useState<string | null>(null);
   const [showLinkDialog, setShowLinkDialog] = useState(false);
   const [isSavingCopy, setIsSavingCopy] = useState(false);
+  const [isManualSaving, setIsManualSaving] = useState(false);
+  // The server's latest persisted revision id (advances only from the
+  // snapshot ack). ExportPanel compares it against an export's
+  // revision_id to PROVE preview/export derive from the same snapshot.
+  const [latestRevisionId, setLatestRevisionId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Holds the autosave baseline resetter so loadProject (defined before
   // the hook call) can re-baseline the server truth after a load/reload
@@ -731,6 +737,7 @@ export function CoverEditorPage() {
       setVersion(project.version);
       setRevisions(revList);
       setAssignments(assignList);
+      setLatestRevisionId(project.current_revision_id ?? revList[0]?.id ?? null);
       setMediaUrls(urlMap);
       setSelectedId(null);
       setLoadState({ kind: "ready", project, workspaceId: wsId });
@@ -774,7 +781,10 @@ export function CoverEditorPage() {
     snapshot: snapshot ?? { canvas: { width: 1920, height: 1080, background: DEFAULT_BACKGROUND }, objects: [] },
     version,
     enabled: ready,
-    onSaved: (result) => setVersion(result.version),
+    onSaved: (result) => {
+      setVersion(result.version);
+      setLatestRevisionId(result.revision_id);
+    },
   });
   autosaveResetRef.current = autosave.reset;
 
@@ -789,6 +799,15 @@ export function CoverEditorPage() {
     // the LATEST snapshot before any export/preview/duplicate/link.
     return autosave.flush();
   }, [autosave]);
+
+  // "Salva progetto": manual immediate flush — never waits the debounce.
+  // The SaveIndicator reflects the REAL outcome (Salvataggio… → Salvato
+  // alle HH:MM only from the server ack; Errore di salvataggio on fail).
+  const handleManualSave = useCallback(() => {
+    if (isManualSaving) return;
+    setIsManualSaving(true);
+    void flushPendingAutosave().finally(() => setIsManualSaving(false));
+  }, [flushPendingAutosave, isManualSaving]);
 
   // Export flow: flush → canonical server render → ready export.
   const handleGenerateExport = useCallback(async () => {
@@ -1024,6 +1043,19 @@ export function CoverEditorPage() {
               lastHash={autosave.lastHash}
               onRetry={autosave.retry}
             />
+            <button
+              type="button"
+              onClick={handleManualSave}
+              disabled={isManualSaving || autosave.conflict !== null}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.10] bg-white/[0.04] px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isManualSaving ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Save size={14} />
+              )}
+              Salva progetto
+            </button>
             <span className="hidden sm:inline text-[12px] text-[#9aa0aa]">
               {snapshot?.canvas.width}×{snapshot?.canvas.height}
             </span>
@@ -1114,6 +1146,10 @@ export function CoverEditorPage() {
                 previewUrl={exportPreviewUrl}
                 onGenerate={() => void handleGenerateExport()}
                 onLink={() => setShowLinkDialog(true)}
+                latestRevisionId={latestRevisionId}
+                canvasWidth={snapshot?.canvas.width}
+                canvasHeight={snapshot?.canvas.height}
+                rendererVersion={THUMBNAIL_RENDERER_VERSION}
               />
             </div>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
