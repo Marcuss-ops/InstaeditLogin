@@ -222,6 +222,34 @@ describe("useThumbnailAutosave", () => {
     expect(saveSnapshotMock).toHaveBeenCalledTimes(1); // baseline == B, nothing new
   });
 
+  it("sends If-Match with the current version on every save (no silent last-write-wins)", async () => {
+    const { rerender } = setup();
+    rerender({ snapshot: SNAP_B, version: 1, enabled: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    const [, , , opts] = saveSnapshotMock.mock.calls[0] as [
+      number,
+      string,
+      unknown,
+      { ifMatchVersion?: number },
+    ];
+    expect(opts.ifMatchVersion).toBe(1);
+
+    // After the server acked version 2, the next save must carry it.
+    rerender({ snapshot: { ...SNAP_B, objects: [{ id: "t", type: "text", text: "X" }] }, version: 2, enabled: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    const [, , , opts2] = saveSnapshotMock.mock.calls[1] as [
+      number,
+      string,
+      unknown,
+      { ifMatchVersion?: number },
+    ];
+    expect(opts2.ifMatchVersion).toBe(2);
+  });
+
   it("flush() cancels the debounce and saves immediately", async () => {
     const { result, rerender } = setup();
     rerender({ snapshot: SNAP_B, version: 1, enabled: true });
@@ -233,13 +261,105 @@ describe("useThumbnailAutosave", () => {
     expect(saveSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
-  it("flush() returns false when there is nothing to save", async () => {
+  it("flush() resolves true when the latest snapshot is already persisted", async () => {
     const { result } = setup();
-    let ok = true;
+    let ok = false;
     await act(async () => {
       ok = await result.current.flush();
     });
-    expect(ok).toBe(false);
+    expect(ok).toBe(true);
     expect(saveSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("flush() AWAITS a save in flight and persists edits made during it", async () => {
+    let resolveFirst: ((r: ThumbnailProjectSnapshotResult) => void) | null = null;
+    let callCount = 0;
+    saveSnapshotMock.mockImplementation(() => {
+      callCount += 1;
+      // Only the FIRST save (SNAP_B) is held in flight; later calls
+      // resolve immediately so the flush can complete its loop.
+      if (callCount === 1) {
+        return new Promise<ThumbnailProjectSnapshotResult>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve({ ...RESULT, snapshot_sha256: `hash${callCount}` });
+    });
+    const { result, rerender } = setup();
+    // Trigger the debounced save for SNAP_B and let it start (in flight).
+    rerender({ snapshot: SNAP_B, version: 1, enabled: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(saveSnapshotMock).toHaveBeenCalledTimes(1);
+
+    // An edit lands WHILE the save is still in flight.
+    const SNAP_C: ThumbnailCanvasSnapshot = {
+      ...SNAP_B,
+      objects: [{ id: "text-1", type: "text", text: "BBBB", x: 90, y: 90 }],
+    };
+    rerender({ snapshot: SNAP_C, version: 1, enabled: true });
+
+    // flush() must JOIN the in-flight save, then persist SNAP_C before
+    // resolving — never resolve while the server still holds a stale
+    // revision (DoD: preview/export always derives from the latest edit).
+    let flushResolved = false;
+    let flushOk: boolean | null = null;
+    void result.current.flush().then((ok) => {
+      flushOk = ok;
+      flushResolved = true;
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(flushResolved).toBe(false); // still waiting on the in-flight save
+
+    await act(async () => {
+      resolveFirst?.(RESULT); // the in-flight save (SNAP_B) completes
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // SNAP_C must now be persisted immediately (flush, not debounce).
+    expect(saveSnapshotMock).toHaveBeenCalledTimes(2);
+    const [, , secondBody] = saveSnapshotMock.mock.calls[1] as [
+      number,
+      string,
+      { snapshot: ThumbnailCanvasSnapshot },
+    ];
+    expect(secondBody.snapshot).toEqual(SNAP_C);
+    expect(flushResolved).toBe(true);
+    expect(flushOk).toBe(true);
+    expect(result.current.status).toBe("saved");
+  });
+
+  it("flush() resolves false when the in-flight save fails", async () => {
+    let rejectFirst: ((e: Error) => void) | null = null;
+    saveSnapshotMock.mockImplementation(
+      () =>
+        new Promise<ThumbnailProjectSnapshotResult>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+    );
+    const { result, rerender } = setup();
+    rerender({ snapshot: SNAP_B, version: 1, enabled: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(saveSnapshotMock).toHaveBeenCalledTimes(1);
+
+    let flushOk: boolean | null = null;
+    void result.current.flush().then((ok) => {
+      flushOk = ok;
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      rejectFirst?.(new Error("network down"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(flushOk).toBe(false);
+    expect(result.current.status).toBe("error");
   });
 });

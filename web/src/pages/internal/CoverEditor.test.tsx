@@ -109,6 +109,22 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+const EXPORT = {
+  id: "thumbexp_1",
+  project_id: "thumbproj_1",
+  revision_id: "thumbrev_1",
+  media_id: "00000000-0000-4000-8000-000000000001",
+  content_type: "image/png",
+  width: 1920,
+  height: 1080,
+  file_size: 1024,
+  sha256: "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefab",
+  renderer_version: "go-canvas-v1",
+  status: "ready",
+  last_error: "",
+  created_at: "2026-08-04T10:00:00Z",
+};
+
 function setEditorEndpoints(snapshotMock: ReturnType<typeof vi.fn>) {
   authedFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/v1/workspaces") {
@@ -139,6 +155,9 @@ function setEditorEndpoints(snapshotMock: ReturnType<typeof vi.fn>) {
         saved_at: "2026-08-04T10:00:00Z",
         snapshot_sha256: "aabbccdd",
       });
+    }
+    if (url === "/api/v1/thumbnail-projects/thumbproj_1/render?workspace_id=1") {
+      return jsonResponse(EXPORT, 201);
     }
     if (url === "/api/v1/media?limit=100") {
       return jsonResponse({
@@ -348,5 +367,220 @@ describe("CoverEditorPage", () => {
     );
     const imgObject = screen.getByTestId("canvas-object");
     expect(imgObject).toHaveAttribute("data-object-type", "image");
+  });
+
+  it("Genera copertina FLUSHES the pending autosave BEFORE rendering (mai revisioni stantie)", async () => {
+    const callOrder: string[] = [];
+    const snapshotMock = vi.fn((url: string, init?: RequestInit) => {
+      callOrder.push("snapshot");
+      void url;
+      void init;
+    });
+    setEditorEndpoints(snapshotMock);
+    // Track the render call too (comes through the same authedFetch mock).
+    const originalImpl = authedFetchMock.getMockImplementation();
+    authedFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === "/api/v1/thumbnail-projects/thumbproj_1/render?workspace_id=1") {
+        callOrder.push("render");
+        return jsonResponse(EXPORT, 201);
+      }
+      if (url === "/api/v1/thumbnail-projects/thumbproj_1/snapshot?workspace_id=1") {
+        callOrder.push("snapshot");
+        snapshotMock(url, init);
+        return jsonResponse({
+          project_id: "thumbproj_1",
+          revision_id: "thumbrev_2",
+          revision_number: 2,
+          version: 2,
+          saved_at: "2026-08-04T10:00:00Z",
+          snapshot_sha256: "aabbccdd",
+        });
+      }
+      return originalImpl!(url, init);
+    });
+
+    renderPage();
+    await screen.findByTestId("canvas-surface");
+
+    // Make an edit so there is a PENDING autosave, then export immediately.
+    await userEvent.click(screen.getByRole("button", { name: "Testo" }));
+    await userEvent.click(screen.getByRole("button", { name: "Genera copertina" }));
+
+    await waitFor(
+      () => {
+        expect(callOrder.filter((c) => c === "render").length).toBe(1);
+      },
+      { timeout: 4000 },
+    );
+    // The flush must have persisted the edit BEFORE the render request.
+    const snapshotIdx = callOrder.lastIndexOf("snapshot");
+    const renderIdx = callOrder.indexOf("render");
+    expect(snapshotIdx).toBeGreaterThan(-1);
+    expect(snapshotIdx).toBeLessThan(renderIdx);
+
+    // Export result panel appears with the export id.
+    expect(await screen.findByText("thumbexp_1")).toBeInTheDocument();
+    expect(screen.getByText("Scarica PNG")).toBeInTheDocument();
+  });
+
+  it("Salva come copia creates a NEW autonomous project with the local snapshot", async () => {
+    setEditorEndpoints(vi.fn());
+    const copyProject = {
+      ...PROJECT,
+      id: "thumbproj_copia",
+      name: "WWE Breaking News (copia)",
+      version: 1,
+    };
+    const baseImpl = authedFetchMock.getMockImplementation();
+    const posted: Array<{ url: string; body?: unknown }> = [];
+    // Layer 1: intercept the copy-project create + its snapshot.
+    const copyImpl = async (url: string, init?: RequestInit) => {
+      if (url === "/api/v1/thumbnail-projects" && init?.method === "POST") {
+        posted.push({ url, body: init.body });
+        return jsonResponse(copyProject, 201);
+      }
+      if (url === "/api/v1/thumbnail-projects/thumbproj_copia/snapshot?workspace_id=1") {
+        posted.push({ url, body: init?.body });
+        return jsonResponse({
+          project_id: "thumbproj_copia",
+          revision_id: "thumbrev_copia_1",
+          revision_number: 1,
+          version: 2,
+          saved_at: "2026-08-04T10:00:00Z",
+          snapshot_sha256: "copia",
+        });
+      }
+      return baseImpl!(url, init);
+    };
+    authedFetchMock.mockImplementation(copyImpl);
+
+    renderPage();
+    await screen.findByTestId("canvas-surface");
+
+    // Layer 2: make the ORIGINAL project's snapshot save return 409.
+    authedFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === "/api/v1/thumbnail-projects/thumbproj_1/snapshot?workspace_id=1") {
+        throw new ApiError(
+          409,
+          "expected=1 current=9",
+          { code: "PROJECT_VERSION_CONFLICT", current_version: 9 },
+        );
+      }
+      return copyImpl(url, init);
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Testo" }));
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("conflict-banner")).toBeInTheDocument();
+      },
+      { timeout: 4000 },
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Salva come copia" }));
+
+    await waitFor(
+      () => {
+        expect(posted.length).toBe(2);
+      },
+      { timeout: 4000 },
+    );
+    const createBody = JSON.parse(String(posted[0]!.body)) as {
+      workspace_id: number;
+      name: string;
+      canvas_width: number;
+      canvas_height: number;
+    };
+    expect(createBody.workspace_id).toBe(1);
+    expect(createBody.name).toBe("WWE Breaking News (copia)");
+    expect(createBody.canvas_width).toBe(1920);
+    const snapshotBody = JSON.parse(String(posted[1]!.body)) as {
+      base_version: number;
+      snapshot: { objects: unknown[] };
+    };
+    expect(snapshotBody.base_version).toBe(1);
+    expect(snapshotBody.snapshot.objects).toHaveLength(1); // the Testo object
+  });
+
+  it("Collega a un video opens the assignment dialog from a ready export", async () => {
+    setEditorEndpoints(vi.fn());
+    const originalImpl = authedFetchMock.getMockImplementation();
+
+    // Stateful mock: after the assignment POST, the list endpoint returns it.
+    let createdAssignment: unknown[] = [];
+    const assignmentsImpl = async (url: string, init?: RequestInit) => {
+      if (url === "/api/v1/accounts") {
+        return jsonResponse({
+          accounts: [
+            {
+              id: 2,
+              platform: "youtube",
+              platform_user_id: "UCdemo",
+              username: "wwe_demo",
+              status: "connected",
+              is_publishable: true,
+              created_at: "2026-08-01T00:00:00Z",
+            },
+          ],
+        });
+      }
+      if (url === "/api/v1/accounts/2/content?limit=50&privacy=private") {
+        return jsonResponse({
+          items: [{ external_id: "video_1", title: "Riservata", privacy: "private" }],
+        });
+      }
+      if (url === "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=1") {
+        createdAssignment = [
+          {
+            id: "thumbass_1",
+            workspace_id: 1,
+            project_id: "thumbproj_1",
+            export_id: "thumbexp_1",
+            platform_account_id: 2,
+            platform: "youtube",
+            youtube_video_id: "video_1",
+            target_language: null,
+            status: "draft",
+            created_at: "2026-08-04T10:00:00Z",
+            updated_at: "2026-08-04T10:00:00Z",
+          },
+        ];
+        return jsonResponse({ items: createdAssignment }, 201);
+      }
+      if (url === "/api/v1/thumbnail-projects/thumbproj_1/assignments?workspace_id=1") {
+        return jsonResponse({ items: createdAssignment });
+      }
+      return originalImpl!(url, init);
+    };
+    authedFetchMock.mockImplementation(assignmentsImpl);
+
+    renderPage();
+    await screen.findByTestId("canvas-surface");
+
+    // Generate an export first (the dialog requires a ready export).
+    await userEvent.click(screen.getByRole("button", { name: "Genera copertina" }));
+    await screen.findByText("thumbexp_1");
+    await userEvent.click(screen.getByRole("button", { name: "Collega a un video" }));
+
+    expect(
+      await screen.findByRole("dialog", { name: "Collega a un video" }),
+    ).toBeInTheDocument();
+    await screen.findByText("wwe_demo");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Canale YouTube" }), "2");
+    await screen.findByText("Riservata");
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Video privato" }),
+      "video_1",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Conferma collegamento" }));
+
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("dialog", { name: "Collega a un video" })).not.toBeInTheDocument();
+      },
+      { timeout: 4000 },
+    );
+    // The assignments panel refreshes with the new link.
+    expect(await screen.findByText("video_1")).toBeInTheDocument();
   });
 });

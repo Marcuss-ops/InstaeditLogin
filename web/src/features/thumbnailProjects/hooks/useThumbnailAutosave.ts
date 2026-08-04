@@ -44,7 +44,13 @@ export interface ThumbnailAutosaveResult {
   lastHash: string | null;
   error: string | null;
   conflict: ProjectVersionConflict | null;
-  /** Cancel the debounce and save immediately; true when persisted. */
+  /**
+   * AWAIT the pending debounce: cancels the timer, joins any save
+   * currently in flight, then persists the latest snapshot if edits
+   * landed while it ran. Resolves `true` ONLY when the server holds
+   * the current snapshot ("preview/export derives from the latest
+   * edit" — mai revisioni stantie), `false` on conflict/failure.
+   */
   flush: () => Promise<boolean>;
   /** Re-attempt the last failed save. */
   retry: () => void;
@@ -93,6 +99,9 @@ export function useThumbnailAutosave({
   const lastSavedVersionRef = useRef<number>(0);
   const timerRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
+  /** The promise of the save currently in flight, so flush() can JOIN
+   *  it instead of racing — the core of "attendi il debounce pendente". */
+  const inFlightPromiseRef = useRef<Promise<boolean> | null>(null);
   const conflictRef = useRef(false);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
@@ -124,56 +133,70 @@ export function useThumbnailAutosave({
       return false; // nothing to persist — never saves unchanged snapshots
     }
     if (inFlightRef.current) {
-      scheduleSave();
-      return false;
+      // Join the save already in flight instead of racing it; the
+      // finally block of that save re-schedules if edits landed during
+      // the flight, so nothing is lost.
+      return inFlightPromiseRef.current ?? false;
     }
     inFlightRef.current = true;
     setStatus("saving");
     setError(null);
-    try {
-      const result = await saveThumbnailSnapshot(workspaceId, projectId, {
-        schema_version: 1,
-        snapshot: snap,
-        renderer_version: THUMBNAIL_RENDERER_VERSION,
-        base_version: baseVersion,
-      });
-      // Advance the baseline ONLY from the server ack.
-      lastSavedJsonRef.current = snapshotJson;
-      lastSavedVersionRef.current = result.version;
-      setStatus("saved");
-      setLastSavedAt(new Date());
-      setLastHash(result.snapshot_sha256);
-      onSaved?.(result);
-      return true;
-    } catch (err) {
-      const conflictErr = toProjectVersionConflictError(err);
-      if (conflictErr) {
-        conflictRef.current = true;
-        setConflict({
-          code: "PROJECT_VERSION_CONFLICT",
-          ...(conflictErr.currentVersion === undefined
-            ? {}
-            : { current_version: conflictErr.currentVersion }),
+    const promise = (async (): Promise<boolean> => {
+      try {
+        const result = await saveThumbnailSnapshot(workspaceId, projectId, {
+          schema_version: 1,
+          snapshot: snap,
+          renderer_version: THUMBNAIL_RENDERER_VERSION,
+          base_version: baseVersion,
+        }, {
+          // Optimistic concurrency on EVERY save: the server also accepts
+          // If-Match: "version-N" as the precondition (parity with
+          // base_version). Another tab that already wrote version+1 makes
+          // this request 409 PROJECT_VERSION_CONFLICT — never silent
+          // last-write-wins on the canvas.
+          ifMatchVersion: baseVersion,
         });
-        setError("Conflitto di versione: il progetto è stato modificato altrove.");
-      } else {
-        setError(err instanceof Error ? err.message : "Errore di salvataggio.");
-      }
-      setStatus("error");
-      return false;
-    } finally {
-      inFlightRef.current = false;
-      // Edits made while the PUT was in flight must not be lost: the
-      // latest snapshot differs from the baseline → schedule again.
-      // (Skipped after unmount — the component is gone; the unmount
-      // cleanup already flushed the pending debounce fire-and-forget.)
-      if (!unmountedRef.current) {
-        const current = latestRef.current.snapshotJson;
-        if (current !== lastSavedJsonRef.current && !conflictRef.current) {
-          scheduleSave();
+        // Advance the baseline ONLY from the server ack.
+        lastSavedJsonRef.current = snapshotJson;
+        lastSavedVersionRef.current = result.version;
+        setStatus("saved");
+        setLastSavedAt(new Date());
+        setLastHash(result.snapshot_sha256);
+        onSaved?.(result);
+        return true;
+      } catch (err) {
+        const conflictErr = toProjectVersionConflictError(err);
+        if (conflictErr) {
+          conflictRef.current = true;
+          setConflict({
+            code: "PROJECT_VERSION_CONFLICT",
+            ...(conflictErr.currentVersion === undefined
+              ? {}
+              : { current_version: conflictErr.currentVersion }),
+          });
+          setError("Conflitto di versione: il progetto è stato modificato altrove.");
+        } else {
+          setError(err instanceof Error ? err.message : "Errore di salvataggio.");
+        }
+        setStatus("error");
+        return false;
+      } finally {
+        inFlightRef.current = false;
+        inFlightPromiseRef.current = null;
+        // Edits made while the PUT was in flight must not be lost: the
+        // latest snapshot differs from the baseline → schedule again.
+        // (Skipped after unmount — the component is gone; the unmount
+        // cleanup already flushed the pending debounce fire-and-forget.)
+        if (!unmountedRef.current) {
+          const current = latestRef.current.snapshotJson;
+          if (current !== lastSavedJsonRef.current && !conflictRef.current) {
+            scheduleSave();
+          }
         }
       }
-    }
+    })();
+    inFlightPromiseRef.current = promise;
+    return promise;
   }, [workspaceId, projectId, onSaved, scheduleSave]);
 
   const doSaveRef = useRef(doSave);
@@ -227,9 +250,31 @@ export function useThumbnailAutosave({
     };
   }, [clearTimer]);
 
+  /**
+   * Await the pending debounce (DoD "Flush prima delle operazioni
+   * importanti"): cancels the timer, JOINS any save in flight, then
+   * persists the latest snapshot if edits landed while it ran. Resolves
+   * true ONLY when the server holds the current snapshot.
+   *
+   * Bounded loop guards against pathological churn; a conflict pause or
+   * a failed save resolves false so callers (Export/preview/duplicate/
+   * link) can refuse to act on a stale revision.
+   */
   const flush = useCallback(async (): Promise<boolean> => {
     clearTimer();
-    return doSaveRef.current();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (inFlightRef.current && inFlightPromiseRef.current) {
+        const inFlightOk = await inFlightPromiseRef.current;
+        if (!inFlightOk) return false;
+        continue; // re-check: edits may have landed during the flight
+      }
+      const { snapshotJson } = latestRef.current;
+      if (lastSavedJsonRef.current !== null && lastSavedJsonRef.current === snapshotJson) {
+        return true; // nothing pending — the latest snapshot is persisted
+      }
+      return doSaveRef.current();
+    }
+    return false;
   }, [clearTimer]);
 
   const retry = useCallback(() => {

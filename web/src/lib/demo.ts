@@ -33,7 +33,37 @@ export const demoAccounts = [
     username: "instaedit_demo",
     created_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
   },
+  {
+    id: 2,
+    platform: "youtube" as const,
+    platform_user_id: "UCdemo",
+    username: "wwe_demo",
+    status: "connected",
+    is_publishable: true,
+    created_at: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
+  },
 ];
+
+const demoPrivateVideos = [
+  {
+    external_id: "video_demo_1",
+    title: "Breaking News — riservata",
+    privacy: "private",
+    status: "uploaded",
+    published_at: new Date(Date.now() - 3600 * 1000).toISOString(),
+  },
+  {
+    external_id: "video_demo_2",
+    title: "Highlights settimanali (bozza)",
+    privacy: "private",
+    status: "uploaded",
+    published_at: new Date(Date.now() - 7200 * 1000).toISOString(),
+  },
+];
+
+// Demo rendered export asset: a stable pseudo-UUID so the media resolver
+// can mint a placeholder preview URL for it.
+const demoExportMediaId = "11111111-1111-4111-8111-111111111111";
 
 export const demoWorkspaces = [
   {
@@ -244,7 +274,7 @@ export function handleDemoRequest(
         id: project.latest_export_id,
         project_id: project.id,
         revision_id: project.current_revision_id,
-        media_id: null,
+        media_id: demoExportMediaId,
         content_type: "image/png",
         width: project.canvas_width,
         height: project.canvas_height,
@@ -257,9 +287,63 @@ export function handleDemoRequest(
       });
     }
     if (thumbMatch.rest === "/media/resolve" && method === "POST") {
-      return json({ items: [] });
+      try {
+        const body = JSON.parse((init.body as string) ?? "{}") as { media_ids?: string[] };
+        const ids = body.media_ids ?? [];
+        return json({
+          items: ids
+            .filter((id) => id === demoExportMediaId)
+            .map((id) => ({
+              media_id: id,
+              url: `https://placehold.co/${project.canvas_width}x${project.canvas_height}/30305a/ffffff?text=${encodeURIComponent(project.name)}`,
+              content_type: "image/png",
+              size_bytes: 0,
+              created_at: new Date().toISOString(),
+            })),
+        });
+      } catch {
+        return json({ items: [] });
+      }
     }
     return json(project);
+  }
+
+  // YouTube account private-video listing for the Link-to-video dialog.
+  const contentMatch = /^\/api\/v1\/accounts\/(\d+)\/content/.exec(path);
+  if (contentMatch && method === "GET") {
+    return json({ items: demoPrivateVideos });
+  }
+
+  // Assign a ready export to a video (thumbnail-exports/{id}/assignments).
+  const assignmentMatch = /^\/api\/v1\/thumbnail-exports\/([^/]+)\/assignments/.exec(path);
+  if (assignmentMatch && method === "POST") {
+    try {
+      const body = JSON.parse((init.body as string) ?? "{}") as {
+        targets?: Array<{ platform_account_id?: number; youtube_video_id?: string; target_language?: string | null }>;
+      };
+      const targets = body.targets ?? [];
+      return json({
+        items: targets.map((target, index) => ({
+          id: `thumbass_demo_${Date.now()}_${index}`,
+          workspace_id: 1,
+          project_id: demoThumbnailProjects[0]?.id,
+          export_id: assignmentMatch[1],
+          platform_account_id: Number(target.platform_account_id ?? 2),
+          platform: "youtube",
+          youtube_video_id: target.youtube_video_id ?? "",
+          target_language: target.target_language ?? null,
+          status: "draft",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })),
+      }, 201);
+    } catch {
+      return json({ error: "demo: invalid assignment body" }, 400);
+    }
+  }
+
+  if (path === "/api/v1/thumbnail-exports") {
+    return json({ items: [] });
   }
 
   if (path === "/api/v1/posts") {
