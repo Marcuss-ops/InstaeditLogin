@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Menu, X, Calendar, Bot, Sparkles } from "lucide-react";
+import { Menu, X, Calendar, Flower2, Heart, Sparkles } from "lucide-react";
 import { useBooking } from "../../components/booking/BookingProvider";
 import { NAV } from "./content";
 
@@ -45,7 +45,7 @@ export function DonneNav() {
         <div className="mx-auto max-w-7xl h-16 px-6 flex items-center justify-between">
           <Link to="/donnetube" className="flex items-center gap-2 group" onClick={close}>
             <span className="inline-flex w-7 h-7 items-center justify-center rounded-md bg-gradient-to-br from-[#E07A5F] to-[#E28743] text-white shadow-[0_0_18px_-4px_rgba(224,122,95,0.7)] group-hover:shadow-[0_0_26px_-4px_rgba(226,135,67,0.8)] transition-shadow">
-              <Bot className="w-4 h-4" />
+              <Flower2 className="w-4 h-4" />
             </span>
             <span className="font-bold tracking-tight text-[#4A3E56] text-sm">{NAV.brand}</span>
           </Link>
@@ -86,7 +86,7 @@ export function DonneNav() {
         {/* Trust bar: badges di fiducia, centrati, toni caldi */}
         <div className="hidden md:flex items-center justify-center gap-2 border-t border-[#F1EBF2] py-2.5 px-6 bg-[#FCFAF8]">
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F6EDEE] border border-[#E8D8DB] text-[11px] font-medium text-[#9C5B63]">
-            <Bot className="w-3 h-3 text-[#C4696F]" />
+            <Heart className="w-3 h-3 text-[#C4696F]" />
             <span>{NAV.badge.pipeline}</span>
           </span>
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FBF1E7] border border-[#EDDFCE] text-[11px] font-medium text-[#A06A38]">

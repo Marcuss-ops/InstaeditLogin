@@ -1,4 +1,4 @@
-import { ArrowRight, Calendar, Bot } from "lucide-react";
+import { ArrowRight, Calendar, Sparkles } from "lucide-react";
 import { useBooking } from "../../components/booking/BookingProvider";
 import { HERO } from "./content";
 
@@ -29,7 +29,7 @@ export function Hero() {
       <div className="relative mx-auto max-w-4xl px-6 text-center animate-fade-up">
         <div className="flex flex-wrap items-center justify-center gap-2 mb-7">
           <span className="donne-chip">
-            <Bot className="w-3.5 h-3.5 text-[#C4696F]" />
+            <Sparkles className="w-3.5 h-3.5 text-[#C4696F]" />
             {HERO.badge}
           </span>
           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FBF1E7] border border-[#EDDFCE] text-xs font-medium text-[#A06A38]">

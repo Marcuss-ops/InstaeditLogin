@@ -11,7 +11,7 @@
  */
 
 export const SEO = {
-  title: "DonneTube — I Tuoi Primi $2.000/Mese Con I Video Faceless",
+  title: "DonneTube — I Tuoi Primi $2.000/Mese Con I Video Senza Volto",
   description:
     "Trasforma YouTube in un flusso di cassa semi-automatico da casa. Pipeline 90% eseguita dall'AI, monetizzazione sbloccata in pochi giorni e affiancamento 1-on-1 per donne che partono da zero.",
   canonical: "https://app.instaedit.org/donnetube",
@@ -27,19 +27,19 @@ export const NAV = {
     { label: "Contatti", href: "#contatti" },
   ],
   badge: {
-    pipeline: "Pipeline semi-automatizzata — 90% eseguita dall'AI",
+    pipeline: "Quasi tutto automatico — l'AI fa il lavoro pesante per te",
     limited: "Posti limitati — Solo 10 nuove studentesse questo mese",
   },
   cta: "Pronta a Iniziare?",
 } as const;
 
 export const HERO = {
-  badge: "Pipeline semi-automatizzata • 90% eseguita dall'AI",
+  badge: "Quasi tutto automatico • l'AI fa il lavoro pesante per te",
   badgeLimited: "Limitata a 10 donne questo mese",
-  titleStart: "I Tuoi Primi $2.000/Mese Con I Video Faceless,",
+  titleStart: "I Tuoi Primi $2.000/Mese Con I Video Senza Volto,",
   titleAccent: "In Pilota Automatico.",
   subtitleTop:
-    "Nessuna Telecamera. Nessun Montaggio. Nessuno Stress Da Schedule.",
+    "Nessuna Telecamera. Nessun Montaggio. Nessuno Stress Da Orari.",
   subtitle:
     "Smettila di sprecare mesi cercando di capire gli algoritmi o registrando video la sera dopo lavoro. La nostra AI produce i video per te, il nostro setup ti sblocca subito la monetizzazione e il nostro affiancamento 1-on-1 ti guida fino al tuo primo guadagno reale.",
   ctaPrimary: "Prenota La Tua Chiamata Strategica",
@@ -65,7 +65,7 @@ export const PROBLEM = {
     {
       title: "Hai paura di mostrare il tuo volto",
       description:
-        "O di esporti al giudizio di amici e parenti. Ma non devi: i canali Faceless esistono e funzionano.",
+        "O di esporti al giudizio di amici e parenti. Ma non devi: i canali senza volto esistono e funzionano.",
     },
     {
       title: "Zero competenze tecniche",
@@ -89,7 +89,7 @@ export const SHORTCUT = {
     {
       title: "Setup Velocizzato Monetizzazione",
       description:
-        "Onboarding pre-configurato per attivare il Partner Program in pochi giorni, non mesi.",
+        "Configurazione iniziale già pronta per attivare il Programma Partner in pochi giorni, non mesi.",
     },
     {
       title: "ChronoN AI",
@@ -119,19 +119,19 @@ export const EARNINGS = {
   rows: [
     {
       level: "1 Canale",
-      tag: "Start",
+      tag: "Inizio",
       earning: "$1.000 – $1.500 / mese",
       reach: "300k visite × $3,50–$5,00 RPM",
     },
     {
       level: "3 Canali",
-      tag: "Multi-lingua",
+      tag: "Multilingua",
       earning: "$2.500 – $5.000 / mese",
       reach: "~500k visite combinate × $5–$10 RPM",
     },
     {
       level: "Portfolio Canali",
-      tag: "Level 3",
+      tag: "Livello 3",
       earning: "$10.000+ / mese",
       reach: "1,2M+ visite × $8,50+ RPM (Nicchie Tier-1 USA/EU)",
     },
@@ -165,7 +165,7 @@ export const HOW_IT_WORKS = {
       step: "3",
       title: "Monetizzazione dal Primo Giorno.",
       description:
-        "Il nostro setup Fast-Track Partner fa passare il tuo canale attraverso la revisione in pochi giorni, non mesi — permettendoti di incassare subito dalla pubblicità, sponsorizzazioni e affiliazioni.",
+        "Il nostro percorso rapido per il Programma Partner fa superare la revisione al tuo canale in pochi giorni, non mesi — permettendoti di incassare subito da pubblicità, sponsorizzazioni e affiliazioni.",
     },
   ],
 } as const;
@@ -182,9 +182,9 @@ export const RESULTS = {
     { v: "90%", l: "Pipeline eseguita dall'AI", d: "tu approvi, il sistema lavora", color: "text-amber-400" },
   ],
   screenshots: [
-    { img: "/results/result-1.jpg", alt: "Risultato canale YouTube — crescita primi 90 giorni", caption: "Crescita giorno per giorno su un canale finance" },
+    { img: "/results/result-1.jpg", alt: "Risultato canale YouTube — crescita primi 90 giorni", caption: "Crescita giorno per giorno su un canale di finanza" },
     { img: "/results/result-2.jpg", alt: "Risultato strategia contenuti — aumento RPM", caption: "Aumento RPM dopo il setup di monetizzazione" },
-    { img: "/results/result-3.jpg", alt: "Risultato monetizzazione canale — Partner Program", caption: "Finestra di attivazione del Partner Program" },
+    { img: "/results/result-3.jpg", alt: "Risultato monetizzazione canale — Programma Partner", caption: "Finestra di attivazione del Programma Partner" },
     { img: "/results/result-4.jpg", alt: "Risultato performance video — ricavi 28 giorni", caption: "Ricavi a 28 giorni per singolo video" },
     { img: "/results/result-5.jpg", alt: "Risultato crescita creator — iscritti", caption: "Curva iscritti che supera i 1.000" },
     { img: "/results/result-6.jpg", alt: "Risultato multi-piattaforma — cross-post", caption: "Guadagni cross-post su 7 piattaforme" },
@@ -196,16 +196,18 @@ export const TESTIMONIALS = {
   title: "Donne vere. ",
   titleAccent: "Parole vere.",
   subtitle:
-    "Storie di studentesse che sono partite da zero e hanno costruito il loro primo flusso di cassa con i video faceless. Guarda e ascolta la loro esperienza:",
+    "Storie di studentesse che sono partite da zero e hanno costruito il loro primo flusso di cassa con i video senza volto. Guarda e ascolta la loro esperienza:",
   videos: [
-    "nHjJXnnf65o",
-    "0ThcbcZlb5k",
-    "CVCnF2JNwBI",
-    "BbCpSok2H1o",
-    "Uscs_mH1MiQ",
-    "Wmq2r8xRaQg",
-    "3BnyG5N3wbw",
-    "VngvA7PpveQ",
+    "AvtS7TToNnc",
+    "mLxH7T6dFds",
+    "5ohlvIn0GHE",
+    "umpasmxyC8U",
+    "zM_cMoXFq48",
+    "icHG9WxaYsI",
+    "1MtkVGYx708",
+    "TkotivQzyNw",
+    "5m_F5c07tpw",
+    "pEk2Ne4FFkQ",
   ],
 } as const;
 
@@ -233,7 +235,7 @@ export const FAQ = {
   items: [
     {
       q: "Devo mostrare la mia faccia o usare la mia voce?",
-      a: "Assolutamente no. Il sistema è progettato al 100% per canali Faceless. L'AI genera immagini, video B-roll e voci sintetiche iper-realistiche.",
+      a: "Assolutamente no. Il sistema è progettato al 100% per canali senza volto. L'AI genera immagini, filmati di repertorio e voci sintetiche iper-realistiche.",
     },
     {
       q: "Quanto tempo devo dedicarci a settimana?",
@@ -252,7 +254,7 @@ export const FAQ = {
 
 export const FINAL_CTA = {
   badge: "Posti Limitati — Accettiamo solo 10 nuove studentesse questo mese per garantire un supporto 1-on-1 personalizzato.",
-  titleStart: "Pronte a trasformare YouTube",
+  titleStart: "Pronta a trasformare YouTube",
   titleAccent: "nel tuo stipendio mensile da casa?",
   subtitle:
     "Prenota una chiamata strategica gratuita. Analizzeremo la tua situazione e tracceremo la mappa esatta per farti raggiungere i tuoi primi $2.000/mese — anche se parti da zero esperienza e zero iscritte oggi.",

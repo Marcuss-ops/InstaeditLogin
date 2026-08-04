@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+import { Flower2 } from "lucide-react";
 import { HOW_IT_WORKS } from "./content";
 
 /**
@@ -25,7 +25,7 @@ export function HowItWorks() {
                 <span className="inline-flex w-12 h-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#E07A5F] to-[#E28743] text-white text-lg font-bold shadow-[0_8px_20px_-8px_rgba(224,122,95,0.7)]">
                   {item.step}
                 </span>
-                <Bot className="w-5 h-5 text-[#D8A0A5]" />
+                <Flower2 className="w-5 h-5 text-[#D8A0A5]" />
               </div>
               <h3 className="text-display-3 text-[#4A3E56] mb-2">{item.title}</h3>
               <p className="text-sm text-[#6E6677] leading-relaxed">{item.description}</p>

@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Bot, Zap } from "lucide-react";
+import { Flower2, Zap } from "lucide-react";
 import { FOOTER } from "./content";
 
 /**
@@ -13,7 +13,7 @@ export function DonneFooter() {
         <div className="lg:col-span-6">
           <Link to="/donnetube" className="flex items-center gap-2">
             <span className="inline-flex w-8 h-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#E07A5F] to-[#E28743] text-white">
-              <Bot className="w-4 h-4" />
+              <Flower2 className="w-4 h-4" />
             </span>
             <span className="font-bold tracking-tight text-[#4A3E56] text-base">
               {FOOTER.brand}

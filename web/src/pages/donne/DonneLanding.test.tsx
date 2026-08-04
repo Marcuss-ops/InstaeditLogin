@@ -22,7 +22,7 @@ describe("DonneLanding", () => {
 
     const h1 = screen.getByRole("heading", { level: 1 });
     expect(h1).toHaveTextContent(/I Tuoi Primi \$2\.000\/Mese/i);
-    expect(h1).toHaveTextContent(/Video Faceless/i);
+    expect(h1).toHaveTextContent(/Video Senza Volto/i);
   });
 
   it("renders the main sections in order", () => {
@@ -91,14 +91,16 @@ describe("DonneLanding", () => {
     );
 
     const testimonialIds = [
-      "nHjJXnnf65o",
-      "0ThcbcZlb5k",
-      "CVCnF2JNwBI",
-      "BbCpSok2H1o",
-      "Uscs_mH1MiQ",
-      "Wmq2r8xRaQg",
-      "3BnyG5N3wbw",
-      "VngvA7PpveQ",
+      "AvtS7TToNnc",
+      "mLxH7T6dFds",
+      "5ohlvIn0GHE",
+      "umpasmxyC8U",
+      "zM_cMoXFq48",
+      "icHG9WxaYsI",
+      "1MtkVGYx708",
+      "TkotivQzyNw",
+      "5m_F5c07tpw",
+      "pEk2Ne4FFkQ",
     ];
     for (const id of testimonialIds) {
       const iframe = document.querySelector(
