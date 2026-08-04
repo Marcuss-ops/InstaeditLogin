@@ -3,7 +3,7 @@ import { Bot, Zap } from "lucide-react";
 import { FOOTER } from "./content";
 
 /**
- * Footer autonomo della landing "HerChannel AI" (italiano).
+ * Footer autonomo della landing "DonneTube" (italiano).
  * Separato da `MarketingFooter`: appartiene al progetto indipendente.
  */
 export function DonneFooter() {

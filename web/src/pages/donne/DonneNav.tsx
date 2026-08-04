@@ -5,7 +5,7 @@ import { useBooking } from "../../components/booking/BookingProvider";
 import { NAV } from "./content";
 
 /**
- * Navigazione autonoma della landing "HerChannel AI".
+ * Navigazione autonoma della landing "DonneTube".
  * Volutamente separata da `MarketingNav` e `Nav`: la landing è un
  * progetto indipendente con la propria identità e la propria lingua.
  */

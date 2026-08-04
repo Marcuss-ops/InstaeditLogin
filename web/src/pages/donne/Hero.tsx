@@ -3,7 +3,7 @@ import { useBooking } from "../../components/booking/BookingProvider";
 import { HERO } from "./content";
 
 /**
- * Hero della landing "HerChannel AI" — promessa al centro: i primi
+ * Hero della landing "DonneTube" — promessa al centro: i primi
  * $2.000/mese con video faceless, in pilota automatico. Il bottone
  * primario apre il booking (call strategica), quello secondario porta
  * alla gallery dei risultati.

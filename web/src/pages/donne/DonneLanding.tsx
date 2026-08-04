@@ -13,7 +13,7 @@ import { FinalCTA } from "./FinalCTA";
 import { SEO } from "./content";
 
 /**
- * Landing "HerChannel AI" — progetto indipendente e volutamente
+ * Landing "DonneTube" — progetto indipendente e volutamente
  * separato dalle altre landing del sito (/, /programs, /mentoring...).
  *
  * - Tutta la copia italiana vive in `./content.ts` (un unico file da

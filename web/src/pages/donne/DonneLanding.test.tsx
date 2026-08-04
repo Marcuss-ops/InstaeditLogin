@@ -5,7 +5,7 @@ import { DonneLanding } from "./DonneLanding";
 import { BookingProvider } from "../../components/booking/BookingProvider";
 
 /**
- * Smoke test per la landing "HerChannel AI".
+ * Smoke test per la landing "DonneTube".
  *
  * Obiettivo: un singolo blocco di asserzioni economiche che fallisce
  * appena la promessa centrale dell'hero cambia o la pagina non monta.

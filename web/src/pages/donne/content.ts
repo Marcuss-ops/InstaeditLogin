@@ -1,5 +1,5 @@
 /**
- * Tutto il testo della landing "HerChannel AI" in un unico punto.
+ * Tutto il testo della landing "DonneTube" in un unico punto.
  *
  * Questa pagina è volutamente separata dalle altre landing del sito
  * (/, /programs, /mentoring): ha navigazione, footer, identità e
@@ -11,14 +11,14 @@
  */
 
 export const SEO = {
-  title: "HerChannel AI — I Tuoi Primi $2.000/Mese Con I Video Faceless",
+  title: "DonneTube — I Tuoi Primi $2.000/Mese Con I Video Faceless",
   description:
     "Trasforma YouTube in un flusso di cassa semi-automatico da casa. Pipeline 90% eseguita dall'AI, monetizzazione sbloccata in pochi giorni e affiancamento 1-on-1 per donne che partono da zero.",
   canonical: "https://app.instaedit.org/donne",
 } as const;
 
 export const NAV = {
-  brand: "HerChannel AI",
+  brand: "DonneTube",
   links: [
     { label: "Come Funziona", href: "#come-funziona" },
     { label: "Programmi", href: "#guadagni" },
@@ -194,11 +194,11 @@ export const RESULTS = {
 export const FOUNDER = {
   eyebrow: "Dalla Fondatrice",
   titleStart: "Come è nato",
-  titleAccent: "HerChannel AI.",
+  titleAccent: "DonneTube.",
   paragraphs: [
     "“Ho iniziato esattamente dove ti trovi tu ora: niente studio, niente competenze di montaggio, niente budget — solo la voglia di creare un'entrata mia che mi permettesse di passare più tempo con la mia famiglia senza la costante ansia del lavoro 9-5.",
     "Dover creare contenuti ovunque significava un incubo di 14 schede aperte sul computer, sottotitoli manuali, stress quotidiano... Sembrava un secondo lavoro a tempo pieno solo per premere 'pubblica'.",
-    "Così ho sviluppato lo strumento che avrei voluto avere dal primo giorno. HerChannel AI automatizza l'intera filiera — dalla scrittura del testo fino alla pubblicazione su 7 piattaforme — permettendo a qualsiasi donna di crearsi un'indipendenza economica da casa, senza il lavoro pesante.”",
+    "Così ho sviluppato lo strumento che avrei voluto avere dal primo giorno. DonneTube automatizza l'intera filiera — dalla scrittura del testo fino alla pubblicazione su 7 piattaforme — permettendo a qualsiasi donna di crearsi un'indipendenza economica da casa, senza il lavoro pesante.”",
   ],
   stats: [
     { v: "1", l: "Fondato da una donna" },
@@ -241,7 +241,7 @@ export const FINAL_CTA = {
 } as const;
 
 export const FOOTER = {
-  brand: "HerChannel AI",
+  brand: "DonneTube",
   description:
     "Trasforma YouTube in un flusso di cassa semi-automatico da casa. La nostra AI produce i contenuti e gestisce le pubblicazioni — tu approvi e incassi.",
   badge: "Pipeline Semi-Automatica • 90% Eseguita dall'AI",

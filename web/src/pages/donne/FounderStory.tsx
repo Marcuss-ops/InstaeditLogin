@@ -2,7 +2,7 @@ import { Sparkles } from "lucide-react";
 import { FOUNDER } from "./content";
 
 /**
- * Sezione "Dalla Fondatrice" — la storia di come è nato HerChannel AI.
+ * Sezione "Dalla Fondatrice" — la storia di come è nato DonneTube.
  * Posizionata prima delle FAQ, come nella landing principale.
  */
 export function FounderStory() {
