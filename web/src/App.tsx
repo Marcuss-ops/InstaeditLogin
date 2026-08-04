@@ -85,9 +85,9 @@ const CoversPage = lazy(() =>
     default: m.CoversPage,
   })),
 );
-const CoverDetailPage = lazy(() =>
-  import("./pages/internal/CoverDetail").then((m) => ({
-    default: m.CoverDetailPage,
+const CoverEditorPage = lazy(() =>
+  import("./pages/internal/CoverEditor").then((m) => ({
+    default: m.CoverEditorPage,
   })),
 );
 
@@ -274,7 +274,7 @@ function App() {
                 path="covers/:projectId"
                 element={
                   <LazyRoute>
-                    <CoverDetailPage />
+                    <CoverEditorPage />
                   </LazyRoute>
                 }
               />

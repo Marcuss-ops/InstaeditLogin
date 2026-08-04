@@ -27,6 +27,21 @@ Object.defineProperty(window, "IntersectionObserver", {
   configurable: true,
   value: IntersectionObserverMock,
 });
+// Global ResizeObserver stub (jsdom does not implement it). The canvas
+// stage in CoverEditor uses it to size the scaled canvas; the stub keeps
+// the component mountable in tests. Tests that need the stage to actually
+// layout override this with a callback-firing mock (see CoverEditor.test).
+class ResizeObserverMock {
+  observe = vi.fn();
+  disconnect = vi.fn();
+  unobserve = vi.fn();
+}
+
+Object.defineProperty(window, "ResizeObserver", {
+  writable: true,
+  configurable: true,
+  value: ResizeObserverMock,
+});
 // Global toast-bus reset for cross-test hygiene.
 //
 // Why: `web/src/lib/auth.ts`'s `authedFetch` auto-emits a toast.error on

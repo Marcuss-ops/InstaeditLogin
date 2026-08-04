@@ -26,11 +26,12 @@ import { cn } from "../../../lib/utils";
 import {
   createThumbnailProject,
   saveThumbnailSnapshot,
+  THUMBNAIL_RENDERER_VERSION,
 } from "../api/thumbnailProjectsApi";
 import type { ThumbnailProject } from "../types";
 
 /** Canonical renderer version the editor/runtime must agree on. */
-export const RENDERER_VERSION = "go-canvas-v1";
+export const RENDERER_VERSION = THUMBNAIL_RENDERER_VERSION;
 
 export interface CoverFormatPreset {
   id: string;

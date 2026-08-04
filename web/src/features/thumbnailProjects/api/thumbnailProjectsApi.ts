@@ -49,6 +49,14 @@ import type {
 const PROJECTS_PATH = "/api/v1/thumbnail-projects";
 const EXPORTS_PATH = "/api/v1/thumbnail-exports";
 
+/**
+ * Canonical renderer version shared by the editor and the server. The
+ * backend stamps it on every snapshot revision and rendered export so
+ * preview and export always share the same renderer lineage (DoD:
+ * "renderer_version uguale").
+ */
+export const THUMBNAIL_RENDERER_VERSION = "go-canvas-v1";
+
 const projectPath = (projectId: string): string =>
   `${PROJECTS_PATH}/${encodeURIComponent(projectId)}`;
 
