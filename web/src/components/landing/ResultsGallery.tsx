@@ -27,17 +27,29 @@ export type Screenshot = {
 export function ResultsGallery({
   screenshots,
   accent = "violet",
+  tone = "dark",
 }: {
   screenshots: ReadonlyArray<Screenshot>;
   accent?: "violet" | "pink";
+  tone?: "dark" | "light";
 }) {
   const [lightbox, setLightbox] = useState<{ imgIdx: number } | null>(null);
 
   const closeLightbox = useCallback(() => setLightbox(null), []);
   const hoverClass =
     accent === "pink"
-      ? "hover:border-pink-400/30 hover:shadow-[0_8px_32px_rgba(244,63,94,0.12)]"
+      ? "hover:border-rose-400/30 hover:shadow-[0_8px_32px_rgba(244,63,94,0.12)]"
       : "hover:border-violet-400/30 hover:shadow-[0_8px_32px_rgba(139,92,246,0.12)]";
+  const isLight = tone === "light";
+  const cardClass = isLight
+    ? "bg-white border-[#ECE6EE]"
+    : "surface-card";
+  const captionClass = isLight
+    ? "text-[#7A7280] border-[#F1EBF2]"
+    : "text-zinc-400 border-white/5";
+  const zoomClass = isLight
+    ? "bg-white/85 border-[#E2D8E6] text-[#6B4E71]"
+    : "bg-black/70 border-white/15 text-white";
 
   // Escape closes the lightbox; ←/→ step through the gallery when open.
   useEffect(() => {
@@ -80,7 +92,7 @@ export function ResultsGallery({
             type="button"
             onClick={() => setLightbox({ imgIdx: i })}
             aria-label={`Open larger preview: ${ch.alt}`}
-            className={`surface-card overflow-hidden animate-fade-up transition-all duration-300 group text-left ${hoverClass} ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300", "animation-delay-400", "animation-delay-500"][i]}`}
+            className={`overflow-hidden animate-fade-up transition-all duration-300 group text-left border ${cardClass} ${hoverClass} ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300", "animation-delay-400", "animation-delay-500"][i]}`}
           >
             <div className="relative overflow-hidden">
               <img
@@ -91,12 +103,12 @@ export function ResultsGallery({
               />
               <span
                 aria-hidden="true"
-                className="absolute top-3 right-3 inline-flex items-center gap-1 px-2 py-1 rounded-full bg-black/70 border border-white/15 text-[10px] font-semibold text-white backdrop-blur-sm"
+                className={`absolute top-3 right-3 inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[10px] font-semibold backdrop-blur-sm ${zoomClass}`}
               >
                 <Maximize2 className="w-3 h-3" /> zoom
               </span>
             </div>
-            <div className="px-4 py-3 text-xs text-zinc-400 border-t border-white/5">
+            <div className={`px-4 py-3 text-xs border-t ${captionClass}`}>
               {ch.caption}
             </div>
           </button>

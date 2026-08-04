@@ -499,3 +499,73 @@ html {
 .fc .fc-bg-event {
   opacity: 0.25;
 }
+
+/* =====================================================================
+ * DONNETUBE LIGHT THEME — light, warm, feminine (women's landing).
+ * Scoped under .donne-theme so it never leaks into the dark main site.
+ * Palette 60-30-10: cream backgrounds, desaturated plum, coral CTAs.
+ * Serif headings (Playfair Display) + modern sans body (Plus Jakarta).
+ * ================================================================== */
+.donne-theme {
+  --donne-cream: #F9F8F6;
+  --donne-soft: #F6F3F7;
+  --donne-ink: #4A3E56;
+  --donne-plum: #6B4E71;
+  --donne-muted: #7A7280;
+  --donne-coral: #E07A5F;
+  --donne-terracotta: #E28743;
+  --donne-sage: #5F7A5A;
+
+  background-color: var(--donne-cream);
+  color: var(--donne-ink);
+  font-family: "Plus Jakarta Sans", "Inter", system-ui, -apple-system, sans-serif;
+}
+
+/* Keep the *document* light while this route is mounted, so overscroll /
+   rubber-band bounce shows cream instead of the dark #030308 page bg. */
+html:has(.donne-theme),
+html:has(.donne-theme) body,
+html:has(.donne-theme) #root {
+  background-color: var(--donne-cream);
+}
+
+.donne-theme .text-display-1,
+.donne-theme .text-display-2,
+.donne-theme .text-display-3 {
+  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--donne-ink);
+}
+
+.donne-theme .text-gradient-warm {
+  background: linear-gradient(
+    135deg,
+    var(--donne-plum) 0%,
+    #b05c6b 45%,
+    var(--donne-terracotta) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.donne-theme .donne-card {
+  background-color: #ffffff;
+  border: 1px solid #ece6ee;
+  border-radius: 1rem;
+  box-shadow: 0 12px 32px -20px rgba(74, 62, 86, 0.28);
+}
+
+.donne-theme .donne-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.875rem;
+  border-radius: 9999px;
+  background-color: #f3eff5;
+  border: 1px solid #e2d8e6;
+  color: var(--donne-plum);
+  font-size: 0.75rem;
+  font-weight: 500;
+}

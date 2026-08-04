@@ -27,7 +27,7 @@ import { SEO } from "./content";
  */
 export function DonneLanding() {
   return (
-    <div className="min-h-screen bg-[#030308]">
+    <div className="donne-theme min-h-screen bg-[#F9F8F6]">
       <Seo {...SEO} />
       <DonneNav />
       <main>

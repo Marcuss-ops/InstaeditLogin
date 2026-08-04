@@ -168,7 +168,11 @@ describe("InternalDashboard", () => {
       expect(screen.getByRole("heading", { name: /Dashboard/i })).toBeInTheDocument();
     });
 
-    expect(screen.getAllByText("0")).toHaveLength(2);
+    // The stat cards render a tick after the heading appears; wait for the
+    // zero values instead of asserting immediately (was flaky in CI).
+    await waitFor(() => {
+      expect(screen.getAllByText("0")).toHaveLength(2);
+    });
     expect(screen.getByTestId("dashboard-groups")).toBeInTheDocument();
   });
 });

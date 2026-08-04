@@ -252,10 +252,14 @@ export const FAQ = {
 
 export const FINAL_CTA = {
   badge: "Posti Limitati — Accettiamo solo 10 nuove studentesse questo mese per garantire un supporto 1-on-1 personalizzato.",
-  title: "Pronte a trasformare YouTube nel tuo stipendio mensile da casa?",
+  titleStart: "Pronte a trasformare YouTube",
+  titleAccent: "nel tuo stipendio mensile da casa?",
   subtitle:
     "Prenota una chiamata strategica gratuita. Analizzeremo la tua situazione e tracceremo la mappa esatta per farti raggiungere i tuoi primi $2.000/mese — anche se parti da zero esperienza e zero iscritte oggi.",
   cta: "Prenota La Tua Chiamata Strategica Gratuita",
+  linkSecondary: "Scopri Come Funziona",
+  smallPrint:
+    "Nessun costo, nessun impegno. Se non è per te, ci stringiamo la mano e ognuna torna per la sua strada.",
 } as const;
 
 export const FOOTER = {
