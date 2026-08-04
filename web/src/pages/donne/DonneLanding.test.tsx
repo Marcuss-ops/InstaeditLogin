@@ -35,7 +35,7 @@ describe("DonneLanding", () => {
     );
 
     const problema = screen.getByRole("heading", {
-      name: /Stai perdendo tempo ed energie/i,
+      name: /La vita di oggi è diventata troppo cara/i,
     });
     const metodo = screen.getByRole("heading", {
       name: /Un metodo chiaro, un percorso guidato\./i,

@@ -1,13 +1,20 @@
 import { CheckCircle2 } from "lucide-react";
+import { SectionVideo } from "./SectionVideo";
 import { SHORTCUT } from "./content";
 
 /**
  * Sezione "Il Metodo" — la soluzione in 4 punti chiave.
- * Contro-altare del problema: stesso layout, segno opposto (verde salvia).
+ * Contro-altare del problema: stesso layout, segno opposto (verde salvia),
+ * con video di sfondo e glow caldo per un tono più umano.
  */
 export function Shortcut() {
   return (
     <section id="scorciatoia" className="relative py-24 sm:py-32 overflow-hidden bg-[#FFFFFF]">
+      <SectionVideo src={SHORTCUT.bgVideo} overlay={0.82} />
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="absolute w-[420px] h-[420px] -top-24 -left-24 rounded-full bg-[#F0E7DC]/50 blur-[110px]" />
+        <div className="absolute w-[380px] h-[380px] -bottom-24 -right-24 rounded-full bg-[#E4EFE0]/50 blur-[110px]" />
+      </div>
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-[#A4708C] mb-3">{SHORTCUT.eyebrow}</div>

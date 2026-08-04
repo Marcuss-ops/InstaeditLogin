@@ -1,14 +1,21 @@
 import { TrendingUp, Calculator } from "lucide-react";
+import { SectionVideo } from "./SectionVideo";
 import { EARNINGS } from "./content";
 
 /**
  * Sezione "I Guadagni" — tabella realistica per livello di portfolio.
+ * Video di sfondo rilassante + glow caldi per un tono più umano.
  * Include disclaimer di conformità marketing (i risultati non sono
  * garantiti) e la spiegazione della matematica dell'RPM.
  */
 export function Earnings() {
   return (
     <section id="guadagni" className="relative py-24 sm:py-32 overflow-hidden bg-[#F6F3F7]">
+      <SectionVideo src={EARNINGS.bgVideo} />
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="absolute w-[420px] h-[420px] -top-24 -right-24 rounded-full bg-[#F7E7D8]/50 blur-[110px]" />
+        <div className="absolute w-[380px] h-[380px] -bottom-24 -left-24 rounded-full bg-[#F0E2F4]/40 blur-[110px]" />
+      </div>
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-[#A4708C] mb-3 inline-flex items-center gap-2">

@@ -53,29 +53,31 @@ export const HERO = {
 
 export const PROBLEM = {
   eyebrow: "Il Problema",
-  title: "Stai perdendo tempo ed energie ogni singolo giorno.",
+  title: "La vita di oggi è diventata troppo cara.",
   subtitle:
-    "Vuoi creare una seconda entrata per la tua famiglia o per lasciare il 9-5, ma il montaggio ti ruba 15 ore a settimana tra lavoro e casa. Ti spaventa l'idea di mettere la faccia online o non ci capisci nulla di tecnologia. Pubblichi da mesi per raccogliere solo 50 visualizzazioni e 0 euro.",
+    "Un solo stipendio non basta più: affitto, bollette, spesa, scuola dei figli. Ogni mese arrivi a fine mese con il conto quasi a zero e zero tempo per te stessa. Riconosci questa situazione?",
+  bgVideo:
+    "https://drive.usercontent.google.com/download?id=1MbUpRn-T0LcYyoFQiyoY16NssYjGGt3m&export=download",
   items: [
     {
-      title: "Il montaggio ti ruba 15+ ore a settimana",
+      title: "Uno stipendio non basta più",
       description:
-        "Togliendo tempo ai figli o al tuo riposo, ogni giorno, mentre lavori e gestisci la casa.",
+        "I prezzi salgono ogni anno, ma il reddito resta lo stesso. A fine mese non avanza quasi nulla, anche lavorando tanto.",
     },
     {
-      title: "Hai paura di mostrare il tuo volto",
+      title: "Zero tempo per te stessa",
       description:
-        "O di esporti al giudizio di amici e parenti. Ma non devi: i canali senza volto esistono e funzionano.",
+        "Tra lavoro, casa e figli ogni minuto libero è già prenotato. Costruire qualcosa di tuo sembra un'utopia.",
     },
     {
-      title: "Zero competenze tecniche",
+      title: "La dipendenza economica pesa",
       description:
-        "Software complessi e strumenti difficili ti bloccano prima ancora di iniziare. Non devi imparare nulla di tutto questo.",
+        "Dipendi da un unico reddito e questo toglie serenità e libertà di scelta a te e alla tua famiglia.",
     },
     {
-      title: "L'algoritmo richiede costanza quotidiana",
+      title: "L'ansia di non farcela",
       description:
-        "Ma con i tuoi impegni è impossibile stare al passo. Non è pigrizia: è un sistema che non è stato pensato per te.",
+        "L'idea di restare indietro anno dopo anno ti sveglia la notte. Ma senza una direzione chiara, tutto sembra fermo.",
     },
   ],
 } as const;
@@ -85,6 +87,8 @@ export const SHORTCUT = {
   title: "Un percorso chiaro verso la tua indipendenza economica.",
   subtitle:
     "Un sistema ordinato che ti accompagna dal primo video alla monetizzazione: strumenti che riducono il lavoro tecnico e una mentor che ti indica i passi giusti al momento giusto.",
+  bgVideo:
+    "https://drive.usercontent.google.com/download?id=1k5leHR3eQohWVm_k-vT8clMCgwNksLEw&export=download",
   items: [
     {
       title: "Setup Velocizzato Monetizzazione",
@@ -114,6 +118,8 @@ export const EARNINGS = {
   title: "Quanto puoi guadagnare realisticamente?",
   subtitle:
     "Tabelle di guadagno basate sulle nostre attuali studentesse (mamme, lavoratrici e donne che partivano da zero). Più canali automatizzi, più flussi di cassa ricorrenti crei.",
+  bgVideo:
+    "https://drive.usercontent.google.com/download?id=1hzK3q2AZ77DYVsvuQTPh3K7nuGwZNf9n&export=download",
   disclaimer:
     "I risultati mostrati non sono una garanzia di guadagno. Dipendono dal tuo impegno, dalla nicchia e dal mercato.",
   rows: [
