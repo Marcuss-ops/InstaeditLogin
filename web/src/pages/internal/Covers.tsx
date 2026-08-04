@@ -15,13 +15,13 @@
  * dimensions and initial background — no YouTube surface at all.
  *
  * The backend persists the project immediately (POST
- * /api/v1/thumbnail-projects) and this page then writes the initial empty
- * canvas snapshot so the project owns a revision from birth
- * ("salvataggio immediato del progetto vuoto"). The real canvas editor
- * arrives in a later phase; for now "Apri" lands on a project detail
- * page (preview, revisions, assignments).
+ * /api/v1/thumbnail-projects) and {@link CreateCoverDialog} then writes
+ * the initial empty canvas snapshot so the project owns a revision from
+ * birth ("salvataggio immediato del progetto vuoto"). The real canvas
+ * editor arrives in a later phase; for now "Apri" lands on a project
+ * detail page (preview, revisions, assignments).
  */
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Plus,
@@ -32,26 +32,22 @@ import {
   Link2,
   Layers,
   Clock,
-  AlertCircle,
 } from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
 import {
-  createThumbnailProject,
   listThumbnailAssignments,
   listThumbnailProjects,
   resolveThumbnailProjectMedia,
-  saveThumbnailSnapshot,
   archiveThumbnailProject,
   deleteThumbnailProject,
 } from "../../features/thumbnailProjects/api/thumbnailProjectsApi";
+import { CreateCoverDialog } from "../../features/thumbnailProjects/components/CreateCoverDialog";
 import type {
   ThumbnailProject,
   ThumbnailProjectStatus,
 } from "../../features/thumbnailProjects/types";
-
-const RENDERER_VERSION = "go-canvas-v1";
 
 type Workspace = { id: number; name: string };
 
@@ -64,12 +60,6 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "linked", label: "Collegate" },
   { key: "archived", label: "Archiviate" },
 ];
-
-const FORMAT_PRESETS = [
-  { id: "youtube", label: "YouTube 16:9", width: 1920, height: 1080 },
-  { id: "short", label: "Short 9:16", width: 1080, height: 1920 },
-  { id: "square", label: "Quadrata 1:1", width: 1080, height: 1080 },
-] as const;
 
 type LoadState =
   | { kind: "loading" }
@@ -114,217 +104,6 @@ function formatDate(iso: string): string {
     month: "short",
     year: "numeric",
   });
-}
-
-interface CreateDialogProps {
-  workspaceId: number;
-  onCreated: (project: ThumbnailProject) => void;
-  onClose: () => void;
-}
-
-/** Minimal autonomous creation: name, format, dimensions, background. */
-function CreateCoverDialog({ workspaceId, onCreated, onClose }: CreateDialogProps) {
-  const navigate = useNavigate();
-  const [name, setName] = useState("");
-  const [preset, setPreset] = useState<(typeof FORMAT_PRESETS)[number]["id"]>("youtube");
-  const [custom, setCustom] = useState(false);
-  const [width, setWidth] = useState(1920);
-  const [height, setHeight] = useState(1080);
-  const [background, setBackground] = useState("#30305a");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const currentPreset = FORMAT_PRESETS.find((p) => p.id === preset) ?? FORMAT_PRESETS[0]!;
-  const canvasWidth = custom ? width : currentPreset.width;
-  const canvasHeight = custom ? height : currentPreset.height;
-  const canSubmit = name.trim().length > 0 && canvasWidth > 0 && canvasHeight > 0 && !submitting;
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!canSubmit) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      // 1) The project is persisted immediately with an ID of its own —
-      //    even an empty project is durable ("salvataggio immediato").
-      const project = await createThumbnailProject({
-        workspace_id: workspaceId,
-        name: name.trim(),
-        canvas_width: canvasWidth,
-        canvas_height: canvasHeight,
-      });
-      // 2) Write the initial empty canvas snapshot (with the chosen
-      //    background) so the project owns revision #1 from birth.
-      try {
-        await saveThumbnailSnapshot(workspaceId, project.id, {
-          schema_version: 1,
-          snapshot: {
-            canvas: { width: canvasWidth, height: canvasHeight, background },
-            objects: [],
-          },
-          renderer_version: RENDERER_VERSION,
-          base_version: project.version,
-        });
-      } catch {
-        // A failed initial snapshot must not block creation: the project
-        // already exists server-side and the editor phase will save it.
-      }
-      onCreated(project);
-      navigate(`/app/covers/${encodeURIComponent(project.id)}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Impossibile creare la copertina.");
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Crea nuova copertina"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-    >
-      <button
-        type="button"
-        aria-label="Chiudi"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm cursor-default"
-      />
-      <form
-        onSubmit={handleSubmit}
-        className="relative w-full max-w-md rounded-2xl border border-white/[0.12] bg-[#1f1f2e] p-6 shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
-      >
-        <h2 className="text-lg font-bold text-white">Crea nuova copertina</h2>
-        <p className="mt-1 text-[13px] text-[#9aa0aa]">
-          Nessun canale, video o connessione richiesti — la copertina nasce autonoma.
-        </p>
-
-        <div className="mt-5 space-y-4">
-          <div>
-            <label htmlFor="cover-name" className="block text-[13px] font-semibold text-[#9aa0aa] mb-1.5">
-              Nome progetto
-            </label>
-            <input
-              id="cover-name"
-              type="text"
-              autoFocus
-              placeholder="Es. WWE Breaking News"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white placeholder:text-white/20 focus:outline-none focus:border-white/[0.20] focus:ring-1 focus:ring-white/10 transition-all"
-            />
-          </div>
-
-          <div>
-            <span className="block text-[13px] font-semibold text-[#9aa0aa] mb-1.5">Formato</span>
-            <div className="grid grid-cols-3 gap-2">
-              {FORMAT_PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => {
-                    setPreset(p.id);
-                    setCustom(false);
-                  }}
-                  className={cn(
-                    "rounded-xl border px-2 py-2 text-center transition-colors",
-                    !custom && preset === p.id
-                      ? "bg-white text-black border-white"
-                      : "bg-white/[0.04] text-[#e8e8ef] border-white/[0.08] hover:border-white/[0.20]",
-                  )}
-                >
-                  <span className="block text-[12px] font-semibold leading-tight">{p.label}</span>
-                  <span className="block text-[11px] opacity-60">
-                    {p.width}×{p.height}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <label className="mt-2 flex items-center gap-2 text-[13px] text-[#9aa0aa]">
-              <input
-                type="checkbox"
-                checked={custom}
-                onChange={(e) => setCustom(e.target.checked)}
-                className="accent-white"
-              />
-              Dimensione personalizzata
-            </label>
-            {custom && (
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="text-[11px] font-semibold text-[#9aa0aa]">Larghezza</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={16384}
-                    value={width}
-                    onChange={(e) => setWidth(Number(e.target.value))}
-                    className="w-full mt-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white focus:outline-none focus:border-white/[0.20]"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-[11px] font-semibold text-[#9aa0aa]">Altezza</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={16384}
-                    value={height}
-                    onChange={(e) => setHeight(Number(e.target.value))}
-                    className="w-full mt-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white focus:outline-none focus:border-white/[0.20]"
-                  />
-                </label>
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="cover-background" className="block text-[13px] font-semibold text-[#9aa0aa] mb-1.5">
-              Sfondo iniziale
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                id="cover-background"
-                type="color"
-                value={background}
-                onChange={(e) => setBackground(e.target.value)}
-                className="h-9 w-12 rounded-lg border border-white/[0.08] bg-white/[0.04] cursor-pointer"
-              />
-              <input
-                type="text"
-                value={background}
-                onChange={(e) => setBackground(e.target.value)}
-                className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white font-mono focus:outline-none focus:border-white/[0.20]"
-              />
-            </div>
-          </div>
-        </div>
-
-        {error && (
-          <p className="mt-4 flex items-center gap-2 text-[13px] text-red-400">
-            <AlertCircle size={14} /> {error}
-          </p>
-        )}
-
-        <div className="mt-6 flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 text-[14px] font-medium text-[#9aa0aa] hover:text-white transition-colors"
-          >
-            Annulla
-          </button>
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-black text-[14px] font-semibold hover:bg-white/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Plus size={16} />
-            Crea copertina
-          </button>
-        </div>
-      </form>
-    </div>
-  );
 }
 
 interface ProjectCardProps {

@@ -44,6 +44,25 @@ type LoadState =
     }
   | { kind: "error"; message: string };
 
+/**
+ * The current revision's canvas background, read from its immutable
+ * snapshot. When a project has no rendered preview yet (no
+ * preview_media_id), this lets the page paint the empty canvas with
+ * the ACTUAL background chosen at creation instead of a hardcoded
+ * placeholder — "il background fino all'ultimo pixel".
+ */
+function currentCanvasBackground(
+  revisions: ThumbnailProjectRevision[],
+  currentRevisionId: string | null | undefined,
+): string {
+  if (!currentRevisionId) return DEFAULT_BACKGROUND;
+  const current = revisions.find((r) => r.id === currentRevisionId);
+  const background = current?.snapshot_json?.canvas?.background;
+  return typeof background === "string" && background.length > 0 ? background : DEFAULT_BACKGROUND;
+}
+
+const DEFAULT_BACKGROUND = "#30305a";
+
 function formatDateTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
@@ -160,6 +179,7 @@ export function CoverDetailPage() {
 
   const { project, revisions, assignments, previewUrl } = state;
   const aspect = `${project.canvas_width} / ${project.canvas_height}`;
+  const emptyBackground = currentCanvasBackground(revisions, project.current_revision_id);
 
   return (
     <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
@@ -185,7 +205,10 @@ export function CoverDetailPage() {
                   className="h-full w-full object-cover"
                 />
               ) : (
-                <div className="flex h-full w-full items-center justify-center bg-[#30305a]">
+                <div
+                  className="flex h-full w-full items-center justify-center"
+                  style={{ backgroundColor: emptyBackground }}
+                >
                   <ImageIcon className="h-10 w-10 text-white/25" />
                 </div>
               )}
@@ -232,6 +255,25 @@ export function CoverDetailPage() {
               {project.description && (
                 <p className="mt-3 text-[14px] text-[#e8e8ef]/80">{project.description}</p>
               )}
+
+              <div className="mt-4 flex items-center gap-2 rounded-xl border border-white/[0.06] bg-black/30 px-3 py-2">
+                <Hash size={13} className="shrink-0 text-[#9aa0aa]" />
+                <code
+                  data-testid="cover-project-id"
+                  className="min-w-0 flex-1 truncate font-mono text-[12px] text-[#9aa0aa]"
+                >
+                  {project.id}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(project.id).catch(() => {});
+                  }}
+                  className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-[#9aa0aa] hover:text-white hover:bg-white/[0.06] transition-colors"
+                >
+                  Copia
+                </button>
+              </div>
 
               <dl className="mt-5 grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-3">
                 <div>
