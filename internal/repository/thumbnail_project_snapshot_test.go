@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -11,6 +12,48 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
+
+func TestThumbnailProjectRepository_SaveSnapshot_RegistersCanvasAssets(t *testing.T) {
+	db, mock := newThumbnailProjectMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	mediaID := "00000000-0000-4000-8000-000000000001"
+	objectID := "img-1"
+	snapshotJSON := `{"canvas":{"background":"#30305a"},"objects":[{"id":"img-1","type":"image","media_id":"00000000-0000-4000-8000-000000000001"}]}`
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT version, status`).WithArgs(int64(7), "thumbproj_test").
+		WillReturnRows(sqlmock.NewRows([]string{"version", "status"}).AddRow(1, "draft"))
+	// The image object enters the canvas → the asset link is upserted in
+	// the SAME transaction as the revision (never a separate client call).
+	mock.ExpectExec(`INSERT INTO thumbnail_project_assets`).
+		WithArgs(int64(7), mediaID, "foreground", &objectID, sqlmock.AnyArg(), "thumbproj_test", "deleted").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT r\.id, r\.project_id, r\.revision_number.*ORDER BY r\.revision_number DESC LIMIT 1`).WithArgs("thumbproj_test", sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT COALESCE\(MAX\(revision_number\), 0\)`).WithArgs("thumbproj_test").
+		// First revision: MAX = 0 → query computes 0 + 1 = 1.
+		WillReturnRows(sqlmock.NewRows([]string{"coalesce"}).AddRow(1))
+	mock.ExpectExec(`INSERT INTO thumbnail_project_revisions`).
+		WithArgs(sqlmock.AnyArg(), "thumbproj_test", int64(1), 1, sqlmock.AnyArg(), sqlmock.AnyArg(), "renderer-1", int64(11), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE thumbnail_projects`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), int64(7), "thumbproj_test", int64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result, err := repo.SaveSnapshot(context.Background(), 7, "thumbproj_test", models.ThumbnailProjectSnapshot{
+		SchemaVersion: 1, SnapshotJSON: []byte(snapshotJSON), RendererVersion: "renderer-1", BaseVersion: 1,
+	}, 11)
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	if result.Deduplicated || result.Version != 2 || result.RevisionNumber != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestThumbnailProjectRepository_SaveSnapshot_DeduplicatesWithoutAdvancingVersion(t *testing.T) {
 	db, mock := newThumbnailProjectMockDB(t)

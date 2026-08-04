@@ -1,122 +1,113 @@
 /**
- * Vitest coverage for the thumbnail media resolver: snapshot media_id
- * collection (dedupe, schema-forward-compat) and server-side resolution
- * (workspace-guarded, no local-blob fallback).
+ * Vitest coverage for the thumbnail open resolver (mediaResolver.ts).
+ *
+ * Certifies the "open" contract of the autonomous Dark Editor: reopening a
+ * project must resolve every media_id referenced by the snapshot through
+ * the server (presigned GET URLs), never from local blobs — so a browser
+ * cache clear, a different device, or a full service restart (API /
+ * worker / MinIO / PostgreSQL) cannot leave images broken as long as the
+ * media rows still exist. Unresolvable ids (missing, foreign, not-ready,
+ * expired) are simply absent from the returned map and render as
+ * placeholders.
  */
-
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { resolveMediaMock } = vi.hoisted(() => ({
-  resolveMediaMock: vi.fn(),
-}));
-
-vi.mock("../api/thumbnailProjectsApi", async (orig) => {
-  const actual = await orig();
-  return {
-    ...actual,
-    resolveThumbnailProjectMedia: (...args: unknown[]) => resolveMediaMock(...args),
-  };
-});
-
+import { describe, expect, it, vi } from "vitest";
 import {
   collectSnapshotMediaIds,
   resolveProjectMedia,
 } from "./mediaResolver";
-import type { ResolvedProjectMedia, ThumbnailCanvasSnapshot } from "../types";
+import type { ResolvedProjectMedia } from "../types";
 
-const MEDIA_A = "00000000-0000-4000-8000-000000000001";
-const MEDIA_B = "00000000-0000-4000-8000-000000000002";
+const { resolveThumbnailProjectMediaMock } = vi.hoisted(() => ({
+  resolveThumbnailProjectMediaMock: vi.fn(),
+}));
 
-function resolvedMedia(mediaId: string): ResolvedProjectMedia {
-  return {
-    media_id: mediaId,
-    url: `https://cdn.example/${mediaId}?X-Amz-Signature=abc`,
-    content_type: "image/jpeg",
-    size_bytes: 2048,
-    created_at: "2026-08-03T00:00:00Z",
-  };
-}
+vi.mock("../api/thumbnailProjectsApi", () => ({
+  resolveThumbnailProjectMedia: resolveThumbnailProjectMediaMock,
+}));
 
-beforeEach(() => {
-  resolveMediaMock.mockReset();
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+const MEDIA = "00000000-0000-4000-8000-000000000001";
 
 describe("collectSnapshotMediaIds", () => {
-  it("collects media_id from every object, deduplicated in order", () => {
-    const snapshot: ThumbnailCanvasSnapshot = {
+  it("collects distinct media_id references preserving order", () => {
+    const ids = collectSnapshotMediaIds({
       objects: [
-        { id: "img-1", type: "image", media_id: MEDIA_A },
-        { id: "txt-1", type: "text", text: "Hi" },
-        { id: "img-2", type: "image", media_id: MEDIA_B },
-        { id: "img-3", type: "image", media_id: MEDIA_A }, // duplicate
-        { id: "ovl-1", type: "overlay", media_id: ` ${MEDIA_B} ` }, // trimmed dup
+        { id: "a", type: "image", media_id: MEDIA },
+        { id: "b", type: "text", text: "no media" },
+        { id: "c", type: "image", media_id: "00000000-0000-4000-8000-000000000002" },
+        { id: "d", type: "image", media_id: ` ${MEDIA} ` }, // trimmed, deduped
       ],
-    };
-    expect(collectSnapshotMediaIds(snapshot)).toEqual([MEDIA_A, MEDIA_B]);
+    });
+    expect(ids).toEqual([
+      MEDIA,
+      "00000000-0000-4000-8000-000000000002",
+    ]);
   });
 
-  it("returns [] for snapshots without objects or with no media_ids", () => {
-    expect(collectSnapshotMediaIds(undefined)).toEqual([]);
+  it("ignores objects without a media_id and empty snapshots", () => {
+    expect(collectSnapshotMediaIds({ objects: [{ id: "t", type: "text", text: "x" }] })).toEqual([]);
+    expect(collectSnapshotMediaIds({ canvas: {}, objects: [] })).toEqual([]);
     expect(collectSnapshotMediaIds(null)).toEqual([]);
-    expect(collectSnapshotMediaIds({})).toEqual([]);
-    expect(
-      collectSnapshotMediaIds({ objects: [{ id: "t", type: "text", text: "x" }] }),
-    ).toEqual([]);
+    expect(collectSnapshotMediaIds(undefined)).toEqual([]);
   });
 
-  it("ignores empty/whitespace-only media_ids", () => {
-    const snapshot: ThumbnailCanvasSnapshot = {
-      objects: [
-        { id: "a", type: "image", media_id: "  " },
-        { id: "b", type: "image", media_id: "" },
-      ],
-    };
-    expect(collectSnapshotMediaIds(snapshot)).toEqual([]);
+  it("is schema-forward: collects media_id from future object types (font)", () => {
+    expect(
+      collectSnapshotMediaIds({ objects: [{ id: "f", type: "font", media_id: MEDIA }] }),
+    ).toEqual([MEDIA]);
   });
 });
 
 describe("resolveProjectMedia", () => {
-  it("resolves all referenced media_ids through the server", async () => {
-    resolveMediaMock.mockResolvedValue([resolvedMedia(MEDIA_A), resolvedMedia(MEDIA_B)]);
-    const snapshot: ThumbnailCanvasSnapshot = {
-      objects: [{ id: "img-1", type: "image", media_id: MEDIA_A }],
-    };
-    const map = await resolveProjectMedia(7, "thumbproj_1", snapshot);
-    const [workspaceId, projectId, mediaIds] = resolveMediaMock.mock.calls[0] as [
-      number,
-      string,
-      string[],
-    ];
-    expect(workspaceId).toBe(7);
-    expect(projectId).toBe("thumbproj_1");
-    expect(mediaIds).toEqual([MEDIA_A]);
-    expect(map.size).toBe(2);
-    expect(map.get(MEDIA_A)?.url).toContain("X-Amz-Signature=abc");
-  });
-
-  it("never falls back to a local blob: blocked assets are simply absent", async () => {
-    // Server blocks a foreign/not-ready asset → only MEDIA_A resolves.
-    resolveMediaMock.mockResolvedValue([resolvedMedia(MEDIA_A)]);
-    const snapshot: ThumbnailCanvasSnapshot = {
-      objects: [
-        { id: "img-1", type: "image", media_id: MEDIA_A },
-        { id: "img-2", type: "image", media_id: "00000000-0000-4000-8000-000000000099" },
-      ],
-    };
-    const map = await resolveProjectMedia(7, "thumbproj_1", snapshot);
-    expect(map.has(MEDIA_A)).toBe(true);
-    expect(map.has("00000000-0000-4000-8000-000000000099")).toBe(false);
-  });
-
-  it("does not call the server when the snapshot references no media", async () => {
-    const map = await resolveProjectMedia(7, "thumbproj_1", {
-      objects: [{ id: "t", type: "text", text: "x" }],
-    });
-    expect(resolveMediaMock).not.toHaveBeenCalled();
+  it("returns an empty map when the snapshot references no media (no API call)", async () => {
+    resolveThumbnailProjectMediaMock.mockReset();
+    const map = await resolveProjectMedia(7, "thumbproj_1", { objects: [] });
     expect(map.size).toBe(0);
+    expect(resolveThumbnailProjectMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves every referenced media_id into a map keyed by media_id", async () => {
+    const items: ResolvedProjectMedia[] = [
+      {
+        media_id: MEDIA,
+        url: "https://cdn.example/presigned/1?X-Amz-Signature=abc",
+        content_type: "image/png",
+        size_bytes: 2048,
+        created_at: "2026-08-04T10:00:00Z",
+      },
+    ];
+    resolveThumbnailProjectMediaMock.mockResolvedValue(items);
+
+    const map = await resolveProjectMedia(7, "thumbproj_1", {
+      objects: [{ id: "a", type: "image", media_id: MEDIA }],
+    });
+
+    expect(resolveThumbnailProjectMediaMock).toHaveBeenCalledWith(
+      7,
+      "thumbproj_1",
+      [MEDIA],
+      expect.anything(),
+    );
+    expect(map.get(MEDIA)?.url).toBe("https://cdn.example/presigned/1?X-Amz-Signature=abc");
+    expect(map.get(MEDIA)?.content_type).toBe("image/png");
+  });
+
+  it("omits server-blocked assets (foreign/not-ready/expired) — never a local blob fallback", async () => {
+    // The server simply does not return the blocked media_id.
+    resolveThumbnailProjectMediaMock.mockResolvedValue([]);
+
+    const map = await resolveProjectMedia(7, "thumbproj_1", {
+      objects: [{ id: "a", type: "image", media_id: MEDIA }],
+    });
+    expect(map.size).toBe(0);
+    expect(map.has(MEDIA)).toBe(false);
+  });
+
+  it("propagates API errors so the editor can surface a retry state", async () => {
+    resolveThumbnailProjectMediaMock.mockRejectedValue(new Error("network down"));
+    await expect(
+      resolveProjectMedia(7, "thumbproj_1", {
+        objects: [{ id: "a", type: "image", media_id: MEDIA }],
+      }),
+    ).rejects.toThrow("network down");
   });
 });

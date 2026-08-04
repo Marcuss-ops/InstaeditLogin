@@ -269,6 +269,106 @@ func insertThumbnailRevision(ctx context.Context, tx *sql.Tx, revision *models.T
 	return err
 }
 
+// snapshotAssetRefs extracts the media references of a canonical schema
+// version 1 snapshot: every drawable object carrying a media_id becomes a
+// thumbnail_project_assets link, with the role derived from the object
+// type (image objects default to foreground; future font/background
+// objects map to their roles). References are deduplicated by
+// (media_id, role) — the table's primary key. The snapshot remains the
+// single source of truth; this derivation exists so the library can
+// answer "which media does this project use" without scanning JSON.
+// A malformed payload degrades to no links (validateSnapshot already
+// guarantees canonical snapshots parse as JSON objects).
+func snapshotAssetRefs(snapshotJSON json.RawMessage) []models.ThumbnailProjectAsset {
+	var snapshot struct {
+		Objects []struct {
+			ID      string `json:"id"`
+			Type    string `json:"type"`
+			MediaID string `json:"media_id"`
+		} `json:"objects"`
+	}
+	if err := json.Unmarshal(snapshotJSON, &snapshot); err != nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(snapshot.Objects))
+	assets := make([]models.ThumbnailProjectAsset, 0, len(snapshot.Objects))
+	for _, obj := range snapshot.Objects {
+		mediaID := strings.TrimSpace(obj.MediaID)
+		if mediaID == "" {
+			continue
+		}
+		// Non-UUID references are skipped, never rejected: the upsert
+		// casts $2::uuid, and a malformed id must not fail the snapshot
+		// save with an opaque SQL error (same contract as CreateAsset
+		// and the media resolver, which reject non-UUIDs explicitly).
+		if _, err := uuid.Parse(mediaID); err != nil {
+			continue
+		}
+		role := models.ThumbnailProjectAssetRoleForeground
+		switch strings.TrimSpace(obj.Type) {
+		case "font":
+			role = models.ThumbnailProjectAssetRoleFont
+		case "background":
+			role = models.ThumbnailProjectAssetRoleBackground
+		}
+		key := role + "\x00" + mediaID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		asset := models.ThumbnailProjectAsset{MediaID: mediaID, Role: role}
+		if objectID := strings.TrimSpace(obj.ID); objectID != "" {
+			asset.ObjectID = &objectID
+		}
+		assets = append(assets, asset)
+	}
+	return assets
+}
+
+// upsertSnapshotAssets records every media reference of a persisted
+// snapshot into thumbnail_project_assets inside the caller's
+// transaction. Links are guarded exactly like CreateAsset: the media row
+// must exist, be ready, non-expired, and owned by the workspace (or a
+// member) or the reference is silently skipped — an image can never be
+// linked to a project outside its workspace, and a snapshot save never
+// fails because of a stale, missing, or malformed media row. The
+// object_id is refreshed to the latest object using that media, so
+// duplicated objects keep the link current (note: the PK is
+// project_id+media_id+role, so object_id tracks the most recent object
+// for that media/role, never a full mapping — the snapshot JSON remains
+// the source of truth). Historical links are never deleted (old
+// revisions may still reference them).
+func (r *ThumbnailProjectRepository) upsertSnapshotAssets(ctx context.Context, tx *sql.Tx, workspaceID int64, projectID string, snapshotJSON json.RawMessage) error {
+	assets := snapshotAssetRefs(snapshotJSON)
+	if len(assets) == 0 {
+		return nil
+	}
+	for i := range assets {
+		asset := &assets[i]
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO thumbnail_project_assets (project_id, media_id, role, object_id, created_at)
+			SELECT p.id, ma.id, $3, $4, $5
+			  FROM thumbnail_projects p
+			  JOIN media_assets ma ON ma.id = $2::uuid AND ma.status = 'ready' AND ma.expires_at > NOW()
+			 WHERE p.workspace_id = $1 AND p.id = $6 AND p.status <> $7
+			   AND EXISTS (
+				   SELECT 1 FROM workspaces w
+				    WHERE w.id = p.workspace_id
+				      AND (w.owner_id = ma.user_id OR EXISTS (
+						  SELECT 1 FROM workspace_members wm
+						   WHERE wm.workspace_id = w.id AND wm.user_id = ma.user_id
+					  ))
+			   )
+			ON CONFLICT ON CONSTRAINT thumbnail_project_assets_project_media_role_pk
+			DO UPDATE SET object_id = EXCLUDED.object_id
+		`, workspaceID, asset.MediaID, asset.Role, asset.ObjectID, time.Now().UTC(),
+			projectID, models.ThumbnailProjectStatusDeleted); err != nil {
+			return fmt.Errorf("upsert thumbnail project asset: %w", err)
+		}
+	}
+	return nil
+}
+
 // SaveSnapshot appends an immutable revision and advances the project version atomically.
 func (r *ThumbnailProjectRepository) SaveSnapshot(ctx context.Context, workspaceID int64, projectID string, snapshot models.ThumbnailProjectSnapshot, createdBy int64) (*models.ThumbnailProjectSnapshotResult, error) {
 	canonical, hash, err := validateSnapshot(snapshot, createdBy)
@@ -291,6 +391,12 @@ func (r *ThumbnailProjectRepository) SaveSnapshot(ctx context.Context, workspace
 	}
 	if version != snapshot.BaseVersion {
 		return nil, fmt.Errorf("%w: expected=%d current=%d", ErrThumbnailProjectConflict, snapshot.BaseVersion, version)
+	}
+	// Register the media references of the snapshot (image objects etc.)
+	// so thumbnail_project_assets always mirrors the canvas — server
+	// side, in the same transaction, on every save (deduplicated or not).
+	if err := r.upsertSnapshotAssets(ctx, tx, workspaceID, projectID, canonical); err != nil {
+		return nil, err
 	}
 	existing := &models.ThumbnailProjectRevision{}
 	err = tx.QueryRowContext(ctx, `SELECT r.id, r.project_id, r.revision_number, r.schema_version, r.snapshot_json, r.snapshot_sha256, r.renderer_version, r.created_by, r.created_at
@@ -385,6 +491,11 @@ func (r *ThumbnailProjectRepository) RestoreRevision(ctx context.Context, worksp
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: revision_id=%s", ErrThumbnailProjectRevisionNotFound, revisionID)
 		}
+		return nil, err
+	}
+	// Restoring an old revision re-establishes its media links (upsert:
+	// never deletes, old history keeps its references).
+	if err := r.upsertSnapshotAssets(ctx, tx, workspaceID, projectID, source.SnapshotJSON); err != nil {
 		return nil, err
 	}
 	number, err := r.nextRevisionNumber(ctx, tx, projectID)
