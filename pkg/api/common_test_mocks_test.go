@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -149,6 +150,13 @@ func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int6
 
 // GetRefreshToken implements the optional RefreshTokenReader capability
 // the account-disconnect flow uses to revoke a YouTube grant remotely.
+func (m *mockCredentialVault) GetRefreshTokenForOAuthConnectionTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64) (string, error) {
+	if m.getRefreshTokenFn != nil {
+		return m.getRefreshTokenFn(ctx, oauthConnectionID)
+	}
+	return "", fmt.Errorf("GetRefreshTokenForOAuthConnectionTx not implemented")
+}
+
 func (m *mockCredentialVault) GetRefreshToken(ctx context.Context, platformAccountID int64) (string, error) {
 	if m.getRefreshTokenFn != nil {
 		return m.getRefreshTokenFn(ctx, platformAccountID)
@@ -297,8 +305,8 @@ type mockUserStore struct {
 	countActiveOnConnectionFn func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error)
 	// disconnectPlatformAccountFn models the production atomic shared-grant
 	// operation without widening the UserStore compatibility interface.
-	disconnectPlatformAccountFn func(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
-	disconnectOAuthGrantFn      func(ctx context.Context, oauthConnectionID int64) error
+	disconnectPlatformAccountFn func(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)	disconnectOAuthGrantFn              func(ctx context.Context, oauthConnectionID int64) error
+	disconnectOAuthGrantWithRevocationFn func(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -407,6 +415,16 @@ func (m *mockUserStore) DisconnectOAuthGrantTx(ctx context.Context, oauthConnect
 		return m.disconnectOAuthGrantFn(ctx, oauthConnectionID)
 	}
 	return nil
+}
+
+func (m *mockUserStore) DisconnectOAuthGrantWithRevocationTx(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error {
+	if m.disconnectOAuthGrantWithRevocationFn != nil {
+		return m.disconnectOAuthGrantWithRevocationFn(ctx, oauthConnectionID, revoke)
+	}
+	if err := revoke(ctx, nil); err != nil {
+		return err
+	}
+	return m.DisconnectOAuthGrantTx(ctx, oauthConnectionID)
 }
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.
