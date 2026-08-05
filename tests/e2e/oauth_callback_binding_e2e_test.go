@@ -120,7 +120,7 @@ type countingChannelAuthorizer struct {
 	authorizeCalls atomic.Int64
 }
 
-func (c *countingChannelAuthorizer) AuthorizeChannel(_ context.Context, accountID int64, expectedChannelID string, scopes []string, tokens ...*models.TokenData) (int64, error) {
+func (c *countingChannelAuthorizer) AuthorizeChannel(_ context.Context, accountID int64, expectedChannelID string, _ string, scopes []string, tokens ...*models.TokenData) (int64, error) {
 	c.authorizeCalls.Add(1)
 	return 0, fmt.Errorf("countingChannelAuthorizer: AuthorizeChannel MUST NOT be called on negative-bind path (accountID=%d expected=%q scopes=%v)", accountID, expectedChannelID, scopes)
 }
@@ -168,6 +168,9 @@ func (s *mockUserStore) AttachPlatformAccount(userID int64, profile *models.Plat
 }
 func (s *mockUserStore) ListPlatformAccountsByUser(int64, string) ([]*models.PlatformAccount, error) {
 	return nil, nil
+}
+func (s *mockUserStore) FindOAuthConnectionByID(context.Context, int64) (*models.OAuthConnection, error) {
+	return nil, nil // not exercised by the callback bind suite
 }
 func (s *mockUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error) {
 	return nil, nil
@@ -664,7 +667,7 @@ type countingChannelAcceptingAuthorizer struct {
 	authorizeCalls atomic.Int64
 }
 
-func (c *countingChannelAcceptingAuthorizer) AuthorizeChannel(_ context.Context, _ int64, expectedChannelID string, _ []string, _ ...*models.TokenData) (int64, error) {
+func (c *countingChannelAcceptingAuthorizer) AuthorizeChannel(_ context.Context, _ int64, expectedChannelID string, _ string, _ []string, _ ...*models.TokenData) (int64, error) {
 	c.authorizeCalls.Add(1)
 	if expectedChannelID != channelA {
 		return 0, fmt.Errorf("countingChannelAcceptingAuthorizer: expected_channel_id mismatch got=%q want=channelA", expectedChannelID)

@@ -22,6 +22,7 @@ func TestAuthorizeChannel_IneligibleStatusRejects(t *testing.T) {
 	_, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
 		"",
+		"",
 		nil,
 		&models.TokenData{AccessToken: "x", TokenType: models.TokenTypeBearer, ExpiresIn: 60},
 	)
@@ -63,6 +64,7 @@ func TestAuthorizeChannel_DisconnectedStatusRejects(t *testing.T) {
 	_, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
 		"",
+		"",
 		nil,
 		&models.TokenData{AccessToken: "x", TokenType: models.TokenTypeBearer, ExpiresIn: 60},
 	)
@@ -101,6 +103,7 @@ func TestAuthorizeChannel_ErrorStatusRejects(t *testing.T) {
 
 	_, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
+		"",
 		"",
 		nil,
 		&models.TokenData{AccessToken: "x", TokenType: models.TokenTypeBearer, ExpiresIn: 60},
@@ -144,6 +147,7 @@ func TestAuthorizeChannel_ReauthFromExpiredStatusRejected(t *testing.T) {
 	_, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
 		"",
+		"",
 		[]string{"https://www.googleapis.com/auth/youtube.upload"},
 		&models.TokenData{AccessToken: "rotated-access", RefreshToken: "rotated-refresh", TokenType: models.TokenTypeBearer, ExpiresIn: 3600},
 	)
@@ -174,7 +178,7 @@ func TestAuthorizeChannel_FirstYouTubeAuthorizationWithoutRefreshTokenRequiresRe
 	expectLoadAccount(mock, accountID, userID, models.PlatformYouTube, "UCabcdefghijklmnopqrstuv", models.AccountStatusPendingAuthorization)
 	mock.ExpectRollback()
 
-	_, err := svc.AuthorizeChannel(context.Background(), accountID, "", nil, &models.TokenData{
+	_, err := svc.AuthorizeChannel(context.Background(), accountID, "", "", nil, &models.TokenData{
 		AccessToken: "youtube-access",
 		TokenType:   models.TokenTypeBearer,
 		ExpiresIn:   3600,
@@ -203,7 +207,7 @@ func TestAuthorizeChannel_ReconnectWithoutRefreshTokenKeepsExistingGrant(t *test
 	expectPromoteAccount(mock, oauthConnID, accountID)
 	mock.ExpectCommit()
 
-	got, err := svc.AuthorizeChannel(context.Background(), accountID, "", scopes, &models.TokenData{
+	got, err := svc.AuthorizeChannel(context.Background(), accountID, "", "", scopes, &models.TokenData{
 		AccessToken: "youtube-reconnected-access",
 		TokenType:   models.TokenTypeBearer,
 		ExpiresIn:   3600,

@@ -21,6 +21,9 @@ func (*browserSmokeUserStore) AttachPlatformAccount(int64, *models.PlatformProfi
 func (*browserSmokeUserStore) ListPlatformAccountsByUser(int64, string) ([]*models.PlatformAccount, error) {
 	return nil, nil
 }
+func (*browserSmokeUserStore) FindOAuthConnectionByID(context.Context, int64) (*models.OAuthConnection, error) {
+	return nil, nil // not exercised by the browser smoke suite
+}
 func (*browserSmokeUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error) {
 	return nil, nil
 }

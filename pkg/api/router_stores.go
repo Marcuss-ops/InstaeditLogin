@@ -110,6 +110,16 @@ type UserStore interface {
 	// blocked_auth on them independently. Idempotent on the DB
 	// side (re-flips with a fresh reauth_required_at on each call).
 	MarkReauthRequired(ctx context.Context, accountID int64, code, message string) error
+	// FindOAuthConnectionByID loads a grant row by id. Used by the
+	// YouTube login handler (R7) to decide whether a reconnect may
+	// skip prompt=consent: the row's status + granted_scopes tell
+	// the handler whether the existing grant is healthy, and the
+	// row's oauth_client_key is reused so a healthy reconnect stays
+	// on the pool client that issued the grant (no new refresh
+	// token, no cross-pool drift). Returns (nil, nil) when no row
+	// matches — the caller treats that as "cannot verify health"
+	// and fails towards consent.
+	FindOAuthConnectionByID(ctx context.Context, id int64) (*models.OAuthConnection, error)
 	// CountActiveAccountsOnConnection (P0 — shared-grant disconnect)
 	// returns the number of still-active sibling channels sharing the
 	// account's OAuth grant (oauth_connection_id), excluding the account

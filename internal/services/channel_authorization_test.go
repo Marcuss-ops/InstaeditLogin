@@ -37,6 +37,7 @@ func TestAuthorizeChannel_HappyPath(t *testing.T) {
 	got, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
 		"UCabcdefghijklmnopqrstuv",
+		"", // legacy resource-keyed branch: no pool client key
 		[]string{"https://www.googleapis.com/auth/youtube.upload"},
 		&models.TokenData{
 			AccessToken:  "fresh-access",
@@ -86,12 +87,12 @@ func TestAuthorizeChannel_YouTubeSubjectSharesGrantAcrossChannels(t *testing.T) 
 	} {
 		mock.ExpectBegin()
 		expectLoadAccount(mock, account.id, userID, models.PlatformYouTube, account.channel, account.status)
-		expectSubjectUpsertOCR(mock, userID, models.PlatformYouTube, "google-subject-1", account.channel, scopes, oauthConnID)
+		expectSubjectUpsertOCR(mock, userID, models.PlatformYouTube, "google-subject-1", account.channel, "youtube_pool_a", scopes, oauthConnID)
 		expectInsertTokenTx(mock, true)
 		expectPromoteAccount(mock, oauthConnID, account.id)
 		mock.ExpectCommit()
 
-		got, err := svc.AuthorizeChannel(context.Background(), account.id, account.channel, scopes, &models.TokenData{
+		got, err := svc.AuthorizeChannel(context.Background(), account.id, account.channel, "youtube_pool_a", scopes, &models.TokenData{
 			AccessToken:       "fresh-access-" + account.channel,
 			RefreshToken:      "fresh-refresh",
 			ProviderSubjectID: "google-subject-1",
@@ -142,6 +143,7 @@ func TestAcceptance_VaultFailureRollsBackAndStatusNotFlipped(t *testing.T) {
 	_, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
 		"UCabcdefghijklmnopqrstuv",
+		"",
 		[]string{"https://www.googleapis.com/auth/youtube.upload"},
 		&models.TokenData{
 			AccessToken:  "fresh-access",
@@ -199,6 +201,7 @@ func TestAcceptance_VaultFailureWithNilBinder(t *testing.T) {
 	_, err = svc.AuthorizeChannel(context.Background(),
 		11,
 		"", // no expectedChannelID — binder path skipped
+		"", // no pool client key (non-YouTube)
 		[]string{"pages_show_list"},
 		&models.TokenData{
 			AccessToken: "user-token",
@@ -225,6 +228,7 @@ func TestAuthorizeChannel_ChannelMismatchPreTxExit(t *testing.T) {
 	_, err := svc.AuthorizeChannel(context.Background(),
 		1,
 		"UCaaaaaaaaaaaaaaaaaaaaaZ", // wrong channel
+		"",
 		nil,
 		&models.TokenData{AccessToken: "bearer", TokenType: models.TokenTypeBearer, ExpiresIn: 60},
 	)

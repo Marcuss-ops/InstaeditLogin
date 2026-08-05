@@ -122,6 +122,14 @@ func NewChannelAuthorizationService(
 // AuthorizeChannel to promote the account to active.
 var ErrOAuthRefreshTokenRequired = errors.New("oauth refresh token required for first YouTube authorization")
 
+// defaultYouTubeOAuthClientKey is the migration 099 default label applied
+// to oauth_connections rows whose grant was NOT issued by a pool client
+// (legacy single-client deployments). AuthorizeChannel writes it when the
+// callback carries no oauth_client_key so the column never holds an
+// empty string and the refresh side (vault → registry.Resolve) treats
+// the grant as the legacy client continuation.
+const defaultYouTubeOAuthClientKey = "youtube_pool_a"
+
 // ChannelAuthorizer is the narrow interface the HTTP router uses to
 // invoke the atomic-flip primitive. Defined here (alongside the
 // concrete implementation) so pkg/api and tests can type-assert
@@ -132,6 +140,7 @@ type ChannelAuthorizer interface {
 		ctx context.Context,
 		accountID int64,
 		expectedChannelID string,
+		oauthClientKey string,
 		scopes []string,
 		tokens ...*models.TokenData,
 	) (int64, error)
@@ -167,10 +176,38 @@ var eligibilityGate = IsEligibleForActivePromotion
 
 // AuthorizeChannel is the one and only entry point that flips
 // platform_accounts.status to 'active'.
+//
+// oauthClientKey is the YouTube OAuth Client Pool label that issued the
+// grant ("youtube_pool_a" / "youtube_pool_b", from the signed OAuth
+// state). It is persisted on the oauth_connections row so the refresh
+// side always renews with the SAME client that issued the token. An
+// empty key (legacy single-client callers: connect-link, non-pool
+// callbacks, non-YouTube providers) falls back to the migration 099
+// default youtube_pool_a.
+//
+// R7 — idempotent reconnect: the YouTube upsert is keyed on
+// (user_id, provider, provider_subject_id), so re-authorising the SAME
+// channel+subject (with any pool client) UPDATES the existing
+// oauth_connections row in place and returns the SAME id. The token
+// rows for that connection are pruned + re-inserted inside the same tx
+// (SaveTokenTx), keeping the "one channel → one active connection →
+// one canonical refresh token" invariant. The DO UPDATE SET
+// oauth_client_key = EXCLUDED.oauth_client_key makes a reconnect
+// through a different pool client flip the row to the client that
+// actually issued the new grant — never leaving a mismatch between the
+// stored key and the issuer.
+//
+// Deliberate no-go (migration 100, oauth_active_channel_client_uq):
+// reconnecting a channel with a DIFFERENT Google subject while the
+// (channel, client) pair already has an active grant is rejected by
+// the partial unique index — the operator must disconnect the stale
+// grant first. This is intentional: two live grants for one channel
+// would double-count refresh tokens against Google's cap.
 func (s *ChannelAuthorizationService) AuthorizeChannel(
 	ctx context.Context,
 	accountID int64,
 	expectedChannelID string,
+	oauthClientKey string,
 	scopes []string,
 	tokens ...*models.TokenData,
 ) (oauthConnectionID int64, err error) {
@@ -340,19 +377,30 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	// whereas the bare []string would surface a
 	// "converting argument $4 type: unsupported type []string"
 	// driver error.
+	//
+	// R7: the pool client that issued the grant is part of the row
+	// (oauth_client_key, migration 099) so the refresh side resolves
+	// the client from the stored key. The column is NOT NULL DEFAULT
+	// 'youtube_pool_a', so legacy callers that never set the key get
+	// the honest legacy label instead of an empty string.
+	clientKey := oauthClientKey
+	if clientKey == "" {
+		clientKey = defaultYouTubeOAuthClientKey
+	}
 	var upsertErr error
 	if platform == models.PlatformYouTube && tokens[0].ProviderSubjectID != "" {
 		upsertErr = tx.QueryRowContext(ctx,
-			`INSERT INTO oauth_connections (user_id, provider, provider_subject_id, provider_resource_id, scopes, granted_scopes, last_validated_at)
-			 VALUES ($1, $2, $3, $4, $5, $5, NOW())
+			`INSERT INTO oauth_connections (user_id, provider, provider_subject_id, provider_resource_id, oauth_client_key, scopes, granted_scopes, last_validated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $6, NOW())
 			 ON CONFLICT (user_id, provider, provider_subject_id) WHERE provider_subject_id <> ''
 			 DO UPDATE SET provider_resource_id = EXCLUDED.provider_resource_id,
+			               oauth_client_key = EXCLUDED.oauth_client_key,
 			               scopes = EXCLUDED.scopes,
 			               granted_scopes = EXCLUDED.granted_scopes,
 			               last_validated_at = NOW(),
 			               updated_at = NOW()
 			 RETURNING id`,
-			userID, platform, tokens[0].ProviderSubjectID, providerResourceID, pq.Array(scopes),
+			userID, platform, tokens[0].ProviderSubjectID, providerResourceID, clientKey, pq.Array(scopes),
 		).Scan(&oauthConnectionID)
 	} else {
 		upsertErr = tx.QueryRowContext(ctx,

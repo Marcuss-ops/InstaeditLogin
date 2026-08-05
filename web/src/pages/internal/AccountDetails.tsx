@@ -133,6 +133,17 @@ export function AccountDetailsPage() {
   const provider = getProviderMeta(account.platform);
   const resource = account.resource;
 
+  // R7 — reconnect URL. For YouTube we pin the channel so the server
+  // can check the existing grant's health and skip prompt=consent when
+  // it is healthy (Google reuses the cached grant → no new refresh
+  // token against the 100-per-client cap). Unpinned reconnect keeps
+  // force-consent (channel unknown → health unverifiable).
+  const reconnectHref = `/api/v1/auth/${account.platform}/login?mode=reconnect${
+    account.platform === "youtube" && account.platform_user_id
+      ? `&expected_channel_id=${encodeURIComponent(account.platform_user_id)}`
+      : ""
+  }`;
+
   const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
     { id: "overview", label: "Overview", icon: <Settings size={14} /> },
     { id: "videos", label: "Videos", icon: <Video size={14} /> },
@@ -256,7 +267,7 @@ export function AccountDetailsPage() {
               </p>
             </div>
             <a
-              href={`/api/v1/auth/${account.platform}/login?mode=reconnect`}
+              href={reconnectHref}
               className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-amber-300 px-4 py-2 text-[13px] font-semibold text-black transition-colors hover:bg-amber-200"
             >
               <RefreshCw size={14} /> Ricollega YouTube
@@ -428,7 +439,7 @@ export function AccountDetailsPage() {
             </dl>
             <div className="flex items-center gap-3 mt-6">
               <a
-                href={`/api/v1/auth/${account.platform}/login?mode=reconnect`}
+                href={reconnectHref}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
               >
                 <RefreshCw size={14} /> Reconnect

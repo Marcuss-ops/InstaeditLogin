@@ -87,6 +87,7 @@ func (*e2EDefaultChannelAuthorizer) AuthorizeChannel(
 	context.Context,
 	int64,
 	string,
+	string,
 	[]string,
 	...*models.TokenData,
 ) (int64, error) {

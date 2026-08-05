@@ -74,7 +74,10 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	}
 	// Translate ?mode=add|reconnect into OAuthLoginOptions.
 	// "add" forces account selection (Google account picker).
-	// "reconnect" forces consent re-approval.
+	// "reconnect" forces consent re-approval. R7 narrows this below:
+	// a channel-pinned reconnect whose grant is healthy skips consent
+	// (see the expected_channel_id block) so Google reuses the cached
+	// grant instead of minting a new refresh token.
 	mode := req.URL.Query().Get("mode")
 	var options services.OAuthLoginOptions
 	switch mode {
@@ -82,11 +85,19 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		// Account selection is sufficient for a normal add flow. Do not
 		// force consent here: repeatedly issuing refresh tokens can
 		// invalidate older grants. A YouTube add flow that binds a
-		// specific channel sets ForceConsent below via expectedChannelID.
+		// specific channel refines ForceConsent below via the R7 health
+		// check.
 		options.SelectAccount = true
 	case "reconnect":
+		// Explicit reconnect requests without a pinned channel stay on
+		// force-consent: the channel (and therefore the grant health) is
+		// unknown, and "the user explicitly asked for a fresh
+		// authorization" is one of the consent-necessary cases. When the
+		// request also pins a channel the health check below may relax it.
 		options.ForceConsent = true
 	}
+	identity := auth.IdentityFromContext(req.Context())
+
 	// YouTube-only: ?expected_channel_id=UC... tells the server which
 	// channel the operator intends to bind the OAuth grant to. Without
 	// it, a Google account with N>1 channels cannot be attached safely
@@ -95,15 +106,31 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	// Brand-Account selection). The hint round-trips through a sibling
 	// HttpOnly cookie (NOT the URL state param — Google echoes the URL
 	// state verbatim, and we keep it a pure CSRF nonce).
+	//
+	// R7 — prompt=consent reduction: consent is forced ONLY when the
+	// pinned channel has no healthy grant (brand-new connection,
+	// reauth_required/pending/error, missing/inactive grant row, or
+	// missing force-ssl scope). A healthy active channel reconnects
+	// with prompt=select_account only — Google reuses its cached
+	// grant and returns the SAME refresh token, so no new token is
+	// burned against the 100-per-client cap. The hint also carries the
+	// healthy grant's pool client key so the pool path below stays on
+	// the client that issued the grant (grant reuse across clients is
+	// impossible: the code exchange would mint a new grant).
+	var reconnectHint youtubeReconnectHint
 	expectedChannelID := ""
 	if raw := req.URL.Query().Get("expected_channel_id"); raw != "" {
 		if provider == models.PlatformYouTube && isValidYouTubeChannelID(raw) {
 			expectedChannelID = raw
-			// expected_channel_id ALWAYS implies account picker +
-			// consent so a previously-cached grant cannot bind to a
-			// different Brand Account.
+			// expected_channel_id ALWAYS implies account picker so the
+			// operator confirms the Google account.
 			options.SelectAccount = true
-			options.ForceConsent = true
+			var userID int64
+			if identity != nil {
+				userID = identity.UserID()
+			}
+			reconnectHint = r.youtubeReconnectHintFor(req.Context(), userID, expectedChannelID)
+			options.ForceConsent = reconnectHint.consentNeeded
 		}
 	}
 
@@ -117,20 +144,37 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	// cookie path is preserved unchanged.
 	var state string
 	if provider == models.PlatformYouTube && r.youtubeOAuthClientRegistry != nil {
-		// The Google subject is unknown until the operator picks an
-		// account on the consent screen, so the pool selection at login
-		// time is subject-less. The registry's no-counter path returns
-		// the first client deterministically; once the storage usage
-		// counter is wired (it rejects an empty subject), this step
-		// MUST switch to a global/least-loaded selection — see
+		// R7 — client selection. A HEALTHY reconnect reuses the pool
+		// client that issued the existing grant (Resolve on the grant's
+		// oauth_client_key): Google's cached consent is per (client,
+		// account, scopes), so reusing the client returns the SAME
+		// refresh token and never burns a new slot. Only new/unhealthy
+		// connections go through the capacity-aware selector. The Google
+		// subject is unknown until the operator picks an account on the
+		// consent screen, so selection stays subject-less here — see
 		// internal/services/youtube_oauth_client_pool.go.
-		client, selErr := r.youtubeOAuthClientRegistry.SelectForNewConnection(req.Context(), "")
-		if selErr != nil {
-			logAndError(w, req, "failed to select youtube oauth pool client", selErr, "provider", provider)
-			return
+		var client *services.YouTubeOAuthClientConfig
+		if reconnectHint.existingClientKey != "" {
+			resolved, resErr := r.youtubeOAuthClientRegistry.Resolve(reconnectHint.existingClientKey)
+			if resErr != nil {
+				// Fail-closed: never fall back to a different client for a
+				// healthy grant (a wrong client would mint a new grant and
+				// orphan the stored one).
+				logAndError(w, req, "failed to resolve existing youtube pool client for reconnect", resErr,
+					"provider", provider, "oauth_client_key", reconnectHint.existingClientKey)
+				return
+			}
+			client = resolved
+		} else {
+			selected, selErr := r.youtubeOAuthClientRegistry.SelectForNewConnection(req.Context(), "")
+			if selErr != nil {
+				logAndError(w, req, "failed to select youtube oauth pool client", selErr, "provider", provider)
+				return
+			}
+			client = selected
 		}
 		workspaceID := int64(0)
-		if identity := auth.IdentityFromContext(req.Context()); identity != nil {
+		if identity != nil {
 			workspaceID = identity.WorkspaceID()
 		}
 		signedState, nonce, expiresAt, issErr := r.auth.IssueOAuthFlowState(client.Key, expectedChannelID, workspaceID)
@@ -234,9 +278,9 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	// single-account attach path.
 	var account *models.PlatformAccount
 	if discoverer, ok := r.capabilities.Discoverer(provider); ok {
-		account, stop = r.callbackAttachDiscovered(w, req, provider, userID, discoverer, tokenData, expectedChannelID, fromConnectLinkState)
+		account, stop = r.callbackAttachDiscovered(w, req, provider, userID, discoverer, tokenData, expectedChannelID, oauthClientKey, fromConnectLinkState)
 	} else {
-		account, stop = r.callbackAttachSingle(w, req, provider, userID, profile, tokenData)
+		account, stop = r.callbackAttachSingle(w, req, provider, userID, profile, tokenData, oauthClientKey)
 	}
 	if stop {
 		return
@@ -367,8 +411,12 @@ func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, 
 // expand the OAuth grant into N platform accounts and map the typed
 // attach errors onto their HTTP contract. On any error it writes the
 // HTTP response itself and returns stop=true.
-func (r *Router) callbackAttachDiscovered(w http.ResponseWriter, req *http.Request, provider string, userID int64, discoverer services.AccountDiscoverer, tokenData *models.TokenData, expectedChannelID string, fromConnectLinkState bool) (*models.PlatformAccount, bool) {
-	account, err := r.attachDiscoveredAccounts(req.Context(), userID, provider, discoverer, tokenData, expectedChannelID)
+//
+// oauthClientKey is the pool client label from the signed state (R4);
+// it is threaded into AuthorizeChannel so the reconnect persists the
+// client that issued the grant (R7).
+func (r *Router) callbackAttachDiscovered(w http.ResponseWriter, req *http.Request, provider string, userID int64, discoverer services.AccountDiscoverer, tokenData *models.TokenData, expectedChannelID string, oauthClientKey string, fromConnectLinkState bool) (*models.PlatformAccount, bool) {
+	account, err := r.attachDiscoveredAccounts(req.Context(), userID, provider, discoverer, tokenData, expectedChannelID, oauthClientKey)
 	if err == nil {
 		return account, false
 	}
@@ -432,7 +480,11 @@ func (r *Router) callbackAttachDiscovered(w http.ResponseWriter, req *http.Reque
 // the platform account to the authenticated user (never auto-create),
 // then run the atomic OAuth finalize. On any error it writes the HTTP
 // response itself and returns stop=true.
-func (r *Router) callbackAttachSingle(w http.ResponseWriter, req *http.Request, provider string, userID int64, profile *models.PlatformProfile, tokenData *models.TokenData) (*models.PlatformAccount, bool) {
+//
+// oauthClientKey is the pool client label from the signed state (R4);
+// it is threaded into AuthorizeChannel so the reconnect persists the
+// client that issued the grant (R7).
+func (r *Router) callbackAttachSingle(w http.ResponseWriter, req *http.Request, provider string, userID int64, profile *models.PlatformProfile, tokenData *models.TokenData, oauthClientKey string) (*models.PlatformAccount, bool) {
 	// Attach to the authenticated user — never auto-create.
 	account, err := r.userRepo.AttachPlatformAccount(userID, profile, provider)
 	if err != nil {
@@ -478,7 +530,7 @@ func (r *Router) callbackAttachSingle(w http.ResponseWriter, req *http.Request, 
 		logAndError(w, req, "channel authorizer not configured", errors.New("channel authorizer not configured"))
 		return nil, true
 	}
-	if _, err := r.authorizer.AuthorizeChannel(req.Context(), account.ID, "", tokenData.Scopes, tokenData); err != nil {
+	if _, err := r.authorizer.AuthorizeChannel(req.Context(), account.ID, "", oauthClientKey, tokenData.Scopes, tokenData); err != nil {
 		if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
 			if flagErr := r.markOAuthRefreshTokenRequired(req.Context(), account); flagErr != nil {
 				slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",

@@ -117,6 +117,9 @@ func (m *stubUserStoreV2) AttachPlatformAccount(int64, *models.PlatformProfile, 
 func (m *stubUserStoreV2) ListPlatformAccountsByUser(int64, string) ([]*models.PlatformAccount, error) {
 	return nil, nil
 }
+func (m *stubUserStoreV2) FindOAuthConnectionByID(context.Context, int64) (*models.OAuthConnection, error) {
+	return nil, nil // not exercised by handleDriveBatchImportV2; satisfies UserStore contract
+}
 func (m *stubUserStoreV2) FindPlatformAccountByID(int64) (*models.PlatformAccount, error) {
 	return nil, nil
 }

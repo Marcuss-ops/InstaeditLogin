@@ -207,8 +207,12 @@ type fakeChannelAuthorizer struct {
 	authorizeCalls atomic.Int32
 	lastAccountID  int64
 	lastExpectedCh string
-	lastScopes     []string
-	lastTokens     []*models.TokenData
+	// lastClientKey (R7) records the oauth_client_key the callback
+	// threaded through from the signed state. Tests assert the
+	// reconnect persists the pool client that issued the grant.
+	lastClientKey string
+	lastScopes    []string
+	lastTokens    []*models.TokenData
 	// tokenWrites is the per-token independent audit trail. Tests
 	// assert len(tokenWrites) for "exactly N cipher writes on
 	// success" and len(tokenWrites)==0 for "no writes on failure".
@@ -234,10 +238,11 @@ type fakeAuthTokenWrite struct {
 	RefreshToken string
 }
 
-func (f *fakeChannelAuthorizer) AuthorizeChannel(ctx context.Context, accountID int64, expectedChannelID string, scopes []string, tokens ...*models.TokenData) (int64, error) {
+func (f *fakeChannelAuthorizer) AuthorizeChannel(ctx context.Context, accountID int64, expectedChannelID string, oauthClientKey string, scopes []string, tokens ...*models.TokenData) (int64, error) {
 	f.authorizeCalls.Add(1)
 	f.lastAccountID = accountID
 	f.lastExpectedCh = expectedChannelID
+	f.lastClientKey = oauthClientKey
 	f.lastScopes = scopes
 	// Make a defensive copy of the variadic token slice so tests
 	// can inspect the inputs without aliasing.
@@ -299,6 +304,10 @@ type mockUserStore struct {
 	// Tests that exercise the 422/409 path override this; the others
 	// get the default (no-op) below.
 	markReauthRequiredFn func(ctx context.Context, accountID int64, code, message string) error
+	// findOAuthConnectionFn (R7) returns the grant row used by the
+	// login handler's consent-reduction decision. Default (nil, nil)
+	// = "no grant found" → the handler fails towards consent.
+	findOAuthConnectionFn func(ctx context.Context, id int64) (*models.OAuthConnection, error)
 	// countActiveOnConnectionFn (P0 — shared-grant disconnect) returns
 	// the number of still-active sibling channels sharing the account's
 	// grant. Default 0 (single-account grants) unless overridden.
@@ -317,6 +326,9 @@ func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.Plat
 	return m.attachFn(userID, profile, platform)
 }
 func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
+	if m.listFn == nil {
+		return nil, nil
+	}
 	return m.listFn(userID, platform)
 }
 func (m *mockUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error) {
@@ -333,6 +345,12 @@ func (m *mockUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *i
 func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
 	if m.findPlatformAccountFn != nil {
 		return m.findPlatformAccountFn(id)
+	}
+	return nil, nil
+}
+func (m *mockUserStore) FindOAuthConnectionByID(ctx context.Context, id int64) (*models.OAuthConnection, error) {
+	if m.findOAuthConnectionFn != nil {
+		return m.findOAuthConnectionFn(ctx, id)
 	}
 	return nil, nil
 }

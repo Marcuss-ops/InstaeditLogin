@@ -37,7 +37,7 @@ func (sentryWiringVault) Revoke(context.Context, int64) error { return nil }
 
 type sentryWiringAuthorizer struct{}
 
-func (sentryWiringAuthorizer) AuthorizeChannel(context.Context, int64, string, []string, ...*models.TokenData) (int64, error) {
+func (sentryWiringAuthorizer) AuthorizeChannel(context.Context, int64, string, string, []string, ...*models.TokenData) (int64, error) {
 	return 0, errors.New("not implemented")
 }
 

@@ -29,6 +29,7 @@ func TestAuthorizeChannel_MultiTokenAtomicallyPersisted(t *testing.T) {
 	got, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
 		"", // Facebook flow has no channels.list check
+		"", // no pool client key (non-YouTube)
 		[]string{"pages_show_list"},
 		&models.TokenData{ // principal user token (long-lived)
 			AccessToken: "user-token",
@@ -79,6 +80,7 @@ func TestAuthorizeChannel_SecondTokenFailureRollsBackFirstAndOCR(t *testing.T) {
 
 	_, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
+		"",
 		"",
 		nil,
 		&models.TokenData{AccessToken: "user-token", TokenType: models.TokenTypeLongLived, ExpiresIn: 86400},
@@ -149,7 +151,7 @@ func TestAuthorizeChannel_ReauthKeepsSameOAuthConnection(t *testing.T) {
 	mock.ExpectCommit()
 
 	got1, err1 := svc.AuthorizeChannel(context.Background(),
-		accountID, "", scopes, token,
+		accountID, "", "", scopes, token,
 	)
 	if err1 != nil {
 		t.Fatalf("first AuthorizeChannel: %v", err1)
@@ -159,7 +161,7 @@ func TestAuthorizeChannel_ReauthKeepsSameOAuthConnection(t *testing.T) {
 	}
 
 	got2, err2 := svc.AuthorizeChannel(context.Background(),
-		accountID, "", scopes, token,
+		accountID, "", "", scopes, token,
 	)
 	if err2 != nil {
 		t.Fatalf("second AuthorizeChannel (re-auth): %v", err2)
@@ -248,6 +250,7 @@ func TestAuthorizeChannel_EligibilityGateActuallyCalled_RejectsInlineMapRegressi
 	_, err := svc.AuthorizeChannel(context.Background(),
 		accountID,
 		"", // no expectedChannelID — binder path skipped
+		"",
 		nil,
 		&models.TokenData{AccessToken: "x", TokenType: models.TokenTypeBearer, ExpiresIn: 60},
 	)

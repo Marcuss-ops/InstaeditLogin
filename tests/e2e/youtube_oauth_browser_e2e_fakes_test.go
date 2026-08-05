@@ -310,7 +310,7 @@ type browserSmokeChannelAuthorizer struct {
 	authorizeCalls atomic.Int64
 }
 
-func (a *browserSmokeChannelAuthorizer) AuthorizeChannel(_ context.Context, accountID int64, expectedChannelID string, scopes []string, _ ...*models.TokenData) (int64, error) {
+func (a *browserSmokeChannelAuthorizer) AuthorizeChannel(_ context.Context, accountID int64, expectedChannelID string, _ string, scopes []string, _ ...*models.TokenData) (int64, error) {
 	a.authorizeCalls.Add(1)
 	if err := a.db.QueryRow(`
 INSERT INTO oauth_connections

@@ -22,8 +22,13 @@ import (
 // exchange so tests can assert the "same client from state" invariant.
 type mockPoolProvider struct {
 	mockProvider
-	discoverFn                    func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error)
+	discoverFn func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error)
+	// poolLoginOptions (R7) captures the OAuthLoginOptions the login
+	// handler passed to the pool login URL builder, so tests can assert
+	// the prompt=consent reduction (healthy reconnect → SelectAccount
+	// only).
 	poolLoginClient               *services.YouTubeOAuthClientConfig
+	poolLoginOptions              services.OAuthLoginOptions
 	poolCallbackClient            *services.YouTubeOAuthClientConfig
 	poolCallbackFn                func(ctx context.Context, state, code string, client *services.YouTubeOAuthClientConfig) (*models.PlatformProfile, *models.TokenData, error)
 	handleCallbackWithClientCalls int
@@ -38,6 +43,7 @@ func (m *mockPoolProvider) DiscoverAccounts(ctx context.Context, accessToken, pl
 
 func (m *mockPoolProvider) GetLoginURLWithPoolClient(state string, options services.OAuthLoginOptions, client *services.YouTubeOAuthClientConfig) string {
 	m.poolLoginClient = client
+	m.poolLoginOptions = options
 	return "https://auth.youtube.com/oauth?state=" + state + "&client=" + client.ClientID
 }
 
@@ -251,6 +257,12 @@ func TestHandleCallback_YouTubePool_ExchangesWithStateClient(t *testing.T) {
 	}
 	if authorizer.tokenWriteCount() != 1 {
 		t.Fatalf("tokenWrites: want 1, got %d", authorizer.tokenWriteCount())
+	}
+	// R7 — the pool client that issued the grant is threaded from the
+	// signed state into AuthorizeChannel so the reconnect persists the
+	// SAME client that must later refresh the token.
+	if authorizer.lastClientKey != "youtube_pool_a" {
+		t.Errorf("authorizer must receive the state's oauth_client_key youtube_pool_a, got %q", authorizer.lastClientKey)
 	}
 }
 

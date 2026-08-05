@@ -106,19 +106,25 @@ func expectUpsertOCR(mock sqlmock.Sqlmock, userID int64, provider, puID string, 
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(returnsID))
 }
 
-func expectSubjectUpsertOCR(mock sqlmock.Sqlmock, userID int64, provider, subject, resource string, scopes []string, returnsID int64) {
+// expectSubjectUpsertOCR is the modern YouTube subject-keyed
+// oauth_connections UPSERT (R7). clientKey is the pool label the call
+// must pass ("youtube_pool_a"/"youtube_pool_b", or the default for
+// legacy callers); it is asserted positionally in WithArgs so a
+// regression that drops oauth_client_key from the write fails here.
+func expectSubjectUpsertOCR(mock sqlmock.Sqlmock, userID int64, provider, subject, resource, clientKey string, scopes []string, returnsID int64) {
 	mock.ExpectQuery(
-		`INSERT INTO oauth_connections (user_id, provider, provider_subject_id, provider_resource_id, scopes, granted_scopes, last_validated_at)
-		 VALUES ($1, $2, $3, $4, $5, $5, NOW())
+		`INSERT INTO oauth_connections (user_id, provider, provider_subject_id, provider_resource_id, oauth_client_key, scopes, granted_scopes, last_validated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $6, NOW())
 		 ON CONFLICT (user_id, provider, provider_subject_id) WHERE provider_subject_id <> ''
 		 DO UPDATE SET provider_resource_id = EXCLUDED.provider_resource_id,
+		               oauth_client_key = EXCLUDED.oauth_client_key,
 		               scopes = EXCLUDED.scopes,
 		               granted_scopes = EXCLUDED.granted_scopes,
 		               last_validated_at = NOW(),
 		               updated_at = NOW()
 		 RETURNING id`,
 	).
-		WithArgs(userID, provider, subject, resource, sqlmock.AnyArg()).
+		WithArgs(userID, provider, subject, resource, clientKey, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(returnsID))
 }
 

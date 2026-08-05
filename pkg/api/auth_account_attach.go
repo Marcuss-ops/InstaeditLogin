@@ -99,7 +99,13 @@ var ErrYouTubeAmbiguousAuthorization = errors.New("youtube authorization is ambi
 // this to HTTP 409 Conflict.
 var ErrYouTubeChannelMismatch = errors.New("youtube authorized channel does not match expected channel")
 
-func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, provider string, discoverer services.AccountDiscoverer, tokenData *models.TokenData, expectedChannelID string) (*models.PlatformAccount, error) {
+// attachDiscoveredAccounts creates one PlatformAccount per discovered
+// account and persists tokens. oauthClientKey is the YouTube OAuth
+// Client Pool label from the signed state (R4); it is threaded into
+// AuthorizeChannel so the reconnect persists the client that issued
+// the grant (R7). An empty key keeps the legacy single-client grant
+// labelling (the service defaults to youtube_pool_a).
+func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, provider string, discoverer services.AccountDiscoverer, tokenData *models.TokenData, expectedChannelID string, oauthClientKey string) (*models.PlatformAccount, error) {
 	accounts, err := discoverer.DiscoverAccounts(ctx, tokenData.AccessToken, "")
 	if err != nil {
 		return nil, fmt.Errorf("discover accounts: %w", err)
@@ -219,7 +225,7 @@ func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, pro
 			// wiring mistake at first-callback time.
 			return nil, errors.New("channel authorizer not configured")
 		}
-		if _, err := r.authorizer.AuthorizeChannel(ctx, created.ID, expectedChannelID, tokenData.Scopes, channelTokens...); err != nil {
+		if _, err := r.authorizer.AuthorizeChannel(ctx, created.ID, expectedChannelID, oauthClientKey, tokenData.Scopes, channelTokens...); err != nil {
 			// Return the account alongside authorization errors so the
 			// callback can persist reauth_required for failures that are
 			// specific to this newly attached row (notably a missing

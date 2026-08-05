@@ -190,6 +190,9 @@ func (f *fakeUserStore) AttachPlatformAccount(userID int64, profile *models.Plat
 func (f *fakeUserStore) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
 	return nil, errors.New("not implemented in fakeUserStore")
 }
+func (f *fakeUserStore) FindOAuthConnectionByID(ctx context.Context, id int64) (*models.OAuthConnection, error) {
+	return nil, errors.New("not implemented in fakeUserStore")
+}
 
 func (f *fakeUserStore) FindPlatformAccount(platform, platformUserID string) (*models.PlatformAccount, error) {
 	return nil, errors.New("not implemented in fakeUserStore")
