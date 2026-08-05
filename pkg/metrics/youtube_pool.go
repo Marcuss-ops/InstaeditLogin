@@ -13,7 +13,9 @@ import (
 // The collector (collector.go::collectYouTubeOAuthPoolMetrics) refreshes
 // the gauge families once per tick inside the single-flighted collect
 // tx; the invalid_grant counter is incremented at the detection site
-// (internal/credentials/vault_refresh.go).
+// (internal/credentials/vault_refresh.go) and the refresh-volume
+// counter youtube_oauth_refresh_total at the refresh site
+// (internal/services/youtube_oauth.go).
 //
 // Label contract:
 //   - google_subject    — the granter's stable Google OIDC `sub` claim,
@@ -128,8 +130,13 @@ var (
 	// youtubeOAuthRefreshTotal counts every YouTube OAuth refresh
 	// attempt per pool client and outcome. result ∈ {success, error};
 	// the oauth_client_key label is the pool client that issued the
-	// grant (the key stamped on ctx by vault.Renew) or
-	// legacy_single_client for the pre-pool / non-pool path. Unlike
+	// grant (the key stamped on ctx by vault.Renew): the grant's own
+	// oauth_client_key, the migration-099 default youtube_pool_a for
+	// legacy rows, or legacy_single_client for a non-vault caller
+	// (empty ctx key). A refresh refused because the stamped key does
+	// not resolve (fail-closed) is recorded under that key with
+	// result=error — deliberate, so a misconfigured client shows up
+	// here instead of a silent no-op. Unlike
 	// youtube_oauth_invalid_grant_total (which only counts rejected
 	// grants), this counter observes the full refresh volume so the
 	// operator can compute per-client success/failure rates and spot a
@@ -235,9 +242,12 @@ func SetYouTubeOAuthReauthRequiredChannels(subject string, count int64) {
 // YouTubeOAuthRefreshResultSuccess / YouTubeOAuthRefreshResultError —
 // an unknown result is normalized to error (fail-closed: a future
 // typo must never inflate the success count). An empty client key
-// (legacy single-client path) is labeled
+// (non-vault / legacy single-client caller) is labeled
 // LegacyYouTubeOAuthClientKeyLabel — never the empty string, never a
-// pool client that did not issue the grant.
+// pool client that did not issue the grant. An unresolvable key on
+// the fail-closed refresh path is recorded under that key with
+// result=error (the series is bounded by configured / stored keys,
+// never attacker input).
 func RecordYouTubeOAuthRefresh(oauthClientKey, result string) {
 	if oauthClientKey == "" {
 		oauthClientKey = LegacyYouTubeOAuthClientKeyLabel
