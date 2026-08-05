@@ -25,13 +25,14 @@ func (r *UserRepository) FindOAuthConnectionByID(ctx context.Context, id int64) 
 	var lastRefreshError sql.NullString
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, user_id, provider, provider_subject_id, provider_resource_id,
+		        oauth_client_key,
 		        status, COALESCE(NULLIF(granted_scopes, '{}'::TEXT[]), scopes), last_refresh_at,
 		        last_refresh_error, created_at, updated_at
 		 FROM oauth_connections
 		 WHERE id = $1`, id,
 	).Scan(
 		&grant.ID, &grant.UserID, &grant.Provider, &grant.ProviderSubjectID,
-		&grant.ProviderResourceID, &grant.Status, pq.Array(&grant.GrantedScopes),
+		&grant.ProviderResourceID, &grant.OAuthClientKey, &grant.Status, pq.Array(&grant.GrantedScopes),
 		&grant.LastRefreshAt, &lastRefreshError, &grant.CreatedAt,
 		&grant.UpdatedAt,
 	)

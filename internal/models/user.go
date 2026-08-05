@@ -133,17 +133,24 @@ type Token struct {
 // Channel-specific identity belongs to PlatformAccount; these fields are
 // shared by every account linked to the same grant.
 type OAuthConnection struct {
-	ID                 int64      `json:"id"`
-	UserID             int64      `json:"user_id"`
-	Provider           string     `json:"provider"`
-	ProviderSubjectID  string     `json:"provider_subject_id"`
-	ProviderResourceID string     `json:"provider_resource_id"`
-	Status             string     `json:"status"`
-	GrantedScopes      []string   `json:"granted_scopes,omitempty"`
-	LastRefreshAt      *time.Time `json:"last_refresh_at,omitempty"`
-	LastRefreshError   string     `json:"last_refresh_error,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                 int64  `json:"id"`
+	UserID             int64  `json:"user_id"`
+	Provider           string `json:"provider"`
+	ProviderSubjectID  string `json:"provider_subject_id"`
+	ProviderResourceID string `json:"provider_resource_id"`
+	// OAuthClientKey is the YouTube OAuth pool client that issued this
+	// grant ("youtube_pool_a" / "youtube_pool_b", migration 099). A
+	// token must ALWAYS be refreshed with the same client_id +
+	// client_secret that issued it, so this key is part of the grant
+	// identity (platform_accounts → oauth_connections →
+	// oauth_client_key → registry.Resolve(key)).
+	OAuthClientKey   string     `json:"oauth_client_key"`
+	Status           string     `json:"status"`
+	GrantedScopes    []string   `json:"granted_scopes,omitempty"`
+	LastRefreshAt    *time.Time `json:"last_refresh_at,omitempty"`
+	LastRefreshError string     `json:"last_refresh_error,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // Token types

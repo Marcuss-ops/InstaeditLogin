@@ -21,13 +21,14 @@ func TestFindOAuthConnectionByID_FallsBackToLegacyScopes(t *testing.T) {
 	repo := repository.NewUserRepository(db)
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	query := `SELECT id, user_id, provider, provider_subject_id, provider_resource_id,
+	        oauth_client_key,
 	        status, COALESCE(NULLIF(granted_scopes, '{}'::TEXT[]), scopes), last_refresh_at,
 	        last_refresh_error, created_at, updated_at
          FROM oauth_connections
          WHERE id = $1`
 	mock.ExpectQuery(query).WithArgs(int64(7)).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "user_id", "provider", "provider_subject_id", "provider_resource_id", "status", "scopes", "last_refresh_at", "last_refresh_error", "created_at", "updated_at"}).
-			AddRow(7, 9, "youtube", "google-sub", "UC-channel", "active", pqArray("https://www.googleapis.com/auth/youtube.force-ssl"), nil, nil, now, now),
+		sqlmock.NewRows([]string{"id", "user_id", "provider", "provider_subject_id", "provider_resource_id", "oauth_client_key", "status", "scopes", "last_refresh_at", "last_refresh_error", "created_at", "updated_at"}).
+			AddRow(7, 9, "youtube", "google-sub", "UC-channel", "youtube_pool_a", "active", pqArray("https://www.googleapis.com/auth/youtube.force-ssl"), nil, nil, now, now),
 	)
 	grant, err := repo.FindOAuthConnectionByID(context.Background(), 7)
 	if err != nil {
@@ -35,6 +36,9 @@ func TestFindOAuthConnectionByID_FallsBackToLegacyScopes(t *testing.T) {
 	}
 	if grant == nil || len(grant.GrantedScopes) != 1 || grant.GrantedScopes[0] != "https://www.googleapis.com/auth/youtube.force-ssl" {
 		t.Fatalf("unexpected grant: %#v", grant)
+	}
+	if grant.OAuthClientKey != "youtube_pool_a" {
+		t.Errorf("OAuthClientKey: want youtube_pool_a, got %q", grant.OAuthClientKey)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -49,6 +53,7 @@ func TestFindOAuthConnectionByID_NotFound(t *testing.T) {
 	defer db.Close()
 	repo := repository.NewUserRepository(db)
 	query := `SELECT id, user_id, provider, provider_subject_id, provider_resource_id,
+	        oauth_client_key,
 	        status, COALESCE(NULLIF(granted_scopes, '{}'::TEXT[]), scopes), last_refresh_at,
         last_refresh_error, created_at, updated_at
          FROM oauth_connections
@@ -68,6 +73,7 @@ func TestFindOAuthConnectionByID_DBError(t *testing.T) {
 	defer db.Close()
 	repo := repository.NewUserRepository(db)
 	query := `SELECT id, user_id, provider, provider_subject_id, provider_resource_id,
+	        oauth_client_key,
 	        status, COALESCE(NULLIF(granted_scopes, '{}'::TEXT[]), scopes), last_refresh_at,
         last_refresh_error, created_at, updated_at
          FROM oauth_connections
