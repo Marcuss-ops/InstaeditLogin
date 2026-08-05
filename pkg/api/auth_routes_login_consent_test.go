@@ -198,6 +198,109 @@ func TestHandleLogin_YouTubePool_HealthyReconnect_ReusesConnectionClient(t *test
 	}
 }
 
+// TestHandleLogin_YouTubePool_ReconnectKnownSubject_UsesLeastLoadedPool
+// certifies the capacity-aware reconnect selection: when a channel's
+// existing grant is reachable (even in a non-active state, e.g.
+// reauth_required), the reconnect resolves the Google subject and
+// passes it to SelectForNewConnection — so the LEAST-LOADED pool wins
+// (youtube_pool_b here: 43 grants vs pool A's 48) instead of the
+// deterministic youtube_pool_a first-client fallback. The consent
+// stays forced (unhealthy grant → new grant must be minted).
+func TestHandleLogin_YouTubePool_ReconnectKnownSubject_UsesLeastLoadedPool(t *testing.T) {
+	poolProvider := &mockPoolProvider{mockProvider: mockProvider{platform: "youtube"}}
+	connID := int64(77)
+	store := &mockUserStore{
+		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
+			return []*models.PlatformAccount{{
+				ID: 10, UserID: 1, Platform: models.PlatformYouTube,
+				PlatformUserID: consentTestChannel, Status: models.AccountStatusReauthRequired,
+				OAuthConnectionID: &connID,
+			}}, nil
+		},
+		findOAuthConnectionFn: func(ctx context.Context, id int64) (*models.OAuthConnection, error) {
+			return &models.OAuthConnection{
+				ID: connID, Status: models.AccountStatusActive,
+				ProviderSubjectID: "google-subject-reconnect",
+				OAuthClientKey:    "youtube_pool_a",
+				GrantedScopes:     []string{services.YouTubeForceSSLScope},
+			}, nil
+		},
+	}
+	nonceStore := newFakeConnectLinkNonceStore()
+	r := newTestRouter(poolProvider, store, "",
+		WithConnectLinkNonceStore(nonceStore),
+		WithYouTubeOAuthClientRegistry(newTestPoolRegistryWithUsage(t, map[string]int64{
+			"youtube_pool_a": 48,
+			"youtube_pool_b": 43,
+		})),
+	)
+
+	doYouTubeLogin(t, r, "expected_channel_id="+consentTestChannel)
+
+	// Least-loaded selection: pool B (43) has more headroom than pool A
+	// (48) for THIS subject — the reconnect must land on B, not the
+	// deterministic first client A.
+	if poolProvider.poolLoginClient == nil || poolProvider.poolLoginClient.Key != "youtube_pool_b" {
+		t.Fatalf("reconnect with known subject must select the least-loaded pool youtube_pool_b, got %+v", poolProvider.poolLoginClient)
+	}
+	if !poolProvider.poolLoginOptions.ForceConsent {
+		t.Error("ForceConsent: want true (reauth_required grant must mint a new grant)")
+	}
+}
+
+// TestHandleLogin_YouTubePool_ReconnectCounterError_FailsClosed pins
+// the capacity manager's fail-closed contract at the router layer: when
+// the reconnect resolves a known subject but the usage counter cannot
+// be queried (storage error), SelectForNewConnection must ERROR — the
+// login must never silently fall back to a deterministic client (a
+// wrong pool guess on a storage failure would mis-balance the fleet
+// while the counter is down).
+func TestHandleLogin_YouTubePool_ReconnectCounterError_FailsClosed(t *testing.T) {
+	poolProvider := &mockPoolProvider{mockProvider: mockProvider{platform: "youtube"}}
+	connID := int64(77)
+	store := &mockUserStore{
+		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
+			return []*models.PlatformAccount{{
+				ID: 10, UserID: 1, Platform: models.PlatformYouTube,
+				PlatformUserID: consentTestChannel, Status: models.AccountStatusReauthRequired,
+				OAuthConnectionID: &connID,
+			}}, nil
+		},
+		findOAuthConnectionFn: func(ctx context.Context, id int64) (*models.OAuthConnection, error) {
+			return &models.OAuthConnection{
+				ID: connID, Status: models.AccountStatusActive,
+				ProviderSubjectID: "google-subject-reconnect",
+				OAuthClientKey:    "youtube_pool_a",
+				GrantedScopes:     []string{services.YouTubeForceSSLScope},
+			}, nil
+		},
+	}
+	nonceStore := newFakeConnectLinkNonceStore()
+	reg, err := services.NewYouTubeOAuthClientRegistry([]services.YouTubeOAuthClientConfig{
+		{Key: "youtube_pool_a", ClientID: "pool-a-client-id", ClientSecret: "pool-a-client-secret-at-least-32-chars!!", RedirectURI: "https://instaedit.example.com/oauth/youtube/callback"},
+		{Key: "youtube_pool_b", ClientID: "pool-b-client-id", ClientSecret: "pool-b-client-secret-at-least-32-chars!!", RedirectURI: "https://instaedit.example.com/oauth/youtube/callback"},
+	}, services.WithYouTubeOAuthClientUsageCounter(&fakePoolUsageCounter{countErr: context.DeadlineExceeded}))
+	if err != nil {
+		t.Fatalf("NewYouTubeOAuthClientRegistry: %v", err)
+	}
+	r := newTestRouter(poolProvider, store, "",
+		WithConnectLinkNonceStore(nonceStore),
+		WithYouTubeOAuthClientRegistry(reg),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/login?expected_channel_id="+consentTestChannel, nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("counter error on known-subject reconnect: want 500 (fail-closed), got %d: %s", w.Code, w.Body.String())
+	}
+	if poolProvider.poolLoginClient != nil {
+		t.Errorf("no client must be selected when the capacity counter fails; got %+v", poolProvider.poolLoginClient)
+	}
+}
+
 // TestHandleLogin_YouTubePool_NewConnectionSelectsCapacityClient pins
 // the complement: a channel with no healthy grant still goes through
 // SelectForNewConnection (youtube_pool_a — the deterministic

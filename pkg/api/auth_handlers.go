@@ -153,9 +153,12 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		// oauth_client_key): Google's cached consent is per (client,
 		// account, scopes), so reusing the client returns the SAME
 		// refresh token and never burns a new slot. Only new/unhealthy
-		// connections go through the capacity-aware selector. The Google
-		// subject is unknown until the operator picks an account on the
-		// consent screen, so selection stays subject-less here — see
+		// connections go through the capacity-aware selector. When the
+		// channel's existing grant is reachable, its Google subject is
+		// passed to SelectForNewConnection so the selector picks the
+		// least-loaded pool FOR THAT account (capacity-aware) instead
+		// of the deterministic first client; a brand-new channel with
+		// no lineage stays subject-less (deterministic fallback) — see
 		// internal/services/youtube_oauth_client_pool.go.
 		var client *services.YouTubeOAuthClientConfig
 		if reconnectHint.existingClientKey != "" {
@@ -170,7 +173,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 			}
 			client = resolved
 		} else {
-			selected, selErr := r.youtubeOAuthClientRegistry.SelectForNewConnection(req.Context(), "")
+			selected, selErr := r.youtubeOAuthClientRegistry.SelectForNewConnection(req.Context(), reconnectHint.providerSubjectID)
 			if selErr != nil {
 				logAndError(w, req, "failed to select youtube oauth pool client", selErr, "provider", provider)
 				return

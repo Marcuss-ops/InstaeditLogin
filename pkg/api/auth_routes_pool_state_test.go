@@ -58,9 +58,44 @@ func (m *mockPoolProvider) HandleCallbackWithClient(ctx context.Context, state, 
 }
 
 // newTestPoolRegistry returns a two-client pool registry used by the
-// pool-state handler tests. SelectForNewConnection (no usage counter
-// wired) deterministically returns youtube_pool_a.
+// pool-state handler tests. It wires a ZERO-usage counter (every client
+// reports 0 active grants): SelectForNewConnection is capacity-aware
+// but, with an empty subject or equal usage, deterministically returns
+// youtube_pool_a (registration-order tie-break).
 func newTestPoolRegistry(t *testing.T) *services.YouTubeOAuthClientRegistry {
+	t.Helper()
+	return newTestPoolRegistryWithUsage(t, nil)
+}
+
+// fakePoolUsageCounter is a deterministic services.OAuthClientUsageCounter
+// for handler tests: it returns the configured per-client active-grant
+// count for any subject. The subject is ignored (fixtures are
+// single-subject) — the tests assert the selector received a subject
+// AND picked by capacity, which is the least-loaded math the counter
+// feeds. Setting countErr makes every CountActiveRefreshTokens call
+// fail (pins the registry's fail-closed contract at the router layer).
+type fakePoolUsageCounter struct {
+	usage    map[string]int64 // oauthClientKey -> active refresh grants
+	countErr error
+}
+
+func (f *fakePoolUsageCounter) CountActiveRefreshTokens(_ context.Context, _, oauthClientKey string) (int64, error) {
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+	if f == nil || f.usage == nil {
+		return 0, nil
+	}
+	return f.usage[oauthClientKey], nil
+}
+
+var _ services.OAuthClientUsageCounter = (*fakePoolUsageCounter)(nil)
+
+// newTestPoolRegistryWithUsage returns the two-client pool registry
+// with a capacity counter wired (usage maps client key → active
+// refresh grants). Pass nil to keep the deterministic no-counter
+// fallback (newTestPoolRegistry).
+func newTestPoolRegistryWithUsage(t *testing.T, usage map[string]int64) *services.YouTubeOAuthClientRegistry {
 	t.Helper()
 	reg, err := services.NewYouTubeOAuthClientRegistry([]services.YouTubeOAuthClientConfig{
 		{
@@ -75,7 +110,7 @@ func newTestPoolRegistry(t *testing.T) *services.YouTubeOAuthClientRegistry {
 			ClientSecret: "pool-b-client-secret-at-least-32-chars!!",
 			RedirectURI:  "https://instaedit.example.com/oauth/youtube/callback",
 		},
-	})
+	}, services.WithYouTubeOAuthClientUsageCounter(&fakePoolUsageCounter{usage: usage}))
 	if err != nil {
 		t.Fatalf("NewYouTubeOAuthClientRegistry: %v", err)
 	}

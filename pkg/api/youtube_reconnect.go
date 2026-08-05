@@ -24,9 +24,18 @@ import (
 //	                          token — exchanging with a different
 //	                          client would mint a new grant and burn
 //	                          another slot against the 100-token cap)
+//	providerSubjectID ""   → the Google subject is unknown (brand-new
+//	                          channel with no grant lineage)
+//	                  otherwise → the subject of the channel's existing
+//	                          grant, when reachable. The login passes it
+//	                          to SelectForNewConnection so an unhealthy
+//	                          reconnect uses the capacity-aware
+//	                          least-loaded pool selection instead of the
+//	                          deterministic first-client fallback.
 type youtubeReconnectHint struct {
 	consentNeeded     bool
 	existingClientKey string
+	providerSubjectID string
 }
 
 // youtubeReconnectHintFor classifies a channel-pinned YouTube reconnect
@@ -63,17 +72,34 @@ func (r *Router) youtubeReconnectHintFor(ctx context.Context, userID int64, expe
 		if acc.PlatformUserID != expectedChannelID {
 			continue
 		}
-		if acc.Status != models.AccountStatusActive || acc.OAuthConnectionID == nil || *acc.OAuthConnectionID <= 0 {
+		// Resolve the grant whenever the account has a lineage. Its
+		// provider_subject_id makes the reconnect capacity-aware even
+		// when the grant is NOT healthy (reauth_required, missing
+		// scope): the login can then pass the known subject to
+		// SelectForNewConnection and pick the least-loaded pool for
+		// THAT Google account instead of the deterministic first
+		// client. Fail towards consent (and no subject) when the
+		// lineage is missing or the grant cannot be read.
+		if acc.OAuthConnectionID == nil || *acc.OAuthConnectionID <= 0 {
 			return youtubeReconnectHint{consentNeeded: true}
 		}
 		grant, err := r.userRepo.FindOAuthConnectionByID(ctx, *acc.OAuthConnectionID)
-		if err != nil || grant == nil || grant.Status != models.AccountStatusActive {
+		if err != nil || grant == nil {
 			return youtubeReconnectHint{consentNeeded: true}
+		}
+		hint := youtubeReconnectHint{consentNeeded: true, providerSubjectID: grant.ProviderSubjectID}
+		if acc.Status != models.AccountStatusActive {
+			return hint
+		}
+		if grant.Status != models.AccountStatusActive {
+			return hint
 		}
 		if !grantHasForceSSLScope(grant.GrantedScopes) {
-			return youtubeReconnectHint{consentNeeded: true}
+			return hint
 		}
-		return youtubeReconnectHint{consentNeeded: false, existingClientKey: grant.OAuthClientKey}
+		hint.consentNeeded = false
+		hint.existingClientKey = grant.OAuthClientKey
+		return hint
 	}
 	return youtubeReconnectHint{consentNeeded: true}
 }
