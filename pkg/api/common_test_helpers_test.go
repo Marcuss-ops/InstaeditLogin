@@ -177,6 +177,25 @@ func setOAuthExpectedChannelCookieForTest(req *http.Request, provider, state, ch
 	})
 }
 
+// setOAuthClientCookieForTest mirrors setOAuthExpectedChannelCookieForTest
+// for the sibling oauth_state_{provider}_oauth_client cookie that
+// round-trips the YouTube OAuth Client Pool client key from handleLogin
+// to the callback. The cookie value is "<jti>:<clientKey>" — the jti of
+// the signed oauth-flow state binds the key to the SAME flow so a
+// stale sibling cookie from a previous round-trip cannot steer a new
+// flow to the wrong client (the production code enforces this prefix
+// check; this helper just mirrors the production format for tests).
+func setOAuthClientCookieForTest(req *http.Request, provider, jti, clientKey string) {
+	req.AddCookie(&http.Cookie{
+		Name:     OAuthStateOAuthClientCookieName(provider),
+		Value:    jti + ":" + clientKey,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 // ---------------------------------------------------------------------------
 // CORS middleware tests
 // ---------------------------------------------------------------------------

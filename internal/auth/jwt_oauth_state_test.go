@@ -10,16 +10,17 @@ import (
 
 // TestVerifyOAuthFlowState_FreshStateRoundTrips is the positive control
 // for the signed OAuth flow state: a freshly issued state must verify
-// and return the oauth_client_key, expected_channel_id, workspace_id
-// and jti exactly as issued.
+// and return the expected_channel_id, workspace_id and jti exactly as
+// issued. The pool client key is deliberately NOT part of the JWT — it
+// round-trips in the sibling oauth_state_{provider}_oauth_client cookie
+// (covered by the pkg/api handler tests).
 func TestVerifyOAuthFlowState_FreshStateRoundTrips(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	const (
-		wantKey     = "youtube_pool_a"
 		wantChannel = "UC1234567890abcdefghij"
 		wantWS      = int64(7)
 	)
-	signed, nonce, expiresAt, err := m.IssueOAuthFlowState(wantKey, wantChannel, wantWS)
+	signed, nonce, expiresAt, err := m.IssueOAuthFlowState(wantChannel, wantWS)
 	if err != nil {
 		t.Fatalf("IssueOAuthFlowState: %v", err)
 	}
@@ -40,9 +41,6 @@ func TestVerifyOAuthFlowState_FreshStateRoundTrips(t *testing.T) {
 	if claims.StateType != "oauth_flow" {
 		t.Errorf("StateType: want oauth_flow, got %q", claims.StateType)
 	}
-	if claims.OAuthClientKey != wantKey {
-		t.Errorf("OAuthClientKey: want %q, got %q", wantKey, claims.OAuthClientKey)
-	}
 	if claims.ExpectedChannelID != wantChannel {
 		t.Errorf("ExpectedChannelID: want %q, got %q", wantChannel, claims.ExpectedChannelID)
 	}
@@ -61,7 +59,6 @@ func TestVerifyOAuthFlowState_ExpiredReturnsErrMalformed(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	claims := OAuthFlowStateClaims{
 		StateType:         "oauth_flow",
-		OAuthClientKey:    "youtube_pool_a",
 		ExpectedChannelID: "UC1234567890abcdefghij",
 		WorkspaceID:       1,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -89,7 +86,7 @@ func TestVerifyOAuthFlowState_ExpiredReturnsErrMalformed(t *testing.T) {
 // with a different secret fails verification.
 func TestVerifyOAuthFlowState_WrongSecretRejected(t *testing.T) {
 	m1 := NewManager(testSecret, 24)
-	signed, _, _, err := m1.IssueOAuthFlowState("youtube_pool_a", "", 1)
+	signed, _, _, err := m1.IssueOAuthFlowState("", 1)
 	if err != nil {
 		t.Fatalf("IssueOAuthFlowState: %v", err)
 	}
@@ -99,40 +96,13 @@ func TestVerifyOAuthFlowState_WrongSecretRejected(t *testing.T) {
 	}
 }
 
-// TestVerifyOAuthFlowState_RejectsMissingClientKey pins that an
-// oauth-flow state without the oauth_client_key claim is rejected —
-// the callback cannot exchange the code without knowing which client
-// issued it.
-func TestVerifyOAuthFlowState_RejectsMissingClientKey(t *testing.T) {
-	m := NewManager(testSecret, 24)
-	claims := OAuthFlowStateClaims{
-		StateType: "oauth_flow",
-		// Deliberately no OAuthClientKey.
-		WorkspaceID: 1,
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    "instaeditlogin",
-			Audience:  jwt.ClaimStrings{"api"},
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
-			ID:        "deadbeefdeadbeef",
-		},
-	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(testSecret))
-	if err != nil {
-		t.Fatalf("forge state without client key: %v", err)
-	}
-	if _, verr := m.VerifyOAuthFlowState(signed); !errors.Is(verr, ErrMalformedOAuthFlowState) {
-		t.Errorf("VerifyOAuthFlowState without client key: want ErrMalformedOAuthFlowState, got %v", verr)
-	}
-}
-
 // TestVerifyOAuthFlowState_RejectsNegativeWorkspace pins that a
 // negative workspace_id cannot be smuggled into a valid state.
 func TestVerifyOAuthFlowState_RejectsNegativeWorkspace(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	claims := OAuthFlowStateClaims{
-		StateType:      "oauth_flow",
-		OAuthClientKey: "youtube_pool_a",
-		WorkspaceID:    -1,
+		StateType:   "oauth_flow",
+		WorkspaceID: -1,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "instaeditlogin",
 			Audience:  jwt.ClaimStrings{"api"},
@@ -148,7 +118,7 @@ func TestVerifyOAuthFlowState_RejectsNegativeWorkspace(t *testing.T) {
 		t.Errorf("VerifyOAuthFlowState with negative workspace: want ErrMalformedOAuthFlowState, got %v", verr)
 	}
 	// Issue side must also refuse a negative workspace.
-	if _, _, _, err := m.IssueOAuthFlowState("youtube_pool_a", "", -1); err == nil {
+	if _, _, _, err := m.IssueOAuthFlowState("", -1); err == nil {
 		t.Error("IssueOAuthFlowState with negative workspace: want error, got nil")
 	}
 }
@@ -158,9 +128,8 @@ func TestVerifyOAuthFlowState_RejectsNegativeWorkspace(t *testing.T) {
 func TestVerifyOAuthFlowState_RejectsMissingJTI(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	claims := OAuthFlowStateClaims{
-		StateType:      "oauth_flow",
-		OAuthClientKey: "youtube_pool_a",
-		WorkspaceID:    1,
+		StateType:   "oauth_flow",
+		WorkspaceID: 1,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "instaeditlogin",
 			Audience:  jwt.ClaimStrings{"api"},
@@ -185,7 +154,7 @@ func TestVerifyOAuthFlowState_RejectsMissingJTI(t *testing.T) {
 func TestVerifyOAuthFlowState_StateTypesAreMutuallyExclusive(t *testing.T) {
 	m := NewManager(testSecret, 24)
 
-	flowState, _, _, err := m.IssueOAuthFlowState("youtube_pool_a", "UC1234567890abcdefghij", 1)
+	flowState, _, _, err := m.IssueOAuthFlowState("UC1234567890abcdefghij", 1)
 	if err != nil {
 		t.Fatalf("IssueOAuthFlowState: %v", err)
 	}
@@ -199,14 +168,5 @@ func TestVerifyOAuthFlowState_StateTypesAreMutuallyExclusive(t *testing.T) {
 	}
 	if _, verr := m.VerifyOAuthFlowState(linkState); !errors.Is(verr, ErrMalformedOAuthFlowState) {
 		t.Errorf("VerifyOAuthFlowState(connect_link state): want ErrMalformedOAuthFlowState, got %v", verr)
-	}
-}
-
-// TestIssueOAuthFlowState_RejectsEmptyClientKey pins that the issuer
-// refuses to sign a state without an oauth_client_key.
-func TestIssueOAuthFlowState_RejectsEmptyClientKey(t *testing.T) {
-	m := NewManager(testSecret, 24)
-	if _, _, _, err := m.IssueOAuthFlowState("", "", 1); err == nil {
-		t.Fatal("IssueOAuthFlowState with empty client key: want error, got nil")
 	}
 }

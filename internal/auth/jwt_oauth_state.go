@@ -3,17 +3,22 @@
 // The YouTube OAuth Client Pool login flow (pkg/api/auth_handlers.go
 // handleLogin) replaces the cookie-backed CSRF nonce with a short-lived
 // HS256-signed JWT when a pool registry is configured. The state carries
-// the pool client that MUST be used for the code→token exchange in the
-// callback (oauth_client_key), the optional channel binding hint
-// (expected_channel_id), the workspace the operator is connecting from
-// (workspace_id) and a single-use nonce (jti) persisted in the same
-// ConnectLinkNonceStore that guards admin connect-links.
+// the optional channel binding hint (expected_channel_id), the
+// workspace the operator is connecting from (workspace_id) and a
+// single-use nonce (jti) persisted in the same ConnectLinkNonceStore
+// that guards admin connect-links.
 //
-// Keeping the state signed (HMAC, same secret as auth tokens) + short
-// TTL + single-use jti means the callback never re-selects a pool
-// client: the client that built the consent URL is the one that must
-// exchange the code, and Google rejects an exchange against a different
-// client_id. See jwt_connectlink.go for the sibling connect-link state.
+// The pool client that MUST exchange the code (the one that built the
+// consent URL) is NOT part of the JWT: it round-trips in the sibling
+// HttpOnly cookie oauth_state_{provider}_oauth_client as
+// "<jti>:<clientKey>", mirroring the expected-channel cookie pattern —
+// see pkg/api/auth_oauth_state.go. The jti prefix binds the cookie to
+// THIS exact flow, so a stale or forged sibling cookie cannot steer a
+// fresh flow to the wrong client, and the callback never re-selects a
+// pool client: the client that built the consent URL is the one that
+// must exchange the code, and Google rejects an exchange against a
+// different client_id. See jwt_connectlink.go for the sibling
+// connect-link state.
 package auth
 
 import (
@@ -35,10 +40,13 @@ const OAuthFlowStateTTL = 10 * time.Minute
 // state JWT for the YouTube OAuth Client Pool flow.
 //
 //	stp  "oauth_flow"           — self-identifying state type keyword
-//	ock  oauth_client_key       — pool client that MUST exchange the code
 //	ech  expected_channel_id    — optional channel binding hint (UC...)
 //	ws   workspace_id           — workspace the operator is connecting from
 //	jti  RegisteredClaims.ID    — single-use nonce (persisted + consumed)
+//
+// The pool client key (oauth_client_key) deliberately does NOT live
+// here: it round-trips in the sibling oauth_state_{provider}_oauth_client
+// cookie, bound to the jti. See the package comment.
 //
 // The state_type keyword makes the JWT self-identifying in the
 // callback's resolveCallbackState path: connect-link states carry
@@ -46,25 +54,26 @@ const OAuthFlowStateTTL = 10 * time.Minute
 // cookie-backed CSRF nonce has no dots at all.
 type OAuthFlowStateClaims struct {
 	StateType         string `json:"stp"`
-	OAuthClientKey    string `json:"ock"`
 	ExpectedChannelID string `json:"ech"`
 	WorkspaceID       int64  `json:"ws"`
 	jwt.RegisteredClaims
 }
 
-// IssueOAuthFlowState signs a short-lived HS256 JWT carrying the pool
-// client key, optional expected_channel_id and the caller's
-// workspace_id. TTL is OAuthFlowStateTTL (10 minutes).
+// IssueOAuthFlowState signs a short-lived HS256 JWT carrying the
+// optional expected_channel_id and the caller's workspace_id. TTL is
+// OAuthFlowStateTTL (10 minutes).
 //
 // Returns the signed JWT, the jti embedded inside it, and the exact JWT
 // expiry time. The caller must persist the jti in a single-use store
 // (the ConnectLinkNonceStore already wired for admin connect-links) so
 // the state cannot be replayed, using the returned expiry for that
 // record so the database expiry cannot drift from the JWT expiry.
-func (m *Manager) IssueOAuthFlowState(oauthClientKey, expectedChannelID string, workspaceID int64) (string, string, time.Time, error) {
-	if oauthClientKey == "" {
-		return "", "", time.Time{}, errors.New("oauth flow state: oauth_client_key is required")
-	}
+//
+// The pool client that must exchange the code is NOT signed into the
+// state: handleLogin carries it in the sibling
+// oauth_state_{provider}_oauth_client cookie as "<jti>:<clientKey>"
+// (see pkg/api/auth_oauth_state.go).
+func (m *Manager) IssueOAuthFlowState(expectedChannelID string, workspaceID int64) (string, string, time.Time, error) {
 	if workspaceID < 0 {
 		return "", "", time.Time{}, errors.New("oauth flow state: workspace_id must not be negative")
 	}
@@ -76,7 +85,6 @@ func (m *Manager) IssueOAuthFlowState(oauthClientKey, expectedChannelID string, 
 	expiresAt := now.Add(OAuthFlowStateTTL)
 	claims := OAuthFlowStateClaims{
 		StateType:         "oauth_flow",
-		OAuthClientKey:    oauthClientKey,
 		ExpectedChannelID: expectedChannelID,
 		WorkspaceID:       workspaceID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -99,14 +107,14 @@ func (m *Manager) IssueOAuthFlowState(oauthClientKey, expectedChannelID string, 
 // VerifyOAuthFlowState validates an OAuth flow state JWT and returns
 // the parsed claims. Returns ErrMalformedOAuthFlowState when the token
 // isn't a JWT, doesn't carry state_type=oauth_flow, is expired, has a
-// signature mismatch, lacks the oauth_client_key claim, or carries a
-// negative workspace_id.
+// signature mismatch, or carries a negative workspace_id.
 //
-// The returned claims contain the authoritative oauth_client_key the
-// callback MUST use for the code→token exchange, the expected_channel_id
-// binding hint and the workspace_id. The caller must also consume the
-// jti (RegisteredClaims.ID) in the single-use store so the state can
-// only be used once.
+// The returned claims contain the expected_channel_id binding hint and
+// the workspace_id. The pool client key the callback MUST use for the
+// code→token exchange comes from the sibling oauth_state_{provider}
+// _oauth_client cookie (bound to the jti), NOT from this JWT. The
+// caller must also consume the jti (RegisteredClaims.ID) in the
+// single-use store so the state can only be used once.
 func (m *Manager) VerifyOAuthFlowState(raw string) (*OAuthFlowStateClaims, error) {
 	if raw == "" {
 		return nil, ErrMalformedOAuthFlowState
@@ -133,9 +141,6 @@ func (m *Manager) VerifyOAuthFlowState(raw string) (*OAuthFlowStateClaims, error
 	}
 	if claims.StateType != "oauth_flow" {
 		return nil, fmt.Errorf("%w: state_type=%q", ErrMalformedOAuthFlowState, claims.StateType)
-	}
-	if claims.OAuthClientKey == "" {
-		return nil, fmt.Errorf("%w: missing oauth_client_key", ErrMalformedOAuthFlowState)
 	}
 	if claims.WorkspaceID < 0 {
 		return nil, fmt.Errorf("%w: negative workspace_id", ErrMalformedOAuthFlowState)

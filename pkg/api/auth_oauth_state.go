@@ -23,6 +23,16 @@ const (
 // TestHandleLogin_RedirectsToProviderURL (length 43 invariant).
 const oauthStateExpectedChannelSuffix = "_expected_channel"
 
+// oauthStateOAuthClientSuffix is appended to oauth_state_{provider} to
+// form the sibling cookie that round-trips the YouTube OAuth Client
+// Pool client key (youtube_pool_a / youtube_pool_b) from handleLogin to
+// the callback. The pool JWT state deliberately does NOT carry the
+// client key (jwt_oauth_state.go): the key lives only in this HttpOnly
+// cookie, bound to the flow by the "<jti>:<clientKey>" prefix, so the
+// callback exchanges the code with EXACTLY the client that built the
+// consent URL.
+const oauthStateOAuthClientSuffix = "_oauth_client"
+
 func OAuthStateCookieName(provider string) string { return oauthStateCookiePrefix + provider }
 
 // OAuthStateExpectedChannelCookieName returns the sibling cookie name used
@@ -34,6 +44,21 @@ func OAuthStateCookieName(provider string) string { return oauthStateCookiePrefi
 // CSRF nonce).
 func OAuthStateExpectedChannelCookieName(provider string) string {
 	return oauthStateCookiePrefix + provider + oauthStateExpectedChannelSuffix
+}
+
+// OAuthStateOAuthClientCookieName returns the sibling cookie name used
+// by the YouTube OAuth Client Pool flow: it round-trips the pool client
+// key selected at login time to the callback. For provider "youtube"
+// this is oauth_state_youtube_oauth_client. The cookie is HttpOnly
+// Secure SameSite=None (cross-site redirect back from Google) with
+// MaxAge matching the signed state; it's deleted on the callback once
+// the key has been consumed. The value format is "<jti>:<clientKey>"
+// where jti is the single-use nonce of the signed oauth-flow state —
+// the prefix binds the key to THIS exact flow so a stale sibling cookie
+// from a previous OAuth round-trip cannot steer a new flow to the wrong
+// client.
+func OAuthStateOAuthClientCookieName(provider string) string {
+	return oauthStateCookiePrefix + provider + oauthStateOAuthClientSuffix
 }
 
 // isValidYouTubeChannelID returns true for strings that look like a
@@ -147,4 +172,49 @@ func verifyOAuthState(w http.ResponseWriter, req *http.Request, provider, stateP
 		})
 	}
 	return expectedChannelID, nil
+}
+
+// setOAuthClientCookie writes the sibling oauth_state_{provider}
+// _oauth_client cookie that round-trips the YouTube OAuth Client Pool
+// client key selected at login time. Value format is "<jti>:<clientKey>"
+// — the jti of the signed oauth-flow state (returned by
+// IssueOAuthFlowState) binds the key to THIS flow, mirroring the
+// expected-channel sibling cookie. Same HttpOnly/Secure/SameSite=None
+// attributes as the expected-channel cookie so the callback (arriving
+// via the Google redirect) can read it.
+func setOAuthClientCookie(w http.ResponseWriter, provider, jti, clientKey, cookieDomain string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: OAuthStateOAuthClientCookieName(provider), Value: jti + ":" + clientKey, Path: "/",
+		Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+		MaxAge: int(oauthStateMaxAge.Seconds()),
+	})
+}
+
+// verifyOAuthClientCookie reads the sibling oauth_state_{provider}
+// _oauth_client cookie in the callback and returns the pool client key
+// it carries, but ONLY when the "<jti>:" prefix matches the jti of the
+// just-verified oauth-flow state. A missing cookie, a stale cookie from
+// a previous flow, or a forged value is rejected — the callback must
+// fail closed (never exchange with a guessed/wrong client). The cookie
+// is deleted on read, matching the expected-channel sibling behaviour:
+// single-use, exactly like the state cookie itself, and never allowed
+// to linger for the rest of its MaxAge.
+func verifyOAuthClientCookie(w http.ResponseWriter, req *http.Request, provider, jti, cookieDomain string) (string, error) {
+	deleteClientCookie := func() {
+		http.SetCookie(w, &http.Cookie{
+			Name: OAuthStateOAuthClientCookieName(provider), Value: "", Path: "/",
+			Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+			MaxAge: -1, Expires: time.Unix(1, 0),
+		})
+	}
+	ec, ecErr := req.Cookie(OAuthStateOAuthClientCookieName(provider))
+	if ecErr != nil || ec.Value == "" {
+		return "", fmt.Errorf("oauth client cookie missing for provider %q", provider)
+	}
+	deleteClientCookie()
+	clientKey, ok := strings.CutPrefix(ec.Value, jti+":")
+	if !ok || clientKey == "" || strings.Contains(clientKey, ":") {
+		return "", fmt.Errorf("oauth client cookie does not match the current oauth flow for provider %q", provider)
+	}
+	return clientKey, nil
 }

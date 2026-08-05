@@ -96,8 +96,11 @@ func stateParamFromURL(t *testing.T, loc string) string {
 //   - selects a pool client (youtube_pool_a — the least-loaded fallback)
 //     and builds the consent URL against it;
 //   - issues a signed JWT state (2 dots) instead of the 43-char CSRF
-//     nonce, carrying oauth_client_key + workspace_id (from the session
-//     identity) + a single-use jti persisted in the nonce store;
+//     nonce, carrying workspace_id (from the session identity) + a
+//     single-use jti persisted in the nonce store;
+//   - round-trips the selected client key in the sibling
+//     oauth_state_youtube_oauth_client cookie as "<jti>:<clientKey>"
+//     (NOT in the JWT — Google echoes the URL state verbatim);
 //   - sets NO cookie-backed CSRF state (the signed state is
 //     self-verifying).
 func TestHandleLogin_YouTubePool_SignedStateCarriesPoolClient(t *testing.T) {
@@ -129,13 +132,11 @@ func TestHandleLogin_YouTubePool_SignedStateCarriesPoolClient(t *testing.T) {
 		t.Fatalf("pool-mode state must be a signed JWT (2 dots), got %q", state)
 	}
 	// The state verifies against the router's own auth Manager and
-	// carries the expected claims.
+	// carries the expected claims (workspace_id + jti; the client key
+	// is deliberately NOT a claim).
 	claims, verr := r.auth.VerifyOAuthFlowState(state)
 	if verr != nil {
 		t.Fatalf("verify issued oauth flow state: %v", verr)
-	}
-	if claims.OAuthClientKey != "youtube_pool_a" {
-		t.Errorf("state oauth_client_key: want youtube_pool_a, got %q", claims.OAuthClientKey)
 	}
 	if claims.WorkspaceID != 1 {
 		t.Errorf("state workspace_id: want 1 (from session identity), got %d", claims.WorkspaceID)
@@ -146,6 +147,24 @@ func TestHandleLogin_YouTubePool_SignedStateCarriesPoolClient(t *testing.T) {
 	}
 	if !nonceStore.created[claims.ID].expiresAt.After(claims.ExpiresAt.Time.Add(-2 * time.Minute)) {
 		t.Errorf("nonce store expiry (%s) must track the JWT expiry (%s)", nonceStore.created[claims.ID].expiresAt, claims.ExpiresAt.Time)
+	}
+	// The selected client key travels in the sibling cookie, bound to
+	// the jti — never in the signed state.
+	var clientCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateOAuthClientCookieName("youtube") {
+			clientCookie = c
+		}
+	}
+	if clientCookie == nil || clientCookie.MaxAge <= 0 {
+		t.Fatalf("pool mode must set the sibling oauth_state_youtube_oauth_client cookie; got %+v", clientCookie)
+	}
+	wantCookieValue := claims.ID + ":youtube_pool_a"
+	if clientCookie.Value != wantCookieValue {
+		t.Errorf("sibling client cookie: want %q, got %q", wantCookieValue, clientCookie.Value)
+	}
+	if !clientCookie.HttpOnly || !clientCookie.Secure {
+		t.Errorf("sibling client cookie must be HttpOnly+Secure; got %+v", clientCookie)
 	}
 	// No CSRF cookie in pool mode.
 	for _, c := range w.Result().Cookies() {
@@ -229,8 +248,9 @@ func TestHandleCallback_YouTubePool_ExchangesWithStateClient(t *testing.T) {
 	)
 
 	// Issue the state exactly as handleLogin would (client selected at
-	// login time + nonce persisted).
-	signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState("youtube_pool_a", expectedChannel, 1)
+	// login time + nonce persisted + sibling client cookie bound to the
+	// jti).
+	signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState(expectedChannel, 1)
 	if err != nil {
 		t.Fatalf("IssueOAuthFlowState: %v", err)
 	}
@@ -239,6 +259,7 @@ func TestHandleCallback_YouTubePool_ExchangesWithStateClient(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state="+url.QueryEscape(signed), nil)
+	setOAuthClientCookieForTest(req, "youtube", nonce, "youtube_pool_a")
 	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
@@ -288,7 +309,7 @@ func TestHandleCallback_YouTubePool_ReplayReturns410(t *testing.T) {
 		WithYouTubeOAuthClientRegistry(newTestPoolRegistry(t)),
 	)
 
-	signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState("youtube_pool_a", expectedChannel, 1)
+	signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState(expectedChannel, 1)
 	if err != nil {
 		t.Fatalf("IssueOAuthFlowState: %v", err)
 	}
@@ -298,6 +319,7 @@ func TestHandleCallback_YouTubePool_ReplayReturns410(t *testing.T) {
 
 	doCallback := func() int {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state="+url.QueryEscape(signed), nil)
+		setOAuthClientCookieForTest(req, "youtube", nonce, "youtube_pool_a")
 		withBearerJWT(t, req, 1)
 		w := httptest.NewRecorder()
 		r.Setup().ServeHTTP(w, req)
@@ -331,7 +353,7 @@ func TestHandleCallback_YouTubePool_ProviderNotPoolAware_FailsClosed(t *testing.
 		WithYouTubeOAuthClientRegistry(newTestPoolRegistry(t)),
 	)
 
-	signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState("youtube_pool_a", "", 1)
+	signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState("", 1)
 	if err != nil {
 		t.Fatalf("IssueOAuthFlowState: %v", err)
 	}
@@ -340,6 +362,7 @@ func TestHandleCallback_YouTubePool_ProviderNotPoolAware_FailsClosed(t *testing.
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state="+url.QueryEscape(signed), nil)
+	setOAuthClientCookieForTest(req, "youtube", nonce, "youtube_pool_a")
 	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
@@ -349,5 +372,92 @@ func TestHandleCallback_YouTubePool_ProviderNotPoolAware_FailsClosed(t *testing.
 	}
 	if legacy.handleCallbackCalls != 0 {
 		t.Errorf("legacy HandleCallback must not be called; got %d calls", legacy.handleCallbackCalls)
+	}
+}
+
+// TestHandleCallback_YouTubePool_MissingClientCookie_FailsClosed pins
+// the cookie transport contract: an oauth-flow state whose sibling
+// oauth_state_youtube_oauth_client cookie is missing (or carries a
+// stale jti prefix) must fail closed with 400 — the callback must
+// never guess or silently fall back to the legacy single-client
+// exchange when the state was issued against a pool client.
+func TestHandleCallback_YouTubePool_MissingClientCookie_FailsClosed(t *testing.T) {
+	const expectedChannel = "UC012345678901234567890123"
+	poolProvider := &mockPoolProvider{
+		mockProvider: mockProvider{
+			platform: "youtube",
+			handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+				t.Error("legacy HandleCallback must not be called when the pool client cookie is missing")
+				return nil, nil, fmt.Errorf("legacy path called")
+			},
+		},
+	}
+	nonceStore := newFakeConnectLinkNonceStore()
+	r := newTestRouter(poolProvider, &mockUserStore{}, "",
+		WithConnectLinkNonceStore(nonceStore),
+		WithYouTubeOAuthClientRegistry(newTestPoolRegistry(t)),
+	)
+
+	signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState(expectedChannel, 1)
+	if err != nil {
+		t.Fatalf("IssueOAuthFlowState: %v", err)
+	}
+	if err := nonceStore.Create(nonce, expectedChannel, expiresAt); err != nil {
+		t.Fatalf("Create nonce: %v", err)
+	}
+
+	// No sibling client cookie at all.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state="+url.QueryEscape(signed), nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("missing client cookie: want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if poolProvider.handleCallbackWithClientCalls != 0 {
+		t.Errorf("no pool exchange must run without the client cookie; got %d calls", poolProvider.handleCallbackWithClientCalls)
+	}
+}
+
+// TestHandleCallback_YouTubePool_StaleClientCookie_FailsClosed pins that
+// a sibling client cookie bound to a DIFFERENT jti (stale flow) cannot
+// steer the callback: the jti prefix must match the current state's
+// single-use nonce.
+func TestHandleCallback_YouTubePool_StaleClientCookie_FailsClosed(t *testing.T) {
+	const expectedChannel = "UC012345678901234567890123"
+	poolProvider := &mockPoolProvider{
+		mockProvider: mockProvider{
+			platform: "youtube",
+			handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+				t.Error("legacy HandleCallback must not be called with a stale client cookie")
+				return nil, nil, fmt.Errorf("legacy path called")
+			},
+		},
+	}
+	nonceStore := newFakeConnectLinkNonceStore()
+	r := newTestRouter(poolProvider, &mockUserStore{}, "",
+		WithConnectLinkNonceStore(nonceStore),
+		WithYouTubeOAuthClientRegistry(newTestPoolRegistry(t)),
+	)
+
+	signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState(expectedChannel, 1)
+	if err != nil {
+		t.Fatalf("IssueOAuthFlowState: %v", err)
+	}
+	if err := nonceStore.Create(nonce, expectedChannel, expiresAt); err != nil {
+		t.Fatalf("Create nonce: %v", err)
+	}
+
+	// Sibling cookie bound to a DIFFERENT (stale) jti.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state="+url.QueryEscape(signed), nil)
+	setOAuthClientCookieForTest(req, "youtube", "deadbeefdeadbeef", "youtube_pool_b")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("stale client cookie: want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if poolProvider.handleCallbackWithClientCalls != 0 {
+		t.Errorf("no pool exchange must run with a stale client cookie; got %d calls", poolProvider.handleCallbackWithClientCalls)
 	}
 }

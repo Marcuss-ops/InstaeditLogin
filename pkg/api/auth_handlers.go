@@ -43,10 +43,11 @@ type YouTubePoolAwareCallback interface {
 }
 
 // exchangeOAuthCode runs the code→token exchange in step 2 of
-// handleCallback. When the signed state carries an oauth_client_key
-// (YouTube OAuth Client Pool), the exchange MUST use exactly that pool
-// client — see YouTubePoolAwareCallback. An empty key keeps the legacy
-// single-client exchange.
+// handleCallback. When the callback resolved an oauth_client_key from
+// the sibling oauth_state_{provider}_oauth_client cookie (YouTube OAuth
+// Client Pool), the exchange MUST use exactly that pool client — see
+// YouTubePoolAwareCallback. An empty key keeps the legacy single-client
+// exchange.
 func (r *Router) exchangeOAuthCode(ctx context.Context, provider string, p services.OAuthProvider, state, code, oauthClientKey string) (*models.PlatformProfile, *models.TokenData, error) {
 	if oauthClientKey == "" {
 		return p.HandleCallback(ctx, state, code)
@@ -136,10 +137,13 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 
 	// YouTube OAuth Client Pool path: when a pool registry is
 	// configured the state stops being a cookie-backed CSRF nonce and
-	// becomes a short-lived HS256-signed JWT carrying the selected
-	// oauth_client_key + expected_channel_id + workspace_id + a
-	// single-use nonce (jti). The callback then exchanges the code
-	// with EXACTLY the client that built this consent URL — never
+	// becomes a short-lived HS256-signed JWT carrying
+	// expected_channel_id + workspace_id + a single-use nonce (jti).
+	// The selected oauth_client_key is NOT baked into the JWT (Google
+	// echoes the URL state verbatim): it round-trips in the sibling
+	// HttpOnly cookie oauth_state_{provider}_oauth_client as
+	// "<jti>:<clientKey>". The callback then exchanges the code with
+	// EXACTLY the client that built this consent URL — never
 	// re-selects at callback time. Without a registry the legacy
 	// cookie path is preserved unchanged.
 	var state string
@@ -177,7 +181,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		if identity != nil {
 			workspaceID = identity.WorkspaceID()
 		}
-		signedState, nonce, expiresAt, issErr := r.auth.IssueOAuthFlowState(client.Key, expectedChannelID, workspaceID)
+		signedState, nonce, expiresAt, issErr := r.auth.IssueOAuthFlowState(expectedChannelID, workspaceID)
 		if issErr != nil {
 			logAndError(w, req, "failed to issue oauth flow state", issErr, "provider", provider)
 			return
@@ -194,6 +198,14 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 			logAndError(w, req, "failed to persist oauth flow nonce", createErr, "provider", provider)
 			return
 		}
+		// Round-trip the selected client key in the sibling
+		// oauth_state_{provider}_oauth_client cookie as
+		// "<jti>:<clientKey>". The pool JWT deliberately does NOT carry
+		// the key (it would be echoed in the URL by Google); the cookie
+		// is HttpOnly and bound to the flow by the jti prefix, so the
+		// callback exchanges the code with exactly the client that
+		// built this consent URL.
+		setOAuthClientCookie(w, provider, nonce, client.Key, r.cookieDomain)
 		keyedLogin, ok := p.(YouTubePoolAwareLogin)
 		if !ok {
 			logAndError(w, req, "youtube provider cannot build a pool-client login URL", errors.New("YouTubePoolAwareLogin not implemented"), "provider", provider)
@@ -310,11 +322,13 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 //
 //  2. YouTube OAuth Client Pool JWT (2 dots, state_type=oauth_flow):
 //     issued by handleLogin when a pool registry is configured. It
-//     carries the oauth_client_key that MUST exchange the code (the
-//     same client that built the consent URL) + expected_channel_id +
-//     workspace_id + a single-use jti. The jti is consumed atomically
-//     here, exactly like the connect-link nonce, so a state cannot be
-//     replayed within its 10-minute window.
+//     carries expected_channel_id + workspace_id + a single-use jti.
+//     The jti is consumed atomically here, exactly like the
+//     connect-link nonce, so a state cannot be replayed within its
+//     10-minute window. The pool client key that MUST exchange the
+//     code comes from the sibling oauth_state_{provider}_oauth_client
+//     cookie (bound to the jti), NOT from this JWT — the exchange
+//     uses the same client that built the consent URL.
 //
 //  3. Legacy cookie-backed CSRF nonce: verified against the
 //     oauth_state_{provider} cookie (constant-time compare) and its
@@ -368,7 +382,9 @@ func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, 
 			return "", "", false, true
 		}
 		// OAuth Client Pool state — issued by handleLogin. Same
-		// single-use nonce contract as connect-link.
+		// single-use nonce contract as connect-link. The pool client
+		// key is NOT in the JWT: it round-trips in the sibling
+		// oauth_state_{provider}_oauth_client cookie, bound to the jti.
 		flowClaims, fErr := r.auth.VerifyOAuthFlowState(state)
 		if fErr != nil {
 			writeError(w, http.StatusBadRequest, "invalid oauth state: "+fErr.Error())
@@ -376,7 +392,6 @@ func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, 
 		}
 		slog.DebugContext(req.Context(), "oauth flow state verified",
 			"provider", provider,
-			"oauth_client_key", flowClaims.OAuthClientKey,
 			"workspace_id", flowClaims.WorkspaceID,
 			"expected_channel_id", flowClaims.ExpectedChannelID,
 		)
@@ -388,7 +403,6 @@ func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, 
 					slog.WarnContext(req.Context(), "oauth flow nonce rejected",
 						"reason", reason,
 						"provider", provider,
-						"oauth_client_key", flowClaims.OAuthClientKey,
 					)
 					writeError(w, http.StatusGone, "oauth state already consumed or expired")
 					return "", "", false, true
@@ -397,7 +411,15 @@ func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, 
 				return "", "", false, true
 			}
 		}
-		return flowClaims.ExpectedChannelID, flowClaims.OAuthClientKey, false, false
+		// The pool client key comes from the sibling cookie — fail
+		// closed on a missing / stale / forged cookie: the exchange
+		// must never guess a client.
+		clientKey, keyErr := verifyOAuthClientCookie(w, req, provider, flowClaims.ID, r.cookieDomain)
+		if keyErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid oauth state: "+keyErr.Error())
+			return "", "", false, true
+		}
+		return flowClaims.ExpectedChannelID, clientKey, false, false
 	}
 	expectedChannelID, stateErr := verifyOAuthState(w, req, provider, state, r.cookieDomain)
 	if stateErr != nil {
