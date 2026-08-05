@@ -27,6 +27,7 @@ type AuthHandlers struct {
 	ValidateAccount               http.HandlerFunc
 	ReconnectAccount              http.HandlerFunc
 	DeleteAccount                 http.HandlerFunc
+	DeleteOAuthGrant              http.HandlerFunc
 	SyncAccount                   http.HandlerFunc
 	AccountContent                http.HandlerFunc
 	UpdateAccount                 http.HandlerFunc
@@ -136,6 +137,7 @@ func (m *AuthModule) Register(mux chi.Router) {
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", m.deps.Protected(m.deps.Handlers.ValidateAccount))
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", m.deps.Protected(m.deps.Handlers.ReconnectAccount))
 	mux.Method(http.MethodDelete, "/api/v1/accounts/{id}", m.deps.Protected(m.deps.Handlers.DeleteAccount))
+	mux.Method(http.MethodDelete, "/api/v1/accounts/{id}/oauth-grant", m.deps.Protected(m.deps.Handlers.DeleteOAuthGrant))
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/sync", m.deps.Protected(m.deps.Handlers.SyncAccount))
 	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/content", m.deps.Protected(m.deps.Handlers.AccountContent))
 	mux.Method(http.MethodPatch, "/api/v1/accounts/{id}", m.deps.Protected(m.deps.Handlers.UpdateAccount))

@@ -287,6 +287,7 @@ type mockUserStore struct {
 	// disconnectPlatformAccountFn models the production atomic shared-grant
 	// operation without widening the UserStore compatibility interface.
 	disconnectPlatformAccountFn func(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
+	disconnectOAuthGrantFn      func(ctx context.Context, oauthConnectionID int64) error
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -388,6 +389,13 @@ func (m *mockUserStore) DisconnectPlatformAccount(ctx context.Context, accountID
 		return m.disconnectPlatformAccountFn(ctx, accountID)
 	}
 	return false, false, nil
+}
+
+func (m *mockUserStore) DisconnectOAuthGrantTx(ctx context.Context, oauthConnectionID int64) error {
+	if m.disconnectOAuthGrantFn != nil {
+		return m.disconnectOAuthGrantFn(ctx, oauthConnectionID)
+	}
+	return nil
 }
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.

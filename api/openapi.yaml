@@ -308,6 +308,41 @@ paths:
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
 
+  /api/v1/accounts/{id}/oauth-grant:
+    delete:
+      tags: [Auth]
+      operationId: oauthGrantDisconnect
+      summary: Disconnect an entire OAuth grant and all linked channels.
+      description: |
+        Disconnects the OAuth grant identified through an account owned by
+        the caller. The server atomically marks the grant and every linked
+        platform account as disconnected, deletes grant-scoped tokens, and
+        writes the audit and outbox records in the same database transaction.
+        This is distinct from `DELETE /api/v1/accounts/{id}`, which only
+        disconnects one channel and preserves a shared grant for its siblings.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '204':
+          description: OAuth grant, linked channels, and local credentials disconnected.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: The selected account has no OAuth grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '501':
+          description: Transactional grant disconnect is not configured.
+
   # ───────────── API keys (Taglio 4.6) ─────────────────────────────────────
 
   /api-keys:

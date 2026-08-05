@@ -49,6 +49,44 @@ type secureDisconnectStore interface {
 	DisconnectPlatformAccount(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
 }
 
+// oauthGrantDisconnectStore is the optional repository capability for the
+// explicit "disconnect Google account" action. It is intentionally separate
+// from secureDisconnectStore: deleting one channel must preserve a shared
+// grant, while this endpoint deliberately disconnects every channel attached
+// to the grant in one transaction.
+type oauthGrantDisconnectStore interface {
+	DisconnectOAuthGrantTx(ctx context.Context, oauthConnectionID int64) error
+}
+
+// handleDeleteOAuthGrant disconnects the complete OAuth grant associated with
+// an owned platform account. The repository performs the grant/account/token/
+// outbox/audit mutations in one transaction; this handler only authenticates
+// ownership and resolves the grant id from the account selected by the user.
+func (r *Router) handleDeleteOAuthGrant(w http.ResponseWriter, req *http.Request) {
+	id, ok := parsePathIDAsInt64(w, req, "id")
+	if !ok {
+		return
+	}
+	account, _, ok := r.loadOwnAccountByID(w, req, id)
+	if !ok {
+		return
+	}
+	if account.OAuthConnectionID == nil || *account.OAuthConnectionID <= 0 {
+		writeError(w, http.StatusConflict, "account has no OAuth grant")
+		return
+	}
+	store, ok := r.userRepo.(oauthGrantDisconnectStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "OAuth grant disconnect is not configured")
+		return
+	}
+	if err := store.DisconnectOAuthGrantTx(req.Context(), *account.OAuthConnectionID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to disconnect OAuth grant: "+err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleDeleteAccount soft-disconnects a platform account. Steps:
 //
 //  1. loadOwnAccountByID (auth + ownership + 404 on cross-tenant).
