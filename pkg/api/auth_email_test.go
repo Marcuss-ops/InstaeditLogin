@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -73,6 +74,17 @@ func (f *fakeAuthEmailStore) Login(email, password string) (*models.User, int64,
 		return nil, 0, services.ErrInvalidPassword
 	}
 	return &models.User{ID: u.userID, Email: email, Name: u.name}, u.userID, nil
+}
+
+// GetUserByID implements AuthEmailStore: the header identity lookup
+// behind /api/v1/auth/me.
+func (f *fakeAuthEmailStore) GetUserByID(id int64) (*models.User, error) {
+	for _, u := range f.users {
+		if u.userID == id {
+			return &models.User{ID: u.userID, Email: u.email, Name: u.name}, nil
+		}
+	}
+	return nil, nil
 }
 
 // -----------------------------------------------------------------------
@@ -232,6 +244,66 @@ func TestHandleLogin_Success(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleMe_ReturnsUserEmailName proves GET /api/v1/auth/me surfaces
+// the logged-in InstaEdit account's email/name (used by the SPA header)
+// in addition to the historical user_id/workspace_id/is_admin shape.
+func TestHandleMe_ReturnsUserEmailName(t *testing.T) {
+	store := newFakeAuthEmailStore()
+	store.users["me@example.com"] = fakeUser{
+		email: "me@example.com", name: "Me User", passwordHash: "password1",
+		userID: 7,
+	}
+	mod := NewAuthModule(AuthModuleDeps{AuthEmailSvc: store}).(*AuthModule)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentityWithAdmin(7, 3, 11, true))
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	mod.handleMe(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["email"] != "me@example.com" {
+		t.Errorf("email: want me@example.com, got %v", resp["email"])
+	}
+	if resp["name"] != "Me User" {
+		t.Errorf("name: want Me User, got %v", resp["name"])
+	}
+	if resp["user_id"] != float64(7) {
+		t.Errorf("user_id: want 7, got %v", resp["user_id"])
+	}
+	if resp["is_admin"] != true {
+		t.Errorf("is_admin: want true, got %v", resp["is_admin"])
+	}
+}
+
+// TestHandleMe_DegradesGracefullyWithoutEmailStore proves /auth/me keeps
+// its historical shape when the auth-email store is unconfigured (or the
+// user row is missing) instead of failing the request.
+func TestHandleMe_DegradesGracefullyWithoutEmailStore(t *testing.T) {
+	mod := NewAuthModule(AuthModuleDeps{}).(*AuthModule)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentityWithAdmin(1, 1, 1, false))
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	mod.handleMe(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if _, ok := resp["email"]; ok {
+		t.Error("email should be absent when store is unconfigured")
 	}
 }
 

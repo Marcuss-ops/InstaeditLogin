@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -252,10 +253,9 @@ func writeAccountDeleteError(w http.ResponseWriter, err error) {
 //  1. loadOwnAccountByID (auth + ownership + 404 on cross-tenant).
 //  2. The repository runs one transaction that locks the account row (and
 //     the shared grant, if any), removes the account from every group and
-//     from the publishable destinations (workspace_channels, which also
-//     cascades thumbnail assignments), deletes its account snapshots,
-//     cancels its future jobs (post_targets → draft + parent aggregates
-//     recomputed), and tombstones the row (status='deleted',
+//     from publishable destinations, snapshots, caches, editor/batch records,
+//     livestream configuration, and future jobs (post_targets → draft +
+//     parent aggregates recomputed), then tombstones the row (status='deleted',
 //     username='[deleted]', metadata='{}'). The row is NOT physically
 //     deleted: historical publications (post_targets, livestreams,
 //     thumbnail_assignments) keep referencing it, so the tombstone keeps
@@ -280,6 +280,27 @@ func (r *Router) handleDeleteAccountData(w http.ResponseWriter, req *http.Reques
 	}
 	account, _, ok := r.loadOwnAccountByID(w, req, id)
 	if !ok {
+		return
+	}
+
+	// A completed tombstone is already the requested end state. Return success
+	// before decoding a body so network retries are genuinely idempotent and
+	// never re-run cleanup, audit, or provider revocation.
+	if account.Status == models.AccountStatusDeleted {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Permanent deletion requires an explicit, exact-name confirmation.
+	var body struct {
+		Confirmation string `json:"confirmation"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "confirmation is required")
+		return
+	}
+	if body.Confirmation != account.Username {
+		writeError(w, http.StatusBadRequest, "confirmation must exactly match the channel name")
 		return
 	}
 	ctx := req.Context()

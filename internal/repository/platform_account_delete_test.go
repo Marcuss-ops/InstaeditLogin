@@ -18,13 +18,13 @@ import (
 // feeds the cancel-future-jobs aggregate recompute.
 func expectPermanentDeleteTransaction(mock sqlmock.Sqlmock, accountID, oauthConnectionID, activeSiblings int64, canceledPostIDs []int64) {
 	mock.ExpectBegin()
-	lockRows := sqlmock.NewRows([]string{"user_id", "platform", "platform_user_id", "oauth_connection_id"})
+	lockRows := sqlmock.NewRows([]string{"user_id", "platform", "platform_user_id", "status", "oauth_connection_id"})
 	if oauthConnectionID > 0 {
-		lockRows.AddRow(int64(1), "youtube", "UC-xyz", oauthConnectionID)
+		lockRows.AddRow(int64(1), "youtube", "UC-xyz", "active", oauthConnectionID)
 	} else {
-		lockRows.AddRow(int64(1), "youtube", "UC-xyz", int64(0))
+		lockRows.AddRow(int64(1), "youtube", "UC-xyz", "active", int64(0))
 	}
-	mock.ExpectQuery(`SELECT user_id, platform, platform_user_id, COALESCE(oauth_connection_id, 0)
+	mock.ExpectQuery(`SELECT user_id, platform, platform_user_id, status, COALESCE(oauth_connection_id, 0)
    FROM platform_accounts
   WHERE id = $1
   FOR UPDATE`).
@@ -63,6 +63,20 @@ func expectPermanentDeleteTransaction(mock sqlmock.Sqlmock, accountID, oauthConn
 	mock.ExpectExec(`DELETE FROM account_resource_snapshots WHERE platform_account_id = $1`).
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	for _, query := range []string{
+		`DELETE FROM account_capabilities WHERE platform_account_id = $1`,
+		`DELETE FROM account_metric_history WHERE platform_account_id = $1`,
+		`DELETE FROM youtube_video_edits WHERE platform_account_id = $1`,
+		`DELETE FROM youtube_thumbnail_batch_items WHERE platform_account_id = $1`,
+		`UPDATE external_destinations
+    SET enabled = FALSE,
+        default_metadata = '{}'::jsonb,
+        updated_at = NOW()
+  WHERE platform_account_id = $1`,
+		`DELETE FROM livestreams WHERE platform_account_id = $1`,
+	} {
+		mock.ExpectExec(query).WithArgs(accountID).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
 	rows := sqlmock.NewRows([]string{"post_id"})
 	for _, postID := range canceledPostIDs {
 		rows.AddRow(postID)
@@ -80,6 +94,7 @@ func expectPermanentDeleteTransaction(mock sqlmock.Sqlmock, accountID, oauthConn
 	mock.ExpectExec(`UPDATE platform_accounts
     SET status = 'deleted',
         username = '[deleted]',
+        platform_user_id = '[deleted:' || id::text || ']',
         metadata = '{}'::jsonb,
         connected_at = NULL,
         last_validated_at = NULL,

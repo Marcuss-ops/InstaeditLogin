@@ -9,11 +9,9 @@
  *   1. Disconnetti canale   → POST /api/v1/accounts/{id}/disconnect
  *      soft-disconnect. The row stays for audit; the shared Google
  *      grant is preserved while sibling channels still use it and
- *      the token is revoked only when the last channel disconnects.
- *   2. Elimina definitivamente → DELETE /api/v1/accounts/{id}/data
- *      permanent removal (hard-delete / tombstone). Wired here so
- *      the UI contract is in place; the endpoint is the backend P1
- *      step of the account-lifecycle plan.
+ *      the token is revoked only when the last channel disconnects.   *   2. Elimina definitivamente → DELETE /api/v1/accounts/{id}/data
+ *      permanent removal (hard-delete / tombstone), requiring the exact
+ *      channel-name confirmation before the JSON request is sent.
  *   3. Revoca account Google e tutti i canali → DELETE
  *      /api/v1/accounts/{id}/oauth-grant  (YouTube only) — revokes
  *      the whole shared grant and disconnects every channel on it.
@@ -72,6 +70,27 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
     }
   };
 
+  const runPermanentDelete = async () => {
+    const confirmation = window.prompt(
+      `Per eliminare definitivamente ${handle}, digita esattamente:\n${handle}`,
+      "",
+    );
+    if (confirmation !== handle) return;
+    setBusy("delete");
+    try {
+      await authedFetch(`/api/v1/accounts/${account.id}/data`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation }),
+      });
+      onDone();
+    } catch {
+      // authedFetch already toasts the server error; keep the action retryable.
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const handle = account.username || `#${account.id}`;
 
   return (
@@ -107,14 +126,7 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
       {/* 2. Permanent delete — hard-delete / tombstone contract. */}
       <button
         type="button"
-        onClick={() =>
-          void run(
-            "delete",
-            "DELETE",
-            `/api/v1/accounts/${account.id}/data`,
-            `Eliminare definitivamente il canale ${handle}?\n\nQuesta azione rimuove il canale e i suoi dati da InstaEdit e non può essere annullata.`,
-          )
-        }
+        onClick={() => void runPermanentDelete()}
         disabled={busy !== null}
         className={cn(TILE_BASE, RED_TILE)}
       >

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -53,7 +54,7 @@ func TestHandleDeleteAccountData_Happy_AtomicTombstone_204(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", strings.NewReader(`{"confirmation":"alice_youtube"}`))
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -103,7 +104,7 @@ func TestHandleDeleteAccountData_SharedGrant_SiblingActive_NoRevoke(t *testing.T
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", strings.NewReader(`{"confirmation":"alice_youtube"}`))
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -132,7 +133,7 @@ func TestHandleDeleteAccountData_NonYouTube_NoRevokeCallback(t *testing.T) {
 	}
 	r := newTestRouter(&mockProvider{platform: "instagram"}, store, "")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", strings.NewReader(`{"confirmation":"alice_instagram"}`))
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -161,7 +162,7 @@ func TestHandleDeleteAccountData_Fallback_TombstonesViaUpdatePlatformAccount(t *
 	}
 	r := newTestRouter(&mockProvider{platform: "instagram"}, store, "")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", strings.NewReader(`{"confirmation":"alice_instagram"}`))
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -183,6 +184,31 @@ func TestHandleDeleteAccountData_Fallback_TombstonesViaUpdatePlatformAccount(t *
 	}
 }
 
+// TestHandleDeleteAccountData_AlreadyDeleted_IsIdempotent returns 204 without
+// requiring the original channel name or invoking the mutation store again.
+func TestHandleDeleteAccountData_AlreadyDeleted_IsIdempotent(t *testing.T) {
+	owner := ownedAccountFixture(1, models.PlatformYouTube)
+	owner.Status = models.AccountStatusDeleted
+	owner.Username = "[deleted]"
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		permanentlyDeleteAccountFn: func(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (bool, error) {
+			t.Fatal("already-deleted account must not invoke the mutation store")
+			return false, nil
+		},
+	}
+	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "")
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("already-deleted delete: want 204, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestHandleDeleteAccountData_CrossTenant_404 is the workspace-isolation
 // canary: a cross-tenant probe must 404 before any store mutation.
 func TestHandleDeleteAccountData_CrossTenant_404(t *testing.T) {
@@ -198,7 +224,7 @@ func TestHandleDeleteAccountData_CrossTenant_404(t *testing.T) {
 	}
 	r := newTestRouter(&mockProvider{platform: "instagram"}, store, "")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", strings.NewReader(`{"confirmation":"alice_youtube"}`))
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -219,7 +245,7 @@ func TestHandleDeleteAccountData_NoSession_401(t *testing.T) {
 	}
 	r := newTestRouter(&mockProvider{platform: "instagram"}, store, "")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", strings.NewReader(`{"confirmation":"alice_youtube"}`))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req) // NO JWT
 
@@ -248,7 +274,7 @@ func TestHandleDeleteAccountData_RemoteRevokePermanent_502(t *testing.T) {
 	}
 	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", strings.NewReader(`{"confirmation":"alice_youtube"}`))
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -272,7 +298,7 @@ func TestHandleDeleteAccountData_StoreError_500(t *testing.T) {
 	}
 	r := newTestRouter(&mockProvider{platform: "instagram"}, store, "")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/data", strings.NewReader(`{"confirmation":"alice_instagram"}`))
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)

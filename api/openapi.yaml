@@ -478,9 +478,23 @@ paths:
         - JwtCookie: []
       parameters:
         - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                confirmation:
+                  type: string
+                  minLength: 1
+                  description: Exact current channel name, required as strong confirmation.
       responses:
         '204':
           description: Account permanently deleted (tombstoned).
+        '400':
+          $ref: '#/components/responses/BadRequestError'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '404':

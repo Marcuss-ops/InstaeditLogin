@@ -21,6 +21,7 @@ export function isDemoMode(): boolean {
 export const demoSession = {
   user_id: 1,
   name: "Demo User",
+  email: "demo@instaedit.org",
   username: "demo_user",
   expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
   is_admin: false,
@@ -197,6 +198,7 @@ export function handleDemoRequest(
     return json({
       user_id: demoSession.user_id,
       name: demoSession.name,
+      email: demoSession.email,
       username: demoSession.username,
       expires_at: demoSession.expires_at,
     });

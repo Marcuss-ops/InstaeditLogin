@@ -32,6 +32,9 @@ describe("ChannelActions", () => {
       json: async () => ({}),
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
+    // Permanent delete requires typing the exact channel name into a
+    // prompt — auto-confirm it so the request is actually sent.
+    vi.spyOn(window, "prompt").mockReturnValue(youtubeAccount.username);
   });
 
   it("shows disconnect and permanent-delete for every platform", () => {
@@ -71,7 +74,8 @@ describe("ChannelActions", () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  it("permanent delete hits DELETE /accounts/{id}/data", async () => {
+  it("permanent delete hits DELETE /accounts/{id}/data with the exact-name confirmation", async () => {
+    const promptMock = vi.spyOn(window, "prompt").mockReturnValue("wwe-channel");
     const onDone = vi.fn();
     render(<ChannelActions account={youtubeAccount} onDone={onDone} />);
     fireEvent.click(
@@ -80,10 +84,29 @@ describe("ChannelActions", () => {
     await waitFor(() =>
       expect(authedFetchMock).toHaveBeenCalledWith(
         "/api/v1/accounts/21/data",
-        { method: "DELETE" },
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmation: "wwe-channel" }),
+        },
       ),
     );
+    expect(promptMock).toHaveBeenCalled();
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("permanent delete is NOT sent when the typed confirmation does not match", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue("wrong-name");
+    render(<ChannelActions account={youtubeAccount} onDone={() => {}} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Elimina definitivamente/i }),
+    );
+    // No fetch happens — the mismatch short-circuits before the request.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(authedFetchMock).not.toHaveBeenCalledWith(
+      "/api/v1/accounts/21/data",
+      expect.anything(),
+    );
   });
 
   it("revoking the shared grant hits DELETE /accounts/{id}/oauth-grant", async () => {
@@ -152,12 +175,18 @@ describe("ChannelActions", () => {
       ).not.toBeDisabled(),
     );
 
-    // Permanent delete confirmation states the irreversibility.
+    // Permanent delete asks for an exact-name typed confirmation and
+    // states the irreversibility (honest, distinct wording).
+    const promptMock = vi.spyOn(window, "prompt");
     fireEvent.click(
       screen.getByRole("button", { name: /Elimina definitivamente/i }),
     );
-    const deleteMsg = confirmMock.mock.calls[1]?.[0] ?? "";
-    expect(deleteMsg).toContain("non può essere annullata");
+    const deleteMsg = promptMock.mock.calls[0]?.[0] ?? "";
+    expect(deleteMsg).toContain("wwe-channel");
+    expect(deleteMsg).toContain("digita esattamente");
+    // The visible tile description states irreversibility without
+    // threatening the shared grant's siblings.
+    expect(screen.getByText(/Azione irreversibile/i)).toBeInTheDocument();
 
     // No visible label or description uses the old misleading vocabulary.
     expect(screen.queryByText(/tokens/i)).not.toBeInTheDocument();

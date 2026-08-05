@@ -100,11 +100,22 @@ func (m *AuthModule) handleMe(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusUnauthorized, "missing identity")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"user_id":      id.UserID(),
 		"workspace_id": id.WorkspaceID(),
 		"is_admin":     id.IsAdmin(),
-	})
+	}
+	// Surface the logged-in account's email/name so the SPA header can
+	// show the InstaEdit user instead of a linked channel. Best-effort:
+	// a lookup failure or an unconfigured auth-email store degrades to
+	// the historical shape (no name/email) rather than failing /auth/me.
+	if m.deps.AuthEmailSvc != nil {
+		if user, err := m.deps.AuthEmailSvc.GetUserByID(id.UserID()); err == nil && user != nil {
+			resp["email"] = user.Email
+			resp["name"] = user.Name
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (m *AuthModule) Register(mux chi.Router) {

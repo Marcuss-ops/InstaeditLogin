@@ -29,6 +29,7 @@ export function AccountSwitcher() {
   const [isOpen, setIsOpen] = useState(false);
   const [state, setState] = useState<FetchState>({ kind: "loading" });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [sessionName, setSessionName] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const loadAccounts = useCallback(async () => {
@@ -54,6 +55,10 @@ export function AccountSwitcher() {
       const session = await fetchSession();
       if (cancelled) return;
       if (!session) return;
+      // The header shows the logged-in InstaEdit account (name or email),
+      // NOT the first linked channel — the dropdown below still lists the
+      // connected channels for quick switching.
+      setSessionName(session.name || session.email || null);
       void loadAccounts();
     })();
     return () => {
@@ -88,6 +93,11 @@ export function AccountSwitcher() {
         null
       : null;
 
+  const displayName = sessionName ?? activeAccount?.username ?? null;
+  const displayInitial = sessionName
+    ? sessionName.charAt(0).toUpperCase()
+    : activeAccount?.username.charAt(0).toUpperCase();
+
   const handleSelect = (account: PlatformAccount) => {
     if (!isPublishableAccount(account)) return;
     setSelectedId(account.id);
@@ -103,6 +113,7 @@ export function AccountSwitcher() {
         aria-expanded={isOpen}
         aria-haspopup="menu"
         aria-controls="account-switcher-menu"
+        title={displayName ?? undefined}
         className={cn(
           "flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full border transition-colors",
           isOpen
@@ -111,14 +122,14 @@ export function AccountSwitcher() {
         )}
       >
         <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center text-white text-[11px] font-bold">
-          {activeAccount ? (
-            activeAccount.username.charAt(0).toUpperCase()
+          {displayInitial ? (
+            displayInitial
           ) : (
             <User size={14} />
           )}
         </div>
         <span className="hidden sm:inline text-[13px] font-medium text-white max-w-[120px] truncate">
-          {activeAccount ? `@${activeAccount.username}` : "Account"}
+          {displayName ?? "Account"}
         </span>
         <ChevronDown
           size={14}

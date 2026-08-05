@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -113,7 +114,7 @@ func TestHandleDeleteAccountData_SharedGrant_SequentialLifecycle(t *testing.T) {
 	}
 
 	hardDelete := func(accountID string) int {
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/"+accountID+"/data", nil)
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/"+accountID+"/data", strings.NewReader(`{"confirmation":"alice_youtube"}`))
 		w := httptest.NewRecorder()
 		withBearerJWT(t, req, 1)
 		r.Setup().ServeHTTP(w, req)

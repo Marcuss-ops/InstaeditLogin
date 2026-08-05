@@ -22,9 +22,8 @@ import (
 //	username = '[deleted]'
 //	metadata = '{}'      → no provider profile data survives
 //	oauth_connection_id → SET NULL when the grant is removed (043 FK);
-//	platform_user_id    → PRESERVED: the UNIQUE(platform, platform_user_id)
-//	                      constraint and the re-attach flow both depend on it
-//	                      (re-linking the same channel revives the row).
+//	platform_user_id    → replaced with an account-scoped tombstone marker;
+//	                      provider identity is not retained in the deleted row.
 //
 // All channel-scoped data is removed in the SAME transaction:
 //
@@ -63,15 +62,21 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 		userID            int64
 		platform          string
 		platformUserID    string
+		accountStatus     string
 		oauthConnectionID int64
 	)
 	if err := tx.QueryRowContext(ctx,
-		`SELECT user_id, platform, platform_user_id, COALESCE(oauth_connection_id, 0)
+		`SELECT user_id, platform, platform_user_id, status, COALESCE(oauth_connection_id, 0)
 		   FROM platform_accounts
 		  WHERE id = $1
 		  FOR UPDATE`, accountID,
-	).Scan(&userID, &platform, &platformUserID, &oauthConnectionID); err != nil {
+	).Scan(&userID, &platform, &platformUserID, &accountStatus, &oauthConnectionID); err != nil {
 		return false, fmt.Errorf("permanently delete account: lock account %d: %w", accountID, err)
+	}
+	// A completed tombstone is an idempotent no-op. In particular, do not
+	// call a provider again or emit duplicate audit/outbox records on retry.
+	if accountStatus == models.AccountStatusDeleted {
+		return true, nil
 	}
 
 	lastOnGrant := false
@@ -140,6 +145,35 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 	); err != nil {
 		return false, fmt.Errorf("permanently delete account: remove snapshots: %w", err)
 	}
+	// These account-scoped caches and editor/batch records do not all have
+	// foreign keys with ON DELETE CASCADE because the account row is kept as
+	// a tombstone. Remove them explicitly so no provider profile, capability
+	// cache, metric history, editor draft, or batch item survives the request.
+	cleanupQueries := []struct {
+		name  string
+		query string
+	}{
+		{"capabilities", `DELETE FROM account_capabilities WHERE platform_account_id = $1`},
+		{"metric history", `DELETE FROM account_metric_history WHERE platform_account_id = $1`},
+		{"editor sessions", `DELETE FROM youtube_video_edits WHERE platform_account_id = $1`},
+		{"thumbnail batch items", `DELETE FROM youtube_thumbnail_batch_items WHERE platform_account_id = $1`},
+		// Keep destination rows that have delivery history because
+		// external_deliveries references them with ON DELETE RESTRICT.
+		// Disable and clear operational metadata instead: historical
+		// deliveries remain resolvable while the deleted channel cannot
+		// be used as a publish target.
+		{"external destinations", `UPDATE external_destinations
+		    SET enabled = FALSE,
+		        default_metadata = '{}'::jsonb,
+		        updated_at = NOW()
+		  WHERE platform_account_id = $1`},
+		{"livestreams", `DELETE FROM livestreams WHERE platform_account_id = $1`},
+	}
+	for _, cleanup := range cleanupQueries {
+		if _, err := tx.ExecContext(ctx, cleanup.query, accountID); err != nil {
+			return false, fmt.Errorf("permanently delete account: remove %s: %w", cleanup.name, err)
+		}
+	}
 	if err := cancelFutureJobsTx(tx, accountID); err != nil {
 		return false, fmt.Errorf("permanently delete account: cancel future jobs: %w", err)
 	}
@@ -149,6 +183,7 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 		`UPDATE platform_accounts
 		    SET status = 'deleted',
 		        username = '[deleted]',
+		        platform_user_id = '[deleted:' || id::text || ']',
 		        metadata = '{}'::jsonb,
 		        connected_at = NULL,
 		        last_validated_at = NULL,
@@ -165,7 +200,6 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 	payload, err := json.Marshal(map[string]interface{}{
 		"platform_account_id": accountID,
 		"platform":            platform,
-		"platform_user_id":    platformUserID,
 		"user_id":             userID,
 		"last_on_grant":       lastOnGrant,
 		"reason":              "user_requested",
@@ -182,9 +216,8 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 	}
 
 	auditMetadata, err := json.Marshal(map[string]interface{}{
-		"platform":         platform,
-		"platform_user_id": platformUserID,
-		"last_on_grant":    lastOnGrant,
+		"platform":      platform,
+		"last_on_grant": lastOnGrant,
 		"scope":            "account_data",
 	})
 	if err != nil {

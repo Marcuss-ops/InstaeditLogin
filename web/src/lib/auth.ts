@@ -23,6 +23,7 @@ export type Session = {
   userId: number;
   name: string;
   username: string;
+  email?: string;
   expiresAt: string;
   isAdmin: boolean;
 };
@@ -47,11 +48,17 @@ export async function fetchSession(): Promise<Session | null> {
 
   sessionPromise = (async () => {
     try {
-      const data = await apiClient<{ user_id: number; is_admin?: boolean }>("/api/v1/auth/me");
+      const data = await apiClient<{
+        user_id: number;
+        name?: string;
+        email?: string;
+        is_admin?: boolean;
+      }>("/api/v1/auth/me");
       sessionCache = {
         userId: data.user_id,
-        name: "",
+        name: data.name ?? "",
         username: "",
+        email: data.email ?? undefined,
         expiresAt: "",
         isAdmin: data.is_admin ?? false,
       };

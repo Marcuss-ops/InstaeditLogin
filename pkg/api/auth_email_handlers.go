@@ -27,6 +27,10 @@ type AuthEmailStore interface {
 	// Login authenticates the user + resolves the active workspace,
 	// returning the user and the active workspace_id.
 	Login(email, password string) (user *models.User, wsID int64, err error)
+	// GetUserByID returns the user row for the given id, or nil when no
+	// such user exists. Used by /api/v1/auth/me to surface the logged-in
+	// account's email/name in the SPA header.
+	GetUserByID(id int64) (*models.User, error)
 }
 
 // AuthEmailServiceAdapter adapts *services.AuthService to the local
@@ -63,6 +67,11 @@ func (a *AuthEmailServiceAdapter) Login(email, password string) (*models.User, i
 		return nil, 0, err
 	}
 	return user, wsID, nil
+}
+
+// GetUserByID projects AuthService.GetUserByID into the API interface.
+func (a *AuthEmailServiceAdapter) GetUserByID(id int64) (*models.User, error) {
+	return a.svc.GetUserByID(id)
 }
 
 // -----------------------------------------------------------------------

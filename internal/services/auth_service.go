@@ -157,6 +157,13 @@ func (s *AuthService) Login(email, password string) (*models.User, int64, error)
 	return user, activeWS, nil
 }
 
+// GetUserByID returns the user row for the given id, or nil when the
+// user does not exist. Used by /api/v1/auth/me so the SPA header can
+// show the logged-in account's email/name instead of a linked channel.
+func (s *AuthService) GetUserByID(id int64) (*models.User, error) {
+	return s.userRepo.FindByID(id)
+}
+
 // IssueSessionTokenForWorkspace has been REMOVED in SPRINT 7.4
 // (P0#14-blocco-1.4). It used Manager.Issue(userID, wsID) which minted
 // sessionID=0 — incompatible with post-SPRINT-2.1 Verify contract.
