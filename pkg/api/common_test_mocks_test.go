@@ -305,7 +305,8 @@ type mockUserStore struct {
 	countActiveOnConnectionFn func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error)
 	// disconnectPlatformAccountFn models the production atomic shared-grant
 	// operation without widening the UserStore compatibility interface.
-	disconnectPlatformAccountFn func(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)	disconnectOAuthGrantFn              func(ctx context.Context, oauthConnectionID int64) error
+	disconnectPlatformAccountFn          func(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
+	disconnectOAuthGrantFn               func(ctx context.Context, oauthConnectionID int64) error
 	disconnectOAuthGrantWithRevocationFn func(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error
 }
 

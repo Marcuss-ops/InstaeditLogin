@@ -109,6 +109,10 @@ func (r *Router) handleDeleteOAuthGrant(w http.ResponseWriter, req *http.Request
 			if err == nil || errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
 				return nil
 			}
+			var revocationErr *services.OAuthGrantRevocationError
+			if !errors.As(err, &revocationErr) {
+				return &services.OAuthGrantRevocationError{Class: services.OAuthGrantRevocationPermanent, Cause: err}
+			}
 			return err
 		})
 		if err != nil {
@@ -129,6 +133,10 @@ func (r *Router) handleDeleteOAuthGrant(w http.ResponseWriter, req *http.Request
 			return
 		}
 		if err := r.oauthGrantRevoker.RevokeGrant(req.Context(), refreshToken); err != nil && !errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+			var revocationErr *services.OAuthGrantRevocationError
+			if !errors.As(err, &revocationErr) {
+				err = &services.OAuthGrantRevocationError{Class: services.OAuthGrantRevocationPermanent, Cause: err}
+			}
 			writeOAuthGrantDisconnectError(w, err)
 			return
 		}
@@ -153,11 +161,13 @@ func writeOAuthGrantDisconnectError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation token is unavailable")
 		return
 	}
-	if errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+	if errors.As(err, &revocationErr) {
 		writeError(w, http.StatusBadGateway, "remote OAuth revocation failed")
 		return
 	}
-	writeError(w, http.StatusBadGateway, "remote OAuth revocation failed")
+	// Errors without the typed provider classification are local repository
+	// failures (for example commit/rollback errors), not remote failures.
+	writeError(w, http.StatusInternalServerError, "failed to disconnect OAuth grant")
 }
 
 // handleDeleteAccount soft-disconnects a platform account. Steps:
