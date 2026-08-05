@@ -91,6 +91,35 @@ export function GroupDetailPanel({
   };
 
   const visibleAccounts = group.accounts.filter((account) => !removedAccountIds.has(account.id));
+  const removeAccount = async (accountId: number) => {
+    const nextAccounts = visibleAccounts.filter((account) => account.id !== accountId);
+    setRemovedAccountIds((current) => new Set(current).add(accountId));
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await authedFetch(`/api/v1/groups/${group.id}/settings`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          accounts: nextAccounts.map((account) => ({
+            account_id: account.id,
+            language: languages[account.id] ?? "",
+          })),
+        }),
+      });
+      if (!response.ok) throw new Error("Unable to remove account from group");
+      await onSaved();
+    } catch (error) {
+      setRemovedAccountIds((current) => {
+        const next = new Set(current);
+        next.delete(accountId);
+        return next;
+      });
+      setSaveError(error instanceof Error ? error.message : "Unable to remove account from group");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveSettings = async () => {
     setSaving(true);
     setSaveError(null);
@@ -189,7 +218,7 @@ export function GroupDetailPanel({
                   {LANGUAGE_OPTIONS.map(({ code, flag, name }) => <option key={code} value={code}>{flag} {name}</option>)}
                 </select>
                 {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]}>!</span> : null}
-                <button type="button" onClick={() => setRemovedAccountIds((current) => new Set(current).add(a.id))} className="rounded-md p-2 text-[#9aa0aa] hover:bg-red-500/15 hover:text-red-300" aria-label={`Remove ${a.username} from group`} title="Rimuovi dal gruppo"><Trash2 size={14} /></button>
+                <button type="button" onClick={() => void removeAccount(a.id)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-red-500/15 hover:text-red-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Remove ${a.username} from group`} title="Rimuovi dal gruppo"><Trash2 size={14} /></button>
               </div>
             ))}
           </div>

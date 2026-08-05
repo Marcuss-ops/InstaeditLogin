@@ -71,17 +71,6 @@ func (r *Router) handleUpdateGroupSettings(w http.ResponseWriter, req *http.Requ
 		writeError(w, status, msg)
 		return
 	}
-	// Group membership is also a publishable workspace binding. Keep the
-	// two projections in sync so the editor and Velox can resolve every
-	// channel selected in the group.
-	if r.workspaceStore != nil {
-		for _, account := range body.Accounts {
-			if _, err := r.workspaceStore.AttachChannel(req.Context(), existing.WorkspaceID, account.AccountID, existing.Name); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to bind group channel: "+err.Error())
-				return
-			}
-		}
-	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"group_id": id,
 		"accounts": body.Accounts,

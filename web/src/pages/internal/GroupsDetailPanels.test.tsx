@@ -36,7 +36,39 @@ describe("GroupDetailPanel batch settings", () => {
     vi.restoreAllMocks();
   });
 
-  it("saves language immediately and sends remaining membership settings", async () => {
+  it("persists a removed account immediately", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const onSaved = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={group}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={onSaved}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove channel-two from group/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/groups/7/settings"),
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          accounts: [{ account_id: 101, language: "en" }],
+        }),
+      }),
+    ));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /Remove channel-two from group/i })).not.toBeInTheDocument();
+  });
+
+  it("saves language and remaining membership settings", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
     const onSaved = vi.fn();
@@ -54,26 +86,24 @@ describe("GroupDetailPanel batch settings", () => {
     );
 
     fireEvent.change(screen.getByLabelText("Language for channel-one"), { target: { value: "it" } });
-    fireEvent.click(screen.getByRole("button", { name: /Remove channel-two from group/i }));
     fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/accounts/101"),
-      expect.objectContaining({ method: "PATCH" }),
-    ));
-    expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/accounts/101"),
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ metadata: { language: "it" } }),
       }),
-    );
+    ));
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/groups/7/settings"),
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({
-          accounts: [{ account_id: 101, language: "it" }],
+          accounts: [
+            { account_id: 101, language: "it" },
+            { account_id: 102, language: "fr" },
+          ],
         }),
       }),
     );

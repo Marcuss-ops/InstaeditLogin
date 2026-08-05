@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/lib/pq"
@@ -293,11 +294,14 @@ func (r *GroupRepository) UpdateSettings(ctx context.Context, groupID, workspace
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var lockedGroupID int64
+	var (
+		lockedGroupID int64
+		groupName     string
+	)
 	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM groups WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+		`SELECT id, name FROM groups WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
 		groupID, workspaceID,
-	).Scan(&lockedGroupID); err != nil {
+	).Scan(&lockedGroupID, &groupName); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("%w: id=%d", ErrGroupNotFound, groupID)
 		}
@@ -340,6 +344,45 @@ func (r *GroupRepository) UpdateSettings(ctx context.Context, groupID, workspace
 		}
 	}
 
+	existingRows, err := tx.QueryContext(ctx,
+		`SELECT account_id FROM group_accounts WHERE group_id = $1`,
+		groupID,
+	)
+	if err != nil {
+		return fmt.Errorf("update group settings: read existing memberships: %w", err)
+	}
+	existingAccountIDs := make(map[int64]struct{}, len(updates))
+	for existingRows.Next() {
+		var accountID int64
+		if err := existingRows.Scan(&accountID); err != nil {
+			_ = existingRows.Close()
+			return fmt.Errorf("update group settings: scan existing membership: %w", err)
+		}
+		existingAccountIDs[accountID] = struct{}{}
+	}
+	if err := existingRows.Err(); err != nil {
+		_ = existingRows.Close()
+		return fmt.Errorf("update group settings: iterate existing memberships: %w", err)
+	}
+	_ = existingRows.Close()
+
+	incomingAccountIDs := make(map[int64]struct{}, len(updates))
+	for _, update := range updates {
+		incomingAccountIDs[update.AccountID] = struct{}{}
+	}
+	affectedAccountIDs := make(map[int64]struct{}, len(existingAccountIDs)+len(incomingAccountIDs))
+	for accountID := range existingAccountIDs {
+		affectedAccountIDs[accountID] = struct{}{}
+	}
+	for accountID := range incomingAccountIDs {
+		affectedAccountIDs[accountID] = struct{}{}
+	}
+	affectedIDs := make([]int64, 0, len(affectedAccountIDs))
+	for accountID := range affectedAccountIDs {
+		affectedIDs = append(affectedIDs, accountID)
+	}
+	sort.Slice(affectedIDs, func(i, j int) bool { return affectedIDs[i] < affectedIDs[j] })
+
 	if _, err := tx.ExecContext(ctx, `DELETE FROM group_accounts WHERE group_id = $1`, groupID); err != nil {
 		return fmt.Errorf("update group settings: clear memberships: %w", err)
 	}
@@ -358,6 +401,47 @@ func (r *GroupRepository) UpdateSettings(ctx context.Context, groupID, workspace
 			update.Language, update.AccountID, userID,
 		); err != nil {
 			return fmt.Errorf("update group settings: update language %d: %w", update.AccountID, err)
+		}
+	}
+
+	if len(updates) > 0 {
+		incomingIDs := make([]int64, 0, len(updates))
+		for _, update := range updates {
+			incomingIDs = append(incomingIDs, update.AccountID)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO workspace_channels (workspace_id, platform_account_id, group_name, enabled)
+			 SELECT $1, ids.account_id, $2, TRUE
+			   FROM unnest($3::bigint[]) AS ids(account_id)
+			 ON CONFLICT (workspace_id, platform_account_id)
+			 DO UPDATE SET group_name = EXCLUDED.group_name`,
+			workspaceID, groupName, pq.Array(incomingIDs),
+		); err != nil {
+			return fmt.Errorf("update group settings: create workspace channels: %w", err)
+		}
+	}
+
+	// workspace_channels stores one group_name per workspace/account pair,
+	// while group_accounts allows membership in multiple groups. Recompute
+	// the binding from the memberships that remain after this replacement,
+	// preferring the group being edited and then a deterministic fallback.
+	if len(affectedIDs) > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE workspace_channels AS wc
+			 SET group_name = (
+			     SELECT g.name
+			       FROM group_accounts AS ga
+			       JOIN groups AS g ON g.id = ga.group_id
+			      WHERE ga.account_id = wc.platform_account_id
+			        AND g.workspace_id = $1
+			      ORDER BY CASE WHEN g.id = $2 THEN 0 ELSE 1 END, g.name, g.id
+			      LIMIT 1
+			 )
+			 WHERE wc.workspace_id = $1
+			   AND wc.platform_account_id = ANY($3)`,
+			workspaceID, groupID, pq.Array(affectedIDs),
+		); err != nil {
+			return fmt.Errorf("update group settings: resync workspace channels: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
