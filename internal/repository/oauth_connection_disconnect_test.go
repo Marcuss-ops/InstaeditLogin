@@ -121,8 +121,11 @@ func TestUserRepository_DisconnectOAuthGrantWithRevocationTx_RollsBackBeforeLoca
 	repo := repository.NewUserRepository(db)
 
 	expectGrantDisconnectLocks(mock, 55, 9)
+	mock.ExpectQuery(`SELECT provider FROM oauth_connections WHERE id = $1`).
+		WithArgs(int64(55)).
+		WillReturnRows(sqlmock.NewRows([]string{"provider"}).AddRow("youtube"))
 	mock.ExpectRollback()
-	if err := repo.DisconnectOAuthGrantWithRevocationTx(context.Background(), 55, func(context.Context, interfaceTx) error {
+	if err := repo.DisconnectOAuthGrantWithAccountRevocationTx(context.Background(), 55, 21, "youtube", func(context.Context, interfaceTx) error {
 		return errors.New("remote provider unavailable")
 	}); err == nil {
 		t.Fatal("remote revocation failure must roll back before local mutation")

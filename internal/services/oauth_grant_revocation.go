@@ -13,6 +13,11 @@ type OAuthGrantRevocationClass string
 const (
 	OAuthGrantRevocationTransient OAuthGrantRevocationClass = "transient"
 	OAuthGrantRevocationPermanent OAuthGrantRevocationClass = "permanent"
+
+	// OAuthGrantRevocationTimeout bounds the provider call while the local
+	// grant transaction holds its row locks. Transient timeout failures leave
+	// the transaction untouched and are explicitly retryable by the caller.
+	OAuthGrantRevocationTimeout = 15 * time.Second
 )
 
 // OAuthGrantRevocationError is a redacted provider error. It deliberately

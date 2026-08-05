@@ -24,7 +24,7 @@ import (
 // enforces the disconnected state and removes any leftover token rows, while
 // recording the requested operation in the audit/outbox trail.
 func (r *UserRepository) DisconnectOAuthGrantTx(ctx context.Context, oauthConnectionID int64) error {
-	return r.disconnectOAuthGrantTx(ctx, oauthConnectionID, nil)
+	return r.disconnectOAuthGrantTx(ctx, oauthConnectionID, 0, "", nil)
 }
 
 // DisconnectOAuthGrantWithRevocationTx locks the grant and linked accounts,
@@ -34,10 +34,18 @@ func (r *UserRepository) DisconnectOAuthGrantTx(ctx context.Context, oauthConnec
 // retryable. The callback receives the transaction so vault token reads share
 // the exact grant lock and cannot race token rotation.
 func (r *UserRepository) DisconnectOAuthGrantWithRevocationTx(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error {
-	return r.disconnectOAuthGrantTx(ctx, oauthConnectionID, revoke)
+	return r.disconnectOAuthGrantTx(ctx, oauthConnectionID, 0, "", revoke)
 }
 
-func (r *UserRepository) disconnectOAuthGrantTx(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error {
+// DisconnectOAuthGrantWithAccountRevocationTx additionally verifies, while
+// holding the grant lock, that accountID still belongs to oauthConnectionID.
+// This closes the re-link race between the HTTP account lookup and the grant
+// cleanup transaction.
+func (r *UserRepository) DisconnectOAuthGrantWithAccountRevocationTx(ctx context.Context, oauthConnectionID, accountID int64, expectedProvider string, revoke func(context.Context, *sql.Tx) error) error {
+	return r.disconnectOAuthGrantTx(ctx, oauthConnectionID, accountID, expectedProvider, revoke)
+}
+
+func (r *UserRepository) disconnectOAuthGrantTx(ctx context.Context, oauthConnectionID, accountID int64, expectedProvider string, revoke func(context.Context, *sql.Tx) error) error {
 	if oauthConnectionID <= 0 {
 		return fmt.Errorf("disconnect OAuth grant: invalid id %d", oauthConnectionID)
 	}
@@ -96,6 +104,31 @@ func (r *UserRepository) disconnectOAuthGrantTx(ctx context.Context, oauthConnec
 	}
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("disconnect OAuth grant: close linked accounts: %w", err)
+	}
+
+	if expectedProvider != "" {
+		var provider string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT provider FROM oauth_connections WHERE id = $1`, oauthConnectionID,
+		).Scan(&provider); err != nil {
+			return fmt.Errorf("disconnect OAuth grant: read provider: %w", err)
+		}
+		if provider != expectedProvider {
+			return fmt.Errorf("disconnect OAuth grant: provider mismatch")
+		}
+	}
+
+	if accountID > 0 {
+		found := false
+		for _, linkedAccountID := range accountIDs {
+			if linkedAccountID == accountID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("disconnect OAuth grant: account %d is not linked to grant %d", accountID, oauthConnectionID)
+		}
 	}
 
 	if revoke != nil {

@@ -13,6 +13,41 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
+func TestHandleDeleteOAuthGrant_RejectsNonYouTubeBeforeRevocation(t *testing.T) {
+	grantID := int64(55)
+	account := ownedAccountFixture(1, models.PlatformInstagram)
+	account.OAuthConnectionID = &grantID
+	remoteCalled := false
+	localCalled := false
+	store := &mockUserStore{
+		findPlatformAccountFn: func(int64) (*models.PlatformAccount, error) { return account, nil },
+		disconnectOAuthGrantFn: func(context.Context, int64) error {
+			localCalled = true
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{getRefreshTokenFn: func(context.Context, int64) (string, error) {
+		return "provider-token", nil
+	}}
+	r := newTestRouter(&mockProvider{platform: models.PlatformInstagram}, store, "", WithCredentialVault(vault))
+	r.oauthGrantRevoker = &fakeOAuthGrantRevoker{revokeFn: func(context.Context, string) error {
+		remoteCalled = true
+		return nil
+	}}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/oauth-grant", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("status: got %d, want 501", w.Code)
+	}
+	if remoteCalled || localCalled {
+		t.Fatalf("non-YouTube grant must not revoke or disconnect: remote=%v local=%v", remoteCalled, localCalled)
+	}
+}
+
 func TestHandleDeleteOAuthGrant_RevokesRemotelyBeforeLocalTransaction(t *testing.T) {
 	grantID := int64(55)
 	account := ownedAccountFixture(1, models.PlatformYouTube)

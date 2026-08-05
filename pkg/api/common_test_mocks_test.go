@@ -418,7 +418,7 @@ func (m *mockUserStore) DisconnectOAuthGrantTx(ctx context.Context, oauthConnect
 	return nil
 }
 
-func (m *mockUserStore) DisconnectOAuthGrantWithRevocationTx(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error {
+func (m *mockUserStore) DisconnectOAuthGrantWithAccountRevocationTx(ctx context.Context, oauthConnectionID, accountID int64, expectedProvider string, revoke func(context.Context, *sql.Tx) error) error {
 	if m.disconnectOAuthGrantWithRevocationFn != nil {
 		return m.disconnectOAuthGrantWithRevocationFn(ctx, oauthConnectionID, revoke)
 	}

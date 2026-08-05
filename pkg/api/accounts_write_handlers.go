@@ -65,7 +65,7 @@ type oauthGrantDisconnectStore interface {
 }
 
 type oauthGrantDisconnectWithRevocationStore interface {
-	DisconnectOAuthGrantWithRevocationTx(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error
+	DisconnectOAuthGrantWithAccountRevocationTx(ctx context.Context, oauthConnectionID, accountID int64, expectedProvider string, revoke func(context.Context, *sql.Tx) error) error
 }
 
 // handleDeleteOAuthGrant disconnects the complete OAuth grant associated with
@@ -85,6 +85,10 @@ func (r *Router) handleDeleteOAuthGrant(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusConflict, "account has no OAuth grant")
 		return
 	}
+	if account.Platform != models.PlatformYouTube {
+		writeError(w, http.StatusNotImplemented, "remote OAuth grant revocation is only supported for YouTube")
+		return
+	}
 	store, ok := r.userRepo.(oauthGrantDisconnectStore)
 	if !ok {
 		writeError(w, http.StatusNotImplemented, "OAuth grant disconnect is not configured")
@@ -100,12 +104,14 @@ func (r *Router) handleDeleteOAuthGrant(w http.ResponseWriter, req *http.Request
 			writeError(w, http.StatusServiceUnavailable, "OAuth refresh-token access is not configured")
 			return
 		}
-		err := revokingStore.DisconnectOAuthGrantWithRevocationTx(req.Context(), *account.OAuthConnectionID, func(ctx context.Context, tx *sql.Tx) error {
+		err := revokingStore.DisconnectOAuthGrantWithAccountRevocationTx(req.Context(), *account.OAuthConnectionID, account.ID, models.PlatformYouTube, func(ctx context.Context, tx *sql.Tx) error {
 			refreshToken, err := reader.GetRefreshTokenForOAuthConnectionTx(ctx, tx, *account.OAuthConnectionID)
 			if err != nil || refreshToken == "" {
 				return fmt.Errorf("OAuth grant revocation token is unavailable")
 			}
-			err = r.oauthGrantRevoker.RevokeGrant(ctx, refreshToken)
+			revokeCtx, cancel := context.WithTimeout(ctx, services.OAuthGrantRevocationTimeout)
+			defer cancel()
+			err = r.oauthGrantRevoker.RevokeGrant(revokeCtx, refreshToken)
 			if err == nil || errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
 				return nil
 			}
@@ -132,7 +138,10 @@ func (r *Router) handleDeleteOAuthGrant(w http.ResponseWriter, req *http.Request
 			writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation token is unavailable")
 			return
 		}
-		if err := r.oauthGrantRevoker.RevokeGrant(req.Context(), refreshToken); err != nil && !errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+		revokeCtx, cancel := context.WithTimeout(req.Context(), services.OAuthGrantRevocationTimeout)
+		err = r.oauthGrantRevoker.RevokeGrant(revokeCtx, refreshToken)
+		cancel()
+		if err != nil && !errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
 			var revocationErr *services.OAuthGrantRevocationError
 			if !errors.As(err, &revocationErr) {
 				err = &services.OAuthGrantRevocationError{Class: services.OAuthGrantRevocationPermanent, Cause: err}
