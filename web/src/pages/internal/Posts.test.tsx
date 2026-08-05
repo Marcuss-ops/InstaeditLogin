@@ -158,7 +158,9 @@ describe("InternalPosts", () => {
       expect(screen.getByRole("heading", { name: /Posts/i })).toBeInTheDocument();
     });
 
-    const actionsButton = screen.getByRole("button", { name: /Actions/i });
+    // Il bottone "Actions" appare solo dopo i fetch async: lo aspettiamo
+    // esplicitamente (findByRole) per evitare flakiness in CI.
+    const actionsButton = await screen.findByRole("button", { name: /Actions/i });
     fireEvent.click(actionsButton);
     expect(screen.getByText("Publish now")).toBeInTheDocument();
 
@@ -205,7 +207,9 @@ describe("InternalPosts", () => {
       expect(screen.getByRole("heading", { name: /Posts/i })).toBeInTheDocument();
     });
 
-    const actionsButton = screen.getByRole("button", { name: /Actions/i });
+    // Il bottone "Actions" appare solo dopo i fetch async: lo aspettiamo
+    // esplicitamente (findByRole) per evitare flakiness in CI.
+    const actionsButton = await screen.findByRole("button", { name: /Actions/i });
     fireEvent.click(actionsButton);
     expect(screen.getByText("Publish now")).toBeInTheDocument();
 
@@ -252,7 +256,9 @@ describe("InternalPosts", () => {
       expect(screen.getByRole("heading", { name: /Posts/i })).toBeInTheDocument();
     });
 
-    const actionsButton = screen.getByRole("button", { name: /Actions/i });
+    // Il bottone "Actions" appare solo dopo i fetch async: lo aspettiamo
+    // esplicitamente (findByRole) per evitare flakiness in CI.
+    const actionsButton = await screen.findByRole("button", { name: /Actions/i });
     fireEvent.click(actionsButton);
     const publishButton = screen.getByText("Publish now");
     expect(publishButton).toBeInTheDocument();
