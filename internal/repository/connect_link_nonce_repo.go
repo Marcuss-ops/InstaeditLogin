@@ -38,21 +38,29 @@ var (
 	ErrNonceConsumed = errors.New("connect-link nonce already consumed")
 )
 
-// Create persists a fresh jti with its expected channel id and expiry.
-// The jti is the JWT's RegisteredClaims.ID (formerly exposed as a
-// custom "nonce" claim).
+// Create persists a fresh jti with its optional expected channel id and
+// expiry. The jti is the JWT's RegisteredClaims.ID (formerly exposed as
+// a custom "nonce" claim).
+//
+// expectedChannelID is REQUIRED for admin connect-links but OPTIONAL for
+// the YouTube OAuth Client Pool login flow (a generic "add channel"
+// cannot pin a channel id before Google consent — disambiguation happens
+// in the callback). An empty value is stored as NULL (migration 101);
+// the caller (IssueConnectLinkState) still enforces the non-empty
+// invariant for the admin connect-link path.
 func (r *ConnectLinkNonceRepository) Create(jti, expectedChannelID string, expiresAt time.Time) error {
 	if jti == "" {
 		return errors.New("connect-link jti: jti is required")
 	}
-	if expectedChannelID == "" {
-		return errors.New("connect-link jti: expected_channel_id is required")
+	var channelID any
+	if expectedChannelID != "" {
+		channelID = expectedChannelID
 	}
 	_, err := r.db.Exec(
 		`INSERT INTO connect_link_nonces (nonce, expected_channel_id, expires_at, created_at)
 		 VALUES ($1, $2, $3, NOW())
 		 ON CONFLICT (nonce) DO NOTHING`,
-		jti, expectedChannelID, expiresAt,
+		jti, channelID, expiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create connect-link jti: %w", err)

@@ -185,7 +185,7 @@ func TestHandleDeleteAccountData_Fallback_TombstonesViaUpdatePlatformAccount(t *
 }
 
 // TestHandleDeleteAccountData_AlreadyDeleted_IsIdempotent returns 204 without
-// requiring the original channel name or invoking the mutation store again.
+// requiring a body or invoking the mutation store again.
 func TestHandleDeleteAccountData_AlreadyDeleted_IsIdempotent(t *testing.T) {
 	owner := ownedAccountFixture(1, models.PlatformYouTube)
 	owner.Status = models.AccountStatusDeleted

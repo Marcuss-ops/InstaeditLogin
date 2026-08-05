@@ -3,6 +3,7 @@ package repository_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -198,7 +199,9 @@ func TestUserRepository_PermanentlyDeleteAccount_CancelsFutureJobs(t *testing.T)
 	repo := repository.NewUserRepository(db)
 	expectPermanentDeleteTransaction(mock, 21, 55, 0, []int64{100})
 
-	handled, err := repo.PermanentlyDeleteAccountTx(context.Background(), 21, nil)
+	handled, err := repo.PermanentlyDeleteAccountTx(context.Background(), 21, func(context.Context, *sql.Tx) error {
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("PermanentlyDeleteAccountTx: %v", err)
 	}
@@ -210,8 +213,36 @@ func TestUserRepository_PermanentlyDeleteAccount_CancelsFutureJobs(t *testing.T)
 	}
 }
 
-// TestUserRepository_PermanentlyDeleteAccount_InvalidID fails fast without
-// touching the database.
+func TestUserRepository_PermanentlyDeleteAccount_LastChannel_RequiresRevoke(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT user_id, platform, platform_user_id, status, COALESCE(oauth_connection_id, 0)
+   FROM platform_accounts
+  WHERE id = $1
+  FOR UPDATE`).
+		WithArgs(int64(21)).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "platform", "platform_user_id", "status", "oauth_connection_id"}).AddRow(1, "youtube", "UC-xyz", "active", 55))
+	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").WithArgs(int64(55)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT COUNT(*)
+   FROM platform_accounts
+  WHERE oauth_connection_id = $1
+    AND status = 'active'
+    AND id <> $2`).WithArgs(int64(55), int64(21)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectRollback()
+
+	handled, err := repo.PermanentlyDeleteAccountTx(context.Background(), 21, nil)
+	if err == nil || !strings.Contains(err.Error(), "remote revoke is not configured") {
+		t.Fatalf("want missing-revoke error, got handled=%v err=%v", handled, err)
+	}
+	if handled {
+		t.Fatal("handled must be false when last-grant revocation is unavailable")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestUserRepository_PermanentlyDeleteAccount_InvalidID(t *testing.T) {
 	db, mock := newMockUserDB(t)
 	repo := repository.NewUserRepository(db)

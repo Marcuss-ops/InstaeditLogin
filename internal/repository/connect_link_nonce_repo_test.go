@@ -47,6 +47,42 @@ func TestConnectLinkNonceRepository_CreateAndConsume(t *testing.T) {
 	}
 }
 
+// TestConnectLinkNonceRepository_Create_EmptyExpectedChannel pins the
+// YouTube OAuth Client Pool contract (migration 101): a generic "add
+// channel" login flow has no channel id yet, so Create must accept an
+// empty expectedChannelID and store NULL — instead of failing with 500
+// before the operator reaches Google's consent screen. The jti
+// single-use requirement is unchanged.
+func TestConnectLinkNonceRepository_Create_EmptyExpectedChannel(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewConnectLinkNonceRepository(db)
+	nonce := "abcdef0123456789abcdef0123456789"
+	expiresAt := time.Now().Add(30 * time.Minute)
+
+	// Empty channel id → NULL is inserted, not an empty string.
+	mock.ExpectExec(`INSERT INTO connect_link_nonces`).
+		WithArgs(nonce, nil, expiresAt).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := repo.Create(nonce, "", expiresAt); err != nil {
+		t.Fatalf("Create with empty expected_channel_id must succeed: %v", err)
+	}
+
+	// The jti requirement is still enforced.
+	if err := repo.Create("", "UC1234567890abcdefghij", expiresAt); err == nil {
+		t.Fatal("Create with empty jti must fail")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("mock expectations: %v", err)
+	}
+}
+
 func TestConnectLinkNonceRepository_Consume_AlreadyConsumed(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {

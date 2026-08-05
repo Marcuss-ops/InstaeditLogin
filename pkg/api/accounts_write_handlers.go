@@ -239,8 +239,11 @@ func writeAccountDeleteError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadGateway, "remote OAuth revocation failed")
 		return
 	}
-	if strings.Contains(err.Error(), "token is unavailable") {
-		writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation token is unavailable")
+	if strings.Contains(err.Error(), "token is unavailable") ||
+		strings.Contains(err.Error(), "revoke is not configured") ||
+		strings.Contains(err.Error(), "revocation is not configured") ||
+		strings.Contains(err.Error(), "refresh-token access is not configured") {
+		writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation is unavailable; retry later")
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "failed to permanently delete account")
@@ -299,7 +302,11 @@ func (r *Router) handleDeleteAccountData(w http.ResponseWriter, req *http.Reques
 		writeError(w, http.StatusBadRequest, "confirmation is required")
 		return
 	}
-	if body.Confirmation != account.Username {
+	expectedConfirmation := account.Username
+	if expectedConfirmation == "" {
+		expectedConfirmation = "#" + strconv.FormatInt(account.ID, 10)
+	}
+	if body.Confirmation != expectedConfirmation {
 		writeError(w, http.StatusBadRequest, "confirmation must exactly match the channel name")
 		return
 	}
@@ -311,25 +318,30 @@ func (r *Router) handleDeleteAccountData(w http.ResponseWriter, req *http.Reques
 	// grant lock is held and before the token rows are removed.
 	var revoke func(context.Context, *sql.Tx) error
 	if account.OAuthConnectionID != nil && *account.OAuthConnectionID > 0 &&
-		account.Platform == models.PlatformYouTube && r.youtubeRevoker != nil {
-		if reader, ok := r.vault.(RefreshTokenTxReader); ok {
-			revoke = func(ctx context.Context, tx *sql.Tx) error {
-				refreshToken, err := reader.GetRefreshTokenForOAuthConnectionTx(ctx, tx, *account.OAuthConnectionID)
-				if err != nil || refreshToken == "" {
-					return fmt.Errorf("OAuth grant revocation token is unavailable")
-				}
-				revokeCtx, cancel := context.WithTimeout(ctx, services.OAuthGrantRevocationTimeout)
-				defer cancel()
-				err = r.youtubeRevoker.Revoke(revokeCtx, refreshToken)
-				if err == nil || errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
-					return nil
-				}
-				var revocationErr *services.OAuthGrantRevocationError
-				if !errors.As(err, &revocationErr) {
-					return &services.OAuthGrantRevocationError{Class: services.OAuthGrantRevocationPermanent, Cause: err}
-				}
-				return err
+		account.Platform == models.PlatformYouTube {
+		revoke = func(ctx context.Context, tx *sql.Tx) error {
+			if r.youtubeRevoker == nil {
+				return fmt.Errorf("OAuth grant revocation is not configured")
 			}
+			reader, ok := r.vault.(RefreshTokenTxReader)
+			if !ok {
+				return fmt.Errorf("OAuth grant refresh-token access is not configured")
+			}
+			refreshToken, err := reader.GetRefreshTokenForOAuthConnectionTx(ctx, tx, *account.OAuthConnectionID)
+			if err != nil || refreshToken == "" {
+				return fmt.Errorf("OAuth grant revocation token is unavailable")
+			}
+			revokeCtx, cancel := context.WithTimeout(ctx, services.OAuthGrantRevocationTimeout)
+			defer cancel()
+			err = r.youtubeRevoker.Revoke(revokeCtx, refreshToken)
+			if err == nil || errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+				return nil
+			}
+			var revocationErr *services.OAuthGrantRevocationError
+			if !errors.As(err, &revocationErr) {
+				return &services.OAuthGrantRevocationError{Class: services.OAuthGrantRevocationPermanent, Cause: err}
+			}
+			return err
 		}
 	}
 

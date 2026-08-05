@@ -95,17 +95,20 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 			return false, fmt.Errorf("permanently delete account: count active siblings: %w", err)
 		}
 		lastOnGrant = activeSiblings == 0
-		if lastOnGrant {
-			if revoke != nil {
-				// Remote provider revocation runs while the grant lock is
-				// held and BEFORE the token rows are removed (the refresh
-				// token is needed for the provider call). A failure rolls
-				// the whole delete back — the caller maps it to a typed
-				// 502/503 via the OAuth-grant error writer.
-				if err := revoke(ctx, tx); err != nil {
-					return false, fmt.Errorf("permanently delete account: remote revoke: %w", err)
-				}
+		if lastOnGrant && platform == models.PlatformYouTube {
+			if revoke == nil {
+				return false, fmt.Errorf("permanently delete account: remote revoke is not configured")
 			}
+			// Remote provider revocation runs while the grant lock is
+			// held and BEFORE the token rows are removed (the refresh
+			// token is needed for the provider call). A failure rolls
+			// the whole delete back — the caller maps it to a typed
+			// 502/503 via the OAuth-grant error writer.
+			if err := revoke(ctx, tx); err != nil {
+				return false, fmt.Errorf("permanently delete account: remote revoke: %w", err)
+			}
+		}
+		if lastOnGrant {
 			if _, err := tx.ExecContext(ctx,
 				`DELETE FROM tokens WHERE oauth_connection_id = $1`, oauthConnectionID,
 			); err != nil {
@@ -178,7 +181,7 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 		return false, fmt.Errorf("permanently delete account: cancel future jobs: %w", err)
 	}
 
-	// Tombstone the row (kept for FK integrity; platform_user_id preserved).
+	// Tombstone the row (kept for FK integrity; provider identity anonymized).
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE platform_accounts
 		    SET status = 'deleted',
@@ -218,7 +221,7 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 	auditMetadata, err := json.Marshal(map[string]interface{}{
 		"platform":      platform,
 		"last_on_grant": lastOnGrant,
-		"scope":            "account_data",
+		"scope":         "account_data",
 	})
 	if err != nil {
 		return false, fmt.Errorf("permanently delete account: marshal audit metadata: %w", err)
