@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -416,6 +417,111 @@ func TestHandleCallback_YouTubePool_MissingClientCookie_FailsClosed(t *testing.T
 	}
 	if poolProvider.handleCallbackWithClientCalls != 0 {
 		t.Errorf("no pool exchange must run without the client cookie; got %d calls", poolProvider.handleCallbackWithClientCalls)
+	}
+}
+
+// TestHandleCallback_YouTubePool_ReconnectReusesExistingConnection is
+// the R7 end-to-end reconnect certification at the router layer: a
+// SECOND callback for the SAME expected_channel — same subject, same
+// oauth_client_key from the state — must NOT create a second
+// platform_account. The attach layer returns ErrAccountAlreadyLinked,
+// the callback loads the existing row, and AuthorizeChannel is invoked
+// again on the SAME account id with the SAME pool client, persisting
+// the refreshed token again (one channel → one active connection →
+// one canonical refresh token).
+//
+// Connection-identity reuse itself (the subject-keyed UPSERT returning
+// the SAME oauth_connection_id) is certified at the service layer
+// (TestAuthorizeChannel_ReconnectSameSubjectReusesConnection) and the
+// migration 100 uniqueness constraint
+// (TestMigration100_ActiveGrantUniquePerChannelClient); the router
+// layer certifies the plumbing: existing account re-threaded, no
+// parallel row created, client key stable across reconnects.
+func TestHandleCallback_YouTubePool_ReconnectReusesExistingConnection(t *testing.T) {
+	const expectedChannel = "UC012345678901234567890123"
+	poolProvider := &mockPoolProvider{
+		mockProvider: mockProvider{platform: "youtube"},
+		discoverFn: func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error) {
+			return []*services.DiscoveredAccount{{Profile: models.PlatformProfile{PlatformUserID: expectedChannel, Username: "Pool Channel"}}}, nil
+		},
+		poolCallbackFn: func(ctx context.Context, state, code string, client *services.YouTubeOAuthClientConfig) (*models.PlatformProfile, *models.TokenData, error) {
+			return &models.PlatformProfile{PlatformUserID: "g-acc", Username: "G"}, &models.TokenData{
+				AccessToken:       "pool-bearer-reconnect",
+				ProviderSubjectID: "google-subject-reconnect",
+				TokenType:         models.TokenTypeBearer,
+				ExpiresIn:         3600,
+			}, nil
+		},
+	}
+
+	attachCalls := 0
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			attachCalls++
+			if attachCalls == 1 {
+				// First callback: brand-new channel → create the account.
+				return &models.PlatformAccount{ID: 10, UserID: userID, Platform: platform, PlatformUserID: profile.PlatformUserID}, nil
+			}
+			// Reconnect: already linked — the callback must load the
+			// existing row instead of creating a parallel account.
+			return nil, repository.ErrAccountAlreadyLinked
+		},
+		findPlatformAccountByTupleFn: func(platform, platformUserID string) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, UserID: 1, Platform: platform, PlatformUserID: platformUserID}, nil
+		},
+	}
+	nonceStore := newFakeConnectLinkNonceStore()
+	authorizer := &fakeChannelAuthorizer{}
+	r := newTestRouter(poolProvider, store, "",
+		WithConnectLinkNonceStore(nonceStore),
+		WithYouTubeOAuthClientRegistry(newTestPoolRegistry(t)),
+		WithChannelAuthorizer(authorizer),
+	)
+
+	doCallback := func() int {
+		signed, nonce, expiresAt, err := r.auth.IssueOAuthFlowState(expectedChannel, 1)
+		if err != nil {
+			t.Fatalf("IssueOAuthFlowState: %v", err)
+		}
+		if err := nonceStore.Create(nonce, expectedChannel, expiresAt); err != nil {
+			t.Fatalf("Create nonce: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state="+url.QueryEscape(signed), nil)
+		setOAuthClientCookieForTest(req, "youtube", nonce, "youtube_pool_a")
+		withBearerJWT(t, req, 1)
+		w := httptest.NewRecorder()
+		r.Setup().ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// First connect: account 10 is created and authorized.
+	if code := doCallback(); code != http.StatusOK {
+		t.Fatalf("first callback: want 200, got %d", code)
+	}
+	// Reconnect: SAME channel, SAME client key from state → the existing
+	// account 10 is re-authorized on the SAME connection (777).
+	if code := doCallback(); code != http.StatusOK {
+		t.Fatalf("reconnect callback: want 200, got %d", code)
+	}
+
+	if authorizer.authorizeCalls.Load() != 2 {
+		t.Errorf("AuthorizeChannel calls: want 2 (connect + reconnect), got %d", authorizer.authorizeCalls.Load())
+	}
+	// The reconnect must thread the SAME account id — no parallel row.
+	if authorizer.lastAccountID != 10 {
+		t.Errorf("last account id: want 10 (existing account reused), got %d", authorizer.lastAccountID)
+	}
+	if authorizer.lastClientKey != "youtube_pool_a" {
+		t.Errorf("reconnect must keep the state's oauth_client_key youtube_pool_a, got %q", authorizer.lastClientKey)
+	}
+	if attachCalls != 2 {
+		t.Errorf("attach calls: want 2 (create + already-linked sentinel), got %d", attachCalls)
+	}
+	// Both passes must persist the (refreshed) canonical token for the
+	// SAME account — the reconnect rewrites the grant's token in place
+	// instead of leaving a second token lineage behind.
+	if writes := authorizer.tokenWriteCount(); writes != 2 {
+		t.Errorf("token writes: want 2 (connect + reconnect), got %d", writes)
 	}
 }
 

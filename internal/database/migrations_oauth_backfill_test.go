@@ -5,6 +5,7 @@ package database
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -242,6 +243,126 @@ func TestMigration084_AllowsMultipleYouTubeChannelsPerOAuthSubject(t *testing.T)
 		if _, err := db.Exec(string(body)); err != nil {
 			t.Fatalf("direct idempotent execution of migration %s: %v", name, err)
 		}
+	}
+}
+
+// TestMigration100_ActiveGrantUniquePerChannelClient certifies the R7
+// anti-duplicate invariant enforced by migration 100
+// (oauth_active_channel_client_uq): one ACTIVE oauth_connections row
+// per (provider, channel/resource, pool client). A channel must never
+// hold two live grants on the same pool client — each live grant owns
+// its own refresh token, so a duplicate would double-count tokens
+// against Google's 100-refresh-token cap per (account, client) pair
+// and recreate the "one channel → five old connections → five active
+// refresh tokens" failure mode.
+//
+// The partial index applies ONLY to status='active': the reconnect
+// flow may move a grant through non-active states
+// (pending_authorization, reauth_required, disconnected) without
+// tripping the constraint — only the final active grant wins.
+func TestMigration100_ActiveGrantUniquePerChannelClient(t *testing.T) {
+	db, cleanup := postgres.StartTestPostgres(t)
+	defer cleanup()
+
+	if err := RunMigrationsUpTo(db, 99); err != nil {
+		t.Fatalf("RunMigrationsUpTo(99): %v", err)
+	}
+	body, err := migrationFiles.ReadFile("migrations/100_oauth_active_channel_client_uq.sql")
+	if err != nil {
+		t.Fatalf("read migration 100: %v", err)
+	}
+	if _, err := db.Exec(string(body)); err != nil {
+		t.Fatalf("apply migration 100: %v", err)
+	}
+
+	var userID int64
+	if err := db.QueryRow(`
+		INSERT INTO users (email, name)
+		VALUES ('migration-100@example.invalid', 'Migration 100')
+		RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	// The migration 099 column default must label legacy inserts as
+	// youtube_pool_a — never an empty string.
+	if _, err := db.Exec(`
+		INSERT INTO oauth_connections (
+			user_id, provider, provider_subject_id, provider_resource_id, status
+		) VALUES ($1, 'youtube', 'subject-legacy-100', 'channel-legacy-100', 'active')`,
+		userID); err != nil {
+		t.Fatalf("insert legacy-default connection: %v", err)
+	}
+	var defaultKey string
+	if err := db.QueryRow(`
+		SELECT oauth_client_key FROM oauth_connections
+		 WHERE provider_subject_id = 'subject-legacy-100'`).Scan(&defaultKey); err != nil {
+		t.Fatalf("read legacy default oauth_client_key: %v", err)
+	}
+	if defaultKey != "youtube_pool_a" {
+		t.Fatalf("migration 099 default: got %q want youtube_pool_a", defaultKey)
+	}
+
+	// First ACTIVE grant for (youtube, channel-100, youtube_pool_a).
+	if _, err := db.Exec(`
+		INSERT INTO oauth_connections (
+			user_id, provider, provider_subject_id, provider_resource_id, oauth_client_key, status
+		) VALUES ($1, 'youtube', 'subject-a-100', 'channel-100', 'youtube_pool_a', 'active')`,
+		userID); err != nil {
+		t.Fatalf("insert first active grant: %v", err)
+	}
+
+	// A SECOND ACTIVE grant for the SAME (channel, client) — even under
+	// a DIFFERENT subject — must be rejected. This is the deliberate
+	// multi-tenant no-go: two different Google accounts managing one
+	// channel on the same pool client would double-count tokens.
+	if _, err := db.Exec(`
+		INSERT INTO oauth_connections (
+			user_id, provider, provider_subject_id, provider_resource_id, oauth_client_key, status
+		) VALUES ($1, 'youtube', 'subject-b-100', 'channel-100', 'youtube_pool_a', 'active')`,
+		userID); err == nil {
+		t.Fatal("duplicate ACTIVE grant for (channel-100, youtube_pool_a) unexpectedly succeeded")
+	} else {
+		var pgErr *pq.Error
+		if !errors.As(err, &pgErr) || pgErr.Constraint != "oauth_active_channel_client_uq" {
+			t.Fatalf("duplicate ACTIVE grant: want unique violation on oauth_active_channel_client_uq, got %v", err)
+		}
+	}
+
+	// The same (channel, client) in a NON-active status must be allowed:
+	// the reconnect flow transitions grants through pending_authorization
+	// / reauth_required without tripping the partial index.
+	if _, err := db.Exec(`
+		INSERT INTO oauth_connections (
+			user_id, provider, provider_subject_id, provider_resource_id, oauth_client_key, status
+		) VALUES ($1, 'youtube', 'subject-c-100', 'channel-100', 'youtube_pool_a', 'reauth_required')`,
+		userID); err != nil {
+		t.Fatalf("non-active grant for (channel-100, youtube_pool_a) must be allowed: %v", err)
+	}
+
+	// A DIFFERENT pool client for the same channel is a different grant
+	// owner (the 50/50 pool split) — must be allowed.
+	if _, err := db.Exec(`
+		INSERT INTO oauth_connections (
+			user_id, provider, provider_subject_id, provider_resource_id, oauth_client_key, status
+		) VALUES ($1, 'youtube', 'subject-d-100', 'channel-100', 'youtube_pool_b', 'active')`,
+		userID); err != nil {
+		t.Fatalf("active grant for (channel-100, youtube_pool_b) must be allowed: %v", err)
+	}
+
+	// A DIFFERENT channel on the same pool client is a distinct grant —
+	// must be allowed.
+	if _, err := db.Exec(`
+		INSERT INTO oauth_connections (
+			user_id, provider, provider_subject_id, provider_resource_id, oauth_client_key, status
+		) VALUES ($1, 'youtube', 'subject-e-100', 'channel-200', 'youtube_pool_a', 'active')`,
+		userID); err != nil {
+		t.Fatalf("active grant for (channel-200, youtube_pool_a) must be allowed: %v", err)
+	}
+
+	// Direct idempotent re-execution of migration 100 (CREATE UNIQUE
+	// INDEX IF NOT EXISTS) must not error.
+	if _, err := db.Exec(string(body)); err != nil {
+		t.Fatalf("direct idempotent execution of migration 100: %v", err)
 	}
 }
 
