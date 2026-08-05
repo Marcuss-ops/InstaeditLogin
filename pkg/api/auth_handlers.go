@@ -82,13 +82,28 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	mode := req.URL.Query().Get("mode")
 	var options services.OAuthLoginOptions
 	switch mode {
-	case "add":
-		// Account selection is sufficient for a normal add flow. Do not
-		// force consent here: repeatedly issuing refresh tokens can
-		// invalidate older grants. A YouTube add flow that binds a
-		// specific channel refines ForceConsent below via the R7 health
-		// check.
+	case "add", "":
+		// Account selection + consent re-approval for an UNPINNED add
+		// (the Linking page's plain "Connect" button sends no mode).
+		// Google caches consent per (client_id, scopes): a channel that
+		// was previously authorized for this client is silently reused
+		// when prompt=consent is absent, and the code exchange then
+		// returns NO refresh_token ("grant offline access and retry"
+		// 422). An unpinned add cannot look up the channel's grant
+		// health, so forcing consent is the only way to guarantee a
+		// fresh offline refresh token. The pinned-channel block below
+		// may still relax ForceConsent when the R7 health check proves
+		// the grant is already healthy (reconnect case).
+		//
+		// SelectAccount applies to every provider (benign account-picker
+		// hint; non-OAuth-options providers ignore it); ForceConsent is
+		// YouTube-only — "consent" is a Google prompt value, other
+		// providers' builders ignore the flag but the contract stays
+		// honest.
 		options.SelectAccount = true
+		if provider == models.PlatformYouTube {
+			options.ForceConsent = true
+		}
 	case "reconnect":
 		// Explicit reconnect requests without a pinned channel stay on
 		// force-consent: the channel (and therefore the grant health) is

@@ -306,7 +306,7 @@ export function InternalLinking() {
                               </Link>
                             ))}
                             <a
-                              href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
+                              href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login?mode=add`}
                               onClick={(e) => e.stopPropagation()}
                               className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-xl border border-dashed border-white/[0.16] text-[13px] font-semibold text-[#9aa0aa] hover:bg-white/[0.04] hover:text-white transition-colors no-underline"
                             >
@@ -315,7 +315,7 @@ export function InternalLinking() {
                           </div>
                         ) : (
                           <a
-                            href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
+                            href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login?mode=add`}
                             className="inline-flex items-center justify-center w-full px-4 py-2.5 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
                           >
                             Connect {provider.name}

@@ -67,15 +67,24 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 	}
 }
 
-func TestHandleLogin_ConsentIsLimitedToReconnect(t *testing.T) {
+func TestHandleLogin_ConsentOptionsForYouTubeFlows(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		query       string
 		wantConsent bool
 		wantSelect  bool
 	}{
-		{name: "add selects account without consent", query: "mode=add", wantSelect: true},
+		// An unpinned add CANNOT look up the channel's grant health,
+		// and Google reuses cached consent (returning no refresh
+		// token) unless prompt=consent is present — so the add flow
+		// forces consent to guarantee a fresh offline grant.
+		{name: "add forces consent + account selection", query: "mode=add", wantConsent: true, wantSelect: true},
 		{name: "reconnect forces consent", query: "mode=reconnect", wantConsent: true},
+		// Unpinned login (the Linking page's plain "Connect" button)
+		// must behave exactly like mode=add: no channel pin means the
+		// grant health is unknowable, so consent is the only way to
+		// guarantee a refresh token.
+		{name: "unpinned login forces consent + account selection", query: "", wantConsent: true, wantSelect: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got services.OAuthLoginOptions
