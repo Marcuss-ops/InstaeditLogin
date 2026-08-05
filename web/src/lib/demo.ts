@@ -201,6 +201,19 @@ export function handleDemoRequest(
     return json({ accounts: demoAccounts });
   }
 
+  // Explicit soft-disconnect (P1): acknowledge and drop the account from
+  // the demo list (the real endpoint keeps the row for audit but removes
+  // it from every app surface, which the demo list mirrors).
+  const disconnectMatch = /^\/api\/v1\/accounts\/(\d+)\/disconnect$/.exec(
+    path,
+  );
+  if (disconnectMatch && method === "POST") {
+    const id = Number(disconnectMatch[1]);
+    const idx = demoAccounts.findIndex((a) => a.id === id);
+    if (idx >= 0) demoAccounts.splice(idx, 1);
+    return json({ ok: true }, 204);
+  }
+
   // "Rimuovi dalla cartella": dedicated DELETE for a single membership.
   // The demo aggregate stays read-only, so the write is acknowledged as
   // a no-op success (mirrors the real 204 endpoint contract).

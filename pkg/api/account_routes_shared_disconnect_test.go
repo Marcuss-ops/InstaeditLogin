@@ -9,7 +9,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-func TestHandleDeleteAccount_UsesAtomicDisconnectDecision(t *testing.T) {
+func TestHandleDisconnectAccount_UsesAtomicDisconnectDecision(t *testing.T) {
 	owner := ownedAccountFixture(1, models.PlatformYouTube)
 	connectionID := int64(55)
 	owner.OAuthConnectionID = &connectionID
@@ -37,7 +37,7 @@ func TestHandleDeleteAccount_UsesAtomicDisconnectDecision(t *testing.T) {
 	}
 	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "", WithCredentialVault(vault))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
@@ -50,7 +50,7 @@ func TestHandleDeleteAccount_UsesAtomicDisconnectDecision(t *testing.T) {
 	}
 }
 
-func TestHandleDeleteAccount_AtomicLastChannelRevokesGrant(t *testing.T) {
+func TestHandleDisconnectAccount_AtomicLastChannelRevokesGrant(t *testing.T) {
 	owner := ownedAccountFixture(1, models.PlatformYouTube)
 	connectionID := int64(55)
 	owner.OAuthConnectionID = &connectionID
@@ -69,7 +69,7 @@ func TestHandleDeleteAccount_AtomicLastChannelRevokesGrant(t *testing.T) {
 	}
 	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "", WithCredentialVault(vault))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)

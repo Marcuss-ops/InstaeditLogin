@@ -56,16 +56,17 @@ describe("ChannelActions", () => {
     ).toBeInTheDocument();
   });
 
-  it("disconnects via DELETE /accounts/{id} on confirm", async () => {
+  it("disconnects via POST /accounts/{id}/disconnect on confirm", async () => {
     const onDone = vi.fn();
     render(<ChannelActions account={youtubeAccount} onDone={onDone} />);
     fireEvent.click(
       screen.getByRole("button", { name: /Disconnetti canale/i }),
     );
     await waitFor(() =>
-      expect(authedFetchMock).toHaveBeenCalledWith("/api/v1/accounts/21", {
-        method: "DELETE",
-      }),
+      expect(authedFetchMock).toHaveBeenCalledWith(
+        "/api/v1/accounts/21/disconnect",
+        { method: "POST" },
+      ),
     );
     expect(onDone).toHaveBeenCalledTimes(1);
   });
@@ -140,9 +141,10 @@ describe("ChannelActions", () => {
     // Wait for the disconnect request to finish so the busy state resets
     // and the other tiles are clickable again.
     await waitFor(() =>
-      expect(authedFetchMock).toHaveBeenCalledWith("/api/v1/accounts/21", {
-        method: "DELETE",
-      }),
+      expect(authedFetchMock).toHaveBeenCalledWith(
+        "/api/v1/accounts/21/disconnect",
+        { method: "POST" },
+      ),
     );
     await waitFor(() =>
       expect(

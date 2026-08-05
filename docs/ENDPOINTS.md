@@ -23,6 +23,10 @@ Providers: `meta`, `tiktok`, `twitter`, `youtube`, `linkedin`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/accounts` | List connected platform accounts. Deleted-state accounts (`account_state=deleted`, i.e. disconnected/revoked) are hidden by default; pass `?include_deleted=true` to include them |
+| POST | `/api/v1/accounts/{id}/disconnect` | Explicit channel disconnect: `status=disconnected` (row kept for audit), removal from all groups and publishable destinations, future jobs cancelled (parent aggregates recomputed), shared Google grant/token preserved while an active sibling channel remains; 204 on success |
+| DELETE | `/api/v1/accounts/{id}` | **Deprecated** — answered with `410 Gone` and guidance; use `POST /api/v1/accounts/{id}/disconnect` (soft) or `DELETE /api/v1/accounts/{id}/data` (permanent, P1) |
+| DELETE | `/api/v1/accounts/{id}/oauth-grant` | Revoke a Google account and every channel sharing its grant (YouTube only); 204 on success |
+| DELETE | `/api/v1/accounts/{id}/data` | Permanent account deletion / tombstone (P1, not yet implemented) |
 
 ## Workspaces
 

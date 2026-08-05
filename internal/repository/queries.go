@@ -219,8 +219,17 @@ const qPublishPostTargetsReset = `UPDATE post_targets SET status = 'queued', err
 // derives the resulting posts.status in the same transaction.
 const qCancelPostTargetsReset = `UPDATE post_targets
  SET status = 'draft', error_message = ''
- WHERE post_id = $1
-   AND status NOT IN ('published', 'partially_published', 'failed', 'dlq')`
+WHERE post_id = $1
+  AND status NOT IN ('published', 'partially_published', 'failed', 'dlq')`
+
+// qCancelFutureJobsForAccount resets every non-terminal post target of an
+// account to 'draft' so scheduled/future jobs stop being publishable after a
+// disconnect. RETURNING post_id feeds the parent aggregate recompute.
+const qCancelFutureJobsForAccount = `UPDATE post_targets
+    SET status = 'draft', error_message = ''
+  WHERE platform_account_id = $1
+    AND status NOT IN ('published', 'partially_published', 'failed', 'dlq')
+  RETURNING post_id`
 
 const qRetryPostResetFailedTargets = `UPDATE post_targets SET status = 'queued', error_message = '' WHERE post_id = $1 AND status = 'failed'`
 

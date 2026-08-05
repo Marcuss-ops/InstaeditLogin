@@ -210,12 +210,12 @@ describe("DashboardChannelsPage", () => {
       screen.getByRole("button", { name: /Disconnetti canale/i }),
     );
     await waitFor(() => {
-      const deleteCall = authedFetchMock.mock.calls.find(
+      const disconnectCall = authedFetchMock.mock.calls.find(
         ([url, init]) =>
-          String(url) === "/api/v1/accounts/123" &&
-          (init as RequestInit)?.method === "DELETE",
+          String(url) === "/api/v1/accounts/123/disconnect" &&
+          (init as RequestInit)?.method === "POST",
       );
-      expect(deleteCall).toBeDefined();
+      expect(disconnectCall).toBeDefined();
     });
   });
 

@@ -27,6 +27,7 @@ type AuthHandlers struct {
 	ValidateAccount               http.HandlerFunc
 	ReconnectAccount              http.HandlerFunc
 	DeleteAccount                 http.HandlerFunc
+	DisconnectAccount             http.HandlerFunc
 	DeleteOAuthGrant              http.HandlerFunc
 	SyncAccount                   http.HandlerFunc
 	AccountContent                http.HandlerFunc
@@ -137,7 +138,12 @@ func (m *AuthModule) Register(mux chi.Router) {
 	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/performance", m.deps.Protected(m.deps.Handlers.GetAccountPerformance))
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", m.deps.Protected(m.deps.Handlers.ValidateAccount))
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", m.deps.Protected(m.deps.Handlers.ReconnectAccount))
+	// P1 (account-lifecycle audit): DELETE /api/v1/accounts/{id} is
+	// deprecated (410 Gone) — the explicit soft-disconnect lives at
+	// POST /api/v1/accounts/{id}/disconnect; permanent removal will be
+	// DELETE /api/v1/accounts/{id}/data.
 	mux.Method(http.MethodDelete, "/api/v1/accounts/{id}", m.deps.Protected(m.deps.Handlers.DeleteAccount))
+	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/disconnect", m.deps.Protected(m.deps.Handlers.DisconnectAccount))
 	mux.Method(http.MethodDelete, "/api/v1/accounts/{id}/oauth-grant", m.deps.Protected(m.deps.Handlers.DeleteOAuthGrant))
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/sync", m.deps.Protected(m.deps.Handlers.SyncAccount))
 	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/content", m.deps.Protected(m.deps.Handlers.AccountContent))

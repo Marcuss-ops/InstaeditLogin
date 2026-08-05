@@ -48,9 +48,15 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 // secureDisconnectStore atomically marks one account disconnected and decides
 // whether its OAuth grant has any active siblings left. Production's
 // repository implementation serializes this operation with the same
-// per-grant advisory-lock discipline used by credential refreshes. The
-// optional interface keeps lightweight test stores and legacy integrations
-// source-compatible; they use the guarded fallback below.
+// per-grant advisory-lock discipline used by credential refreshes AND runs
+// the P1 channel cleanup (group memberships, publishable destinations,
+// future-job cancellation) in the same transaction as the status flip.
+//
+// The guarded fallback below (CountActiveAccountsOnConnection +
+// UpdatePlatformAccount) is TEST-ONLY: it flips the status but performs NO
+// P1 cleanup. Production always wires the real UserRepository (which
+// implements this interface), so the cleanup contract is guaranteed there;
+// the fallback exists only to keep lightweight mock stores source-compatible.
 type secureDisconnectStore interface {
 	DisconnectPlatformAccount(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
 }
@@ -179,7 +185,18 @@ func writeOAuthGrantDisconnectError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusInternalServerError, "failed to disconnect OAuth grant")
 }
 
-// handleDeleteAccount soft-disconnects a platform account. Steps:
+// handleDeleteAccount is the DEPRECATED DELETE /api/v1/accounts/{id}
+// route. The account-lifecycle audit found the DELETE method misleading:
+// it performed a soft disconnection, not a deletion. The explicit commands
+// are now POST /api/v1/accounts/{id}/disconnect (soft, row kept for
+// audit) and DELETE /api/v1/accounts/{id}/data (permanent). The old
+// route answers 410 Gone with guidance instead of silently soft-deleting.
+func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
+	writeError(w, http.StatusGone, "DELETE /api/v1/accounts/{id} is removed; use POST /api/v1/accounts/{id}/disconnect (disconnect, keeps history) or DELETE /api/v1/accounts/{id}/data (permanent delete)")
+}
+
+// handleDisconnectAccount soft-disconnects a platform account — the
+// explicit POST /api/v1/accounts/{id}/disconnect command. Steps:
 //
 //  1. loadOwnAccountByID (auth + ownership + 404 on cross-tenant).
 //  2. Shared-grant awareness (P0): migrations 084/085 let several
@@ -193,39 +210,30 @@ func writeOAuthGrantDisconnectError(w http.ResponseWriter, err error) {
 //     b. vault.Revoke → deletes every encrypted token row for the
 //     connection. Idempotent: the vault swallows ErrTokenNotFound.
 //     When siblings remain active, BOTH revokes are skipped so the
-//     grant keeps working for them.
-//  3. Soft-disconnect: status='disconnected' on the account row +
-//     last_error_code='DISCONNECTED' for operator dashboards. The
-//     row stays so the audit trail (user_id, platform, platform_user_id,
-//     connected_at) is preserved for compliance — a future Taglio adds
-//     the workspace-level "data deletion" endpoint that hard-deletes
-//     the row + scrubs the encrypted tokens.
+//     shared grant keeps working for them.
+//  3. Disconnect (P1): status='disconnected' on the account row +
+//     last_error_code='DISCONNECTED' for operator dashboards, in the
+//     same transaction the repository removes the account from every
+//     group, from the publishable destinations (workspace_channels)
+//     and cancels its future jobs (post_targets → draft + parent
+//     aggregates recomputed). The row stays so the audit trail
+//     (user_id, platform, platform_user_id, connected_at) is
+//     preserved — the hard-delete/tombstone endpoint
+//     (DELETE /api/v1/accounts/{id}/data) is the separate permanent
+//     removal path.
 //  4. Audit log (account.disconnected), nil-safe.
-//
-// post_targets that referenced this account remain unchanged in the
-// schema: the publish driver will surface a "token revoked" failure
-// on the next tick and stamp post_targets.status='failed' through
-// the existing error-classification path. No handler-side bulk
-// transition is needed (Taglio 1.4 contract is implicit failure via
-// worker, not synchronous transition via handler).
 //
 // Accounts without an oauth_connection (pre-043 legacy attach or an
 // already-revoked grant) skip the grant work entirely — there is
 // nothing to revoke — and disconnect cleanly.
 //
-// Workspace unlinking is implicit in the status flip: the workspace
-// channel listings and the delivery target resolver treat
-// 'disconnected' like 'deleted' (accounts_state.go /
-// target_resolver_group.go), so the channel disappears from every
-// publishable surface without touching workspace_channels rows (the
-// audit row stays for compliance).
-//
-// Production performs the status transition and sibling decision in one
-// transaction under a per-grant advisory lock. This prevents concurrent
-// disconnects from both observing an active sibling and orphaning the last
-// grant. Remote-revoke failure remains non-fatal: the local disconnect has
-// already committed and the local vault cleanup still runs.
-func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
+// Production performs the status transition, sibling decision and
+// cleanup in one transaction under a per-grant advisory lock. This
+// prevents concurrent disconnects from both observing an active
+// sibling and orphaning the last grant. Remote-revoke failure remains
+// non-fatal: the local disconnect has already committed and the local
+// vault cleanup still runs.
+func (r *Router) handleDisconnectAccount(w http.ResponseWriter, req *http.Request) {
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
 		return

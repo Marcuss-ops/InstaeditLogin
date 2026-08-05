@@ -6,7 +6,7 @@
  * folder, while this component owns the channel-level commands with
  * honest labels and explicit confirmations:
  *
- *   1. Disconnetti canale   → DELETE /api/v1/accounts/{id}
+ *   1. Disconnetti canale   → POST /api/v1/accounts/{id}/disconnect
  *      soft-disconnect. The row stays for audit; the shared Google
  *      grant is preserved while sibling channels still use it and
  *      the token is revoked only when the last channel disconnects.
@@ -82,8 +82,8 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
         onClick={() =>
           void run(
             "disconnect",
-            "DELETE",
-            `/api/v1/accounts/${account.id}`,
+            "POST",
+            `/api/v1/accounts/${account.id}/disconnect`,
             `Disconnetti il canale ${handle}?\n\nIl canale non sarà più utilizzabile da InstaEdit.\nLa cronologia verrà conservata.\nGli altri canali dello stesso account Google non saranno interessati.`,
           )
         }

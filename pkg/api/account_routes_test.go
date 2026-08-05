@@ -352,11 +352,11 @@ func TestHandleGetAccount_NoSession_401(t *testing.T) {
 	}
 }
 
-// TestHandleDeleteAccount_Happy_204 verifies: 204 No Content + the
+// TestHandleDisconnectAccount_Happy_204 verifies: 204 No Content + the
 // shared-grant check ran (count == 0 → last channel on the grant) +
 // vault.Revoke was called + account row was updated to
 // status='disconnected' + auditLogStore fired (when present).
-func TestHandleDeleteAccount_Happy_204(t *testing.T) {
+func TestHandleDisconnectAccount_Happy_204(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	owner := ownedAccountFixture(1, "instagram")
 	connID := int64(55)
@@ -391,7 +391,7 @@ func TestHandleDeleteAccount_Happy_204(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -425,10 +425,10 @@ func TestHandleDeleteAccount_Happy_204(t *testing.T) {
 	}
 }
 
-// TestHandleDeleteAccount_VaultRevokeError_500 covers the failure path:
+// TestHandleDisconnectAccount_VaultRevokeError_500 covers the failure path:
 // vault.Revoke errors ⇒ 500, account row NOT updated, cross-handler
 // state machine stays consistent.
-func TestHandleDeleteAccount_VaultRevokeError_500(t *testing.T) {
+func TestHandleDisconnectAccount_VaultRevokeError_500(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	owner := ownedAccountFixture(1, "instagram")
 	connID := int64(55)
@@ -453,7 +453,7 @@ func TestHandleDeleteAccount_VaultRevokeError_500(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -463,11 +463,11 @@ func TestHandleDeleteAccount_VaultRevokeError_500(t *testing.T) {
 	}
 }
 
-// TestHandleDeleteAccount_CrossTenant_404 is the workspace-isolation
+// TestHandleDisconnectAccount_CrossTenant_404 is the workspace-isolation
 // canary: vault.Revoke MUST NOT be called and UpdatePlatformAccount
 // MUST NOT be called for a cross-tenant probe. Existence-leak
 // prevention: 404 (not 403).
-func TestHandleDeleteAccount_CrossTenant_404(t *testing.T) {
+func TestHandleDisconnectAccount_CrossTenant_404(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	crossTenant := ownedAccountFixture(999, "instagram")
 	store := &mockUserStore{
@@ -487,7 +487,7 @@ func TestHandleDeleteAccount_CrossTenant_404(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -497,11 +497,11 @@ func TestHandleDeleteAccount_CrossTenant_404(t *testing.T) {
 	}
 }
 
-// TestHandleDeleteAccount_NoSession_401: r.protected rejects the
+// TestHandleDisconnectAccount_NoSession_401: r.protected rejects the
 // session-less probe BEFORE any DB or vault work happens. The
 // handler's own nil-identity 401 in loadOwnAccountByID is
 // defence-in-depth.
-func TestHandleDeleteAccount_NoSession_401(t *testing.T) {
+func TestHandleDisconnectAccount_NoSession_401(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
@@ -521,20 +521,44 @@ func TestHandleDeleteAccount_NoSession_401(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req) // NO JWT — session-less probe
 
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("no-session /accounts/21 DELETE: want 401, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("no-session /accounts/21 disconnect: want 401, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-// TestHandleDeleteAccount_YouTube_RemoteRevoke_BeforeLocalCleanup pins
+// TestHandleDeleteAccount_Deprecated_410 pins the account-lifecycle audit
+// fix: the old DELETE /api/v1/accounts/{id} route no longer performs a
+// misleading soft-delete. It answers 410 Gone with guidance towards the
+// explicit commands (POST /disconnect, DELETE /data) — a deliberate API
+// contract break so no silent soft-deletion can happen on a "DELETE".
+func TestHandleDeleteAccount_Deprecated_410(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusGone {
+		t.Fatalf("deprecated DELETE /accounts/{id}: want 410 Gone, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "disconnect") || !strings.Contains(body, "/data") {
+		t.Errorf("410 body must guide towards the explicit commands; got: %s", body)
+	}
+}
+
+// TestHandleDisconnectAccount_YouTube_RemoteRevoke_BeforeLocalCleanup pins
 // the P2 wiring: for a YouTube account with a YouTubeRevoker wired, the
 // decoded refresh token is revoked on Google's endpoint BEFORE the local
 // vault.Revoke deletes the token material.
-func TestHandleDeleteAccount_YouTube_RemoteRevoke_BeforeLocalCleanup(t *testing.T) {
+func TestHandleDisconnectAccount_YouTube_RemoteRevoke_BeforeLocalCleanup(t *testing.T) {
 	svc := &mockProvider{platform: "youtube"}
 	owner := ownedAccountFixture(1, "youtube")
 	connID := int64(55)
@@ -571,7 +595,7 @@ func TestHandleDeleteAccount_YouTube_RemoteRevoke_BeforeLocalCleanup(t *testing.
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -587,10 +611,10 @@ func TestHandleDeleteAccount_YouTube_RemoteRevoke_BeforeLocalCleanup(t *testing.
 	}
 }
 
-// TestHandleDeleteAccount_YouTube_RemoteRevokeFailure_Still204 proves the
+// TestHandleDisconnectAccount_YouTube_RemoteRevokeFailure_Still204 proves the
 // remote revoke is best-effort: a provider-side failure must NOT block the
 // local disconnect (vault.Revoke still runs and the account row flips).
-func TestHandleDeleteAccount_YouTube_RemoteRevokeFailure_Still204(t *testing.T) {
+func TestHandleDisconnectAccount_YouTube_RemoteRevokeFailure_Still204(t *testing.T) {
 	svc := &mockProvider{platform: "youtube"}
 	owner := ownedAccountFixture(1, "youtube")
 	connID := int64(55)
@@ -625,7 +649,7 @@ func TestHandleDeleteAccount_YouTube_RemoteRevokeFailure_Still204(t *testing.T) 
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -638,14 +662,14 @@ func TestHandleDeleteAccount_YouTube_RemoteRevokeFailure_Still204(t *testing.T) 
 	}
 }
 
-// TestHandleDeleteAccount_SharedGrant_SiblingActive_KeepsGrant pins the
+// TestHandleDisconnectAccount_SharedGrant_SiblingActive_KeepsGrant pins the
 // P0 shared-grant fix: disconnecting ONE channel of a grant still used by
 // an active sibling MUST NOT revoke the grant — neither the remote
 // provider revoke (which would kill the sibling's refresh token at Google)
 // nor the local vault.Revoke (which would delete the sibling's token rows).
 // The account still soft-disconnects (status='disconnected') so the row
 // drops out of every publishable surface.
-func TestHandleDeleteAccount_SharedGrant_SiblingActive_KeepsGrant(t *testing.T) {
+func TestHandleDisconnectAccount_SharedGrant_SiblingActive_KeepsGrant(t *testing.T) {
 	svc := &mockProvider{platform: "youtube"}
 	owner := ownedAccountFixture(1, "youtube")
 	connID := int64(55)
@@ -685,7 +709,7 @@ func TestHandleDeleteAccount_SharedGrant_SiblingActive_KeepsGrant(t *testing.T) 
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -707,11 +731,11 @@ func TestHandleDeleteAccount_SharedGrant_SiblingActive_KeepsGrant(t *testing.T) 
 	}
 }
 
-// TestHandleDeleteAccount_CountError_FailClosed_500 pins the fail-closed
+// TestHandleDisconnectAccount_CountError_FailClosed_500 pins the fail-closed
 // branch: if the shared-grant inspection itself errors, the handler must
 // refuse the disconnect (500) and MUST NOT touch the vault or the account
 // row — deleting (or keeping) grant tokens on a guess is never safe.
-func TestHandleDeleteAccount_CountError_FailClosed_500(t *testing.T) {
+func TestHandleDisconnectAccount_CountError_FailClosed_500(t *testing.T) {
 	svc := &mockProvider{platform: "youtube"}
 	owner := ownedAccountFixture(1, "youtube")
 	connID := int64(55)
@@ -738,7 +762,7 @@ func TestHandleDeleteAccount_CountError_FailClosed_500(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
@@ -754,12 +778,12 @@ func TestHandleDeleteAccount_CountError_FailClosed_500(t *testing.T) {
 	}
 }
 
-// TestHandleDeleteAccount_NoConnection_SkipsGrantWork_204 pins the
+// TestHandleDisconnectAccount_NoConnection_SkipsGrantWork_204 pins the
 // pre-043 / already-revoked legacy path: an account without an
 // oauth_connection has no grant to revoke, so the disconnect must
 // complete without touching the vault or the sibling-count query
 // (previously vault.Revoke 500'd on its no-connection error).
-func TestHandleDeleteAccount_NoConnection_SkipsGrantWork_204(t *testing.T) {
+func TestHandleDisconnectAccount_NoConnection_SkipsGrantWork_204(t *testing.T) {
 	svc := &mockProvider{platform: "youtube"}
 	owner := ownedAccountFixture(1, "youtube") // OAuthConnectionID nil
 
@@ -787,7 +811,7 @@ func TestHandleDeleteAccount_NoConnection_SkipsGrantWork_204(t *testing.T) {
 	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 	r.youtubeRevoker = &fakeYouTubeRevoker{}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)

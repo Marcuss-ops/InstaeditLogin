@@ -106,6 +106,7 @@ func (r *Router) Setup() http.Handler {
 			ValidateAccount:               r.handleValidateAccount,
 			ReconnectAccount:              r.handleReconnectAccount,
 			DeleteAccount:                 r.handleDeleteAccount,
+			DisconnectAccount:             r.handleDisconnectAccount,
 			DeleteOAuthGrant:              r.handleDeleteOAuthGrant,
 			SyncAccount:                   r.handleSyncAccount,
 			AccountContent:                r.handleAccountContent,
