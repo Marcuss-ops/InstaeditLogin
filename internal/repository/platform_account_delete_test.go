@@ -19,13 +19,13 @@ import (
 // feeds the cancel-future-jobs aggregate recompute.
 func expectPermanentDeleteTransaction(mock sqlmock.Sqlmock, accountID, oauthConnectionID, activeSiblings int64, canceledPostIDs []int64) {
 	mock.ExpectBegin()
-	lockRows := sqlmock.NewRows([]string{"user_id", "platform", "platform_user_id", "status", "oauth_connection_id"})
+	lockRows := sqlmock.NewRows([]string{"user_id", "platform", "status", "oauth_connection_id"})
 	if oauthConnectionID > 0 {
-		lockRows.AddRow(int64(1), "youtube", "UC-xyz", "active", oauthConnectionID)
+		lockRows.AddRow(int64(1), "youtube", "active", oauthConnectionID)
 	} else {
-		lockRows.AddRow(int64(1), "youtube", "UC-xyz", "active", int64(0))
+		lockRows.AddRow(int64(1), "youtube", "active", int64(0))
 	}
-	mock.ExpectQuery(`SELECT user_id, platform, platform_user_id, status, COALESCE(oauth_connection_id, 0)
+	mock.ExpectQuery(`SELECT user_id, platform, status, COALESCE(oauth_connection_id, 0)
    FROM platform_accounts
   WHERE id = $1
   FOR UPDATE`).
@@ -217,12 +217,12 @@ func TestUserRepository_PermanentlyDeleteAccount_LastChannel_RequiresRevoke(t *t
 	db, mock := newMockUserDB(t)
 	repo := repository.NewUserRepository(db)
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT user_id, platform, platform_user_id, status, COALESCE(oauth_connection_id, 0)
+	mock.ExpectQuery(`SELECT user_id, platform, status, COALESCE(oauth_connection_id, 0)
    FROM platform_accounts
   WHERE id = $1
   FOR UPDATE`).
 		WithArgs(int64(21)).
-		WillReturnRows(sqlmock.NewRows([]string{"user_id", "platform", "platform_user_id", "status", "oauth_connection_id"}).AddRow(1, "youtube", "UC-xyz", "active", 55))
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "platform", "status", "oauth_connection_id"}).AddRow(1, "youtube", "active", 55))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").WithArgs(int64(55)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT COUNT(*)
    FROM platform_accounts

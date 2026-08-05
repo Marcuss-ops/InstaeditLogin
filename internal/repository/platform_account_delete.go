@@ -61,16 +61,15 @@ func (r *UserRepository) PermanentlyDeleteAccountTx(ctx context.Context, account
 	var (
 		userID            int64
 		platform          string
-		platformUserID    string
 		accountStatus     string
 		oauthConnectionID int64
 	)
 	if err := tx.QueryRowContext(ctx,
-		`SELECT user_id, platform, platform_user_id, status, COALESCE(oauth_connection_id, 0)
+		`SELECT user_id, platform, status, COALESCE(oauth_connection_id, 0)
 		   FROM platform_accounts
 		  WHERE id = $1
 		  FOR UPDATE`, accountID,
-	).Scan(&userID, &platform, &platformUserID, &accountStatus, &oauthConnectionID); err != nil {
+	).Scan(&userID, &platform, &accountStatus, &oauthConnectionID); err != nil {
 		return false, fmt.Errorf("permanently delete account: lock account %d: %w", accountID, err)
 	}
 	// A completed tombstone is an idempotent no-op. In particular, do not
