@@ -34,6 +34,10 @@ type stubAdminStore struct {
 	createCalled atomic.Int64
 	createResp   repository.FleetReadinessSnapshotResponse
 	createErr    error
+	// capacityResp/capacityErr (R8) back YouTubePoolCapacity for the
+	// OAuth pool capacity dashboard handler tests.
+	capacityResp repository.YouTubePoolCapacityReport
+	capacityErr  error
 }
 
 func (s *stubAdminStore) ChannelCounts(_ context.Context) (repository.AdminChannelCounts, error) {
@@ -83,6 +87,12 @@ func (s *stubAdminStore) UpsertPendingChannel(_ context.Context, _ int64, _ []ch
 func (s *stubAdminStore) CreateFleetReadinessSnapshot(_ context.Context, _ int64) (repository.FleetReadinessSnapshotResponse, error) {
 	s.createCalled.Add(1)
 	return s.createResp, s.createErr
+}
+
+// YouTubePoolCapacity returns an empty report unless a test seeds
+// capacityResp; the pool-capacity handler tests set it explicitly.
+func (s *stubAdminStore) YouTubePoolCapacity(_ context.Context) (repository.YouTubePoolCapacityReport, error) {
+	return s.capacityResp, s.capacityErr
 }
 
 // staffIdentity composes a minimal auth.Identity for handler-side

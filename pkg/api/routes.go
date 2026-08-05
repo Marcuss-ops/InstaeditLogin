@@ -18,12 +18,13 @@ func (r *Router) Setup() http.Handler {
 	// into the router; individual modules only declare their routes.
 	reg := NewRouteRegistry()
 	reg.Register(NewAdminModule(AdminModuleDeps{
-		AdminStore:            r.adminStore,
-		AuthManager:           r.auth,
-		UserStore:             r.userRepo,
-		WorkspaceStore:        r.workspaceStore,
-		Capabilities:          r.capabilities,
-		ConnectLinkNonceStore: r.connectLinkNonceStore,
+		AdminStore:                 r.adminStore,
+		AuthManager:                r.auth,
+		UserStore:                  r.userRepo,
+		WorkspaceStore:             r.workspaceStore,
+		Capabilities:               r.capabilities,
+		ConnectLinkNonceStore:      r.connectLinkNonceStore,
+		YouTubeOAuthClientRegistry: r.youtubeOAuthClientRegistry,
 	}))
 	reg.Register(NewVeloxModule(VeloxModuleDeps{
 		ExternalDestinationStore: r.externalDestinations,

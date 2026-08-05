@@ -129,9 +129,10 @@ func TestBillingModule_Webhook(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type fakeAdminStore struct {
-	counts   repository.AdminChannelCounts
-	channels []repository.AdminChannelRow
-	queue    repository.AdminQueueCounts
+	counts       repository.AdminChannelCounts
+	channels     []repository.AdminChannelRow
+	queue        repository.AdminQueueCounts
+	poolCapacity repository.YouTubePoolCapacityReport
 }
 
 func (f *fakeAdminStore) ChannelCounts(ctx context.Context) (repository.AdminChannelCounts, error) {
@@ -172,6 +173,10 @@ func (f *fakeAdminStore) UpsertPendingChannel(ctx context.Context, ownerUserID i
 
 func (f *fakeAdminStore) CreateFleetReadinessSnapshot(ctx context.Context, adminUserID int64) (repository.FleetReadinessSnapshotResponse, error) {
 	return repository.FleetReadinessSnapshotResponse{}, nil
+}
+
+func (f *fakeAdminStore) YouTubePoolCapacity(ctx context.Context) (repository.YouTubePoolCapacityReport, error) {
+	return f.poolCapacity, nil
 }
 
 type testConnectLinkNonceStore struct{}

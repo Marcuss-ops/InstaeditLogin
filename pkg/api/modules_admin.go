@@ -18,6 +18,11 @@ type AdminModuleDeps struct {
 	WorkspaceStore        WorkspaceStore
 	Capabilities          *services.CapabilityRouter
 	ConnectLinkNonceStore ConnectLinkNonceStore
+	// YouTubeOAuthClientRegistry (R8) supplies the pool clients'
+	// recommended capacities + health bands for the OAuth pool
+	// capacity dashboard. Optional: nil keeps the legacy fallback
+	// (default capacity 50 per observed client key).
+	YouTubeOAuthClientRegistry *services.YouTubeOAuthClientRegistry
 }
 
 // AdminModule mounts the operator dashboard routes under /admin/*.
@@ -48,6 +53,7 @@ func (m *AdminModule) Register(mux chi.Router) {
 	mux.Method(http.MethodPost, "/admin/channels/import-csv", m.admin(http.HandlerFunc(m.handleAdminImportChannelsCSV)))
 	mux.Method(http.MethodGet, "/admin/channels/pending", m.admin(http.HandlerFunc(m.handleAdminPendingChannels)))
 	mux.Method(http.MethodGet, "/admin/youtube/fleet_readiness", m.admin(http.HandlerFunc(m.handleAdminYouTubeFleetReadiness)))
+	mux.Method(http.MethodGet, "/admin/youtube/oauth_pool_capacity", m.admin(http.HandlerFunc(m.handleAdminYouTubeOAuthPoolCapacity)))
 	mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", m.admin(http.HandlerFunc(m.handleAdminChannelConnectLink)))
 }
 

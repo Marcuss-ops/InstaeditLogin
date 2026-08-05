@@ -313,6 +313,13 @@ type AdminStore interface {
 	// so successive calls produce an audit trail an operator can
 	// diff to spot channels that flipped recently.
 	CreateFleetReadinessSnapshot(ctx context.Context, adminUserID int64) (repository.FleetReadinessSnapshotResponse, error)
+	// YouTubePoolCapacity (R8 — OAuth Client Pool dashboard) returns
+	// the fleet-wide pool-capacity report: per-client active-grant
+	// counts + the per-Google-manager breakdown (pool client, grant
+	// status, channel totals, per-channel drill-down). Backs
+	// GET /admin/youtube/oauth_pool_capacity. Never contains
+	// credential material — only subject IDs, client keys, statuses.
+	YouTubePoolCapacity(ctx context.Context) (repository.YouTubePoolCapacityReport, error)
 }
 
 // SnapshotStore is the persistence contract for
