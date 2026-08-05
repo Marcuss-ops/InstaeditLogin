@@ -6,10 +6,11 @@
  * folder, while this component owns the channel-level commands with
  * honest labels and explicit confirmations:
  *
- *   1. Disconnetti canale   → POST /api/v1/accounts/{id}/disconnect
+ *   1. Disconnetti canale → POST /api/v1/accounts/{id}/disconnect
  *      soft-disconnect. The row stays for audit; the shared Google
  *      grant is preserved while sibling channels still use it and
- *      the token is revoked only when the last channel disconnects.   *   2. Elimina definitivamente → DELETE /api/v1/accounts/{id}/data
+ *      the token is revoked only when the last channel disconnects.
+ *   2. Elimina definitivamente → DELETE /api/v1/accounts/{id}/data
  *      permanent removal (hard-delete / tombstone), requiring the exact
  *      channel-name confirmation before the JSON request is sent.
  *   3. Revoca account Google e tutti i canali → DELETE
@@ -94,7 +95,7 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
   const handle = account.username || `#${account.id}`;
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" data-testid="channel-actions">
       {/* 1. Soft disconnect — the row stays, siblings unaffected. */}
       <button
         type="button"
@@ -108,6 +109,8 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
         }
         disabled={busy !== null}
         className={cn(TILE_BASE, AMBER_TILE)}
+        data-testid="channel-action-disconnect"
+        title="Blocca questo canale senza eliminare lo storico"
       >
         <div className="flex items-center gap-2 mb-1">
           <Unplug size={16} className="text-amber-300" aria-hidden="true" />
@@ -119,7 +122,7 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
           )}
         </div>
         <p className="text-[12px] text-amber-100/60 leading-snug">
-          Il canale non sarà più utilizzabile. La cronologia viene conservata.
+          Blocca solo questo canale. Lo storico resta disponibile e gli altri canali non cambiano.
         </p>
       </button>
 
@@ -129,6 +132,8 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
         onClick={() => void runPermanentDelete()}
         disabled={busy !== null}
         className={cn(TILE_BASE, RED_TILE)}
+        data-testid="channel-action-delete"
+        title="Elimina definitivamente i dati di questo canale"
       >
         <div className="flex items-center gap-2 mb-1">
           <XCircle size={16} className="text-red-300" aria-hidden="true" />
@@ -140,7 +145,7 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
           )}
         </div>
         <p className="text-[12px] text-red-100/60 leading-snug">
-          Rimuove definitivamente il canale e i suoi dati. Azione irreversibile.
+          Elimina solo i dati di questo canale. Azione irreversibile; richiede il nome esatto.
         </p>
       </button>
 
@@ -154,11 +159,13 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
               "revoke-grant",
               "DELETE",
               `/api/v1/accounts/${account.id}/oauth-grant`,
-              `Revocare l'account Google di ${handle} e disconnettere TUTTI i canali collegati?\n\nIl token Google verrà revocato e ogni canale che condivide questo collegamento smetterà di funzionare su InstaEdit.`,
+              `Revocare l'account Google di ${handle} e disconnettere TUTTI i canali collegati?\n\nIl grant Google verrà revocato. Tutti i canali che condividono questo collegamento smetteranno di funzionare su InstaEdit.`,
             )
           }
           disabled={busy !== null}
           className={cn(TILE_BASE, RED_TILE)}
+          data-testid="channel-action-revoke-grant"
+          title="Revoca l'account Google e tutti i canali collegati"
         >
           <div className="flex items-center gap-2 mb-1">
             <ShieldX size={16} className="text-red-300" aria-hidden="true" />
@@ -170,8 +177,7 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
             )}
           </div>
           <p className="text-[12px] text-red-100/60 leading-snug">
-            Revoca il collegamento Google e disconnette tutti i canali che lo
-            condividono.
+            Chiude il grant Google: tutti i canali collegati vengono disconnessi e le credenziali locali vengono revocate.
           </p>
         </button>
       )}

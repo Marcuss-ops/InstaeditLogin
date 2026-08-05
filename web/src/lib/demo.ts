@@ -236,6 +236,18 @@ export function handleDemoRequest(
     return json({ ok: true }, 204);
   }
 
+  // "Revoca account Google e tutti i canali": the real endpoint revokes
+  // the complete shared YouTube grant. The demo has one YouTube grant, so
+  // remove every YouTube account from the operational list as the UI would
+  // observe after the grant-level disconnect.
+  const revokeGrantMatch = /^\/api\/v1\/accounts\/(\d+)\/oauth-grant$/.exec(path);
+  if (revokeGrantMatch && method === "DELETE") {
+    for (let index = demoAccounts.length - 1; index >= 0; index -= 1) {
+      if (demoAccounts[index]?.platform === "youtube") demoAccounts.splice(index, 1);
+    }
+    return json({ ok: true }, 204);
+  }
+
   // "Rimuovi dalla cartella": dedicated DELETE for a single membership.
   // Mutate the in-memory join-table fixture so the next aggregate reload
   // preserves the removal, just like the persistent backend transaction.

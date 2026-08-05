@@ -51,12 +51,22 @@ describe("ChannelActions", () => {
   });
 
   it("shows the shared-grant revoke only for YouTube accounts", () => {
+    render(<ChannelActions account={youtubeAccount} onDone={() => {}} />);    const revokeButton = screen.getByRole("button", {
+      name: /Revoca account Google e tutti i canali/i,
+    });
+    expect(revokeButton).toBeInTheDocument();
+    expect(revokeButton).toHaveAttribute("data-testid", "channel-action-revoke-grant");
+    expect(revokeButton).toHaveAttribute("title", expect.stringContaining("tutti i canali"));
+
+  });
+
+  it("keeps the channel actions visually distinct", () => {
     render(<ChannelActions account={youtubeAccount} onDone={() => {}} />);
-    expect(
-      screen.getByRole("button", {
-        name: /Revoca account Google e tutti i canali/i,
-      }),
-    ).toBeInTheDocument();
+
+    expect(screen.getByTestId("channel-action-disconnect")).toHaveAttribute("title", expect.stringContaining("senza eliminare"));
+    expect(screen.getByTestId("channel-action-delete")).toHaveAttribute("title", expect.stringContaining("definitivamente"));
+    expect(screen.getByTestId("channel-action-revoke-grant")).toHaveAttribute("title", expect.stringContaining("account Google"));
+    expect(screen.getByTestId("channel-action-disconnect")).not.toHaveAttribute("data-testid", "channel-action-delete");
   });
 
   it("disconnects via POST /accounts/{id}/disconnect on confirm", async () => {
@@ -124,6 +134,22 @@ describe("ChannelActions", () => {
       ),
     );
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a grant-wide confirmation without conflating it with channel delete", async () => {
+    const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ChannelActions account={youtubeAccount} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByTestId("channel-action-revoke-grant"));
+
+    await waitFor(() => expect(authedFetchMock).toHaveBeenCalledWith(
+      "/api/v1/accounts/21/oauth-grant",
+      { method: "DELETE" },
+    ));
+    const message = String(confirmMock.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("TUTTI i canali collegati");
+    expect(message).toContain("grant Google verrà revocato");
+    expect(message).not.toContain("Azione irreversibile");
   });
 
   it("does nothing when the user cancels the confirmation", async () => {

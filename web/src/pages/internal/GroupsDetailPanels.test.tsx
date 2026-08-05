@@ -56,7 +56,10 @@ describe("GroupDetailPanel batch settings", () => {
     fireEvent.click(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i }));
 
     expect(confirmMock).toHaveBeenCalledWith(expect.stringContaining('soltanto dalla cartella "Editorial"'));
-    expect(confirmMock.mock.calls[0]?.[0]).toContain("rimarrà collegato a InstaEdit");
+    const confirmation = String(confirmMock.mock.calls[0]?.[0] ?? "");
+    expect(confirmation).toContain("rimarrà collegato a InstaEdit");
+    expect(confirmation).toContain("\n\n");
+    expect(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i })).toHaveAttribute("title", expect.stringContaining("il canale resta collegato"));
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/groups/7/accounts/102"))).toBe(false);
     expect(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i })).toBeInTheDocument();
   });

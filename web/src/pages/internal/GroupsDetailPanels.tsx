@@ -10,7 +10,7 @@ import {
   Pencil,
   RefreshCw,
   Trash2,
-  Unlink,
+  FolderMinus,
 } from "lucide-react";
 import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
@@ -98,7 +98,7 @@ export function GroupDetailPanel({
   // disconnects the channel or touches OAuth tokens.
   const removeAccount = async (accountId: number, username: string) => {
     if (!window.confirm(
-      `Rimuovere ${username || `il canale #${accountId}`} soltanto dalla cartella "${group.name}"?\\n\\nIl canale rimarrà collegato a InstaEdit e continuerà a essere disponibile altrove.`,
+      `Rimuovere ${username || `il canale #${accountId}`} soltanto dalla cartella "${group.name}"?\n\nIl canale rimarrà collegato a InstaEdit e continuerà a essere disponibile altrove.`,
     )) return;
     setRemovedAccountIds((current) => new Set(current).add(accountId));
     setSaving(true);
@@ -177,9 +177,10 @@ export function GroupDetailPanel({
             type="button"
             onClick={onDeleteGroup}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-[12px] font-medium text-red-300 hover:bg-red-500/[0.12] hover:border-red-500/40 transition-colors"
-            aria-label="Delete folder"
+            aria-label="Elimina cartella"
+            title="Elimina cartella e le relative membership"
           >
-            <Trash2 size={13} /> Delete
+            <Trash2 size={13} /> Elimina cartella
           </button>
         </div>
       </div>
@@ -227,7 +228,7 @@ export function GroupDetailPanel({
                   {LANGUAGE_OPTIONS.map(({ code, flag, name }) => <option key={code} value={code}>{flag} {name}</option>)}
                 </select>
                 {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]}>!</span> : null}
-                <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username} dalla cartella`} title="Rimuovi dalla cartella"><Unlink size={14} /></button>
+                <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username || `canale #${a.id}`} dalla cartella`} title="Rimuovi dalla cartella — il canale resta collegato"><FolderMinus size={14} /></button>
               </div>
             ))}
           </div>
