@@ -2,6 +2,7 @@
         test-integration-db test-integration-db-a test-integration-db-b test-integration-db-c \
         test-integration-worker \
         verify-entrypoint-topology oauth-preflight-check oauth-preflight-test \
+        installation-identity-diagnostic installation-identity-diagnostic-test \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
@@ -49,6 +50,15 @@ oauth-preflight-check:
 # Static and mocked regression tests for the read-only OAuth preflight.
 oauth-preflight-test:
 	./scripts/db/test-oauth-preflight-check.sh
+
+# Read-only database installation identity check. It prints only MATCH,
+# MISMATCH, or MISSING and never prints UUID values or token material.
+installation-identity-diagnostic:
+	./scripts/db/installation-identity-diagnostic.sh
+
+# Static and mocked tests for the redacted installation identity check.
+installation-identity-diagnostic-test:
+	./scripts/db/test-installation-identity-diagnostic.sh
 
 # HTTP server only (cmd/api). No workers spawned.
 run-api:
