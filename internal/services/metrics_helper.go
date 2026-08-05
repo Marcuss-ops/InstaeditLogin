@@ -40,3 +40,23 @@ func RecordTokenRefreshMetrics(platform string, err *error) {
 		metrics.RecordTokenRefreshSuccess(platform)
 	}
 }
+
+// RecordYouTubeOAuthRefreshMetrics records the pool-scoped refresh
+// outcome counter (youtube_oauth_refresh_total{oauth_client_key,
+// result}) for the YouTube OAuth Client Pool. The oauth_client_key
+// label is the pool client that handled the refresh (the key stamped
+// on ctx by CredentialVault.Renew, or LegacyYouTubeOAuthClientKeyLabel
+// for the legacy single-client path). result ∈ {success, error}.
+//
+// Usage (mirrors RecordTokenRefreshMetrics):
+//
+//	func (s *YouTubeOAuthService) RefreshOAuthToken(ctx, ...) (result *models.TokenData, err error) {
+//	    defer RecordYouTubeOAuthRefreshMetrics(credentials.OAuthClientKeyFromContext(ctx), &err)
+//	    ...
+func RecordYouTubeOAuthRefreshMetrics(oauthClientKey string, err *error) {
+	result := metrics.YouTubeOAuthRefreshResultSuccess
+	if *err != nil {
+		result = metrics.YouTubeOAuthRefreshResultError
+	}
+	metrics.RecordYouTubeOAuthRefresh(oauthClientKey, result)
+}

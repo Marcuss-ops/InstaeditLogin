@@ -387,6 +387,14 @@ func safeOAuthRevocationCode(code string) string {
 
 func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (result *models.TokenData, err error) {
 	defer RecordTokenRefreshMetrics(models.PlatformYouTube, &err)
+	// Pool-scoped observability (youtube_oauth_refresh_total{oauth_client_key,
+	// result}): label the attempt with the pool client that issued the grant
+	// — the key CredentialVault.Renew stamped on ctx — so the operator can
+	// compute per-client success/failure rates. Consistent with the
+	// invalid_grant metric (also labelled by the grant's stored key). An
+	// empty key (non-vault caller) is normalized to
+	// legacy_single_client inside RecordYouTubeOAuthRefreshMetrics.
+	defer RecordYouTubeOAuthRefreshMetrics(credentials.OAuthClientKeyFromContext(ctx), &err)
 	if refreshToken == "" {
 		return nil, fmt.Errorf("youtube RefreshOAuthToken: empty refresh token")
 	}

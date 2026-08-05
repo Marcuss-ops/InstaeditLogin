@@ -205,6 +205,75 @@ func TestYouTubeOAuthPoolMetrics_ReauthRequiredChannels_Registered(t *testing.T)
 	}
 }
 
+// TestYouTubeOAuthPoolMetrics_RefreshTotal_Counter pins the per-client
+// refresh-outcome counter: each Record call increments the
+// (oauth_client_key, result) series. An empty key (non-vault / legacy
+// caller) is labelled LegacyYouTubeOAuthClientKeyLabel — never the
+// empty string, never a pool client that did not issue the grant; an
+// unknown result is fail-closed to error (a typo must never inflate
+// the success count).
+func TestYouTubeOAuthPoolMetrics_RefreshTotal_Counter(t *testing.T) {
+	youtubeOAuthRefreshTotal.Reset()
+
+	RecordYouTubeOAuthRefresh("youtube_pool_a", YouTubeOAuthRefreshResultSuccess)
+	RecordYouTubeOAuthRefresh("youtube_pool_a", YouTubeOAuthRefreshResultSuccess)
+	RecordYouTubeOAuthRefresh("youtube_pool_a", YouTubeOAuthRefreshResultError)
+	RecordYouTubeOAuthRefresh("youtube_pool_b", YouTubeOAuthRefreshResultError)
+	RecordYouTubeOAuthRefresh("youtube_pool_b", YouTubeOAuthRefreshResultError)
+	// Empty key → legacy_single_client, never "".
+	RecordYouTubeOAuthRefresh("", YouTubeOAuthRefreshResultSuccess)
+	// Unknown result → fail-closed to error, never a third label value.
+	RecordYouTubeOAuthRefresh("youtube_pool_a", "bogus-result")
+
+	family := gatherFamily(t, "youtube_oauth_refresh_total")
+	if family == nil {
+		t.Fatal("youtube_oauth_refresh_total: not present in gatherer after Record calls")
+	}
+	if family.GetType() != dto.MetricType_COUNTER {
+		t.Errorf("youtube_oauth_refresh_total: want counter type, got %v", family.GetType())
+	}
+	counts := map[string]map[string]float64{}
+	for _, m := range family.GetMetric() {
+		key, result := "", ""
+		for _, lp := range m.GetLabel() {
+			switch lp.GetName() {
+			case "oauth_client_key":
+				key = lp.GetValue()
+			case "result":
+				result = lp.GetValue()
+			}
+		}
+		if counts[key] == nil {
+			counts[key] = map[string]float64{}
+		}
+		counts[key][result] = m.GetCounter().GetValue()
+	}
+	if counts["youtube_pool_a"][YouTubeOAuthRefreshResultSuccess] != 2 {
+		t.Errorf("youtube_oauth_refresh_total{youtube_pool_a,success}: want 2, got %v", counts["youtube_pool_a"][YouTubeOAuthRefreshResultSuccess])
+	}
+	if counts["youtube_pool_a"][YouTubeOAuthRefreshResultError] != 2 {
+		t.Errorf("youtube_oauth_refresh_total{youtube_pool_a,error} (1 explicit + 1 fail-closed bogus): want 2, got %v", counts["youtube_pool_a"][YouTubeOAuthRefreshResultError])
+	}
+	if counts["youtube_pool_b"][YouTubeOAuthRefreshResultError] != 2 {
+		t.Errorf("youtube_oauth_refresh_total{youtube_pool_b,error}: want 2, got %v", counts["youtube_pool_b"][YouTubeOAuthRefreshResultError])
+	}
+	// Empty key must never produce a series with oauth_client_key == "".
+	if _, ok := counts[""]; ok {
+		t.Error("youtube_oauth_refresh_total: an empty oauth_client_key series must never be emitted")
+	}
+	if counts[LegacyYouTubeOAuthClientKeyLabel][YouTubeOAuthRefreshResultSuccess] != 1 {
+		t.Errorf("youtube_oauth_refresh_total{%s,success}: want 1, got %v", LegacyYouTubeOAuthClientKeyLabel, counts[LegacyYouTubeOAuthClientKeyLabel][YouTubeOAuthRefreshResultSuccess])
+	}
+	// Fail-closed: no "bogus-result" label value may exist.
+	for _, m := range family.GetMetric() {
+		for _, lp := range m.GetLabel() {
+			if lp.GetName() == "result" && lp.GetValue() == "bogus-result" {
+				t.Errorf("youtube_oauth_refresh_total: unknown result %q must be fail-closed to error", lp.GetValue())
+			}
+		}
+	}
+}
+
 // TestYouTubeOAuthPoolMetrics_ResetRemovesSeries pins the reset
 // contract: after Reset, a revoked grant's series disappears from the
 // next scrape. An empty GaugeVec emits no family at all from the

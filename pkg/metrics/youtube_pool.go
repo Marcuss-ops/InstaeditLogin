@@ -124,7 +124,39 @@ var (
 		},
 		[]string{"google_subject"},
 	)
+
+	// youtubeOAuthRefreshTotal counts every YouTube OAuth refresh
+	// attempt per pool client and outcome. result ∈ {success, error};
+	// the oauth_client_key label is the pool client that issued the
+	// grant (the key stamped on ctx by vault.Renew) or
+	// legacy_single_client for the pre-pool / non-pool path. Unlike
+	// youtube_oauth_invalid_grant_total (which only counts rejected
+	// grants), this counter observes the full refresh volume so the
+	// operator can compute per-client success/failure rates and spot a
+	// client silently failing (e.g. revoked secret, misconfigured
+	// client) before invalid_grant detections stack up.
+	youtubeOAuthRefreshTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "youtube_oauth_refresh_total",
+			Help: "YouTube OAuth refresh attempts per pool client and result (success|error). Use rate(youtube_oauth_refresh_total{result=\"error\"}[5m]) / rate(youtube_oauth_refresh_total[5m]) for the per-client error ratio.",
+		},
+		[]string{"oauth_client_key", "result"},
+	)
 )
+
+// YouTubeOAuthRefreshResult labels for youtube_oauth_refresh_total.
+const (
+	YouTubeOAuthRefreshResultSuccess = "success"
+	YouTubeOAuthRefreshResultError   = "error"
+)
+
+// LegacyYouTubeOAuthClientKeyLabel is the oauth_client_key label value
+// for refreshes that did NOT go through a pool client (legacy
+// single-client deployments, pre-pool rows, non-vault callers). Kept
+// distinct from "youtube_pool_a" so the pool distribution stays honest:
+// a legacy refresh must never be attributed to a pool client that did
+// not issue the grant.
+const LegacyYouTubeOAuthClientKeyLabel = "legacy_single_client"
 
 func init() {
 	prometheus.MustRegister(
@@ -133,6 +165,7 @@ func init() {
 		youtubeOAuthInvalidGrantTotal,
 		youtubeOAuthPoolHealth,
 		youtubeOAuthReauthRequiredChannels,
+		youtubeOAuthRefreshTotal,
 	)
 }
 
@@ -195,6 +228,24 @@ func ResetYouTubeOAuthPoolHealthMetrics() {
 // status='reauth_required' for a Google subject.
 func SetYouTubeOAuthReauthRequiredChannels(subject string, count int64) {
 	youtubeOAuthReauthRequiredChannels.WithLabelValues(TruncateSubjectForLabel(subject)).Set(float64(count))
+}
+
+// RecordYouTubeOAuthRefresh increments youtube_oauth_refresh_total for
+// the pool client that handled the refresh. result must be one of
+// YouTubeOAuthRefreshResultSuccess / YouTubeOAuthRefreshResultError —
+// an unknown result is normalized to error (fail-closed: a future
+// typo must never inflate the success count). An empty client key
+// (legacy single-client path) is labeled
+// LegacyYouTubeOAuthClientKeyLabel — never the empty string, never a
+// pool client that did not issue the grant.
+func RecordYouTubeOAuthRefresh(oauthClientKey, result string) {
+	if oauthClientKey == "" {
+		oauthClientKey = LegacyYouTubeOAuthClientKeyLabel
+	}
+	if result != YouTubeOAuthRefreshResultSuccess {
+		result = YouTubeOAuthRefreshResultError
+	}
+	youtubeOAuthRefreshTotal.WithLabelValues(oauthClientKey, result).Inc()
 }
 
 // ResetYouTubeOAuthReauthRequiredChannelsMetrics clears ALL series on
