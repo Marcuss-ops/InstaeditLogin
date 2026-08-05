@@ -212,42 +212,6 @@ export function handleDemoRequest(
     return json({ accounts: demoAccounts });
   }
 
-  // Explicit soft-disconnect (P1): acknowledge and drop the account from
-  // the demo list (the real endpoint keeps the row for audit but removes
-  // it from every app surface, which the demo list mirrors).
-  const disconnectMatch = /^\/api\/v1\/accounts\/(\d+)\/disconnect$/.exec(
-    path,
-  );
-  if (disconnectMatch && method === "POST") {
-    const id = Number(disconnectMatch[1]);
-    const idx = demoAccounts.findIndex((a) => a.id === id);
-    if (idx >= 0) demoAccounts.splice(idx, 1);
-    return json({ ok: true }, 204);
-  }
-
-  // Permanent delete (P1): the real endpoint tombstones the account row
-  // (kept for FK integrity) but removes it from every app surface; the demo
-  // list mirrors that by dropping it entirely.
-  const deleteDataMatch = /^\/api\/v1\/accounts\/(\d+)\/data$/.exec(path);
-  if (deleteDataMatch && method === "DELETE") {
-    const id = Number(deleteDataMatch[1]);
-    const idx = demoAccounts.findIndex((a) => a.id === id);
-    if (idx >= 0) demoAccounts.splice(idx, 1);
-    return json({ ok: true }, 204);
-  }
-
-  // "Revoca account Google e tutti i canali": the real endpoint revokes
-  // the complete shared YouTube grant. The demo has one YouTube grant, so
-  // remove every YouTube account from the operational list as the UI would
-  // observe after the grant-level disconnect.
-  const revokeGrantMatch = /^\/api\/v1\/accounts\/(\d+)\/oauth-grant$/.exec(path);
-  if (revokeGrantMatch && method === "DELETE") {
-    for (let index = demoAccounts.length - 1; index >= 0; index -= 1) {
-      if (demoAccounts[index]?.platform === "youtube") demoAccounts.splice(index, 1);
-    }
-    return json({ ok: true }, 204);
-  }
-
   // "Rimuovi dalla cartella": dedicated DELETE for a single membership.
   // Mutate the in-memory join-table fixture so the next aggregate reload
   // preserves the removal, just like the persistent backend transaction.
