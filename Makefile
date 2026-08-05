@@ -1,5 +1,5 @@
 .PHONY: dev stop seed lint lint-check backend-test test-integration \
-        verify-entrypoint-topology \
+        verify-entrypoint-topology oauth-preflight-check oauth-preflight-test \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
@@ -38,6 +38,15 @@ seed:
 # One-shot pre-deploy: connect + apply pending migrations + exit.
 run-migrate:
 	go run ./cmd/migrate
+
+# Read-only OAuth database invariant check. Requires DATABASE_URL and
+# EXPECTED_DATABASE_INSTALLATION_UUID; it never prints token material.
+oauth-preflight-check:
+	./scripts/db/oauth-preflight-check.sh
+
+# Static and mocked regression tests for the read-only OAuth preflight.
+oauth-preflight-test:
+	./scripts/db/test-oauth-preflight-check.sh
 
 # HTTP server only (cmd/api). No workers spawned.
 run-api:

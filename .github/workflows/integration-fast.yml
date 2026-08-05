@@ -266,6 +266,12 @@ jobs:
       - name: OAuth scope canary + secrets coherence smoke
         run: go test -count=1 ./cmd/oauth-scope-canary/...
 
+      # ─── 8.7. OAuth DB preflight script regression ───────────────
+      # Uses a local fake psql client; no production/staging credentials
+      # or database connection are involved.
+      - name: OAuth DB preflight script regression
+        run: make oauth-preflight-test
+
       # ─── 9. Integration tests (Postgres via testcontainers-go) ────
       # Delegates to the Makefile — single source of truth for the
       # test command. Edit `make test-integration`, not this step.
