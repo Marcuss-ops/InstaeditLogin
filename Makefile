@@ -1,5 +1,6 @@
 .PHONY: dev stop seed lint lint-check backend-test test-integration \
-        test-integration-db test-integration-worker \
+        test-integration-db test-integration-db-a test-integration-db-b test-integration-db-c \
+        test-integration-worker \
         verify-entrypoint-topology oauth-preflight-check oauth-preflight-test \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
@@ -100,17 +101,37 @@ backend-test:
 # run under `go test -race ./...` via the `backend-test` target — no
 # integration tag needed.
 # This Makefile target is the canonical local command; the CI workflow
-# (integration-fast.yml) invokes the two SPLIT targets below so the
-# database lane and the worker+redis lane run on parallel runners
+# (integration-fast.yml) invokes the SPLIT targets below so the three
+# database lanes and the worker+redis lane run on parallel runners
 # instead of one sequential ~90s job. `-count=1` defeats go's test
 # cache (the ephemeral containers must actually exercise the code),
 # and `-v` was dropped — it only added log I/O, not coverage.
 test-integration:
 	go test -tags=integration -count=1 -timeout 10m ./internal/database/... ./internal/worker/... ./internal/testutil/redis/...
 
-# Database lane — migrations, order-independence, multi-tenancy.
+# Database full lane — convenience alias running all three db sub-lanes
+# sequentially (local use / docs); the CI splits them on 3 runners.
 test-integration-db:
-	go test -tags=integration -count=1 -timeout 10m ./internal/database/...
+	make test-integration-db-a test-integration-db-b test-integration-db-c
+
+# Database lane A — multi-tenancy + upload-jobs + schema health + misc.
+# Explicit `-run` list (measured ~34s local). Every regex below is
+# mirrored by lane C's `-skip`, so the three lanes' union is EXACTLY
+# the full ./internal/database/... suite — a test can never be orphaned.
+test-integration-db-a:
+	go test -tags=integration -count=1 -timeout 10m -run 'TestMultiTenancy|TestUploadJobs|TestPostStatus|TestColumns|TestSchemaHealthy|TestVerify' ./internal/database/...
+
+# Database lane B — Meta→Instagram + OAuth backfill migrations.
+# Explicit `-run` list (measured ~26s local). Mirror in lane C's `-skip`.
+test-integration-db-b:
+	go test -tags=integration -count=1 -timeout 10m -run 'TestMigrationMetaToInstagram|TestMigrationDoesNotChange|TestMigrationPreserves|TestMigrationLeavesNo|TestMigrationCanRunTwice|TestMigrationHandles|TestMigration083|TestMigration084' ./internal/database/...
+
+# Database lane C — the rest via `-skip` of lanes A+B patterns (~40s
+# local). Being the `-skip` lane means ANY new database test not listed
+# in A or B automatically runs here: coverage is guaranteed even as the
+# suite grows.
+test-integration-db-c:
+	go test -tags=integration -count=1 -timeout 10m -skip 'TestMultiTenancy|TestUploadJobs|TestPostStatus|TestColumns|TestSchemaHealthy|TestVerify|TestMigrationMetaToInstagram|TestMigrationDoesNotChange|TestMigrationPreserves|TestMigrationLeavesNo|TestMigrationCanRunTwice|TestMigrationHandles|TestMigration083|TestMigration084' ./internal/database/...
 
 # Worker + redis lane — PublishWorker + ReconcileWorker pipeline on
 # testcontainer postgres:17-alpine + real httptest.Server TikTok wire,

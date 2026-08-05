@@ -26,11 +26,20 @@
 #                   the shard commands' comments.
 #   - frontend    : npm ci + lint + vitest + vite build + uploads the
 #                   web-dist artifact consumed by deploy.yml.
-#   - integration : testcontainers suite split into db / worker+redis
-#                   lanes (each ~30-60s instead of one 94s job).
+#   - integration : testcontainers suite split into FOUR lanes: the db
+#                   lane (was the ~111s bottleneck — 37 container
+#                   spin-ups!) is sharded 3-way (db-a tenancy/schema,
+#                   db-b meta+oauth migrations, db-c the -skip
+#                   complement) + worker/redis. Wall ~50-90s per lane.
 #   - test-parse-envfile: fast pure-Python regression (unchanged).
 # The deploy gate still requires the WHOLE workflow to conclude
 # `success` — parallel lanes don't weaken the contract.
+#
+# REBALANCE NOTE: lane db-c is the `-skip` complement of db-a+db-b,
+# so ANY new database test lands there by design — it will grow
+# monotonically and eventually re-become the critical path. When that
+# happens, move its heaviest tests into a new explicit `-run` lane
+# (mirroring the pattern in the two sibling lanes).
 #
 # Coverage (this file):
 #   1. Go files are gofmt-clean (Blocco #3.1 hard requirement).
@@ -312,10 +321,16 @@ jobs:
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────
-  # integration — testcontainers suite split into two parallel lanes
-  # so neither pays the other's container spin-up + migration runs.
-  #   db      : internal/database — migrations, order-independence,
-  #             multi-tenancy (the heavy lane).
+  # integration — testcontainers suite split into FOUR parallel lanes
+  # so no lane pays another's container spin-up + migration runs.
+  # The db lane was the CI bottleneck at ~111s (37 container spin-ups
+  # in ./internal/database!); it is now sharded 3-way:
+  #   db-a    : multi-tenancy + upload-jobs + schema health (~34s
+  #             local, ~10 containers)
+  #   db-b    : Meta→Instagram + OAuth backfill migrations (~26s)
+  #   db-c    : everything else, via `-skip` of A+B patterns (~40s).
+  #             Being the -skip lane, any NEW database test lands
+  #             here automatically — union of lanes = full suite.
   #   worker  : internal/worker (Publish+Reconcile pipeline on real
   #             Postgres + httptest TikTok wire) + redis smoke.
   # `-count=1` defeats go's test cache so the ephemeral containers
@@ -329,7 +344,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [db, worker]
+        lane: [db-a, db-b, db-c, worker]
 
     steps:
       - uses: actions/checkout@v4
@@ -342,11 +357,20 @@ jobs:
 
       - name: Run integration tests (${{ matrix.lane }} lane)
         run: |
-          if [ "${{ matrix.lane }}" = "db" ]; then
-            make test-integration-db
-          else
-            make test-integration-worker
-          fi
+          case "${{ matrix.lane }}" in
+            db-a)
+              make test-integration-db-a
+              ;;
+            db-b)
+              make test-integration-db-b
+              ;;
+            db-c)
+              make test-integration-db-c
+              ;;
+            worker)
+              make test-integration-worker
+              ;;
+          esac
 
       # Integration was historically the flaky lane — keep the operator
       # hints close to the failure instead of burying them in go-static.
