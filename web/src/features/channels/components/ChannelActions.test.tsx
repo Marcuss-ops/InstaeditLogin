@@ -84,6 +84,73 @@ describe("ChannelActions", () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks a same-turn double click while the first mutation is pending", async () => {
+    let resolveRequest: (value: unknown) => void = () => {};
+    authedFetchMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRequest = resolve;
+    }));
+    const onDone = vi.fn();
+    render(<ChannelActions account={youtubeAccount} onDone={onDone} />);
+
+    const button = screen.getByTestId("channel-action-disconnect");
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(authedFetchMock).toHaveBeenCalledTimes(1);
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    resolveRequest({ ok: true, status: 204 });
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  });
+
+  it("re-enables the action after a failed request so the user can retry", async () => {
+    authedFetchMock.mockRejectedValueOnce(new Error("timeout"));
+    authedFetchMock.mockResolvedValueOnce({ ok: true, status: 204 });
+    const onDone = vi.fn();
+    render(<ChannelActions account={youtubeAccount} onDone={onDone} />);
+
+    const button = screen.getByTestId("channel-action-disconnect");
+    fireEvent.click(button);
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+
+    await waitFor(() => expect(authedFetchMock).toHaveBeenCalledTimes(2));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a same-turn double click for permanent delete", async () => {
+    let resolveRequest: (value: unknown) => void = () => {};
+    authedFetchMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRequest = resolve;
+    }));
+    render(<ChannelActions account={youtubeAccount} onDone={() => {}} />);
+
+    const button = screen.getByTestId("channel-action-delete");
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(authedFetchMock).toHaveBeenCalledTimes(1);
+    expect(window.prompt).toHaveBeenCalledTimes(1);
+    resolveRequest({ ok: true, status: 204 });
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it("blocks a same-turn double click for grant revoke", async () => {
+    let resolveRequest: (value: unknown) => void = () => {};
+    authedFetchMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRequest = resolve;
+    }));
+    render(<ChannelActions account={youtubeAccount} onDone={() => {}} />);
+
+    const button = screen.getByTestId("channel-action-revoke-grant");
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(authedFetchMock).toHaveBeenCalledTimes(1);
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    resolveRequest({ ok: true, status: 204 });
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
   it("permanent delete hits DELETE /accounts/{id}/data with the exact-name confirmation", async () => {
     const promptMock = vi.spyOn(window, "prompt").mockReturnValue("wwe-channel");
     const onDone = vi.fn();

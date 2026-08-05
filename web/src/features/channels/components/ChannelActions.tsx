@@ -21,7 +21,7 @@
  * a successful action so the parent can reload or navigate away.
  * Errors surface through authedFetch's shared toast handling.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { RefreshCw, ShieldX, Unplug, XCircle } from "lucide-react";
 import { authedFetch } from "../../../lib/auth";
 import { cn } from "../../../lib/utils";
@@ -51,6 +51,11 @@ const RED_TILE =
 
 export function ChannelActions({ account, onDone }: ChannelActionsProps) {
   const [busy, setBusy] = useState<BusyAction>(null);
+  // State updates are asynchronous: two clicks in the same event turn can
+  // otherwise both pass the disabled check before React re-renders. Keep a
+  // synchronous guard as well so a double-click can never submit two lifecycle
+  // mutations.
+  const busyRef = useRef<BusyAction>(null);
 
   const run = async (
     action: Exclude<BusyAction, null>,
@@ -58,7 +63,9 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
     endpoint: string,
     confirmMessage: string,
   ) => {
+    if (busyRef.current !== null) return;
     if (!window.confirm(confirmMessage)) return;
+    busyRef.current = action;
     setBusy(action);
     try {
       await authedFetch(endpoint, { method });
@@ -67,6 +74,7 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
       // authedFetch already toasts the server error; the tile stays so
       // the user can retry. Never leave an unhandled rejection.
     } finally {
+      if (busyRef.current === action) busyRef.current = null;
       setBusy(null);
     }
   };
@@ -76,7 +84,8 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
       `Per eliminare definitivamente ${handle}, digita esattamente:\n${handle}`,
       "",
     );
-    if (confirmation !== handle) return;
+    if (confirmation !== handle || busyRef.current !== null) return;
+    busyRef.current = "delete";
     setBusy("delete");
     try {
       await authedFetch(`/api/v1/accounts/${account.id}/data`, {
@@ -88,6 +97,7 @@ export function ChannelActions({ account, onDone }: ChannelActionsProps) {
     } catch {
       // authedFetch already toasts the server error; keep the action retryable.
     } finally {
+      if (busyRef.current === "delete") busyRef.current = null;
       setBusy(null);
     }
   };
