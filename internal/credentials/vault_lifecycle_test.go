@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -36,12 +37,20 @@ func (s *statusTrackingTokenStore) UpdateOAuthConnectionStatus(ctx context.Conte
 	return nil
 }
 
+func (s *statusTrackingTokenStore) MarkInvalidGrantTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64, code, message string) error {
+	if s.statusRepo == nil {
+		return nil
+	}
+	return s.statusRepo.MarkInvalidGrantTx(ctx, tx, oauthConnectionID, code, message)
+}
+
 var _ GrantStatusStore = (*statusTrackingTokenStore)(nil)
+var _ InvalidGrantTxStore = (*statusTrackingTokenStore)(nil)
 
 // TestVault_Lifecycle_InvalidGrantMarksGrantReauthRequired verifies the
 // complete vault-side invalid_grant contract: the refresh is attempted once,
-// the lock transaction rolls back, and only the redacted application error
-// classification is persisted on the OAuth connection.
+// the grant and linked-account propagation commit in the lock transaction,
+// and only redacted application classifications are persisted.
 func TestVault_Lifecycle_InvalidGrantMarksGrantReauthRequired(t *testing.T) {
 	v, mock, base := newTestVault(t)
 	store := &statusTrackingTokenStore{
@@ -61,15 +70,20 @@ func TestVault_Lifecycle_InvalidGrantMarksGrantReauthRequired(t *testing.T) {
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectRollback()
-	mock.ExpectExec(`UPDATE oauth_connections
-	    SET status = $2::text,
-	        last_refresh_error = NULLIF($3::text, ''),
-	        last_refresh_at = CASE WHEN $2::text = 'active' THEN NOW() ELSE last_refresh_at END,
-	        updated_at = NOW()
-	  WHERE id = $1`).
+	mock.ExpectExec(`UPDATE oauth_connections SET status = $2::text, last_refresh_error = NULLIF($3::text, ''), last_refresh_at = CASE WHEN $2::text = 'active' THEN NOW() ELSE last_refresh_at END, updated_at = NOW() WHERE id = $1`).
 		WithArgs(accountID, models.AccountStatusReauthRequired, "invalid_grant").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE platform_accounts
+		    SET status = 'reauth_required',
+		        reauth_required_at = NOW(),
+		        last_error_code = $1,
+		        last_error_message = $2,
+		        updated_at = NOW()
+		  WHERE oauth_connection_id = $3
+		    AND status <> 'disconnected'`).
+		WithArgs("SHARED_GRANT_REAUTH_REQUIRED", "Shared OAuth grant requires reauthorization", accountID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	providerErr := &OAuthTokenError{
 		StatusCode:  400,
@@ -86,12 +100,8 @@ func TestVault_Lifecycle_InvalidGrantMarksGrantReauthRequired(t *testing.T) {
 	if errors.Is(err, providerErr) == false {
 		t.Fatalf("Renew error: want provider error preserved through wrapping, got %v", err)
 	}
-	if store.statusCalls != 1 {
-		t.Fatalf("grant status calls: want 1, got %d", store.statusCalls)
-	}
-	if store.oauthID != accountID || store.status != models.AccountStatusReauthRequired || store.lastError != "invalid_grant" {
-		t.Fatalf("grant status: want (%d, %q, invalid_grant), got (%d, %q, %q)",
-			accountID, models.AccountStatusReauthRequired, store.oauthID, store.status, store.lastError)
+	if store.statusCalls != 0 {
+		t.Fatalf("non-transactional grant status calls: want 0, got %d", store.statusCalls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sqlmock expectations: %v", err)

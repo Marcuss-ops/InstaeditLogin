@@ -16,8 +16,10 @@ const (
 	YouTubeReauthMessage = "Shared OAuth grant requires reauthorization"
 )
 
-// OAuthConnectionReauthStore is an optional extension implemented by the
-// production user repository. It deliberately stays outside
+// OAuthConnectionReauthStore is the invalid_grant-specific extension
+// implemented by the production user repository. Channel-binding mismatch
+// paths use MarkReauthRequired on the individual account and do not call this
+// grant-wide method. It deliberately stays outside
 // PublisherUserStore/ReconcileUserStore so existing test doubles and other
 // consumers do not need to grow a grant-wide mutation surface.
 type OAuthConnectionReauthStore interface {
@@ -40,23 +42,28 @@ func markYouTubeGrantReauth(ctx context.Context, userRepo PublisherUserStore, lo
 	// key. Use that path exclusively when available so the current channel is
 	// not updated twice and all sibling channels are transitioned together.
 	if account.OAuthConnectionID != nil && *account.OAuthConnectionID > 0 {
-		if store, ok := userRepo.(OAuthConnectionReauthStore); ok {
-			if err := store.MarkOAuthConnectionAccountsReauthRequired(ctx, *account.OAuthConnectionID, YouTubeReauthCode, YouTubeReauthMessage); err == nil {
-				return
-			} else {
-				logger.Warn("could not flag YouTube accounts sharing OAuth connection as reauth_required",
-					"oauth_connection_id", *account.OAuthConnectionID, "error", err)
-				// Fall through so the current channel still receives a
-				// reauth_required signal if the grant-wide write is unavailable.
-			}
+		store, ok := userRepo.(OAuthConnectionReauthStore)
+		if !ok {
+			logger.Error("shared OAuth grant reauth propagation capability is unavailable",
+				"oauth_connection_id", *account.OAuthConnectionID)
+			return
 		}
+		if err := store.MarkOAuthConnectionAccountsReauthRequired(ctx, *account.OAuthConnectionID, YouTubeReauthCode, YouTubeReauthMessage); err != nil {
+			// Do not fall back to a single-account update: that would leave
+			// sibling channels with a misleading active state. The vault and
+			// worker both fail closed until the atomic grant-wide operation can
+			// be retried.
+			logger.Error("shared OAuth grant reauth propagation failed",
+				"oauth_connection_id", *account.OAuthConnectionID, "error", err)
+		}
+		return
 	}
 
-	// Compatibility fallback for narrow test stores and legacy wiring without
-	// a grant key. It still marks the current account and never exposes the
-	// upstream OAuth response.
+	// Compatibility fallback is limited to legacy rows without a canonical
+	// grant key; there are no siblings that can be addressed safely in that
+	// shape.
 	if err := userRepo.MarkReauthRequired(ctx, account.ID, YouTubeReauthCode, YouTubeReauthMessage); err != nil {
-		logger.Warn("could not flag YouTube platform account reauth_required",
+		logger.Warn("could not flag legacy YouTube platform account reauth_required",
 			"platform_account_id", account.ID, "error", err)
 	}
 }

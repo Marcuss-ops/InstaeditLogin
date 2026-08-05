@@ -27,6 +27,7 @@ func TestUserRepository_MarkOAuthConnectionAccountsReauthRequired_UsesGrantIDAnd
 	repo := repository.NewUserRepository(db)
 
 	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").WithArgs(int64(45)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE oauth_connections
 	    SET status = 'reauth_required',
 	        last_refresh_error = 'invalid_grant',

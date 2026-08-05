@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -80,10 +81,11 @@ func (r *UserRepository) CountActiveAccountsOnConnection(ctx context.Context, oa
 	return n, nil
 }
 
-// MarkOAuthConnectionAccountsReauthRequired propagates the shared-grant
-// reconnect state to every linked account except explicitly disconnected
-// accounts. The two updates are committed together so a failed grant cannot
-// leave siblings displaying an active state.
+// MarkOAuthConnectionAccountsReauthRequired is the invalid_grant-specific
+// propagation path. Channel-binding mismatches intentionally use
+// MarkReauthRequired instead, because they do not invalidate the shared OAuth
+// grant. This method updates the grant and every linked account except
+// explicitly disconnected accounts in one locked transaction.
 func (r *UserRepository) MarkOAuthConnectionAccountsReauthRequired(ctx context.Context, oauthConnectionID int64, code, message string) error {
 	if oauthConnectionID <= 0 {
 		return fmt.Errorf("mark OAuth connection reauth required: invalid OAuth connection id %d", oauthConnectionID)
@@ -98,6 +100,27 @@ func (r *UserRepository) MarkOAuthConnectionAccountsReauthRequired(ctx context.C
 			_ = tx.Rollback()
 		}
 	}()
+	if err := lockOAuthConnectionTx(ctx, tx, oauthConnectionID); err != nil {
+		return fmt.Errorf("mark OAuth connection reauth required: lock grant: %w", err)
+	}
+	if err := markOAuthConnectionAccountsReauthRequiredTx(ctx, tx, oauthConnectionID, code, message); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("mark OAuth connection reauth required: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func lockOAuthConnectionTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64) error {
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", oauthConnectionID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func markOAuthConnectionAccountsReauthRequiredTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64, code, message string) error {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE oauth_connections
 		    SET status = 'reauth_required',
@@ -118,9 +141,5 @@ func (r *UserRepository) MarkOAuthConnectionAccountsReauthRequired(ctx context.C
 		code, message, oauthConnectionID); err != nil {
 		return fmt.Errorf("mark OAuth connection reauth required: propagate accounts: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("mark OAuth connection reauth required: commit: %w", err)
-	}
-	committed = true
 	return nil
 }

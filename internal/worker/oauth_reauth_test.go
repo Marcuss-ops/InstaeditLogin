@@ -48,7 +48,7 @@ func TestMarkYouTubeGrantReauth_UsesSingleGrantWideUpdate(t *testing.T) {
 	}
 }
 
-func TestMarkYouTubeGrantReauth_FallsBackToCurrentAccountOnGrantWriteError(t *testing.T) {
+func TestMarkYouTubeGrantReauth_DoesNotPartiallyUpdateOnGrantWriteError(t *testing.T) {
 	connectionID := int64(45)
 	store := &grantAwareUserStore{mockUserStore: &mockUserStore{
 		markReauthRequiredFn: func(context.Context, int64, string, string) error { return nil },
@@ -65,8 +65,8 @@ func TestMarkYouTubeGrantReauth_FallsBackToCurrentAccountOnGrantWriteError(t *te
 	failingStore := &grantWriteErrorStore{grantAwareUserStore: store}
 	markYouTubeGrantReauth(context.Background(), failingStore, nil, account)
 
-	if store.markReauthRequiredCalls != 1 {
-		t.Fatalf("per-account fallback calls: want 1, got %d", store.markReauthRequiredCalls)
+	if store.markReauthRequiredCalls != 0 {
+		t.Fatalf("per-account fallback calls: want 0 for a shared grant, got %d", store.markReauthRequiredCalls)
 	}
 }
 
