@@ -331,6 +331,42 @@ fingerprint clean (no cross-cluster / managed-Postgres confusion),
 and the discipline stays so the roll-back path remains identical
 to drift recovery.
 
+#### 3.1.7 Automated backup services (live VPS state)
+
+> **Path correction:** the production repo on the VPS lives at
+> `~/Projects/company/InstaeditLogin` (`/home/pierone/Projects/company/`),
+> NOT `/opt/instaedit/InstaeditLogin`. The stack deploys with
+> `docker-compose.yml` + `.env.dev` (compose project `instaeditlogin`);
+> the `/opt/instaedit/secrets/.env.production` paths quoted elsewhere are
+> legacy and not used on this host.
+
+The VPS already runs three automated backup/restore services managed by
+systemd (in addition to the manual drill in §3.1.3):
+
+| Service | Cadence | What it does |
+|---|---|---|
+| `instaedit-db-backup.service` + `.timer` | Daily 03:15 UTC (±300 s) | Runs `/usr/local/sbin/instaedit-db-backup`: custom-format `pg_dump` of `instaedit_login` + `pg_dumpall --globals-only`, writes `instaedit_login_<UTC>.dump` + `postgres_globals_<UTC>.sql` + `SHA256SUMS_<UTC>` under `/srv/instaedit-backups/postgres/` (root:root 0600), 30-day retention. Uses `flock` on `/run/lock/instaedit-db-backup.lock`. |
+| `instaedit-db-restore-check.service` + `.timer` | Weekly | Runs `/usr/local/sbin/instaedit-db-restore-check`: restores the newest dump into a throwaway database inside `instaedit-db`, compares non-sensitive row counts, drops the temp DB on every exit. |
+| Manual secret snapshot | As needed | GPG-symmetric (AES256) archive of the four secret files → `/srv/instaedit-backups/secret/instaedit_secrets_<UTC>.gpg` + `.sha256`; passphrase stored root-only in `/root/instaedit-secret-backup.passphrase.<UTC>`. **Copy the passphrase off-host** (password manager) or the archive is unrecoverable if the VPS dies. |
+
+**Verify the last DB backup (read-only):**
+
+```bash
+BD=/srv/instaedit-backups/postgres
+D=$(sudo sh -c "ls -1t $BD/instaedit_login_*.dump | head -1")
+M=$(sudo sh -c "ls -1t $BD/SHA256SUMS_* | head -1")
+sudo cat "$D" | docker exec -i instaedit-db pg_restore --list | head -8  # TOC legibile
+sudo sh -c "cd $BD && sha256sum -c $(basename "$M")"                      # OK x2
+```
+
+**Files covered by the secrets snapshot:** `/etc/instaeditlogin-youtube.env`
+(OAuth clients + pool + `ENCRYPTION_KEY_HISTORY`),
+`/etc/instaeditlogin-overrides.env` (DATABASE_URL + S3),
+`~/.env.dev` (ENCRYPTION_KEY, JWT_SECRET, S3/MinIO, Velox) and
+`~/.env.youtube.local` (pool A + `YOUTUBE_CLIENT_JSON`). The rotation
+invariant: add the new `ENCRYPTION_KEYS` entry and keep the old key active
+until every token is re-encrypted — never replace the keyring brutally.
+
 ---
 
 ## 4. Storage (MinIO / `instaedit-prod-media`)
