@@ -7,7 +7,14 @@ import (
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
+
+// Compile-time proof that the production storage repository satisfies
+// the narrow counting interface the pool registry needs — if the
+// signatures ever drift, this package stops building instead of
+// failing at first login in production.
+var _ OAuthClientUsageCounter = (*repository.OAuthTokenCapacityRepository)(nil)
 
 const (
 	testPoolClientAID     = "client-a-id.apps.googleusercontent.com"
@@ -255,17 +262,83 @@ func TestYouTubeOAuthClientRegistry_Select_CounterError_FailsClosed(t *testing.T
 	}
 }
 
-func TestYouTubeOAuthClientRegistry_Select_EmptySubjectRejectedWithCounter(t *testing.T) {
-	r, err := NewYouTubeOAuthClientRegistry(testPoolClients(), WithYouTubeOAuthClientUsageCounter(&fakeOAuthClientUsageCounter{}))
+// TestYouTubeOAuthClientRegistry_Select_EmptySubjectFallsBackToFirstClient
+// pins the PRODUCTION login path contract: with a usage counter wired
+// but NO Google subject (the account is unknown until the consent
+// screen), selection must fall back to the first registered client —
+// deterministically, and WITHOUT consulting the counter (the
+// per-subject usage query would be meaningless). A regression that
+// errors here would break every new YouTube pool login once the
+// counter is wired in bootstrap.
+func TestYouTubeOAuthClientRegistry_Select_EmptySubjectFallsBackToFirstClient(t *testing.T) {
+	counter := &fakeOAuthClientUsageCounter{usage: map[string]int64{
+		"youtube_pool_a": 95, // over critical — yet must still win the subject-less fallback
+		"youtube_pool_b": 1,
+	}}
+	r, err := NewYouTubeOAuthClientRegistry(testPoolClients(), WithYouTubeOAuthClientUsageCounter(counter))
 	if err != nil {
 		t.Fatalf("NewYouTubeOAuthClientRegistry: %v", err)
 	}
-	_, err = r.SelectForNewConnection(context.Background(), "")
-	if err == nil {
-		t.Fatal("SelectForNewConnection with empty subject + counter: want error, got nil")
+	selected, err := r.SelectForNewConnection(context.Background(), "")
+	if err != nil {
+		t.Fatalf("SelectForNewConnection with empty subject + counter: want deterministic first client, got error %v", err)
 	}
-	if !strings.Contains(err.Error(), "googleSubjectID is required") {
-		t.Errorf("error must explain the empty subject; got %v", err)
+	if selected.Key != "youtube_pool_a" {
+		t.Fatalf("empty subject fallback: want youtube_pool_a (first registered), got %q", selected.Key)
+	}
+	if len(counter.calls) != 0 {
+		t.Fatalf("empty subject must NOT consult the usage counter; got %d counter calls", len(counter.calls))
+	}
+}
+
+// TestYouTubeOAuthClientRegistryFromConfig_WiresUsageCounter proves the
+// production wiring path: NewYouTubeOAuthClientRegistryFromConfig
+// accepts registry options, so bootstrap can attach the storage-backed
+// OAuthClientUsageCounter (OAuthTokenCapacityRepository). With a
+// subject resolved, selection becomes capacity-aware (least-loaded
+// pool wins); the subject-less login path still degrades gracefully.
+func TestYouTubeOAuthClientRegistryFromConfig_WiresUsageCounter(t *testing.T) {
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			YouTubeOAuthClientPool: config.YouTubeOAuthClientPoolConfig{
+				ClientA: config.YouTubeOAuthPoolClient{
+					ClientID: testPoolClientAID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectA,
+				},
+				ClientB: config.YouTubeOAuthPoolClient{
+					ClientID: testPoolClientBID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectB,
+				},
+			},
+		},
+	}
+	counter := &fakeOAuthClientUsageCounter{usage: map[string]int64{
+		"youtube_pool_a": 48,
+		"youtube_pool_b": 43,
+	}}
+	r, err := NewYouTubeOAuthClientRegistryFromConfig(cfg, WithYouTubeOAuthClientUsageCounter(counter))
+	if err != nil {
+		t.Fatalf("NewYouTubeOAuthClientRegistryFromConfig: %v", err)
+	}
+	if r == nil {
+		t.Fatal("registry must not be nil when both pool clients are configured")
+	}
+	// Subject-aware selection now consults the counter (least-loaded wins).
+	selected, err := r.SelectForNewConnection(context.Background(), testPoolGoogleSubject)
+	if err != nil {
+		t.Fatalf("SelectForNewConnection(subject): %v", err)
+	}
+	if selected.Key != "youtube_pool_b" {
+		t.Fatalf("capacity-aware selection: want youtube_pool_b (43 used vs 48), got %q", selected.Key)
+	}
+	if len(counter.calls) != 2 {
+		t.Errorf("counter calls: want 2 (one per client), got %d", len(counter.calls))
+	}
+	// Subject-less login path still degrades gracefully.
+	fallback, err := r.SelectForNewConnection(context.Background(), "")
+	if err != nil {
+		t.Fatalf("SelectForNewConnection(empty subject): %v", err)
+	}
+	if fallback.Key != "youtube_pool_a" {
+		t.Errorf("empty subject fallback: want youtube_pool_a, got %q", fallback.Key)
 	}
 }
 

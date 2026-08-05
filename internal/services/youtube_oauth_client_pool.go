@@ -197,10 +197,12 @@ func NewYouTubeOAuthClientRegistry(clients []YouTubeOAuthClientConfig, opts ...Y
 
 // NewYouTubeOAuthClientRegistryFromConfig builds the pool registry from
 // the optional YOUTUBE_OAUTH_CLIENT_A/B_* env vars (via
-// cfg.Auth.YouTubeOAuthClientPool). Returns (nil, nil) when no pool
-// client is configured, preserving the legacy single-client path
-// (cfg.Auth.YouTubeClientID) untouched.
-func NewYouTubeOAuthClientRegistryFromConfig(cfg *config.Config) (*YouTubeOAuthClientRegistry, error) {
+// cfg.Auth.YouTubeOAuthClientPool), applying any extra options (e.g.
+// WithYouTubeOAuthClientUsageCounter wired from the storage
+// repository). Returns (nil, nil) when no pool client is configured,
+// preserving the legacy single-client path (cfg.Auth.YouTubeClientID)
+// untouched.
+func NewYouTubeOAuthClientRegistryFromConfig(cfg *config.Config, opts ...YouTubeOAuthClientRegistryOption) (*YouTubeOAuthClientRegistry, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("youtube oauth client pool: nil config")
 	}
@@ -225,7 +227,7 @@ func NewYouTubeOAuthClientRegistryFromConfig(cfg *config.Config) (*YouTubeOAuthC
 	if len(clients) == 0 {
 		return nil, nil
 	}
-	return NewYouTubeOAuthClientRegistry(clients)
+	return NewYouTubeOAuthClientRegistry(clients, opts...)
 }
 
 // Len returns the number of configured pool clients.
@@ -267,23 +269,27 @@ func (r *YouTubeOAuthClientRegistry) Resolve(key string) (*YouTubeOAuthClientCon
 // SelectForNewConnection returns the pool client that should issue the
 // next OAuth grant for the given Google subject.
 //
-// With a usage counter wired, the client with the most remaining
-// capacity (RecommendedCapacity − active refresh grants) wins; ties
-// break by lower usage, then registration order (deterministic, never
-// random — a new channel must not land on a different pool across
-// retries). Counter failures fail closed: the registry refuses to
-// pick a pool on a storage error rather than guessing. An empty
-// googleSubjectID is rejected when a counter is wired (the usage
-// query would be meaningless); the no-counter fallback does not need
-// the subject.
+// With a usage counter wired AND a known googleSubjectID, the client
+// with the most remaining capacity (RecommendedCapacity − active
+// refresh grants) wins; ties break by lower usage, then registration
+// order (deterministic, never random — a new channel must not land on
+// a different pool across retries). Counter failures fail closed: the
+// registry refuses to pick a pool on a storage error rather than
+// guessing. Clients over the critical threshold (90 active grants)
+// are excluded from selection; if every client is blocked the
+// registry returns ErrYouTubeOAuthClientPoolExhausted (new
+// connections refused until a pool drains below critical).
 //
-// Clients over the critical threshold (90 active grants) are excluded
-// from selection; if every client is blocked the registry returns
-// ErrYouTubeOAuthClientPoolExhausted (new connections refused until a
-// pool drains below critical).
-//
-// Without a counter (pre-migration wiring), the first registered
-// client is returned deterministically.
+// An EMPTY googleSubjectID — the production login path, where the
+// Google account is unknown until the operator picks it on the
+// consent screen — falls back to the first registered client,
+// deterministically, exactly as the no-counter selection did. The
+// per-(subject, client) usage query would be meaningless without the
+// subject, so capacity-aware selection only engages once a caller can
+// resolve it (e.g. a future subject-pinned connect-link flow); the
+// strict empty-subject rejection lives in selectLeastLoadedPoolClient
+// for OAuthTokenCapacityManager.SelectPool, whose contract demands a
+// subject.
 func (r *YouTubeOAuthClientRegistry) SelectForNewConnection(ctx context.Context, googleSubjectID string) (*YouTubeOAuthClientConfig, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -291,7 +297,7 @@ func (r *YouTubeOAuthClientRegistry) SelectForNewConnection(ctx context.Context,
 	if r == nil || len(r.clients) == 0 {
 		return nil, ErrYouTubeOAuthClientPoolEmpty
 	}
-	if r.usageCounter == nil {
+	if r.usageCounter == nil || googleSubjectID == "" {
 		return &r.clients[0], nil
 	}
 	selected, _, err := selectLeastLoadedPoolClient(ctx, r.clients, r.usageCounter, googleSubjectID)

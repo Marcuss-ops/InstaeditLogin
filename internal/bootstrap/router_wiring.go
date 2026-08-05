@@ -245,7 +245,18 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	// bakes it into the signed state, and the callback exchanges the
 	// code with exactly that client. Nil registry keeps the legacy
 	// single-client flow untouched.
-	if ytPoolRegistry, regErr := services.NewYouTubeOAuthClientRegistryFromConfig(s.cfg); regErr != nil {
+	//
+	// The capacity counter (OAuthTokenCapacityRepository) is wired as
+	// the registry's OAuthClientUsageCounter: SelectForNewConnection
+	// becomes capacity-aware (least-loaded pool per Google subject)
+	// once a caller resolves the subject. The production login path
+	// stays subject-less (the Google account is unknown until the
+	// consent screen), so it falls back to the deterministic first
+	// client — never an error.
+	if ytPoolRegistry, regErr := services.NewYouTubeOAuthClientRegistryFromConfig(
+		s.cfg,
+		services.WithYouTubeOAuthClientUsageCounter(repository.NewOAuthTokenCapacityRepository(s.db)),
+	); regErr != nil {
 		return nil, nil, fmt.Errorf("build youtube oauth client pool registry: %w", regErr)
 	} else if ytPoolRegistry != nil {
 		opts = append(opts, api.WithYouTubeOAuthClientRegistry(ytPoolRegistry))
