@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -97,6 +98,43 @@ func TestUserRepository_DisconnectOAuthGrantTx_RollsBackWhenAuditInsertFails(t *
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+func expectGrantDisconnectLocks(mock sqlmock.Sqlmock, grantID, userID int64) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT user_id
+	   FROM oauth_connections
+	  WHERE id = $1
+	  FOR UPDATE`).
+		WithArgs(grantID).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(userID))
+	mock.ExpectQuery(`SELECT id
+	   FROM platform_accounts
+	  WHERE oauth_connection_id = $1
+	  ORDER BY id
+	  FOR UPDATE`).
+		WithArgs(grantID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(21).AddRow(22))
+}
+
+func TestUserRepository_DisconnectOAuthGrantWithRevocationTx_RollsBackBeforeLocalMutation(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+
+	expectGrantDisconnectLocks(mock, 55, 9)
+	mock.ExpectRollback()
+	if err := repo.DisconnectOAuthGrantWithRevocationTx(context.Background(), 55, func(context.Context, interfaceTx) error {
+		return errors.New("remote provider unavailable")
+	}); err == nil {
+		t.Fatal("remote revocation failure must roll back before local mutation")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// interfaceTx keeps this test callback independent of SQL details while
+// asserting that remote revocation is called before local state changes.
+type interfaceTx = *sql.Tx
 
 func TestUserRepository_DisconnectOAuthGrantTx_RejectsInvalidIDWithoutDBWork(t *testing.T) {
 	db, mock := newMockUserDB(t)
