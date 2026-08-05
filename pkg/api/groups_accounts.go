@@ -15,6 +15,49 @@ type SetGroupAccountsRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
 }
 
+// handleRemoveGroupAccount detaches a single account from a group — the
+// dedicated "Rimuovi dalla cartella" operation (the folder trash icon).
+// It deletes only the group_accounts membership and resyncs the
+// workspace_channels binding; platform_accounts and OAuth grants are
+// never touched — disconnect and hard-delete live on /accounts.
+//
+// DELETE /api/v1/groups/{id}/accounts/{accountId}
+func (r *Router) handleRemoveGroupAccount(w http.ResponseWriter, req *http.Request) {
+	if r.groupStore == nil {
+		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
+		return
+	}
+	groupID, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
+	if err != nil || groupID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid group id")
+		return
+	}
+	accountID, err := strconv.ParseInt(chi.URLParam(req, "accountId"), 10, 64)
+	if err != nil || accountID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid account id")
+		return
+	}
+	existing, err := r.groupStore.FindByID(groupID)
+	if err != nil {
+		status, msg := mapGroupError(err)
+		writeError(w, status, msg)
+		return
+	}
+	if existing == nil {
+		writeError(w, http.StatusNotFound, "group not found")
+		return
+	}
+	if ok, _ := r.requireWorkspaceOwnership(w, req, existing.WorkspaceID); !ok {
+		return
+	}
+	if err := r.groupStore.RemoveAccountFromGroupTx(req.Context(), groupID, existing.WorkspaceID, accountID); err != nil {
+		status, msg := mapGroupError(err)
+		writeError(w, status, msg)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleListGroupAccounts returns the account ids attached directly to
 // a group (NOT recursive through subgroups — the join table is
 // per-row). 404 on cross-tenant or missing.

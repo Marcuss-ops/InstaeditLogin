@@ -19,6 +19,7 @@ type mockGroupStore struct {
 	deleteFn                      func(id int64) error
 	setAccountsFn                 func(groupID int64, accountIDs []int64) error
 	updateSettingsFn              func(ctx context.Context, groupID, workspaceID, userID int64, updates []models.GroupAccountLanguageUpdate) error
+	removeAccountFromGroupTxFn    func(ctx context.Context, groupID, workspaceID, accountID int64) error
 }
 
 func (m *mockGroupStore) FindByID(id int64) (*models.Group, error) {
@@ -87,6 +88,13 @@ func (m *mockGroupStore) SetAccounts(groupID int64, accountIDs []int64) error {
 func (m *mockGroupStore) UpdateSettings(ctx context.Context, groupID, workspaceID, userID int64, updates []models.GroupAccountLanguageUpdate) error {
 	if m.updateSettingsFn != nil {
 		return m.updateSettingsFn(ctx, groupID, workspaceID, userID, updates)
+	}
+	return nil
+}
+
+func (m *mockGroupStore) RemoveAccountFromGroupTx(ctx context.Context, groupID, workspaceID, accountID int64) error {
+	if m.removeAccountFromGroupTxFn != nil {
+		return m.removeAccountFromGroupTxFn(ctx, groupID, workspaceID, accountID)
 	}
 	return nil
 }

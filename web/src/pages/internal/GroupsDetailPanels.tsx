@@ -92,20 +92,16 @@ export function GroupDetailPanel({
   };
 
   const visibleAccounts = group.accounts.filter((account) => !removedAccountIds.has(account.id));
+  // "Rimuovi dalla cartella": dedicated endpoint that only deletes the
+  // group_accounts membership and resyncs workspace_channels — it never
+  // disconnects the channel or touches OAuth tokens.
   const removeAccount = async (accountId: number) => {
-    const nextAccounts = visibleAccounts.filter((account) => account.id !== accountId);
     setRemovedAccountIds((current) => new Set(current).add(accountId));
     setSaving(true);
     setSaveError(null);
     try {
-      const response = await authedFetch(`/api/v1/groups/${group.id}/settings`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          accounts: nextAccounts.map((account) => ({
-            account_id: account.id,
-            language: languages[account.id] ?? "",
-          })),
-        }),
+      const response = await authedFetch(`/api/v1/groups/${group.id}/accounts/${accountId}`, {
+        method: "DELETE",
       });
       if (!response.ok) throw new Error("Impossibile rimuovere il canale dalla cartella");
       await onSaved();

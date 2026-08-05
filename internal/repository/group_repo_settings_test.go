@@ -175,6 +175,95 @@ func TestGroupRepository_UpdateSettings_RollsBackOnLanguageUpdateFailure(t *test
 	}
 }
 
+const (
+	removeLockSQL = `SELECT id FROM groups WHERE id = $1 AND workspace_id = $2 FOR UPDATE`
+	removeDeleteSQL = `DELETE FROM group_accounts WHERE group_id = $1 AND account_id = $2`
+	removeResyncSQL = `UPDATE workspace_channels AS wc
+			 SET group_name = (
+			     SELECT g.name
+			       FROM group_accounts AS ga
+			       JOIN groups AS g ON g.id = ga.group_id
+			      WHERE ga.account_id = wc.platform_account_id
+			        AND g.workspace_id = $1
+			      ORDER BY CASE WHEN g.id = $2 THEN 0 ELSE 1 END, g.name, g.id
+			      LIMIT 1
+			 )
+			 WHERE wc.workspace_id = $1 AND wc.platform_account_id = $2`
+)
+
+func TestGroupRepository_RemoveAccountFromGroupTx_CommitsMembershipAndResync(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(removeLockSQL)).
+		WithArgs(int64(7), int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
+	mock.ExpectExec(regexp.QuoteMeta(removeDeleteSQL)).
+		WithArgs(int64(7), int64(101)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(removeResyncSQL)).
+		WithArgs(int64(9), int64(7), int64(101)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	if err := NewGroupRepository(db).RemoveAccountFromGroupTx(context.Background(), 7, 9, 101); err != nil {
+		t.Fatalf("RemoveAccountFromGroupTx: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v", err)
+	}
+}
+
+func TestGroupRepository_RemoveAccountFromGroupTx_GroupNotFoundRollsBack(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(removeLockSQL)).
+		WithArgs(int64(7), int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectRollback()
+
+	err = NewGroupRepository(db).RemoveAccountFromGroupTx(context.Background(), 7, 9, 101)
+	if !errors.Is(err, ErrGroupNotFound) {
+		t.Fatalf("expected ErrGroupNotFound, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v", err)
+	}
+}
+
+func TestGroupRepository_RemoveAccountFromGroupTx_ResyncFailureRollsBack(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(removeLockSQL)).
+		WithArgs(int64(7), int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
+	mock.ExpectExec(regexp.QuoteMeta(removeDeleteSQL)).
+		WithArgs(int64(7), int64(101)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(removeResyncSQL)).
+		WithArgs(int64(9), int64(7), int64(101)).WillReturnError(errors.New("workspace channel resync failed"))
+	mock.ExpectRollback()
+
+	err = NewGroupRepository(db).RemoveAccountFromGroupTx(context.Background(), 7, 9, 101)
+	if err == nil {
+		t.Fatal("RemoveAccountFromGroupTx: expected resync error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v", err)
+	}
+}
+
 func TestGroupRepository_UpdateSettings_RejectsForeignAccountBeforeDelete(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

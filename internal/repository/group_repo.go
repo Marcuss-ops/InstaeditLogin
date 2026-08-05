@@ -466,6 +466,72 @@ func (r *GroupRepository) AddAccount(groupID, accountID int64) error {
 	return nil
 }
 
+// RemoveAccountFromGroupTx detaches a single account from a group in one
+// transaction and resyncs the workspace_channels binding. This is the
+// dedicated "rimuovi dalla cartella" operation: it touches only
+// group_accounts + workspace_channels — never platform_accounts, tokens
+// or OAuth grants (disconnect and hard-delete are separate endpoints on
+// /accounts). Idempotent: removing a non-existent membership succeeds as
+// a no-op and still resyncs the channel binding.
+func (r *GroupRepository) RemoveAccountFromGroupTx(ctx context.Context, groupID, workspaceID, accountID int64) error {
+	if groupID <= 0 || workspaceID <= 0 || accountID <= 0 {
+		return fmt.Errorf("remove account from group: invalid identifiers")
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("remove account from group: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Lock the group row so a concurrent settings write cannot interleave
+	// with the membership deletion + resync (same discipline as
+	// UpdateSettings). Missing row / foreign workspace → ErrGroupNotFound.
+	var lockedGroupID int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM groups WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+		groupID, workspaceID,
+	).Scan(&lockedGroupID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("%w: id=%d", ErrGroupNotFound, groupID)
+		}
+		return fmt.Errorf("remove account from group: lock group: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM group_accounts WHERE group_id = $1 AND account_id = $2`,
+		groupID, accountID,
+	); err != nil {
+		return fmt.Errorf("remove account from group: delete membership: %w", err)
+	}
+
+	// Recompute the workspace_channels group binding for this account from
+	// the memberships that remain after the removal (NULL when the account
+	// is no longer in any group of the workspace). Mirrors the resync step
+	// in UpdateSettings.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE workspace_channels AS wc
+		 SET group_name = (
+		     SELECT g.name
+		       FROM group_accounts AS ga
+		       JOIN groups AS g ON g.id = ga.group_id
+		      WHERE ga.account_id = wc.platform_account_id
+		        AND g.workspace_id = $1
+		      ORDER BY CASE WHEN g.id = $2 THEN 0 ELSE 1 END, g.name, g.id
+		      LIMIT 1
+		 )
+		 WHERE wc.workspace_id = $1 AND wc.platform_account_id = $2`,
+		workspaceID, groupID, accountID,
+	); err != nil {
+		return fmt.Errorf("remove account from group: resync workspace channel: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("remove account from group: commit: %w", err)
+	}
+	return nil
+}
+
 // RemoveAccount detaches a platform_account from a group. Idempotent:
 // removing a non-existent row returns nil (idempotent teardown).
 func (r *GroupRepository) RemoveAccount(groupID, accountID int64) error {

@@ -56,13 +56,8 @@ describe("GroupDetailPanel batch settings", () => {
     fireEvent.click(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/groups/7/settings"),
-      expect.objectContaining({
-        method: "PATCH",
-        body: JSON.stringify({
-          accounts: [{ account_id: 101, language: "en" }],
-        }),
-      }),
+      expect.stringContaining("/api/v1/groups/7/accounts/102"),
+      expect.objectContaining({ method: "DELETE" }),
     ));
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: /Rimuovi channel-two dalla cartella/i })).not.toBeInTheDocument();

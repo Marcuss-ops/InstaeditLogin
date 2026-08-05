@@ -193,6 +193,11 @@ type GroupStore interface {
 	ListByWorkspace(workspaceID int64) ([]models.Group, error)
 	ListByWorkspaceWithAccounts(workspaceID int64) ([]models.GroupWithAccounts, error)
 	UpdateSettings(ctx context.Context, groupID, workspaceID, userID int64, updates []models.GroupAccountLanguageUpdate) error
+	// RemoveAccountFromGroupTx detaches a single account from a group in
+	// one transaction and resyncs the workspace_channels binding — the
+	// dedicated "rimuovi dalla cartella" endpoint contract. It must NOT
+	// touch platform_accounts or OAuth grants.
+	RemoveAccountFromGroupTx(ctx context.Context, groupID, workspaceID, accountID int64) error
 	ListAccountsInGroup(groupID int64) ([]int64, error)
 	// ValidateAccountOwnership returns the subset of supplied
 	// accountIDs that are visible to (userID, workspaceID). The

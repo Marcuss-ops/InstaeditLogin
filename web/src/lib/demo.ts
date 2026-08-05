@@ -201,6 +201,15 @@ export function handleDemoRequest(
     return json({ accounts: demoAccounts });
   }
 
+  // "Rimuovi dalla cartella": dedicated DELETE for a single membership.
+  // The demo aggregate stays read-only, so the write is acknowledged as
+  // a no-op success (mirrors the real 204 endpoint contract).
+  const removeGroupAccountMatch =
+    /^\/api\/v1\/groups\/(\d+)\/accounts\/(\d+)$/.exec(path);
+  if (removeGroupAccountMatch && method === "DELETE") {
+    return json({ ok: true }, 204);
+  }
+
   // Groups aggregate (group → member account_ids) for the Link-to-video
   // dialog's Gruppo → Canale filter. Mirrors GET /api/v1/groups/aggregate.
   if (path === "/api/v1/groups/aggregate") {
