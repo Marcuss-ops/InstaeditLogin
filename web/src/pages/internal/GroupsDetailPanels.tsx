@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
-import { ChannelActions } from "../../features/channels/components/ChannelActions";
 import { PLATFORM_GRADIENT, type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 
@@ -354,23 +353,6 @@ export function AccountDetailPanel({
           description="Test that the stored tokens still work."
           onClick={() => void runAction("validate", "POST", `/api/v1/accounts/${account.id}/validate`)}
           busy={busy === "validate"}
-        />
-      </div>
-
-      {/* Channel lifecycle actions — three distinct commands, never the
-          same trash icon for different operations (account-lifecycle
-          audit). Disconnect preserves the row and the shared grant;
-          permanent delete and shared-grant revoke are explicit. */}
-      <div className="mt-6">
-        <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa] mb-2">
-          Channel actions
-        </h3>
-        <ChannelActions
-          account={{ id: account.id, platform: account.platform, username: account.username }}
-          onDone={() => {
-            onUpdated();
-            onClose();
-          }}
         />
       </div>
 

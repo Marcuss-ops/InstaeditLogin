@@ -188,37 +188,6 @@ describe("DashboardChannelsPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders channel actions (disconnect + permanent delete + grant revoke) and disconnects on confirm", async () => {
-    setAccountEndpoint();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    renderAt("/app/dashboard-channels/123");
-    await screen.findByTestId("channel-header-name");
-    // All three channel-level commands are visible for a YouTube channel.
-    expect(
-      screen.getByRole("button", { name: /Disconnetti canale/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Elimina definitivamente/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", {
-        name: /Revoca account Google e tutti i canali/i,
-      }),
-    ).toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /Disconnetti canale/i }),
-    );
-    await waitFor(() => {
-      const disconnectCall = authedFetchMock.mock.calls.find(
-        ([url, init]) =>
-          String(url) === "/api/v1/accounts/123/disconnect" &&
-          (init as RequestInit)?.method === "POST",
-      );
-      expect(disconnectCall).toBeDefined();
-    });
-  });
-
   it("?video=URL param highlights the matching card", async () => {
     setAccountEndpoint();
     renderAt("/app/dashboard-channels/123?video=yt_BBB");

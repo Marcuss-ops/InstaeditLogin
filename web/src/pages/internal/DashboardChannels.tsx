@@ -50,7 +50,6 @@ import { ErrorState } from "../../components/feedback";
 import { EmptyState } from "../../components/feedback/EmptyState";
 import { Skeleton } from "../../components/feedback/Skeleton";
 import { ChannelHeader } from "../../features/channels/components/ChannelHeader";
-import { ChannelActions } from "../../features/channels/components/ChannelActions";
 import { ChannelVideoFilters } from "../../features/channels/components/ChannelVideoFilters";
 import { ChannelVideoCard } from "../../features/channels/components/ChannelVideoCard";
 import { useChannelAccount } from "../../features/channels/hooks/useChannelAccount";
@@ -239,27 +238,6 @@ export function DashboardChannelsPage() {
           onRefresh={() => void handleRefreshBoth()}
           onBack={() => navigate("/app/linking")}
         />
-
-        {/* Channel lifecycle actions — the three distinct channel-level
-            commands (disconnect / permanent delete / shared-grant
-            revoke). Rendered only once the account has loaded. After a
-            successful action the channel is gone, so we navigate back
-            to the linking page. */}
-        {accountState.state.kind === "ready" && (
-          <div className="mb-6">
-            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa] mb-2">
-              Channel actions
-            </h3>
-            <ChannelActions
-              account={{
-                id: accountState.state.account.id,
-                platform: accountState.state.account.platform,
-                username: accountState.state.account.username,
-              }}
-              onDone={() => navigate("/app/linking")}
-            />
-          </div>
-        )}
 
         {/* Filters — initial = "all" per spec */}
         <ChannelVideoFilters
