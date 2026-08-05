@@ -52,6 +52,32 @@ func (v *CredentialVault) GetRefreshToken(ctx context.Context, platformAccountID
 	return v.encryptor.Decrypt(stored.EncryptedRefreshToken)
 }
 
+// GetRefreshTokenForOAuthConnectionTx decrypts a grant refresh token while the
+// caller-owned transaction holds the grant lock. It is intentionally narrow:
+// complete grant revocation uses it to coordinate provider revocation with the
+// subsequent local cleanup.
+func (v *CredentialVault) GetRefreshTokenForOAuthConnectionTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64) (string, error) {
+	if tx == nil || oauthConnectionID <= 0 {
+		return "", fmt.Errorf("vault: invalid OAuth connection transaction")
+	}
+	var encrypted []byte
+	if err := tx.QueryRowContext(ctx,
+		`SELECT encrypted_refresh_token
+		   FROM tokens
+		  WHERE oauth_connection_id = $1
+		    AND token_type = $2
+		  ORDER BY created_at DESC
+		  LIMIT 1`,
+		oauthConnectionID, models.TokenTypeBearer,
+	).Scan(&encrypted); err != nil {
+		return "", fmt.Errorf("vault: refresh token not found for OAuth connection %d: %w", oauthConnectionID, err)
+	}
+	if len(encrypted) == 0 {
+		return "", fmt.Errorf("vault: refresh token empty for OAuth connection %d", oauthConnectionID)
+	}
+	return v.encryptor.Decrypt(encrypted)
+}
+
 // Revoke deletes all tokens for the resolved OAuth connection and remains
 // idempotent for already-revoked token rows.
 func (v *CredentialVault) Revoke(ctx context.Context, platformAccountID int64) error {

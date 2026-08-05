@@ -107,6 +107,9 @@ func WithYouTubeService(svc YouTubeOAuthService) RouterOption {
 		if revoker, ok := svc.(YouTubeRevoker); ok {
 			r.youtubeRevoker = revoker
 		}
+		if revoker, ok := svc.(services.OAuthGrantRevoker); ok {
+			r.oauthGrantRevoker = revoker
+		}
 	}
 }
 

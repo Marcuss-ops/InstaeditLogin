@@ -104,6 +104,13 @@ func (d ProviderDependencies) resolveClock() func() time.Time {
 // error types.
 var ErrRevokeUnsupported = fmt.Errorf("provider does not support token revocation")
 
+// OAuthGrantRevoker revokes a provider OAuth grant using the decoded token
+// supplied by the credential vault. Implementations must never log or include
+// the token in returned errors.
+type OAuthGrantRevoker interface {
+	RevokeGrant(ctx context.Context, token string) error
+}
+
 // ---------------------------------------------------------------------------
 // Rate limit error contract (cross-cutting; not a per-capability interface)
 // ---------------------------------------------------------------------------

@@ -270,9 +270,11 @@ type Router struct {
 	// cmd/server/main.go via WithYouTubeService(svc); the handler
 	// owns the routing decision.
 	youTubeSvc YouTubeOAuthService
-	// youtubeRevoker is discovered from the concrete YouTube provider when
-	// WithYouTubeService is applied. It is intentionally separate from the
-	// broad validation interface so existing test providers remain compatible.
+	// oauthGrantRevoker is discovered from the concrete provider when
+	// WithYouTubeService is applied. Complete grant disconnects require this
+	// capability before local token deletion is allowed.
+	oauthGrantRevoker services.OAuthGrantRevoker
+	// youtubeRevoker remains for the legacy single-account disconnect path.
 	youtubeRevoker YouTubeRevoker
 
 	// nvidiaMetadataSvc is the NVIDIA AI metadata generator.

@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"database/sql"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -39,6 +41,13 @@ type YouTubeRevoker interface {
 // may omit it and are used only by non-YouTube account flows.
 type RefreshTokenReader interface {
 	GetRefreshToken(ctx context.Context, platformAccountID int64) (string, error)
+}
+
+// RefreshTokenTxReader reads and decrypts a grant's refresh token using the
+// transaction that already locked the grant. This keeps remote revocation
+// coordinated with the local grant cleanup and prevents token rotation races.
+type RefreshTokenTxReader interface {
+	GetRefreshTokenForOAuthConnectionTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64) (string, error)
 }
 
 // YouTubeDisconnectStore performs the local, grant-scoped disconnect. The

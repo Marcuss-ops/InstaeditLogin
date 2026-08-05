@@ -169,6 +169,17 @@ func (f *fakeYouTubeRevoker) Revoke(ctx context.Context, token string) error {
 	return nil
 }
 
+type fakeOAuthGrantRevoker struct {
+	revokeFn func(ctx context.Context, token string) error
+}
+
+func (f *fakeOAuthGrantRevoker) RevokeGrant(ctx context.Context, token string) error {
+	if f.revokeFn != nil {
+		return f.revokeFn(ctx, token)
+	}
+	return nil
+}
+
 // fakeChannelAuthorizer (Task 1/10 test seam) is the no-op
 // implementation of services.ChannelAuthorizer that newTestRouter
 // wires by default. Each AuthorizeChannel call records every

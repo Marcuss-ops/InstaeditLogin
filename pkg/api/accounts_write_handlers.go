@@ -15,12 +15,18 @@ package api
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // auditAccountEvent fires a typed audit log entry, nil-safe (the
@@ -58,6 +64,10 @@ type oauthGrantDisconnectStore interface {
 	DisconnectOAuthGrantTx(ctx context.Context, oauthConnectionID int64) error
 }
 
+type oauthGrantDisconnectWithRevocationStore interface {
+	DisconnectOAuthGrantWithRevocationTx(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error
+}
+
 // handleDeleteOAuthGrant disconnects the complete OAuth grant associated with
 // an owned platform account. The repository performs the grant/account/token/
 // outbox/audit mutations in one transaction; this handler only authenticates
@@ -80,11 +90,74 @@ func (r *Router) handleDeleteOAuthGrant(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusNotImplemented, "OAuth grant disconnect is not configured")
 		return
 	}
-	if err := store.DisconnectOAuthGrantTx(req.Context(), *account.OAuthConnectionID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to disconnect OAuth grant: "+err.Error())
+	if r.oauthGrantRevoker == nil {
+		writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation is not configured")
 		return
 	}
+	if revokingStore, ok := r.userRepo.(oauthGrantDisconnectWithRevocationStore); ok {
+		reader, readerOK := r.vault.(RefreshTokenTxReader)
+		if !readerOK {
+			writeError(w, http.StatusServiceUnavailable, "OAuth refresh-token access is not configured")
+			return
+		}
+		err := revokingStore.DisconnectOAuthGrantWithRevocationTx(req.Context(), *account.OAuthConnectionID, func(ctx context.Context, tx *sql.Tx) error {
+			refreshToken, err := reader.GetRefreshTokenForOAuthConnectionTx(ctx, tx, *account.OAuthConnectionID)
+			if err != nil || refreshToken == "" {
+				return fmt.Errorf("OAuth grant revocation token is unavailable")
+			}
+			err = r.oauthGrantRevoker.RevokeGrant(ctx, refreshToken)
+			if err == nil || errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+				return nil
+			}
+			return err
+		})
+		if err != nil {
+			writeOAuthGrantDisconnectError(w, err)
+			return
+		}
+	} else {
+		// Compatibility fallback for legacy/test stores. Production's
+		// UserRepository implements the transaction-aware capability above.
+		reader, readerOK := r.vault.(RefreshTokenReader)
+		if !readerOK {
+			writeError(w, http.StatusServiceUnavailable, "OAuth refresh-token access is not configured")
+			return
+		}
+		refreshToken, err := reader.GetRefreshToken(req.Context(), id)
+		if err != nil || refreshToken == "" {
+			writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation token is unavailable")
+			return
+		}
+		if err := r.oauthGrantRevoker.RevokeGrant(req.Context(), refreshToken); err != nil && !errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+			writeOAuthGrantDisconnectError(w, err)
+			return
+		}
+		if err := store.DisconnectOAuthGrantTx(req.Context(), *account.OAuthConnectionID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to disconnect OAuth grant")
+			return
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeOAuthGrantDisconnectError(w http.ResponseWriter, err error) {
+	var revocationErr *services.OAuthGrantRevocationError
+	if errors.As(err, &revocationErr) && revocationErr.IsTransient() {
+		if revocationErr.RetryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(int(revocationErr.RetryAfter/time.Second)))
+		}
+		writeError(w, http.StatusServiceUnavailable, "remote OAuth revocation is temporarily unavailable; retry later")
+		return
+	}
+	if strings.Contains(err.Error(), "token is unavailable") {
+		writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation token is unavailable")
+		return
+	}
+	if errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+		writeError(w, http.StatusBadGateway, "remote OAuth revocation failed")
+		return
+	}
+	writeError(w, http.StatusBadGateway, "remote OAuth revocation failed")
 }
 
 // handleDeleteAccount soft-disconnects a platform account. Steps:

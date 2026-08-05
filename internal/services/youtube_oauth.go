@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -134,6 +135,7 @@ var _ YouTubeCanaryUploader = (*YouTubeOAuthService)(nil)
 // changes its signature would surface here at vet time instead of
 // at runtime on a real publish tick.
 var _ YouTubePrivacyUpdater = (*YouTubeOAuthService)(nil)
+var _ OAuthGrantRevoker = (*YouTubeOAuthService)(nil)
 
 func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
@@ -238,32 +240,91 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 	return profile, tokenData, nil
 }
 
-// Revoke calls Google's OAuth 2.0 token revocation endpoint.
-func (s *YouTubeOAuthService) Revoke(ctx context.Context, accessToken string) error {
-	body := url.Values{}
-	body.Set("token", accessToken)
+// Revoke calls Google's OAuth 2.0 token revocation endpoint. It remains as
+// the compatibility method used by the legacy single-account disconnect path.
+func (s *YouTubeOAuthService) Revoke(ctx context.Context, token string) error {
+	return s.revokeToken(ctx, token)
+}
 
-	req, err := http.NewRequestWithContext(ctx, "POST",
+// RevokeGrant implements the complete-grant revocation capability. The
+// caller supplies the decoded refresh token from the credential vault; this
+// method never logs or includes that token in an error.
+func (s *YouTubeOAuthService) RevokeGrant(ctx context.Context, token string) error {
+	return s.revokeToken(ctx, token)
+}
+
+func (s *YouTubeOAuthService) revokeToken(ctx context.Context, token string) error {
+	if token == "" {
+		return &OAuthGrantRevocationError{
+			Class: OAuthGrantRevocationPermanent,
+			Cause: errors.New("empty revocation token"),
+		}
+	}
+	body := url.Values{}
+	body.Set("token", token)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://oauth2.googleapis.com/revoke",
 		strings.NewReader(body.Encode()))
 	if err != nil {
-		return fmt.Errorf("youtube revoke request: %w", err)
+		return &OAuthGrantRevocationError{Class: OAuthGrantRevocationPermanent, Cause: err}
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("youtube revoke failed: %w", err)
+		return &OAuthGrantRevocationError{
+			Class: OAuthGrantRevocationTransient,
+			Cause: err,
+		}
 	}
 	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(resp.Body)
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("youtube revoke returned status %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusOK {
+		return nil
 	}
-	return nil
+
+	if resp.StatusCode == http.StatusBadRequest {
+		var envelope struct {
+			Code string `json:"error"`
+		}
+		_ = json.Unmarshal(responseBody, &envelope)
+		envelope.Code = safeOAuthRevocationCode(envelope.Code)
+		if envelope.Code == "invalid_token" {
+			// Google has already rejected the grant. Treat this as an
+			// idempotent success: local cleanup is safe and a retry after a
+			// partially completed disconnect must not be blocked forever.
+			return OAuthGrantRevocationAlreadyCompleted
+		}
+		return &OAuthGrantRevocationError{
+			StatusCode: resp.StatusCode,
+			Code:       envelope.Code,
+			Class:      OAuthGrantRevocationPermanent,
+		}
+	}
+
+	class := OAuthGrantRevocationPermanent
+	if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		class = OAuthGrantRevocationTransient
+	}
+	return &OAuthGrantRevocationError{
+		StatusCode: resp.StatusCode,
+		Class:      class,
+		RetryAfter: ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+	}
 }
 
 // RefreshOAuthToken exchanges a YouTube refresh token for a new access token.
+func safeOAuthRevocationCode(code string) string {
+	switch code {
+	case "invalid_token", "invalid_request", "invalid_client":
+		return code
+	default:
+		return ""
+	}
+}
+
 func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (result *models.TokenData, err error) {
 	defer RecordTokenRefreshMetrics(models.PlatformYouTube, &err)
 	if refreshToken == "" {

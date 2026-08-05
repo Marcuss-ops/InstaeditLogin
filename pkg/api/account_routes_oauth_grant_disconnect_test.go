@@ -27,7 +27,11 @@ func TestHandleDeleteOAuthGrant_UsesTransactionalStore(t *testing.T) {
 			return nil
 		},
 	}
-	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "")
+	vault := &mockCredentialVault{getRefreshTokenFn: func(context.Context, int64) (string, error) {
+		return "test-refresh-token", nil
+	}}
+	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "", WithCredentialVault(vault))
+	r.oauthGrantRevoker = &fakeOAuthGrantRevoker{}
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/oauth-grant", nil)
 	withBearerJWT(t, req, 1)
@@ -54,7 +58,11 @@ func TestHandleDeleteOAuthGrant_DoesNotDisconnectForeignAccount(t *testing.T) {
 			return nil
 		},
 	}
-	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "")
+	vault := &mockCredentialVault{getRefreshTokenFn: func(context.Context, int64) (string, error) {
+		return "test-refresh-token", nil
+	}}
+	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "", WithCredentialVault(vault))
+	r.oauthGrantRevoker = &fakeOAuthGrantRevoker{}
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/oauth-grant", nil)
 	withBearerJWT(t, req, 1)
@@ -79,7 +87,11 @@ func TestHandleDeleteOAuthGrant_PropagatesStoreFailure(t *testing.T) {
 			return fmt.Errorf("transaction rolled back")
 		},
 	}
-	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "")
+	vault := &mockCredentialVault{getRefreshTokenFn: func(context.Context, int64) (string, error) {
+		return "test-refresh-token", nil
+	}}
+	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "", WithCredentialVault(vault))
+	r.oauthGrantRevoker = &fakeOAuthGrantRevoker{}
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21/oauth-grant", nil)
 	withBearerJWT(t, req, 1)

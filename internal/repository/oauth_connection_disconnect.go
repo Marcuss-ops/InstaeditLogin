@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -9,7 +10,10 @@ import (
 )
 
 // DisconnectOAuthGrantTx atomically disconnects an entire OAuth grant.
-//
+// It performs no provider call; callers that need remote revocation should use
+// DisconnectOAuthGrantWithRevocationTx so the grant lock also covers token
+// selection and remote revocation.
+
 // The grant row and every linked platform account are locked before any
 // mutation. The parent grant row is locked first, followed by its child
 // account rows, so concurrent grant-level operations cannot form a parent/
@@ -20,6 +24,20 @@ import (
 // enforces the disconnected state and removes any leftover token rows, while
 // recording the requested operation in the audit/outbox trail.
 func (r *UserRepository) DisconnectOAuthGrantTx(ctx context.Context, oauthConnectionID int64) error {
+	return r.disconnectOAuthGrantTx(ctx, oauthConnectionID, nil)
+}
+
+// DisconnectOAuthGrantWithRevocationTx locks the grant and linked accounts,
+// invokes revoke while that lock is held, then performs the local disconnect
+// mutations in the same transaction. The callback must return nil before any
+// local mutation begins; a remote failure rolls back and leaves the grant
+// retryable. The callback receives the transaction so vault token reads share
+// the exact grant lock and cannot race token rotation.
+func (r *UserRepository) DisconnectOAuthGrantWithRevocationTx(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error {
+	return r.disconnectOAuthGrantTx(ctx, oauthConnectionID, revoke)
+}
+
+func (r *UserRepository) disconnectOAuthGrantTx(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error {
 	if oauthConnectionID <= 0 {
 		return fmt.Errorf("disconnect OAuth grant: invalid id %d", oauthConnectionID)
 	}
@@ -78,6 +96,12 @@ func (r *UserRepository) DisconnectOAuthGrantTx(ctx context.Context, oauthConnec
 	}
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("disconnect OAuth grant: close linked accounts: %w", err)
+	}
+
+	if revoke != nil {
+		if err := revoke(ctx, tx); err != nil {
+			return fmt.Errorf("disconnect OAuth grant: remote revoke: %w", err)
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx,
