@@ -203,11 +203,18 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 //   - err error — non-nil on any failure path; nil on 200/201
 //     success or 308 "more bytes please".
 func (s *YouTubeOAuthService) putChunk(ctx context.Context, uploadURL string, data []byte, contentRange string, expectedLen int64) (videoID string, retryAfter time.Duration, retryable bool, err error) {
+	return s.putChunkWithContentType(ctx, uploadURL, data, contentRange, expectedLen, "")
+}
+
+func (s *YouTubeOAuthService) putChunkWithContentType(ctx context.Context, uploadURL string, data []byte, contentRange string, expectedLen int64, contentType string) (videoID string, retryAfter time.Duration, retryable bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, "PUT", uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return "", 0, false, err
 	}
 	req.Header.Set("Content-Range", contentRange)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	req.ContentLength = expectedLen
 
 	resp, err := s.httpClient.Do(req)

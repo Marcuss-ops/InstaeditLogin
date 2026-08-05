@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -225,45 +226,29 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 	return out, nil
 }
 
-// canaryUploadLiteral is the SINGLE source-of-truth for the canary
-// body. Both the byte slice (canaryUploadBytes) and the size constant
-// (canaryUploadSize) derive from this — a future maintainer edits
-// THIS line, the two derived values follow without cross-reference
-// mistakes. The previous shape (a duplicated literal in two places)
-// burst silently: a delete in canaryUploadBytes without the matching
-// edit in canaryUploadSize surfaced as a content-range mismatch
-// rather than a compile error.
-const canaryUploadLiteral = "INSTAEDIT-CANARY-PAYLOAD\n"
+// canaryUploadBase64 is a tiny, static, valid H.264/MP4 payload used by
+// the OAuth canary. It is intentionally a real video rather than a text
+// probe: a successful canary must exercise YouTube's media ingest path,
+// not merely prove that an OAuth grant can create an upload session.
+// The payload is 1 second, 16x16, silent video and contains no secrets.
+const canaryUploadBase64 = "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMUbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAj90cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAG3bWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAQABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABYm1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAASJzdGJsAAAAvnN0c2QAAAAAAAAAAQAAAK5hdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABFUxhdmM2Mi4xMS4xMDAgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAANGF2Y0MBZAAK/+EAF2dkAAqs2V7ARAAAAwAEAAADAAg8SJZYAQAGaOvjyyLA/fj4AAAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAAABW4AAAAAAAAABhzdHRzAAAAAAAAAAEAAAABAABAAAAAABxzdHNjAAAAAAAAAAEAAAABAAAAAQAAAAEAAAAUc3RzegAAAAAAAAK3AAAAAQAAABRzdGNvAAAAAAAAAAEAAANEAAAAYXVkdGEAAABZbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAAAAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2Mi4zLjEwMAAAAAhmcmVlAAACv21kYXQAAAKfBgX//5vcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNhYmFjPTEgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiB0aHJlYWRzPTEgbG9va2FoZWFkX3RocmVhZHM9MSBzbGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0wIGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz0zIGJfcHlyYW1pZD0yIGJfYWRhcHQ9MSBiX2JpYXM9MCBkaXJlY3Q9MSB3ZWlnaHRiPTEgb3Blbl9nb3A9MCB3ZWlnaHRwPTIga2V5aW50PTI1MCBrZXlpbnRfbWluPTEgc2NlbmVjdXQ9NDAgaW50cmFfcmVmcmVzaD0wIHJjX2xvb2thaGVhZD00MCByYz1jcmYgbWJ0cmVlPTEgY3JmPTIzLjAgcWNvbXA9MC42MCBxcG1pbj0wIHFwbWF4PTY5IHFwc3RlcD00IGlwX3JhdGlvPTEuNDAgYXE9MToxLjAwAIAAAAAQZYiEABX//vfJ78Cm69vfgQ=="
 
-// canaryUploadBytes is a small synthetic payload used for the
-// optional INSTAEDIT-OAUTH-CANARY test upload. Intentionally small
-// (a single PUT chunk) so:
-//
-//   - The canary doesn't meaningfully consume the daily videos.insert
-//     quota (1 call per /validate invocation that requests canary).
-//   - Test assertions can hard-code the byte offsets
-//     (bytes 0-21 / 22 bytes) without measuring the actual byte length.
-//
-// YouTube's videos.insert endpoint MAY accept this non-video content
-// (returning 200 + video_id) OR reject it with 4xx (invalid argument,
-// because the upload protocol expects video/* bytes). Both outcomes
-// prove end-to-end binding — the snippet.channelId reconciliation on
-// the resulting video (or the videos.list absence on rejection) is
-// the source of truth. The canary upload body's content is NOT what
-// step-4 measures — channel binding is.
-var canaryUploadBytes = []byte(canaryUploadLiteral)
+var canaryUploadBytes = mustDecodeCanaryUpload()
 
-// canaryUploadSize derives from canaryUploadLiteral — guarantees
-// compile-time sync with canaryUploadBytes.
-const canaryUploadSize = int64(len(canaryUploadLiteral))
+func mustDecodeCanaryUpload() []byte {
+	// Keep malformed fixture data a programmer error, not a runtime
+	// OAuth classification. The literal is generated once and checked
+	// by the canary tests for the MP4 ftyp signature and byte length.
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(canaryUploadBase64, " ", ""))
+	if err != nil {
+		panic(fmt.Sprintf("invalid embedded YouTube canary MP4: %v", err))
+	}
+	return decoded
+}
 
-// canaryUploadContentType is intentionally NOT video/* — the canary
-// upload is a probe, not a real publish. Stamping a non-video MIME
-// makes the canary visually distinct in any tooling that filters on
-// MIME type, AND signals to Google's API that the body is not a
-// real video (Google may 4xx on MIME mismatch; that's still
-// acceptable evidence that the OAuth grant can call videos.insert).
-const canaryUploadContentType = "application/octet-stream"
+var canaryUploadSize = int64(len(canaryUploadBytes))
+
+const canaryUploadContentType = "video/mp4"
 
 // ErrYouTubeCanaryRejected is the canonical sentinel for hard 4xx
 // rejections from the canary upload path (videos.insert init OR PUT
@@ -282,13 +267,11 @@ const canaryUploadContentType = "application/octet-stream"
 // These all escalate to ErrYouTubeCanaryRejected and the handler
 // flags the account reauth_required.
 //
-// HTTP 400 is deliberately EXCLUDED because YouTube returns 400 for
-// invalid media payload (the canary uses application/octet-stream,
-// not a real MP4) — a 400 means the token and grant are fine but
-// the media format is wrong. That's a separate sentinel
-// (ErrYouTubeCanaryInvalidMedia) so the handler can distinguish
-// "invalid canary media" (transient, retry later) from "grant
-// revoked" (reauth_required).
+// HTTP 400 is deliberately EXCLUDED because it represents an invalid
+// upload request/media response rather than proof that the OAuth grant
+// was revoked. That's a separate sentinel (ErrYouTubeCanaryInvalidMedia)
+// so the handler can distinguish an upload/media problem (transient,
+// retry later) from grant revoked (reauth_required).
 //
 // Rate-limit 429, Locked 423, every 5xx, plus decode / network /
 // ctx-cancelled errors all stay on the transient branch — that's
@@ -297,12 +280,9 @@ const canaryUploadContentType = "application/octet-stream"
 var ErrYouTubeCanaryRejected = errors.New("youtube canary upload was rejected by videos.insert (auth-level 4xx)")
 
 // ErrYouTubeCanaryInvalidMedia is the sentinel for a 400 response
-// during the canary upload — the most common outcome when the canary
-// body is application/octet-stream (not a real MP4). A 400 means
-// YouTube saw the request but rejected the media format; the token
-// and grant are perfectly valid. The handler treats this as a
-// TRANSIENT signal (not reauth_required) — the operator dashboard
-// logs "canary invalid media" but the account stays active.
+// during the canary upload. A 400 means YouTube rejected the upload
+// request/media shape; it does not by itself prove the grant is revoked.
+// The handler treats this as a TRANSIENT signal (not reauth_required).
 var ErrYouTubeCanaryInvalidMedia = errors.New("youtube canary: invalid media payload (400)")
 
 // statusCodeRegexp captures the (status N) triplet embedded in the
@@ -329,9 +309,7 @@ var statusCodeRegexp = regexp.MustCompile(`\(status (\d+)\)`)
 //	    ErrYouTubeCanaryRejected (handler → 422 + reauth).
 //	(hardRejection=false, isInvalidMedia=true) — HTTP 400 →
 //	    escalate to ErrYouTubeCanaryInvalidMedia (handler → transient,
-//	    NOT reauth). The canary media is application/octet-stream,
-//	    not a real MP4; 400 means the grant is fine but the payload
-//	    is wrong.
+//	    NOT reauth). A 400 alone is not proof of grant revocation.
 //	(hardRejection=false, isInvalidMedia=false) — transient
 //	    (5xx, 429, 423, decode, network, ctx-cancelled) → stay
 //	    plain wrapped (handler → next-sync retry).
@@ -357,11 +335,10 @@ var statusCodeRegexp = regexp.MustCompile(`\(status (\d+)\)`)
 //	422 — unprocessable; metadata valid but refused
 //	451 — legal / jurisdictional unavailability
 //
-// 400 is deliberately EXCLUDED — it means invalid media, not
-// invalid grant. The canary uploads application/octet-stream;
-// YouTube correctly rejects it with 400 (invalid media format).
-// The token is fine, the grant is fine — the operator should NOT
-// be forced to reconnect.
+// 400 is deliberately EXCLUDED — it means an invalid upload/media
+// request, not a proven invalid grant. Even though the canary uses
+// a valid MP4, the operator should not be forced to reconnect on a
+// bare 400 response.
 //
 // Transient-by-default (NOT in table):
 //
@@ -491,7 +468,7 @@ func (s *YouTubeOAuthService) CanaryUpload(ctx context.Context, accessToken, exp
 	}
 
 	contentRange := fmt.Sprintf("bytes 0-%d/%d", canaryUploadSize-1, canaryUploadSize)
-	videoID, _, _, putErr := s.putChunk(ctx, uploadURL, canaryUploadBytes, contentRange, canaryUploadSize)
+	videoID, _, _, putErr := s.putChunkWithContentType(ctx, uploadURL, canaryUploadBytes, contentRange, canaryUploadSize, canaryUploadContentType)
 	if putErr != nil {
 		// Same classifier as the initiate path — applies to
 		// 200-with-bad-body decode errors, which carry NO (status N)

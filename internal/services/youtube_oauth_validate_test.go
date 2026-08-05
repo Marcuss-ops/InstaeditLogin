@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -225,6 +226,12 @@ func TestYouTubeCanaryUpload_HappyPath(t *testing.T) {
 		if r.URL.Query().Get("uploadType") != "resumable" {
 			t.Errorf("canary init: uploadType got %q, want resumable", r.URL.Query().Get("uploadType"))
 		}
+		if got := r.Header.Get("X-Upload-Content-Type"); got != "video/mp4" {
+			t.Errorf("canary init: X-Upload-Content-Type got %q, want video/mp4", got)
+		}
+		if got := r.Header.Get("X-Upload-Content-Length"); got != fmt.Sprint(canaryUploadSize) {
+			t.Errorf("canary init: X-Upload-Content-Length got %q, want %d", got, canaryUploadSize)
+		}
 		body, _ := io.ReadAll(r.Body)
 		var meta map[string]interface{}
 		if jerr := json.Unmarshal(body, &meta); jerr != nil {
@@ -259,8 +266,18 @@ func TestYouTubeCanaryUpload_HappyPath(t *testing.T) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if r.Header.Get("Content-Range") == "" {
-			t.Errorf("canary session: missing Content-Range header on final PUT")
+		if got := r.Header.Get("Content-Range"); got != fmt.Sprintf("bytes 0-%d/%d", canaryUploadSize-1, canaryUploadSize) {
+			t.Errorf("canary session: Content-Range got %q, want bytes 0-%d/%d", got, canaryUploadSize-1, canaryUploadSize)
+		}
+		if got := r.Header.Get("Content-Type"); got != "video/mp4" {
+			t.Errorf("canary session: Content-Type got %q, want video/mp4", got)
+		}
+		media, _ := io.ReadAll(r.Body)
+		if got, want := int64(len(media)), canaryUploadSize; got != want {
+			t.Errorf("canary session: media length got %d, want %d", got, want)
+		}
+		if !bytes.HasPrefix(media, []byte{0x00, 0x00, 0x00, 0x20, 'f', 't', 'y', 'p'}) {
+			t.Errorf("canary session: media does not start with an MP4 ftyp box")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"id":"%s"}`, canaryVideoID)
