@@ -4,11 +4,13 @@ package credentials
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // refreshGrantExpiryWarningWindow is the lookahead before a provider-issued
@@ -110,6 +112,12 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 	if err != nil {
 		status, code := classifyRefreshFailure(err)
 		if errors.Is(err, ErrInvalidGrant) {
+			// Observability: bump youtube_oauth_invalid_grant_total for
+			// the pool client that issued this grant. Best-effort — on a
+			// pre-migration-099 database the oauth_client_key column is
+			// missing and the increment is skipped (DEBUG) rather than
+			// failing the propagation below.
+			v.recordInvalidGrantMetric(ctx, lockTx, oauthConnectionID)
 			statusStore, ok := v.store.(InvalidGrantTxStore)
 			if !ok {
 				_ = lockTx.Rollback()
@@ -202,4 +210,39 @@ func (v *CredentialVault) updateGrantStatus(ctx context.Context, oauthConnection
 		return nil
 	}
 	return store.UpdateOAuthConnectionStatus(ctx, oauthConnectionID, status, lastError)
+}
+
+// recordInvalidGrantMetric bumps youtube_oauth_invalid_grant_total for
+// the grant's pool client (oauth_client_key). YouTube-ONLY: the vault's
+// Renew path is platform-agnostic (shared by TikTok, Instagram, X, …),
+// so the increment is gated on the connection's provider to avoid
+// polluting a YouTube metric with other platforms' invalid_grants.
+// Best-effort and never allowed to fail the refresh path: on a
+// pre-migration-099 database the column does not exist (DEBUG skip),
+// and a non-YouTube connection is skipped silently.
+func (v *CredentialVault) recordInvalidGrantMetric(ctx context.Context, tx *sql.Tx, oauthConnectionID int64) {
+	clientKey := "youtube_pool_a"
+	err := tx.QueryRowContext(ctx,
+		`SELECT oc.oauth_client_key
+		   FROM oauth_connections oc
+		  WHERE oc.id = $1
+		    AND oc.provider = 'youtube'`,
+		oauthConnectionID,
+	).Scan(&clientKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Non-YouTube grant (or row already gone): not this metric's
+		// jurisdiction. No increment, no log noise.
+		return
+	}
+	if err != nil {
+		if v.logger != nil {
+			v.logger.Debug("youtube oauth invalid_grant metric skipped (oauth_client_key column may not exist on pre-migration-099 database)",
+				"oauth_connection_id", oauthConnectionID, "error", err)
+		}
+		return
+	}
+	if clientKey == "" {
+		clientKey = "youtube_pool_a"
+	}
+	metrics.RecordYouTubeOAuthInvalidGrant(clientKey)
 }

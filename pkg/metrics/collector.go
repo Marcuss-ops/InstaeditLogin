@@ -180,7 +180,9 @@ func RunPeriodicCollector(ctx context.Context, db *sql.DB, interval time.Duratio
 //  6. dead_letter_count (pre-set 3 sources to 0, overwrite observed;
 //     webhook source is best-effort — table may not exist pre-migration 030)
 //  7. refresh_tokens_near_expiry (single aggregate query)
-//  8. commit tx (lock auto-released)
+//  8. youtube_oauth_* pool gauges (best-effort — oauth_client_key
+//     column may not exist pre-migration 099)
+//  9. commit tx (lock auto-released)
 //
 // nil *sql.DB: returns an error WITHOUT logging internally — the
 // caller (RunPeriodicCollector) logs the WARN. Avoids double-logging
@@ -371,9 +373,110 @@ func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 		SetRefreshTokensNearExpiry(refreshNearExpiry)
 	}
 
+	// 8. YouTube OAuth client-pool gauges. Best-effort like the
+	// webhook-DLQ block: the active-grant + capacity queries need the
+	// oauth_client_key column added by migration 099, so a pre-099
+	// database skips those two series at DEBUG while the
+	// reauth_required_channels gauge (which only joins existing
+	// columns) still emits.
+	collectYouTubeOAuthPoolMetrics(ctx, tx, logger)
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
 	committed = true
 	return nil
+}
+
+// collectYouTubeOAuthPoolMetrics refreshes the four YouTube OAuth
+// client-pool gauges inside the single-flighted collect tx:
+//
+//	youtube_oauth_refresh_tokens_active{google_subject, oauth_client_key}
+//	youtube_oauth_pool_capacity_remaining{google_subject, oauth_client_key}
+//	youtube_oauth_invalid_grant_total{oauth_client_key}  (counter; see vault_refresh.go)
+//	youtube_oauth_reauth_required_channels{google_subject}
+//
+// Active refresh grants = distinct active oauth_connections rows that
+// own a non-empty bearer refresh token (the count Google's 100-token
+// cap is measured against). Capacity remaining = the recommended
+// per-client ceiling (YouTubeOAuthPoolRecommendedCapacity, 50) minus
+// active grants, so a negative value means the soft ceiling is busted.
+//
+// Both query blocks are best-effort (mirrors the webhook-DLQ
+// contract): an error is surfaced at DEBUG and the tick proceeds — a
+// pre-migration-099 database has no oauth_client_key column and simply
+// emits fewer series until the migration lands.
+func collectYouTubeOAuthPoolMetrics(ctx context.Context, tx *sql.Tx, logger *slog.Logger) {
+	ResetYouTubeOAuthRefreshTokensActiveMetrics()
+	ResetYouTubeOAuthPoolCapacityRemainingMetrics()
+	ResetYouTubeOAuthReauthRequiredChannelsMetrics()
+
+	// 8a. active grants + capacity headroom, per (subject, client).
+	rows, err := tx.QueryContext(ctx,
+		`SELECT oc.provider_subject_id,
+		        oc.oauth_client_key,
+		        COUNT(DISTINCT oc.id) AS active_grants
+		   FROM oauth_connections oc
+		   JOIN tokens t ON t.oauth_connection_id = oc.id
+		  WHERE oc.provider = 'youtube'
+		    AND oc.status = 'active'
+		    AND oc.provider_subject_id <> ''
+		    AND t.token_type = 'bearer'
+		    AND t.encrypted_refresh_token IS NOT NULL
+		    AND octet_length(t.encrypted_refresh_token) > 0
+		  GROUP BY oc.provider_subject_id, oc.oauth_client_key`,
+	)
+	if err != nil {
+		logger.Debug("youtube oauth pool active-grant gauges skipped (oauth_client_key column may not exist on pre-migration-099 database)",
+			"error", err)
+	} else {
+		for rows.Next() {
+			var subject, clientKey string
+			var active int64
+			if err := rows.Scan(&subject, &clientKey, &active); err != nil {
+				rows.Close()
+				logger.Debug("youtube oauth pool active-grant scan skipped", "error", err)
+				break
+			}
+			if clientKey == "" {
+				clientKey = "youtube_pool_a"
+			}
+			SetYouTubeOAuthRefreshTokensActive(subject, clientKey, active)
+			SetYouTubeOAuthPoolCapacityRemaining(subject, clientKey, YouTubeOAuthPoolRecommendedCapacity-active)
+		}
+		if err := rows.Err(); err != nil {
+			logger.Debug("youtube oauth pool active-grant rows skipped", "error", err)
+		}
+		rows.Close()
+	}
+
+	// 8b. reauth_required channels per Google subject (no new-column
+	// dependency; joins platform_accounts → oauth_connections).
+	reauthRows, err := tx.QueryContext(ctx,
+		`SELECT oc.provider_subject_id, COUNT(*)
+		   FROM platform_accounts pa
+		   JOIN oauth_connections oc ON oc.id = pa.oauth_connection_id
+		  WHERE pa.platform = 'youtube'
+		    AND pa.status = 'reauth_required'
+		    AND oc.provider_subject_id <> ''
+		  GROUP BY oc.provider_subject_id`,
+	)
+	if err != nil {
+		logger.Debug("youtube oauth reauth-required gauge skipped", "error", err)
+		return
+	}
+	for reauthRows.Next() {
+		var subject string
+		var count int64
+		if err := reauthRows.Scan(&subject, &count); err != nil {
+			reauthRows.Close()
+			logger.Debug("youtube oauth reauth-required scan skipped", "error", err)
+			return
+		}
+		SetYouTubeOAuthReauthRequiredChannels(subject, count)
+	}
+	if err := reauthRows.Err(); err != nil {
+		logger.Debug("youtube oauth reauth-required rows skipped", "error", err)
+	}
+	reauthRows.Close()
 }

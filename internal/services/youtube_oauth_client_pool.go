@@ -53,6 +53,14 @@ var ErrYouTubeOAuthClientPoolEmpty = errors.New("youtube oauth client pool: no c
 // material — only the offending key.
 var ErrYouTubeOAuthClientUnknown = errors.New("youtube oauth client pool: unknown client key")
 
+// ErrYouTubeOAuthClientPoolExhausted is returned by
+// SelectForNewConnection when EVERY configured pool client is over the
+// critical load threshold (90 active refresh grants). No new
+// connection may be issued until one of the pools drains (operator
+// must reconnect/rebalance) — Google's hard cap is 100 per
+// (account, client), so this margin protects the fleet.
+var ErrYouTubeOAuthClientPoolExhausted = errors.New("youtube oauth client pool: all pool clients are over the critical capacity; new connections blocked")
+
 // OAuthClientUsageCounter is the narrow storage capability the
 // registry needs to select the least-loaded pool for a Google subject.
 // The production repository implements it once the oauth_client_key
@@ -70,6 +78,53 @@ type OAuthClientUsageCounter interface {
 // cap per (account, client) pair leaves room for reconnects,
 // migrations and recovery.
 const defaultYouTubePoolCapacity = 50
+
+// YouTube OAuth pool load thresholds (per the operator's capacity
+// spec). Google's hard cap is 100 refresh tokens per (account, client)
+// pair; these margins keep InstaEdit well inside it and give the
+// operator increasing-warning bands before the hard block.
+const (
+	// YouTubeOAuthPoolHealthyThreshold: 0–60 active grants = healthy.
+	YouTubeOAuthPoolHealthyThreshold int64 = 60
+	// YouTubeOAuthPoolWarningThreshold: 61–75 = warning.
+	YouTubeOAuthPoolWarningThreshold int64 = 75
+	// YouTubeOAuthPoolHighThreshold: 76–85 = high.
+	YouTubeOAuthPoolHighThreshold int64 = 85
+	// YouTubeOAuthPoolCriticalThreshold: 86–90 = critical. Active
+	// grants ABOVE this threshold block new connections on that client.
+	YouTubeOAuthPoolCriticalThreshold int64 = 90
+)
+
+// YouTubeOAuthPoolHealth classifies a pool client's active-grant load.
+type YouTubeOAuthPoolHealth string
+
+const (
+	YouTubeOAuthPoolHealthHealthy  YouTubeOAuthPoolHealth = "healthy"
+	YouTubeOAuthPoolHealthWarning  YouTubeOAuthPoolHealth = "warning"
+	YouTubeOAuthPoolHealthHigh     YouTubeOAuthPoolHealth = "high"
+	YouTubeOAuthPoolHealthCritical YouTubeOAuthPoolHealth = "critical"
+	// YouTubeOAuthPoolHealthBlocked means the client is over the
+	// critical threshold (90) and refuses new connections.
+	YouTubeOAuthPoolHealthBlocked YouTubeOAuthPoolHealth = "blocked"
+)
+
+// YouTubeOAuthPoolHealthFor maps an active-grant count to its health
+// band: 0–60 healthy, 61–75 warning, 76–85 high, 86–90 critical,
+// >90 blocked.
+func YouTubeOAuthPoolHealthFor(active int64) YouTubeOAuthPoolHealth {
+	switch {
+	case active > YouTubeOAuthPoolCriticalThreshold:
+		return YouTubeOAuthPoolHealthBlocked
+	case active > YouTubeOAuthPoolHighThreshold:
+		return YouTubeOAuthPoolHealthCritical
+	case active > YouTubeOAuthPoolWarningThreshold:
+		return YouTubeOAuthPoolHealthHigh
+	case active > YouTubeOAuthPoolHealthyThreshold:
+		return YouTubeOAuthPoolHealthWarning
+	default:
+		return YouTubeOAuthPoolHealthHealthy
+	}
+}
 
 // YouTubeOAuthClientRegistry resolves and selects Google OAuth clients
 // in the YouTube OAuth Client Pool.
@@ -222,6 +277,11 @@ func (r *YouTubeOAuthClientRegistry) Resolve(key string) (*YouTubeOAuthClientCon
 // query would be meaningless); the no-counter fallback does not need
 // the subject.
 //
+// Clients over the critical threshold (90 active grants) are excluded
+// from selection; if every client is blocked the registry returns
+// ErrYouTubeOAuthClientPoolExhausted (new connections refused until a
+// pool drains below critical).
+//
 // Without a counter (pre-migration wiring), the first registered
 // client is returned deterministically.
 func (r *YouTubeOAuthClientRegistry) SelectForNewConnection(ctx context.Context, googleSubjectID string) (*YouTubeOAuthClientConfig, error) {
@@ -240,12 +300,20 @@ func (r *YouTubeOAuthClientRegistry) SelectForNewConnection(ctx context.Context,
 	selected := 0
 	bestRemaining := int64(-1)
 	bestUsed := int64(0)
+	available := false
 	for i := range r.clients {
 		c := &r.clients[i]
 		used, err := r.usageCounter.CountActiveRefreshTokens(ctx, googleSubjectID, c.Key)
 		if err != nil {
 			return nil, fmt.Errorf("youtube oauth client pool: count usage for %s: %w", c.Redacted(), err)
 		}
+		if used > YouTubeOAuthPoolCriticalThreshold {
+			// Over the hard block threshold (90): this client must not
+			// issue a new grant until it drains below critical. Skip it
+			// for selection.
+			continue
+		}
+		available = true
 		remaining := int64(c.RecommendedCapacity) - used
 		if remaining > bestRemaining ||
 			(remaining == bestRemaining && (used < bestUsed || (used == bestUsed && i < selected))) {
@@ -253,6 +321,9 @@ func (r *YouTubeOAuthClientRegistry) SelectForNewConnection(ctx context.Context,
 			bestRemaining = remaining
 			bestUsed = used
 		}
+	}
+	if !available {
+		return nil, ErrYouTubeOAuthClientPoolExhausted
 	}
 	return &r.clients[selected], nil
 }

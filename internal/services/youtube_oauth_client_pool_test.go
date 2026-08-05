@@ -281,6 +281,77 @@ func TestYouTubeOAuthClientRegistry_Select_CancelledContext(t *testing.T) {
 	}
 }
 
+func TestYouTubeOAuthPoolHealthFor_Bands(t *testing.T) {
+	cases := []struct {
+		active int64
+		want   YouTubeOAuthPoolHealth
+	}{
+		{0, YouTubeOAuthPoolHealthHealthy},
+		{60, YouTubeOAuthPoolHealthHealthy},
+		{61, YouTubeOAuthPoolHealthWarning},
+		{75, YouTubeOAuthPoolHealthWarning},
+		{76, YouTubeOAuthPoolHealthHigh},
+		{85, YouTubeOAuthPoolHealthHigh},
+		{86, YouTubeOAuthPoolHealthCritical},
+		{90, YouTubeOAuthPoolHealthCritical},
+		{91, YouTubeOAuthPoolHealthBlocked},
+		{100, YouTubeOAuthPoolHealthBlocked},
+	}
+	for _, tc := range cases {
+		if got := YouTubeOAuthPoolHealthFor(tc.active); got != tc.want {
+			t.Errorf("YouTubeOAuthPoolHealthFor(%d): want %s, got %s", tc.active, tc.want, got)
+		}
+	}
+}
+
+func TestYouTubeOAuthClientRegistry_Select_AllClientsBlocked_ReturnsExhausted(t *testing.T) {
+	r, err := NewYouTubeOAuthClientRegistry(testPoolClients(), WithYouTubeOAuthClientUsageCounter(&fakeOAuthClientUsageCounter{usage: map[string]int64{
+		"youtube_pool_a": 95,
+		"youtube_pool_b": 97,
+	}}))
+	if err != nil {
+		t.Fatalf("NewYouTubeOAuthClientRegistry: %v", err)
+	}
+	_, err = r.SelectForNewConnection(context.Background(), testPoolGoogleSubject)
+	if !errors.Is(err, ErrYouTubeOAuthClientPoolExhausted) {
+		t.Fatalf("both clients over critical: want ErrYouTubeOAuthClientPoolExhausted, got %v", err)
+	}
+}
+
+func TestYouTubeOAuthClientRegistry_Select_SkipsBlockedClient(t *testing.T) {
+	r, err := NewYouTubeOAuthClientRegistry(testPoolClients(), WithYouTubeOAuthClientUsageCounter(&fakeOAuthClientUsageCounter{usage: map[string]int64{
+		"youtube_pool_a": 95, // blocked (>90)
+		"youtube_pool_b": 20,
+	}}))
+	if err != nil {
+		t.Fatalf("NewYouTubeOAuthClientRegistry: %v", err)
+	}
+	selected, err := r.SelectForNewConnection(context.Background(), testPoolGoogleSubject)
+	if err != nil {
+		t.Fatalf("SelectForNewConnection: %v", err)
+	}
+	if selected.Key != "youtube_pool_b" {
+		t.Fatalf("blocked client A (95) must be skipped; want youtube_pool_b, got %q", selected.Key)
+	}
+}
+
+func TestYouTubeOAuthClientRegistry_Select_CriticalButNotBlocked_StillSelectable(t *testing.T) {
+	// 86–90 is critical but NOT blocked: selection must still be able
+	// to land on it when it is the only available client (the operator
+	// band says critical, the hard block starts above 90).
+	r, err := NewYouTubeOAuthClientRegistry([]YouTubeOAuthClientConfig{
+		{Key: "youtube_pool_a", ClientID: testPoolClientAID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectA, RecommendedCapacity: 50},
+	}, WithYouTubeOAuthClientUsageCounter(&fakeOAuthClientUsageCounter{usage: map[string]int64{
+		"youtube_pool_a": 90,
+	}}))
+	if err != nil {
+		t.Fatalf("NewYouTubeOAuthClientRegistry: %v", err)
+	}
+	if _, err := r.SelectForNewConnection(context.Background(), testPoolGoogleSubject); err != nil {
+		t.Fatalf("critical-but-not-blocked client (90) must remain selectable: %v", err)
+	}
+}
+
 func TestYouTubeOAuthClientRegistry_Select_EmptyRegistry(t *testing.T) {
 	var r *YouTubeOAuthClientRegistry
 	_, err := r.SelectForNewConnection(context.Background(), testPoolGoogleSubject)
