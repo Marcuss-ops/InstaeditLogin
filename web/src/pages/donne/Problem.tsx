@@ -17,11 +17,11 @@ export function Problem() {
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="donne-video-scrim max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-[#A4708C] mb-3">{PROBLEM.eyebrow}</div>
-          <h2 className="text-display-2 text-[#4A3E56] donne-text-halo">
+          <h2 className="text-display-2 text-[#4A3E56]">
             {PROBLEM.titleStart}
             <span className="text-gradient-coral">{PROBLEM.titleAccent}</span>
           </h2>
-          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch] donne-text-halo">
+          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch]">
             {PROBLEM.subtitleStart}
             <span className="font-semibold text-[#C0655C]">{PROBLEM.subtitleAccent}</span>
             {PROBLEM.subtitleEnd}

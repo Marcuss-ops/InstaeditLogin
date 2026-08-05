@@ -22,11 +22,11 @@ export function Earnings() {
             <TrendingUp className="w-4 h-4" />
             {EARNINGS.eyebrow}
           </div>
-          <h2 className="text-display-2 text-[#4A3E56] donne-text-halo">
+          <h2 className="text-display-2 text-[#4A3E56]">
             {EARNINGS.titleStart}
             <span className="text-gradient-gold">{EARNINGS.titleAccent}</span>
           </h2>
-          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch] donne-text-halo">
+          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch]">
             {EARNINGS.subtitleStart}
             <span className="font-semibold text-[#C78A4B]">{EARNINGS.subtitleAccent}</span>
             {EARNINGS.subtitleEnd}

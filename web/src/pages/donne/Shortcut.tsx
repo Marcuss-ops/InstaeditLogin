@@ -18,11 +18,11 @@ export function Shortcut() {
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="donne-video-scrim max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-[#A4708C] mb-3">{SHORTCUT.eyebrow}</div>
-          <h2 className="text-display-2 text-[#4A3E56] donne-text-halo">
+          <h2 className="text-display-2 text-[#4A3E56]">
             {SHORTCUT.titleStart}
             <span className="text-gradient-sage">{SHORTCUT.titleAccent}</span>
           </h2>
-          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch] donne-text-halo">
+          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch]">
             {SHORTCUT.subtitleStart}
             <span className="font-semibold text-[#5F7A5A]">{SHORTCUT.subtitleAccent}</span>
             {SHORTCUT.subtitleEnd}
