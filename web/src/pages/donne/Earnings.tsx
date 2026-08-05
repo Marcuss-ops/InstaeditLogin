@@ -17,13 +17,20 @@ export function Earnings() {
         <div className="absolute w-[380px] h-[380px] -bottom-24 -left-24 rounded-full bg-[#F0E2F4]/40 blur-[110px]" />
       </div>
       <div className="relative mx-auto max-w-7xl px-6">
-        <div className="max-w-3xl mb-16 animate-fade-up">
+        <div className="donne-video-scrim max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-[#A4708C] mb-3 inline-flex items-center gap-2">
             <TrendingUp className="w-4 h-4" />
             {EARNINGS.eyebrow}
           </div>
-          <h2 className="text-display-2 text-[#4A3E56]">{EARNINGS.title}</h2>
-          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch]">{EARNINGS.subtitle}</p>
+          <h2 className="text-display-2 text-[#4A3E56] donne-text-halo">
+            {EARNINGS.titleStart}
+            <span className="text-gradient-gold">{EARNINGS.titleAccent}</span>
+          </h2>
+          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch] donne-text-halo">
+            {EARNINGS.subtitleStart}
+            <span className="font-semibold text-[#C78A4B]">{EARNINGS.subtitleAccent}</span>
+            {EARNINGS.subtitleEnd}
+          </p>
         </div>
 
         <div className="grid md:grid-cols-3 gap-5 animate-fade-up">
@@ -44,7 +51,11 @@ export function Earnings() {
                   {row.tag}
                 </span>
               </div>
-              <div className="text-2xl sm:text-3xl font-extrabold text-[#4A3E56] tabular-nums tracking-tight mb-2">
+              <div
+                className={`text-2xl sm:text-3xl font-extrabold tabular-nums tracking-tight mb-2 ${
+                  i === 2 ? "text-gradient-gold" : "text-[#4A3E56]"
+                }`}
+              >
                 {row.earning}
               </div>
               <div className="text-sm text-[#6E6677]">{row.reach}</div>

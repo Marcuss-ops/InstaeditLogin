@@ -53,9 +53,15 @@ export const HERO = {
 
 export const PROBLEM = {
   eyebrow: "Il Problema",
-  title: "La vita di oggi è diventata troppo cara.",
-  subtitle:
-    "Un solo stipendio non basta più: affitto, bollette, spesa, scuola dei figli. Ogni mese arrivi a fine mese con il conto quasi a zero e zero tempo per te stessa. Riconosci questa situazione?",
+  titleStart: "La vita di oggi è diventata ",
+  titleAccent: "troppo cara.",
+  subtitleStart:
+    "Un solo stipendio ",
+  subtitleAccent: "non basta più",
+  subtitleEnd:
+    ": affitto, bollette, spesa, scuola dei figli. Ogni mese arrivi a fine mese con il conto quasi a zero e ",
+  subtitleAccent2: "zero tempo per te stessa",
+  subtitleEnd2: ". Riconosci questa situazione?",
   bgVideo: "/videos/harsh.mp4",
   items: [
     {
@@ -83,9 +89,13 @@ export const PROBLEM = {
 
 export const SHORTCUT = {
   eyebrow: "Il Metodo",
-  title: "Un percorso chiaro verso la tua indipendenza economica.",
-  subtitle:
-    "Un sistema ordinato che ti accompagna dal primo video alla monetizzazione: strumenti che riducono il lavoro tecnico e una mentor che ti indica i passi giusti al momento giusto.",
+  titleStart: "Un percorso chiaro verso la tua ",
+  titleAccent: "indipendenza economica.",
+  subtitleStart:
+    "Un sistema ordinato che ti accompagna dal primo video alla monetizzazione: ",
+  subtitleAccent: "strumenti che riducono il lavoro tecnico",
+  subtitleEnd:
+    " e una mentor che ti indica i passi giusti al momento giusto.",
   bgVideo: "/videos/relax1.mp4",
   items: [
     {
@@ -113,9 +123,12 @@ export const SHORTCUT = {
 
 export const EARNINGS = {
   eyebrow: "I Guadagni",
-  title: "Quanto puoi guadagnare realisticamente?",
-  subtitle:
-    "Tabelle di guadagno basate sulle nostre attuali studentesse (mamme, lavoratrici e donne che partivano da zero). Più canali automatizzi, più flussi di cassa ricorrenti crei.",
+  titleStart: "Quanto puoi ",
+  titleAccent: "guadagnare realisticamente?",
+  subtitleStart:
+    "Tabelle di guadagno basate sulle nostre attuali studentesse (mamme, lavoratrici e donne che partivano da zero). Più canali automatizzi, più ",
+  subtitleAccent: "flussi di cassa ricorrenti",
+  subtitleEnd: " crei.",
   bgVideo: "/videos/relax-background.mp4",
   disclaimer:
     "I risultati mostrati non sono una garanzia di guadagno. Dipendono dal tuo impegno, dalla nicchia e dal mercato.",

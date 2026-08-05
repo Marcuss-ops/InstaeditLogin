@@ -15,11 +15,18 @@ export function Problem() {
         <div className="absolute w-[380px] h-[380px] -bottom-24 -left-24 rounded-full bg-[#F0E2F4]/40 blur-[110px]" />
       </div>
       <div className="relative mx-auto max-w-7xl px-6">
-        <div className="max-w-3xl mb-16 animate-fade-up">
+        <div className="donne-video-scrim max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-[#A4708C] mb-3">{PROBLEM.eyebrow}</div>
-          <h2 className="text-display-2 text-[#4A3E56]">{PROBLEM.title}</h2>
-          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch]">
-            {PROBLEM.subtitle}
+          <h2 className="text-display-2 text-[#4A3E56] donne-text-halo">
+            {PROBLEM.titleStart}
+            <span className="text-gradient-coral">{PROBLEM.titleAccent}</span>
+          </h2>
+          <p className="text-body-lg text-[#6E6677] mt-5 max-w-[62ch] donne-text-halo">
+            {PROBLEM.subtitleStart}
+            <span className="font-semibold text-[#C0655C]">{PROBLEM.subtitleAccent}</span>
+            {PROBLEM.subtitleEnd}
+            <span className="font-semibold text-[#C0655C]">{PROBLEM.subtitleAccent2}</span>
+            {PROBLEM.subtitleEnd2}
           </p>
         </div>
         <div className="grid sm:grid-cols-2 gap-5">

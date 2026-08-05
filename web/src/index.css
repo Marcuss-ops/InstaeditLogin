@@ -550,6 +550,56 @@ html:has(.donne-theme) #root {
   color: transparent;
 }
 
+/* Accent gradient per parole chiave evidenziate nelle sezioni con video:
+ * colori diversi per sezione — corallo (problema), salvia (metodo),
+ * oro/terracotta (guadagni). Tutti scoped sotto .donne-theme. */
+.donne-theme .text-gradient-coral {
+  background: linear-gradient(135deg, #c0655c 0%, #d95f5f 45%, #e07a5f 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.donne-theme .text-gradient-sage {
+  background: linear-gradient(135deg, #5f7a5a 0%, #7a9a74 55%, #5f7a5a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.donne-theme .text-gradient-gold {
+  background: linear-gradient(135deg, #b05c6b 0%, #e28743 55%, #c78a4b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Scrim bianco sfumato dietro i blocchi di testo delle sezioni con video:
+ * il testo resta leggibile, il video resta visibile intorno. */
+.donne-theme .donne-video-scrim {
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.92) 0%,
+    rgba(255, 255, 255, 0.78) 60%,
+    rgba(255, 255, 255, 0.55) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 1.25rem;
+  box-shadow: 0 14px 40px -18px rgba(74, 62, 86, 0.30);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  padding: 1.5rem 1.75rem;
+}
+
+/* Halo chiaro attorno alle lettere: tiene i titoli leggibili anche dove
+ * il video è più scuro o contrastato, senza coprire il filmato. */
+.donne-theme .donne-text-halo {
+  text-shadow:
+    0 0 1px rgba(255, 255, 255, 0.95),
+    0 1px 2px rgba(255, 255, 255, 0.9),
+    0 2px 12px rgba(249, 248, 246, 0.95);
+}
+
 .donne-theme .donne-card {
   background-color: #ffffff;
   border: 1px solid #ece6ee;
