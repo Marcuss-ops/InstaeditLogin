@@ -3,7 +3,7 @@
         test-integration-worker \
         verify-entrypoint-topology oauth-preflight-check oauth-preflight-test \
         installation-identity-diagnostic installation-identity-diagnostic-test \
-        duplicate-token-diagnostic-test \
+        duplicate-token-diagnostic-test oauth-migrations-diagnostic-test \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
@@ -64,6 +64,10 @@ installation-identity-diagnostic-test:
 # Static privacy and query-shape tests for the duplicate-token diagnostic.
 duplicate-token-diagnostic-test:
 	./scripts/db/test-duplicate-token-diagnostic.sh
+
+# Static privacy and query-shape tests for the migrations 084/085 diagnostic.
+oauth-migrations-diagnostic-test:
+	./scripts/db/test-oauth-migrations-084-085-diagnostic.sh
 
 # HTTP server only (cmd/api). No workers spawned.
 run-api:
