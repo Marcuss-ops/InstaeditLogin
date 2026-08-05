@@ -308,6 +308,41 @@ paths:
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
 
+  /api/v1/groups/{group_id}/accounts/{account_id}:
+    delete:
+      tags: [Auth]
+      operationId: groupAccountRemove
+      summary: Remove one channel from a folder without disconnecting it.
+      description: |
+        Deletes only the `group_accounts` membership and resynchronizes the
+        workspace channel binding. The platform account, its OAuth connection,
+        encrypted tokens, history and availability in other folders remain
+        unchanged. The operation is idempotent for an already-removed
+        membership and returns `204 No Content` on success.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: account_id
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '204':
+          description: Channel removed from this folder only.
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /api/v1/accounts:
     get:
       tags: [Auth]

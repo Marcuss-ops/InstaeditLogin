@@ -18,6 +18,12 @@ Base path: `/api/v1`
 
 Providers: `meta`, `tiktok`, `twitter`, `youtube`, `linkedin`.
 
+## Groups / folders
+
+| Method | Path | Description |
+|--------|------|-------------|
+| DELETE | `/api/v1/groups/{group_id}/accounts/{account_id}` | Remove one channel from this folder only; preserves the platform account, OAuth grant and tokens; returns `204` |
+
 ## Accounts
 
 | Method | Path | Description |

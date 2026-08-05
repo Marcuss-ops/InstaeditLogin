@@ -127,6 +127,14 @@ export const demoThumbnailProjects: DemoThumbnailProject[] = [
 
 let nextThumbnailProjectVersion = 10;
 
+// Mutable demo membership state mirrors the real group_accounts join table.
+// Keeping it outside the request handler means a successful DELETE remains
+// visible after the next aggregate reload instead of reappearing in the UI.
+const demoGroupMemberships = [
+  { id: 1, workspace_id: 1, name: "WWE", account_ids: [2] },
+  { id: 2, workspace_id: 1, name: "Marketing", account_ids: [] as number[] },
+];
+
 function thumbnailProjectPathMatch(path: string): { id: string; rest: string } | null {
   const match = /^\/api\/v1\/thumbnail-projects\/([^/]+)(\/.*)?$/.exec(path);
   if (!match) return null;
@@ -159,6 +167,7 @@ export const demoPosts = [
 let nextPostId = demoPosts.length + 1;
 
 function json(body: unknown, status = 200) {
+  if (status === 204) return new Response(null, { status });
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -226,23 +235,24 @@ export function handleDemoRequest(
   }
 
   // "Rimuovi dalla cartella": dedicated DELETE for a single membership.
-  // The demo aggregate stays read-only, so the write is acknowledged as
-  // a no-op success (mirrors the real 204 endpoint contract).
+  // Mutate the in-memory join-table fixture so the next aggregate reload
+  // preserves the removal, just like the persistent backend transaction.
   const removeGroupAccountMatch =
     /^\/api\/v1\/groups\/(\d+)\/accounts\/(\d+)$/.exec(path);
   if (removeGroupAccountMatch && method === "DELETE") {
+    const groupID = Number(removeGroupAccountMatch[1]);
+    const accountID = Number(removeGroupAccountMatch[2]);
+    const group = demoGroupMemberships.find((item) => item.id === groupID);
+    if (group) {
+      group.account_ids = group.account_ids.filter((id) => id !== accountID);
+    }
     return json({ ok: true }, 204);
   }
 
   // Groups aggregate (group → member account_ids) for the Link-to-video
   // dialog's Gruppo → Canale filter. Mirrors GET /api/v1/groups/aggregate.
   if (path === "/api/v1/groups/aggregate") {
-    return json({
-      groups: [
-        { id: 1, workspace_id: 1, name: "WWE", account_ids: [2] },
-        { id: 2, workspace_id: 1, name: "Marketing", account_ids: [] },
-      ],
-    });
+    return json({ groups: demoGroupMemberships });
   }
 
   if (path === "/api/v1/workspaces") {

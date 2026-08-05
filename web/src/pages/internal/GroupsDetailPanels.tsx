@@ -10,6 +10,7 @@ import {
   Pencil,
   RefreshCw,
   Trash2,
+  Unlink,
 } from "lucide-react";
 import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
@@ -95,23 +96,34 @@ export function GroupDetailPanel({
   // "Rimuovi dalla cartella": dedicated endpoint that only deletes the
   // group_accounts membership and resyncs workspace_channels — it never
   // disconnects the channel or touches OAuth tokens.
-  const removeAccount = async (accountId: number) => {
+  const removeAccount = async (accountId: number, username: string) => {
+    if (!window.confirm(
+      `Rimuovere ${username || `il canale #${accountId}`} soltanto dalla cartella "${group.name}"?\\n\\nIl canale rimarrà collegato a InstaEdit e continuerà a essere disponibile altrove.`,
+    )) return;
     setRemovedAccountIds((current) => new Set(current).add(accountId));
     setSaving(true);
     setSaveError(null);
+    let removalCommitted = false;
     try {
       const response = await authedFetch(`/api/v1/groups/${group.id}/accounts/${accountId}`, {
         method: "DELETE",
       });
       if (!response.ok) throw new Error("Impossibile rimuovere il canale dalla cartella");
+      removalCommitted = true;
       await onSaved();
     } catch (error) {
-      setRemovedAccountIds((current) => {
-        const next = new Set(current);
-        next.delete(accountId);
-        return next;
-      });
-      setSaveError(error instanceof Error ? error.message : "Impossibile rimuovere il canale dalla cartella");
+      if (!removalCommitted) {
+        setRemovedAccountIds((current) => {
+          const next = new Set(current);
+          next.delete(accountId);
+          return next;
+        });
+      }
+      setSaveError(
+        removalCommitted
+          ? "Canale rimosso, ma impossibile aggiornare la cartella. Ricarica la pagina."
+          : error instanceof Error ? error.message : "Impossibile rimuovere il canale dalla cartella",
+      );
     } finally {
       setSaving(false);
     }
@@ -215,7 +227,7 @@ export function GroupDetailPanel({
                   {LANGUAGE_OPTIONS.map(({ code, flag, name }) => <option key={code} value={code}>{flag} {name}</option>)}
                 </select>
                 {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]}>!</span> : null}
-                <button type="button" onClick={() => void removeAccount(a.id)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-red-500/15 hover:text-red-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username} dalla cartella`} title="Rimuovi dalla cartella"><Trash2 size={14} /></button>
+                <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username} dalla cartella`} title="Rimuovi dalla cartella"><Unlink size={14} /></button>
               </div>
             ))}
           </div>

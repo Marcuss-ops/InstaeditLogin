@@ -36,9 +36,35 @@ describe("GroupDetailPanel batch settings", () => {
     vi.restoreAllMocks();
   });
 
-  it("persists a removed account immediately", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+  it("requires confirmation and preserves the channel when cancelled", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
+    const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={group}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i }));
+
+    expect(confirmMock).toHaveBeenCalledWith(expect.stringContaining('soltanto dalla cartella "Editorial"'));
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("rimarrà collegato a InstaEdit");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/groups/7/accounts/102"))).toBe(false);
+    expect(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i })).toBeInTheDocument();
+  });
+
+  it("persists a removed account immediately", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     const onSaved = vi.fn();
 
     render(
@@ -60,6 +86,8 @@ describe("GroupDetailPanel batch settings", () => {
       expect.objectContaining({ method: "DELETE" }),
     ));
     expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/accounts/102/disconnect"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/accounts/102/data"))).toBe(false);
     expect(screen.queryByRole("button", { name: /Rimuovi channel-two dalla cartella/i })).not.toBeInTheDocument();
   });
 

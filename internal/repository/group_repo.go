@@ -520,7 +520,7 @@ func (r *GroupRepository) RemoveAccountFromGroupTx(ctx context.Context, groupID,
 		      ORDER BY CASE WHEN g.id = $2 THEN 0 ELSE 1 END, g.name, g.id
 		      LIMIT 1
 		 )
-		 WHERE wc.workspace_id = $1 AND wc.platform_account_id = $2`,
+		 WHERE wc.workspace_id = $1 AND wc.platform_account_id = $3`,
 		workspaceID, groupID, accountID,
 	); err != nil {
 		return fmt.Errorf("remove account from group: resync workspace channel: %w", err)
