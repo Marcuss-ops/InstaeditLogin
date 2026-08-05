@@ -21,23 +21,33 @@ func TestHandleDisconnectAccount_SharedGrant_SequentialLifecycle(t *testing.T) {
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
 			owner := ownedAccountFixture(1, models.PlatformYouTube)
 			owner.ID = id // the fixture hardcodes 21; honor the path id
+			connectionID := int64(55)
+			owner.OAuthConnectionID = &connectionID
 			return owner, nil
 		},
 		// Stateful atomic store: models the production repo counting active
 		// siblings on the shared grant inside its transaction.
-		disconnectPlatformAccountFn: func(ctx context.Context, accountID int64) (bool, bool, error) {
+		disconnectPlatformAccountTxFn: func(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (bool, bool, error) {
 			delete(active, accountID)
+			if len(active) == 0 && revoke != nil {
+				if err := revoke(ctx, nil); err != nil {
+					return false, true, err
+				}
+			}
 			return len(active) == 0, true, nil
 		},
 	}
 	var revokeCalls int
 	vault := &mockCredentialVault{
-		revokeFn: func(context.Context, int64) error {
-			revokeCalls++
-			return nil
+		getRefreshTokenFn: func(context.Context, int64) (string, error) {
+			return "refresh-token", nil
 		},
 	}
 	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "", WithCredentialVault(vault))
+	r.youtubeRevoker = &fakeYouTubeRevoker{revokeFn: func(context.Context, string) error {
+		revokeCalls++
+		return nil
+	}}
 
 	disconnect := func(accountID string) int {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/"+accountID+"/disconnect", nil)
@@ -58,7 +68,7 @@ func TestHandleDisconnectAccount_SharedGrant_SequentialLifecycle(t *testing.T) {
 		t.Fatalf("disconnect B: want 204, got %d", code)
 	}
 	if revokeCalls != 1 {
-		t.Fatalf("disconnect B: vault.Revoke must run exactly once for the last channel (got %d calls)", revokeCalls)
+		t.Fatalf("disconnect B: remote revoke must run exactly once for the last channel (got %d calls)", revokeCalls)
 	}
 }
 

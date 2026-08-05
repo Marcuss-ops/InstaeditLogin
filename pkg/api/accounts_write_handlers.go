@@ -21,7 +21,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,6 +61,10 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 // the fallback exists only to keep lightweight mock stores source-compatible.
 type secureDisconnectStore interface {
 	DisconnectPlatformAccount(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
+}
+
+type secureDisconnectTxStore interface {
+	DisconnectPlatformAccountTx(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (lastOnGrant bool, handled bool, err error)
 }
 
 // oauthGrantDisconnectStore is the optional repository capability for the
@@ -164,6 +167,14 @@ func (r *Router) handleDeleteOAuthGrant(w http.ResponseWriter, req *http.Request
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeDisconnectError(w http.ResponseWriter, err error) {
+	if strings.Contains(err.Error(), "remote revoke") || strings.Contains(err.Error(), "token is unavailable") {
+		writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation failed; retry the disconnect")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "failed to disconnect account")
 }
 
 func writeOAuthGrantDisconnectError(w http.ResponseWriter, err error) {
@@ -337,13 +348,14 @@ func (r *Router) handleDeleteAccountData(w http.ResponseWriter, req *http.Reques
 //     many channels). Count the still-active sibling channels on the
 //     same grant, excluding this account. Only when this is the LAST
 //     active channel (count == 0) do we revoke the grant:
-//     a. best-effort remote revoke at the provider (YouTube only) —
-//     revoking the refresh token on Google would otherwise kill
-//     every sibling channel, so it is gated on last-on-grant too;
-//     b. vault.Revoke → deletes every encrypted token row for the
-//     connection. Idempotent: the vault swallows ErrTokenNotFound.
-//     When siblings remain active, BOTH revokes are skipped so the
-//     shared grant keeps working for them.
+//     a. the transaction-aware repository callback remotely revokes the
+//     provider grant (YouTube only) while the grant lock is held —
+//     revoking the refresh token on Google would otherwise kill every
+//     sibling channel, so it is gated on last-on-grant;
+//     b. the same transaction marks oauth_connections disconnected and
+//     deletes every encrypted token row for the connection.
+//     When siblings remain active, neither remote nor local grant cleanup
+//     runs, so the shared grant keeps working for them.
 //  3. Disconnect (P1): status='disconnected' on the account row +
 //     last_error_code='DISCONNECTED' for operator dashboards, in the
 //     same transaction the repository removes the account from every
@@ -360,12 +372,12 @@ func (r *Router) handleDeleteAccountData(w http.ResponseWriter, req *http.Reques
 // already-revoked grant) skip the grant work entirely — there is
 // nothing to revoke — and disconnect cleanly.
 //
-// Production performs the status transition, sibling decision and
-// cleanup in one transaction under a per-grant advisory lock. This
-// prevents concurrent disconnects from both observing an active
-// sibling and orphaning the last grant. Remote-revoke failure remains
-// non-fatal: the local disconnect has already committed and the local
-// vault cleanup still runs.
+// Production performs the status transition, sibling decision, optional
+// remote revoke, grant cleanup, and channel cleanup in one transaction
+// under a per-grant advisory lock. This prevents concurrent disconnects
+// from both observing an active sibling and orphaning the last grant. A
+// remote-revoke failure aborts the transaction so the account remains
+// retryable and no partial local state is committed.
 func (r *Router) handleDisconnectAccount(w http.ResponseWriter, req *http.Request) {
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
@@ -377,12 +389,44 @@ func (r *Router) handleDisconnectAccount(w http.ResponseWriter, req *http.Reques
 	}
 	ctx := req.Context()
 
-	// Shared-grant awareness: production atomically disconnects this row
-	// and decides whether it is the last active channel. Test/legacy stores
-	// without the optional operation use the original fail-closed count path.
+	// Define the provider revoke callback once. The transaction-aware
+	// repository invokes it only for the last active channel, while holding
+	// the grant lock and before deleting the local token rows. Shared-grant
+	// disconnects never enter this callback, preserving sibling tokens.
+	var revoke func(context.Context, *sql.Tx) error
+	if account.OAuthConnectionID != nil && *account.OAuthConnectionID > 0 &&
+		account.Platform == models.PlatformYouTube && r.youtubeRevoker != nil {
+		if reader, ok := r.vault.(RefreshTokenTxReader); ok {
+			revoke = func(ctx context.Context, tx *sql.Tx) error {
+				refreshToken, err := reader.GetRefreshTokenForOAuthConnectionTx(ctx, tx, *account.OAuthConnectionID)
+				if err != nil || refreshToken == "" {
+					return fmt.Errorf("OAuth grant revocation token is unavailable")
+				}
+				revokeCtx, cancel := context.WithTimeout(ctx, services.OAuthGrantRevocationTimeout)
+				defer cancel()
+				err = r.youtubeRevoker.Revoke(revokeCtx, refreshToken)
+				if err == nil || errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+					return nil
+				}
+				var revocationErr *services.OAuthGrantRevocationError
+				if !errors.As(err, &revocationErr) {
+					return &services.OAuthGrantRevocationError{Class: services.OAuthGrantRevocationPermanent, Cause: err}
+				}
+				return err
+			}
+		}
+	}
+
 	lastOnGrant := false
 	handledDisconnect := false
-	if secureStore, ok := r.userRepo.(secureDisconnectStore); ok {
+	if secureStore, ok := r.userRepo.(secureDisconnectTxStore); ok {
+		var err error
+		lastOnGrant, handledDisconnect, err = secureStore.DisconnectPlatformAccountTx(ctx, account.ID, revoke)
+		if err != nil {
+			writeDisconnectError(w, err)
+			return
+		}
+	} else if secureStore, ok := r.userRepo.(secureDisconnectStore); ok {
 		var err error
 		lastOnGrant, handledDisconnect, err = secureStore.DisconnectPlatformAccount(ctx, account.ID)
 		if err != nil {
@@ -401,21 +445,17 @@ func (r *Router) handleDisconnectAccount(w http.ResponseWriter, req *http.Reques
 		}
 	}
 
-	if lastOnGrant {
-		// Best-effort remote revocation at the provider BEFORE the
-		// local vault.Revoke (which deletes the token material needed
-		// to revoke). Google's oauth2.googleapis.com/revoke accepts
-		// the refresh token; the YouTubeRevoker contract requires
-		// exactly that decoded value. Gated on last-on-grant: revoking
-		// the refresh token at Google would also kill every sibling
-		// channel still using the grant. A remote-revoke failure must
-		// not block the disconnect.
+	// Legacy fallback only: older test stores do not implement the
+	// transaction-aware capability, so preserve their existing behavior.
+	// Production never enters this branch; its repository invokes `revoke`
+	// inside the transaction above.
+	if !handledDisconnect && lastOnGrant {
 		if account.Platform == models.PlatformYouTube && r.youtubeRevoker != nil {
 			if reader, ok := r.vault.(RefreshTokenReader); ok {
-				if refreshToken, rerr := reader.GetRefreshToken(ctx, account.ID); rerr == nil && refreshToken != "" {
-					if revErr := r.youtubeRevoker.Revoke(ctx, refreshToken); revErr != nil {
-						slog.WarnContext(ctx, "best-effort remote YouTube token revoke failed (continuing with local disconnect)",
-							"platform_account_id", account.ID, "error", revErr)
+				if refreshToken, readErr := reader.GetRefreshToken(ctx, account.ID); readErr == nil && refreshToken != "" {
+					if remoteErr := r.youtubeRevoker.Revoke(ctx, refreshToken); remoteErr != nil {
+						// Legacy behavior is best-effort for the remote provider;
+						// local cleanup still proceeds.
 					}
 				}
 			}

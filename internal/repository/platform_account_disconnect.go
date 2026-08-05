@@ -8,9 +8,12 @@ import (
 
 // DisconnectPlatformAccount marks one platform account disconnected and
 // returns whether no active sibling remains on its OAuth grant. The status
-// transition and sibling decision run under the grant's transaction-scoped
-// advisory lock, so concurrent channel disconnects cannot both miss the last
-// active channel and orphan the shared grant.
+// transition, sibling decision, optional remote revoke, token cleanup and
+// channel cleanup run under the grant's transaction-scoped advisory lock.
+//
+// It is retained as a compatibility wrapper; new callers should use
+// DisconnectPlatformAccountTx when they need remote provider revocation
+// coordinated with the local transaction.
 //
 // P1 (account-lifecycle audit) — the explicit disconnect also performs the
 // channel cleanup in the SAME transaction as the status flip:
@@ -22,6 +25,19 @@ import (
 //     audit) and never revokes the shared grant while a sibling is active
 //     (the caller decides revocation from the returned lastOnGrant).
 func (r *UserRepository) DisconnectPlatformAccount(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error) {
+	return r.disconnectPlatformAccountTx(ctx, accountID, nil, false)
+}
+
+// DisconnectPlatformAccountTx performs the complete single-channel
+// disconnect in one transaction. The revoke callback is invoked only when
+// this account was active and is the last active account on its grant. It is
+// called while the grant lock is held and before local token deletion; a
+// non-nil error rolls the transaction back.
+func (r *UserRepository) DisconnectPlatformAccountTx(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (lastOnGrant bool, handled bool, err error) {
+	return r.disconnectPlatformAccountTx(ctx, accountID, revoke, true)
+}
+
+func (r *UserRepository) disconnectPlatformAccountTx(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error, transactionalGrantRevoke bool) (lastOnGrant bool, handled bool, err error) {
 	if accountID <= 0 {
 		return false, true, fmt.Errorf("disconnect platform account: invalid id %d", accountID)
 	}
@@ -37,13 +53,25 @@ func (r *UserRepository) DisconnectPlatformAccount(ctx context.Context, accountI
 	}()
 
 	var oauthConnectionID sql.NullInt64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT oauth_connection_id
-		   FROM platform_accounts
-		  WHERE id = $1
-		  FOR UPDATE`, accountID,
-	).Scan(&oauthConnectionID); err != nil {
-		return false, true, fmt.Errorf("disconnect platform account: load account %d: %w", accountID, err)
+	var status string
+	var loadErr error
+	if transactionalGrantRevoke {
+		loadErr = tx.QueryRowContext(ctx,
+			`SELECT oauth_connection_id, status
+			   FROM platform_accounts
+			  WHERE id = $1
+			  FOR UPDATE`, accountID,
+		).Scan(&oauthConnectionID, &status)
+	} else {
+		loadErr = tx.QueryRowContext(ctx,
+			`SELECT oauth_connection_id
+			   FROM platform_accounts
+			  WHERE id = $1
+			  FOR UPDATE`, accountID,
+		).Scan(&oauthConnectionID)
+	}
+	if loadErr != nil {
+		return false, true, fmt.Errorf("disconnect platform account: load account %d: %w", accountID, loadErr)
 	}
 
 	if oauthConnectionID.Valid {
@@ -64,7 +92,10 @@ func (r *UserRepository) DisconnectPlatformAccount(ctx context.Context, accountI
 		return false, true, fmt.Errorf("disconnect platform account: mark disconnected: %w", err)
 	}
 
-	if oauthConnectionID.Valid {
+	// A repeated request for an already-disconnected account is a no-op for
+	// grant revocation. This prevents a double click/retry from revoking the
+	// same remote grant again or deleting a sibling's shared credentials.
+	if oauthConnectionID.Valid && (!transactionalGrantRevoke || status != "disconnected") {
 		var activeAccounts int64
 		if err := tx.QueryRowContext(ctx,
 			`SELECT COUNT(*)
@@ -75,8 +106,29 @@ func (r *UserRepository) DisconnectPlatformAccount(ctx context.Context, accountI
 			return false, true, fmt.Errorf("disconnect platform account: count active siblings: %w", err)
 		}
 		lastOnGrant = activeAccounts == 0
-	} else {
-		lastOnGrant = false
+	}
+
+	if lastOnGrant && transactionalGrantRevoke {
+		if revoke != nil {
+			if err := revoke(ctx, tx); err != nil {
+				return false, true, fmt.Errorf("disconnect platform account: remote revoke: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE oauth_connections
+			    SET status = 'disconnected',
+			        reauth_required_at = NULL,
+			        last_refresh_error = NULL,
+			        updated_at = NOW()
+			  WHERE id = $1`, oauthConnectionID.Int64,
+		); err != nil {
+			return false, true, fmt.Errorf("disconnect platform account: disconnect OAuth connection: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM tokens WHERE oauth_connection_id = $1`, oauthConnectionID.Int64,
+		); err != nil {
+			return false, true, fmt.Errorf("disconnect platform account: delete grant tokens: %w", err)
+		}
 	}
 
 	// P1 cleanup: folders, publishable destinations, future jobs.

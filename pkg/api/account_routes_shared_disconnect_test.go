@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -24,8 +25,11 @@ func TestHandleDisconnectAccount_UsesAtomicDisconnectDecision(t *testing.T) {
 			t.Fatal("atomic disconnect must not use the non-atomic count fallback")
 			return 0, nil
 		},
-		disconnectPlatformAccountFn: func(context.Context, int64) (bool, bool, error) {
+		disconnectPlatformAccountTxFn: func(_ context.Context, _ int64, revoke func(context.Context, *sql.Tx) error) (bool, bool, error) {
 			calls++
+			if revoke != nil {
+				t.Fatal("shared-grant disconnect must not provide a revoke callback when a sibling remains")
+			}
 			return false, true, nil
 		},
 	}
@@ -56,18 +60,27 @@ func TestHandleDisconnectAccount_AtomicLastChannelRevokesGrant(t *testing.T) {
 	owner.OAuthConnectionID = &connectionID
 	store := &mockUserStore{
 		findPlatformAccountFn: func(int64) (*models.PlatformAccount, error) { return owner, nil },
-		disconnectPlatformAccountFn: func(context.Context, int64) (bool, bool, error) {
+		disconnectPlatformAccountTxFn: func(ctx context.Context, _ int64, revoke func(context.Context, *sql.Tx) error) (bool, bool, error) {
+			if revoke == nil {
+				t.Fatal("last-channel disconnect must receive a transactional revoke callback")
+			}
+			if err := revoke(ctx, nil); err != nil {
+				return false, true, err
+			}
 			return true, true, nil
 		},
 	}
 	var revokeCalls int
 	vault := &mockCredentialVault{
-		revokeFn: func(context.Context, int64) error {
-			revokeCalls++
-			return nil
+		getRefreshTokenFn: func(context.Context, int64) (string, error) {
+			return "refresh-token", nil
 		},
 	}
 	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "", WithCredentialVault(vault))
+	r.youtubeRevoker = &fakeYouTubeRevoker{revokeFn: func(context.Context, string) error {
+		revokeCalls++
+		return nil
+	}}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/disconnect", nil)
 	withBearerJWT(t, req, 1)
@@ -78,6 +91,6 @@ func TestHandleDisconnectAccount_AtomicLastChannelRevokesGrant(t *testing.T) {
 		t.Fatalf("status: want 204, got %d: %s", w.Code, w.Body.String())
 	}
 	if revokeCalls != 1 {
-		t.Fatalf("last-channel vault.Revoke calls: want 1, got %d", revokeCalls)
+		t.Fatalf("last-channel remote revoke calls: want 1, got %d", revokeCalls)
 	}
 }

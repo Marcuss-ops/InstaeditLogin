@@ -93,6 +93,168 @@ func expectAggregateRecomputeForPost(mock sqlmock.Sqlmock, postID int64) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
+func TestUserRepository_DisconnectPlatformAccountTx_PreservesGrantForActiveSibling(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT oauth_connection_id, status
+	   FROM platform_accounts
+	  WHERE id = $1
+	  FOR UPDATE`).
+		WithArgs(int64(21)).
+		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id", "status"}).AddRow(55, models.AccountStatusActive))
+	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").WithArgs(int64(55)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE platform_accounts
+	    SET status = 'disconnected',
+	        connected_at = NULL,
+	        last_error_code = 'DISCONNECTED',
+	        last_error_message = 'account disconnected by user',
+	        updated_at = NOW()
+	  WHERE id = $1`).WithArgs(int64(21)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT COUNT(*)
+		   FROM platform_accounts
+		  WHERE oauth_connection_id = $1
+		    AND status = 'active'`).WithArgs(int64(55)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	expectCleanupAfterDisconnect(mock, 21, nil)
+	mock.ExpectCommit()
+
+	called := false
+	lastOnGrant, handled, err := repo.DisconnectPlatformAccountTx(context.Background(), 21, func(context.Context, *sql.Tx) error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("DisconnectPlatformAccountTx: %v", err)
+	}
+	if !handled || lastOnGrant || called {
+		t.Fatalf("shared grant result: handled=%v lastOnGrant=%v callbackCalled=%v, want true/false/false", handled, lastOnGrant, called)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUserRepository_DisconnectPlatformAccountTx_LastChannelRevokesInsideTransaction(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT oauth_connection_id, status
+	   FROM platform_accounts
+	  WHERE id = $1
+	  FOR UPDATE`).
+		WithArgs(int64(21)).
+		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id", "status"}).AddRow(55, models.AccountStatusActive))
+	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").WithArgs(int64(55)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE platform_accounts
+	    SET status = 'disconnected',
+	        connected_at = NULL,
+	        last_error_code = 'DISCONNECTED',
+	        last_error_message = 'account disconnected by user',
+	        updated_at = NOW()
+	  WHERE id = $1`).WithArgs(int64(21)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT COUNT(*)
+		   FROM platform_accounts
+		  WHERE oauth_connection_id = $1
+		    AND status = 'active'`).WithArgs(int64(55)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectExec(`UPDATE oauth_connections
+		    SET status = 'disconnected',
+		        reauth_required_at = NULL,
+		        last_refresh_error = NULL,
+		        updated_at = NOW()
+		  WHERE id = $1`).WithArgs(int64(55)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM tokens WHERE oauth_connection_id = $1`).WithArgs(int64(55)).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectCleanupAfterDisconnect(mock, 21, nil)
+	mock.ExpectCommit()
+
+	called := false
+	lastOnGrant, handled, err := repo.DisconnectPlatformAccountTx(context.Background(), 21, func(_ context.Context, tx *sql.Tx) error {
+		called = true
+		if tx == nil {
+			t.Fatal("transaction-aware revoke callback received nil transaction")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("DisconnectPlatformAccountTx: %v", err)
+	}
+	if !handled || !lastOnGrant || !called {
+		t.Fatalf("last grant result: handled=%v lastOnGrant=%v callbackCalled=%v, want true/true/true", handled, lastOnGrant, called)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUserRepository_DisconnectPlatformAccountTx_RemoteRevokeFailureRollsBack(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT oauth_connection_id, status
+	   FROM platform_accounts
+	  WHERE id = $1
+	  FOR UPDATE`).WithArgs(int64(21)).
+		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id", "status"}).AddRow(55, models.AccountStatusActive))
+	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").WithArgs(int64(55)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE platform_accounts
+	    SET status = 'disconnected',
+	        connected_at = NULL,
+	        last_error_code = 'DISCONNECTED',
+	        last_error_message = 'account disconnected by user',
+	        updated_at = NOW()
+	  WHERE id = $1`).WithArgs(int64(21)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT COUNT(*)
+		   FROM platform_accounts
+		  WHERE oauth_connection_id = $1
+		    AND status = 'active'`).WithArgs(int64(55)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectRollback()
+
+	_, _, err := repo.DisconnectPlatformAccountTx(context.Background(), 21, func(context.Context, *sql.Tx) error {
+		return context.Canceled
+	})
+	if err == nil {
+		t.Fatal("remote revoke failure must be returned")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUserRepository_DisconnectPlatformAccountTx_AlreadyDisconnectedIsIdempotent(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT oauth_connection_id, status
+	   FROM platform_accounts
+	  WHERE id = $1
+	  FOR UPDATE`).WithArgs(int64(21)).
+		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id", "status"}).AddRow(55, models.AccountStatusDisconnected))
+	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").WithArgs(int64(55)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE platform_accounts
+	    SET status = 'disconnected',
+	        connected_at = NULL,
+	        last_error_code = 'DISCONNECTED',
+	        last_error_message = 'account disconnected by user',
+	        updated_at = NOW()
+	  WHERE id = $1`).WithArgs(int64(21)).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectCleanupAfterDisconnect(mock, 21, nil)
+	mock.ExpectCommit()
+
+	callbackCalled := false
+	lastOnGrant, handled, err := repo.DisconnectPlatformAccountTx(context.Background(), 21, func(context.Context, *sql.Tx) error {
+		callbackCalled = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("idempotent disconnect: %v", err)
+	}
+	if !handled || lastOnGrant || callbackCalled {
+		t.Fatalf("idempotent result: handled=%v lastOnGrant=%v callbackCalled=%v, want true/false/false", handled, lastOnGrant, callbackCalled)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestUserRepository_DisconnectPlatformAccount_PreservesGrantForActiveSibling(t *testing.T) {
 	db, mock := newMockUserDB(t)
 	repo := repository.NewUserRepository(db)

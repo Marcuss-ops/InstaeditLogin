@@ -315,6 +315,7 @@ type mockUserStore struct {
 	// disconnectPlatformAccountFn models the production atomic shared-grant
 	// operation without widening the UserStore compatibility interface.
 	disconnectPlatformAccountFn          func(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
+	disconnectPlatformAccountTxFn        func(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (lastOnGrant bool, handled bool, err error)
 	disconnectOAuthGrantFn               func(ctx context.Context, oauthConnectionID int64) error
 	disconnectOAuthGrantWithRevocationFn func(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error
 	// permanentlyDeleteAccountFn models the production permanent-delete /
@@ -431,6 +432,15 @@ func (m *mockUserStore) DisconnectPlatformAccount(ctx context.Context, accountID
 	if m.disconnectPlatformAccountFn != nil {
 		return m.disconnectPlatformAccountFn(ctx, accountID)
 	}
+	return false, false, nil
+}
+
+func (m *mockUserStore) DisconnectPlatformAccountTx(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (bool, bool, error) {
+	if m.disconnectPlatformAccountTxFn != nil {
+		return m.disconnectPlatformAccountTxFn(ctx, accountID, revoke)
+	}
+	// A nil transaction-aware callback deliberately leaves the capability
+	// unhandled so the handler can exercise its legacy compatibility path.
 	return false, false, nil
 }
 
