@@ -76,7 +76,7 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 		return v.toOAuthToken(stored)
 	}
 	if stored == nil {
-		return nil, fmt.Errorf("vault: no stored token for account %d (oauth_connection=%d)", platformAccountID, oauthConnectionID)
+		return nil, fmt.Errorf("vault: %w for account %d (oauth_connection=%d)", ErrModernGrantMissing, platformAccountID, oauthConnectionID)
 	}
 
 	// P3 observability: warn when the stored refresh grant is close to its

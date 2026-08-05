@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
@@ -324,19 +325,15 @@ func (r *Router) ensurePrivateYouTubeBatchVideo(ctx context.Context, edit *model
 		return errors.New("batch channel not found")
 	}
 	// 1. Renew first (P0): an expired access token is refreshed
-	// automatically from the stored grant, so a stale token can never
-	// fail the whole batch and force the operator to reconnect. The
-	// Get bearer → long_lived → short_lived fallback remains only for
-	// historical tokens written by older releases / migrations.
+	// automatically from the stored grant. Legacy rows are eligible for
+	// compatibility only when the canonical modern grant is explicitly
+	// absent; hard OAuth failures must never be hidden by stale-token reads.
 	token, err := r.vault.Renew(ctx, edit.PlatformAccountID, models.TokenTypeBearer, r.youTubeSvc.RefreshOAuthToken)
-	if err != nil {
-		token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeBearer)
-	}
-	if err != nil {
+	if errors.Is(err, credentials.ErrModernGrantMissing) {
 		token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeLongLived)
-	}
-	if err != nil {
-		token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeShortLived)
+		if errors.Is(err, credentials.ErrModernGrantMissing) {
+			token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeShortLived)
+		}
 	}
 	if err != nil {
 		return errors.New("no valid token found for this account")

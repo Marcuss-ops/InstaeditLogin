@@ -41,7 +41,16 @@ import (
 // RenewYouTubeToken) and the HTTP layer can switch on errors.Is instead of
 // parsing provider bodies. It intentionally carries no upstream text or
 // credential material.
-var ErrInvalidGrant = errors.New("oauth grant requires reauthorization")
+var (
+	// ErrInvalidGrant is the typed classification for a provider OAuth
+	// response that says the stored grant is revoked or expired.
+	ErrInvalidGrant = errors.New("oauth grant requires reauthorization")
+	// ErrModernGrantMissing means the canonical modern token row is absent.
+	// It is the only error that permits callers to try a legacy credential
+	// row; expiry, refresh failures, grant state, audience, and scope errors
+	// must be returned immediately instead of being masked by fallback.
+	ErrModernGrantMissing = errors.New("modern OAuth grant token is missing")
+)
 
 // TokenRefresher is the narrow function signature the vault uses to call
 // a platform's refresh endpoint. It is intentionally a plain function

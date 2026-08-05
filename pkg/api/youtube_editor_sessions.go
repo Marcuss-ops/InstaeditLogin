@@ -20,6 +20,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -103,24 +105,22 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	// Renew first (P0): CreateEditorSession is the FIRST step of the
 	// thumbnail-batch chain and makes a remote GetYouTubeVideo call, so
 	// an expired access token must be refreshed automatically from the
-	// stored grant instead of failing the batch item (vault.Get returns
-	// an "expired" error for stale tokens). The Get bearer → long_lived
-	// → short_lived fallback remains only for historical tokens written
-	// by older releases / migrations. youTubeSvc is still optional at
-	// this point (its nil-check is below), so the refresher is only
-	// used when the service is wired.
+	// stored grant. Legacy rows are eligible only when the canonical
+	// modern grant is explicitly missing; hard OAuth failures are not
+	// masked by stale-token fallback. youTubeSvc is still optional at
+	// this point, so the refresher is only used when the service is wired.
 	var token *models.OAuthToken
 	if r.youTubeSvc != nil {
 		token, err = r.vault.Renew(ctx, account.ID, models.TokenTypeBearer, r.youTubeSvc.RefreshOAuthToken)
 	}
-	if err != nil || token == nil {
-		token, err = r.vault.Get(ctx, account.ID, models.TokenTypeBearer)
+	if token == nil && err == nil {
+		err = errors.New("vault returned an empty token")
 	}
-	if err != nil {
+	if errors.Is(err, credentials.ErrModernGrantMissing) {
 		token, err = r.vault.Get(ctx, account.ID, models.TokenTypeLongLived)
-	}
-	if err != nil {
-		token, err = r.vault.Get(ctx, account.ID, models.TokenTypeShortLived)
+		if errors.Is(err, credentials.ErrModernGrantMissing) {
+			token, err = r.vault.Get(ctx, account.ID, models.TokenTypeShortLived)
+		}
 	}
 	if err != nil {
 		return nil, ErrEditorSessionNoValidToken

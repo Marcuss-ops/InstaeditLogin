@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -36,7 +35,7 @@ func RenewYouTubeToken(
 		// must not cross the credential package boundary.
 		return nil, ErrYouTubeInvalidGrant
 	}
-	if !isMissingYouTubeCanonicalToken(canonicalErr) {
+	if !errors.Is(canonicalErr, ErrModernGrantMissing) {
 		return nil, ErrYouTubeTokenRenewal
 	}
 
@@ -61,18 +60,9 @@ func RenewYouTubeToken(
 	return nil, fmt.Errorf("youtube token renewal failed for canonical and temporary legacy credentials: %w", ErrYouTubeTokenRenewal)
 }
 
-// isMissingYouTubeCanonicalToken deliberately recognizes only the vault's
-// token-absence errors. Infrastructure, decryption, expiry, and provider
-// errors must not trigger a legacy lookup because doing so would mask the
-// actual incident and could select an unrelated credential.
-func isMissingYouTubeCanonicalToken(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no token for account") ||
-		strings.Contains(message, "no stored token for account")
-}
+// Legacy fallback is intentionally selected only by the typed vault
+// classification ErrModernGrantMissing. Provider-controlled text is never
+// parsed to decide whether a different credential row may be used.
 
 // ErrYouTubeTokenRenewal is intentionally generic. Callers may use
 // errors.Is without logging provider response bodies or token material.

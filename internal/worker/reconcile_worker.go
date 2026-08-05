@@ -370,7 +370,7 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 		oauthToken, err = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
 	} else {
 		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
-		if err != nil {
+		if errors.Is(err, credentials.ErrModernGrantMissing) {
 			oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
 		}
 	}

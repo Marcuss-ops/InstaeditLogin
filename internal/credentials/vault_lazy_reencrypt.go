@@ -27,7 +27,7 @@ func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, toke
 		return nil, fmt.Errorf("vault: failed to find token: %w", err)
 	}
 	if stored == nil {
-		return nil, fmt.Errorf("vault: no token for account %d (type: %s)", platformAccountID, tokenType)
+		return nil, fmt.Errorf("vault: %w for account %d (type: %s)", ErrModernGrantMissing, platformAccountID, tokenType)
 	}
 	accessExpiresAt := stored.AccessTokenExpiresAt
 	if accessExpiresAt == nil {

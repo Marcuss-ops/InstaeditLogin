@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,17 +97,15 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewsExpiredAccessToken(t *testing.T) {
 	}
 }
 
-// TestEnsurePrivateYouTubeBatchVideo_RenewFailure_FallsBackToLegacyTokens
-// pins the preserved historical path: when Renew fails (no refresh grant,
-// legacy migration rows), the handler MUST fall back to the Get
-// bearer → long_lived → short_lived chain so pre-043 tokens keep
-// working instead of failing the batch.
-func TestEnsurePrivateYouTubeBatchVideo_RenewFailure_FallsBackToLegacyTokens(t *testing.T) {
+// TestEnsurePrivateYouTubeBatchVideo_RenewMissingModernGrant_FallsBackToLegacyTokens
+// pins the compatibility path: only an explicitly missing modern grant may
+// use the historical long_lived/short_lived rows.
+func TestEnsurePrivateYouTubeBatchVideo_RenewMissingModernGrant_FallsBackToLegacyTokens(t *testing.T) {
 	var renewCalled, bearerGetCalled, longLivedGetCalled bool
 	vault := &mockCredentialVault{
 		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			renewCalled = true
-			return nil, errors.New("no refresh grant stored")
+			return nil, fmt.Errorf("vault: %w", credentials.ErrModernGrantMissing)
 		},
 		getFn: func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
 			switch tokenType {
@@ -154,11 +153,56 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewFailure_FallsBackToLegacyTokens(t *
 	if !renewCalled {
 		t.Fatal("vault.Renew must be attempted first even when it will fail")
 	}
-	if !bearerGetCalled || !longLivedGetCalled {
-		t.Errorf("legacy fallback order violated: bearerGet=%v longLivedGet=%v (want both true)", bearerGetCalled, longLivedGetCalled)
+	if bearerGetCalled {
+		t.Error("legacy fallback must not probe the bearer row after ErrModernGrantMissing")
+	}
+	if !longLivedGetCalled {
+		t.Error("legacy fallback must probe long_lived after ErrModernGrantMissing")
 	}
 	if youTubeGotToken != "legacy-long-lived-token" {
 		t.Errorf("YouTube got access token %q, want %q (the legacy long_lived token must be used)", youTubeGotToken, "legacy-long-lived-token")
+	}
+}
+
+func TestEnsurePrivateYouTubeBatchVideo_HardOAuthErrorsDoNotFallback(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "invalid_grant", err: credentials.ErrInvalidGrant},
+		{name: "grant_reauth_required", err: errors.New("oauth grant status is reauth_required")},
+		{name: "audience_mismatch", err: errors.New("oauth audience mismatch")},
+		{name: "scope_insufficient", err: errors.New("oauth insufficient scope")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			getCalls := 0
+			vault := &mockCredentialVault{
+				renewFn: func(context.Context, int64, string, credentials.TokenRefresher) (*models.OAuthToken, error) {
+					return nil, tc.err
+				},
+				getFn: func(context.Context, int64, string) (*models.OAuthToken, error) {
+					getCalls++
+					return &models.OAuthToken{AccessToken: "legacy-must-not-be-used"}, nil
+				},
+			}
+			youTubeSvc := &mockYouTubeOAuthServiceForEditor{}
+			r := mustNewRouterWithDefaults(
+				services.NewCapabilityRouter(),
+				&mockUserStore{findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+					return &models.PlatformAccount{ID: 42, Platform: models.PlatformYouTube, PlatformUserID: "UC123", Status: models.AccountStatusActive}, nil
+				}},
+				auth.NewManager(testJWTSecret, 24), "", nil,
+				WithYouTubeService(youTubeSvc), WithCredentialVault(vault),
+			)
+			err := r.ensurePrivateYouTubeBatchVideo(context.Background(), &models.YouTubeVideoEdit{PlatformAccountID: 42, YouTubeVideoID: "video"})
+			if err == nil {
+				t.Fatal("hard OAuth error must stop the batch")
+			}
+			if getCalls != 0 {
+				t.Fatalf("hard OAuth error %q must not trigger legacy Get fallback; calls=%d", tc.name, getCalls)
+			}
+		})
 	}
 }
 

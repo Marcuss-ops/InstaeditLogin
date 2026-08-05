@@ -66,7 +66,7 @@ func TestRenewYouTubeToken_LegacyFallbackIsTemporaryAndRedacted(t *testing.T) {
 		renewFn: func(_ context.Context, _ int64, tokenType string, _ TokenRefresher) (*models.OAuthToken, error) {
 			types = append(types, tokenType)
 			if tokenType == models.TokenTypeBearer {
-				return nil, errors.New("vault: no token for account 42 (type: bearer)")
+				return nil, fmt.Errorf("vault: %w for account 42 (type: bearer)", ErrModernGrantMissing)
 			}
 			return &models.OAuthToken{AccessToken: "legacy-access", TokenType: models.TokenTypeLongLived}, nil
 		},
@@ -122,7 +122,7 @@ func TestRenewYouTubeToken_LegacyInvalidGrantIsClassified(t *testing.T) {
 		renewFn: func(_ context.Context, _ int64, tokenType string, _ TokenRefresher) (*models.OAuthToken, error) {
 			types = append(types, tokenType)
 			if tokenType == models.TokenTypeBearer {
-				return nil, errors.New("no token for account 42")
+				return nil, fmt.Errorf("vault: %w for account 42", ErrModernGrantMissing)
 			}
 			return nil, &OAuthTokenError{
 				StatusCode:  400,
