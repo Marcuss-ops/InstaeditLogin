@@ -99,6 +99,7 @@ func expectSlowPathRefreshChain(mock sqlmock.Sqlmock, accountID int64) {
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
 	mock.ExpectCommit()
 	expectOauthConnLookup(mock, accountID, accountID)
 }

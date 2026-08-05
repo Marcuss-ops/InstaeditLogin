@@ -22,6 +22,7 @@ func TestVault_Renew_InvalidGrant_LegacyStoreFailsClosed(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).WithArgs(accountID).WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").WithArgs(accountID).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
 	mock.ExpectRollback()
 
 	_, err := v.Renew(context.Background(), accountID, models.TokenTypeBearer, func(context.Context, string) (*models.TokenData, error) {

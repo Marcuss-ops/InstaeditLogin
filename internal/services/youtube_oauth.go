@@ -59,6 +59,13 @@ type YouTubeOAuthService struct {
 	// SetSessionContext before calling Publish/StartPublish.
 	sessionJobID    int64
 	sessionWorkerID string
+	// pool (YouTube OAuth Client Pool, R4) is the optional A/B client
+	// registry used by RefreshOAuthToken. When wired (bootstrap), every
+	// YouTube refresh resolves the grant's oauth_client_key (stamped on
+	// ctx by CredentialVault.Renew) against this registry and refreshes
+	// with the EXACT client that issued the token. nil keeps the legacy
+	// single-client refresh path (cfg.Auth.YouTubeClientID) untouched.
+	pool *YouTubeOAuthClientRegistry
 }
 
 // NewYouTubeOAuthService creates a new YouTubeOAuthService. Accepts optional
@@ -79,6 +86,15 @@ func NewYouTubeOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*
 		uploadOpts: opts,
 		uploadDeps: loadYouTubeUploadDeps(opts),
 	}, nil
+}
+
+// SetYouTubeOAuthPool wires the optional YouTube OAuth Client Pool
+// registry onto the service so RefreshOAuthToken refreshes each grant
+// with the client that issued it (resolved via the grant's
+// oauth_client_key). Nil (default) keeps the legacy single-client
+// refresh path. The registry never exposes client secrets.
+func (s *YouTubeOAuthService) SetYouTubeOAuthPool(pool *YouTubeOAuthClientRegistry) {
+	s.pool = pool
 }
 
 // ClientID returns the YouTube OAuth client_id this service was
@@ -374,10 +390,29 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 	if refreshToken == "" {
 		return nil, fmt.Errorf("youtube RefreshOAuthToken: empty refresh token")
 	}
-	slog.Info("YouTube: refreshing access token")
+
+	// R4 — YouTube OAuth Client Pool: resolve the client from the
+	// grant's oauth_client_key (stamped on ctx by vault.Renew) and
+	// refresh with EXACTLY that client. Fail-closed: an unknown key is
+	// an error — never fall back to a different client (refreshing a
+	// pool A token with client B would surface as invalid_client /
+	// invalid_grant from Google). A nil pool (legacy deployment) or
+	// empty key (non-vault caller) falls back to the legacy single
+	// client.
+	client, err := s.poolClientForRefresh(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Info("YouTube: refreshing access token", "oauth_client_key", clientKeyForLog(client))
 	body := url.Values{}
-	body.Set("client_id", s.cfg.Auth.YouTubeClientID)
-	body.Set("client_secret", s.cfg.Auth.YouTubeClientSecret)
+	if client != nil {
+		body.Set("client_id", client.ClientID)
+		body.Set("client_secret", client.ClientSecret)
+	} else {
+		body.Set("client_id", s.cfg.Auth.YouTubeClientID)
+		body.Set("client_secret", s.cfg.Auth.YouTubeClientSecret)
+	}
 	body.Set("refresh_token", refreshToken)
 	body.Set("grant_type", "refresh_token")
 
@@ -397,6 +432,37 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 		RefreshTokenExpiresIn: tr.RefreshTokenExpiresIn,
 		Scopes:                nonEmptyScopes(tr.Scope),
 	}, nil
+}
+
+// poolClientForRefresh resolves the pool client that must refresh the
+// grant, from the oauth_client_key CredentialVault.Renew stamped on
+// ctx.
+//
+//	key empty       → (nil, nil): legacy single-client caller
+//	pool nil        → (nil, nil): legacy deployment (no pool wired)
+//	key resolvable  → that client (never a different one)
+//	key unknown     → error, fail-closed (cross-pool refresh refused)
+//
+// Fail-closed semantics mean a legacy grant stamped with the migration
+// default youtube_pool_a on a deployment that configured ONLY pool B
+// will refuse to refresh (the key does not resolve). That is intended:
+// operators must keep pool A as the legacy client's continuation when
+// enabling the pool, otherwise old grants would be silently refreshed
+// with a client that never issued them.
+//
+// Never returns a client different from the one that issued the grant.
+func (s *YouTubeOAuthService) poolClientForRefresh(ctx context.Context) (*YouTubeOAuthClientConfig, error) {
+	key := credentials.OAuthClientKeyFromContext(ctx)
+	if key == "" || s.pool == nil {
+		return nil, nil
+	}
+	client, err := s.pool.Resolve(key)
+	if err != nil {
+		// Fail-closed: refuse to refresh with any other client. The
+		// error is redacted (registry errors never carry secrets).
+		return nil, fmt.Errorf("youtube refresh: %w", err)
+	}
+	return client, nil
 }
 
 func (s *YouTubeOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*youtubeTokenResponse, error) {

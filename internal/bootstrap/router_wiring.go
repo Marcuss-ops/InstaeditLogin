@@ -249,6 +249,15 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		return nil, nil, fmt.Errorf("build youtube oauth client pool registry: %w", regErr)
 	} else if ytPoolRegistry != nil {
 		opts = append(opts, api.WithYouTubeOAuthClientRegistry(ytPoolRegistry))
+		// R4 — attach the pool to the SHARED YouTubeOAuthService instance
+		// (the same one the capability router hands to workers and the
+		// credential resolver). With the registry wired, every YouTube
+		// refresh (vault.Renew slow path) resolves the grant's
+		// oauth_client_key against the pool instead of the legacy single
+		// client — a pool A token is never refreshed with client B.
+		if ytSvc, typeOK := rawYouTubeService.(*services.YouTubeOAuthService); typeOK {
+			ytSvc.SetYouTubeOAuthPool(ytPoolRegistry)
+		}
 		slog.Info("YouTube OAuth client pool configured", "clients", ytPoolRegistry.Keys())
 	}
 

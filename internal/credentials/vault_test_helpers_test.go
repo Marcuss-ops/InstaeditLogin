@@ -158,6 +158,18 @@ func expectOauthConnLookup(mock sqlmock.Sqlmock, platformAccountID, oauthConnect
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(oauthConnectionID))
 }
 
+// expectOAuthClientKeyLookup installs the R4 pool-client-key resolution
+// the Renew slow path issues inside the lock tx. The SQL must match
+// resolveOAuthClientKey exactly (QueryMatcherEqual).
+func expectOAuthClientKeyLookup(mock sqlmock.Sqlmock, oauthConnectionID int64, key string) {
+	mock.ExpectQuery(`SELECT oc.oauth_client_key
+		   FROM oauth_connections oc
+		  WHERE oc.id = $1
+		    AND oc.provider = 'youtube'`).
+		WithArgs(oauthConnectionID).
+		WillReturnRows(sqlmock.NewRows([]string{"oauth_client_key"}).AddRow(key))
+}
+
 func newEncryptedToken(t *testing.T, v *CredentialVault, accountID int64, expiresIn time.Duration, refreshToken string) *models.Token {
 	t.Helper()
 	encAccess, err := v.encryptor.Encrypt("old-access-token")

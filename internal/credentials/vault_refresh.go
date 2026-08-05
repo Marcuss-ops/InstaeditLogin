@@ -108,7 +108,19 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 		return nil, err
 	}
 
-	newTokenData, err := refresher(ctx, refreshToken)
+	// R4 — YouTube OAuth Client Pool: resolve the grant's pool client
+	// key inside the lock tx (platform_account_id → oauth_connection_id
+	// → oauth_client_key) and stamp it on the ctx handed to the
+	// refresher. The refresher (services layer) Resolves that key
+	// through the pool registry and refreshes with the SAME client_id +
+	// client_secret that issued the token — never a different one.
+	// Best-effort: a pre-migration-099 database has no oauth_client_key
+	// column and falls back to the legacy label at DEBUG without
+	// failing the refresh (mirrors recordInvalidGrantMetric).
+	clientKey := v.resolveOAuthClientKey(ctx, lockTx, oauthConnectionID)
+	refreshCtx := WithOAuthClientKey(ctx, clientKey)
+
+	newTokenData, err := refresher(refreshCtx, refreshToken)
 	if err != nil {
 		status, code := classifyRefreshFailure(err)
 		if errors.Is(err, ErrInvalidGrant) {
@@ -210,6 +222,44 @@ func (v *CredentialVault) updateGrantStatus(ctx context.Context, oauthConnection
 		return nil
 	}
 	return store.UpdateOAuthConnectionStatus(ctx, oauthConnectionID, status, lastError)
+}
+
+// resolveOAuthClientKey returns the oauth_client_key of the grant
+// being refreshed, resolved inside the caller's lock tx. The key is
+// part of the grant identity (migration 099): a refresh token must
+// always be renewed with the SAME OAuth client that issued it, so the
+// vault hands the key to the refresher instead of letting the
+// refresher pick a client on its own.
+//
+// Best-effort and never allowed to fail the refresh path: on a
+// pre-migration-099 database the oauth_client_key column does not
+// exist and the lookup falls back to the legacy label (DEBUG).
+func (v *CredentialVault) resolveOAuthClientKey(ctx context.Context, tx *sql.Tx, oauthConnectionID int64) string {
+	var clientKey string
+	err := tx.QueryRowContext(ctx,
+		`SELECT oc.oauth_client_key
+		   FROM oauth_connections oc
+		  WHERE oc.id = $1
+		    AND oc.provider = 'youtube'`,
+		oauthConnectionID,
+	).Scan(&clientKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Non-YouTube grant (the vault's Renew path is shared by
+		// TikTok, Instagram, X, Drive, …): not this metric's
+		// jurisdiction, no stamp, no log noise.
+		return defaultYouTubeOAuthClientKey
+	}
+	if err != nil {
+		if v.logger != nil {
+			v.logger.Debug("oauth client key resolution skipped (oauth_client_key column may not exist on pre-migration-099 database)",
+				"oauth_connection_id", oauthConnectionID, "error", err)
+		}
+		return defaultYouTubeOAuthClientKey
+	}
+	if clientKey == "" {
+		return defaultYouTubeOAuthClientKey
+	}
+	return clientKey
 }
 
 // recordInvalidGrantMetric bumps youtube_oauth_invalid_grant_total for

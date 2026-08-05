@@ -77,6 +77,7 @@ func TestVault_Renew_SlowPath_ExpiredToken_AcquiresLockAndCommits(t *testing.T) 
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
 	mock.ExpectCommit()
 	expectOauthConnLookup(mock, accountID, accountID)
 
@@ -135,6 +136,7 @@ func TestVault_Renew_SlowPath_WithinGraceWindow_AcquiresLock(t *testing.T) {
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
 	mock.ExpectCommit()
 	expectOauthConnLookup(mock, accountID, accountID)
 
@@ -195,6 +197,7 @@ func TestVault_Renew_RefresherFails_PropagatesAndRollsBack(t *testing.T) {
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
 	mock.ExpectRollback()
 
 	_, err := v.Renew(context.Background(), accountID, models.TokenTypeBearer, func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
@@ -229,6 +232,7 @@ func TestVault_Renew_LongLivedToken_UsesAccessTokenAsRefreshMaterial(t *testing.
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
 	mock.ExpectCommit()
 	expectOauthConnLookup(mock, accountID, accountID)
 
@@ -339,6 +343,7 @@ func TestVault_Renew_NearRefreshExpiry_Warns(t *testing.T) {
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
 	mock.ExpectCommit()
 	expectOauthConnLookup(mock, accountID, accountID)
 
@@ -381,6 +386,7 @@ func TestVault_Renew_DistantRefreshExpiry_NoWarning(t *testing.T) {
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
 	mock.ExpectCommit()
 	expectOauthConnLookup(mock, accountID, accountID)
 

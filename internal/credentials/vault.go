@@ -66,6 +66,31 @@ var (
 // know which it is.
 type TokenRefresher func(ctx context.Context, refreshToken string) (*models.TokenData, error)
 
+// oauthClientKeyCtxKey is the private context key under which
+// CredentialVault.Renew publishes the oauth_client_key of the grant
+// being refreshed (YouTube OAuth Client Pool, R4). The refresher
+// (services layer) reads it via OAuthClientKeyFromContext to refresh
+// with the EXACT OAuth client that issued the token — never a
+// different one. The value is a pool-key label ("youtube_pool_a" /
+// "youtube_pool_b"), never a secret.
+type oauthClientKeyCtxKey struct{}
+
+// WithOAuthClientKey returns a ctx carrying the pool client key of the
+// grant being refreshed. CredentialVault.Renew stamps it before
+// invoking the refresher; the refresher Resolves the key through the
+// pool registry. Non-YouTube refreshers ignore the value entirely.
+func WithOAuthClientKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, oauthClientKeyCtxKey{}, key)
+}
+
+// OAuthClientKeyFromContext returns the pool client key the vault
+// resolved for the grant being refreshed ("" when the caller is not on
+// a vault refresh path — the legacy single-client refresher ignores it).
+func OAuthClientKeyFromContext(ctx context.Context) string {
+	key, _ := ctx.Value(oauthClientKeyCtxKey{}).(string)
+	return key
+}
+
 // TokenStore is the storage-layer interface the vault depends on. It is
 // intentionally narrower than repository.TokenRepository: the vault only
 // needs Save / Read / UpdateCiphertexts (Blocco #2.2 lazy re-encrypt) /
@@ -101,6 +126,13 @@ type TokenStore interface {
 	// ChannelAuthorizationService.AuthorizeChannel's atomic flow.
 	SaveTokenTx(ctx context.Context, tx *sql.Tx, token *models.Token) error
 }
+
+// defaultYouTubeOAuthClientKey is the fallback oauth_client_key used
+// when a grant's pool client cannot be resolved: legacy rows created
+// before migration 099 and pre-migration-099 databases both fall back
+// to this label (the migration's column default), which is the honest
+// label for the historical single-client path.
+const defaultYouTubeOAuthClientKey = "youtube_pool_a"
 
 // GrantStatusStore is implemented by stores that persist OAuth-grant health.
 // It is optional so in-memory/test stores and older integrations remain
