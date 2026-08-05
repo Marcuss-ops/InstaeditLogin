@@ -4,6 +4,7 @@ package credentials
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -108,6 +109,18 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 	newTokenData, err := refresher(ctx, refreshToken)
 	if err != nil {
 		status, code := classifyRefreshFailure(err)
+		if errors.Is(err, ErrInvalidGrant) {
+			if statusStore, ok := v.store.(InvalidGrantTxStore); ok {
+				if statusErr := statusStore.MarkInvalidGrantTx(ctx, lockTx, oauthConnectionID, SharedGrantReauthRequiredCode, InvalidGrantAccountErrorMessage); statusErr != nil {
+					return nil, fmt.Errorf("vault: propagate invalid_grant state: %w", statusErr)
+				}
+				if err := lockTx.Commit(); err != nil {
+					return nil, fmt.Errorf("vault: commit invalid_grant state: %w", err)
+				}
+				committed = true
+				return nil, fmt.Errorf("vault: refresh failed: %w", err)
+			}
+		}
 		_ = lockTx.Rollback()
 		committed = true
 		if statusErr := v.updateGrantStatus(ctx, oauthConnectionID, status, code); statusErr != nil {

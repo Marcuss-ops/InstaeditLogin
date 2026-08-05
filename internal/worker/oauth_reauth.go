@@ -8,12 +8,12 @@ import (
 )
 
 const (
-	// YouTubeReauthCode is the stable operator-facing classification for a
-	// revoked or expired Google OAuth grant.
-	YouTubeReauthCode = "invalid_grant"
+	// YouTubeReauthCode is the stable, shared-grant classification used by
+	// both refresh and worker propagation paths.
+	YouTubeReauthCode = "SHARED_GRANT_REAUTH_REQUIRED"
 	// YouTubeReauthMessage is deliberately provider-safe and contains no
-	// upstream response body or credential material.
-	YouTubeReauthMessage = "Ricollega YouTube"
+	// upstream response body, SQL error, or credential material.
+	YouTubeReauthMessage = "Shared OAuth grant requires reauthorization"
 )
 
 // OAuthConnectionReauthStore is an optional extension implemented by the

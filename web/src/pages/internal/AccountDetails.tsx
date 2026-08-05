@@ -245,12 +245,14 @@ export function AccountDetailsPage() {
           </div>
         </div>
 
-        {account.status === "reauth_required" && account.platform === "youtube" && (
+        {account.account_state === "reconnect_required" && account.platform === "youtube" && (
           <div className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-amber-400/20 bg-amber-400/[0.08] px-5 py-4">
             <div>
               <p className="text-[13px] font-semibold text-amber-200">Autorizzazione YouTube richiesta</p>
               <p className="mt-1 text-[12px] text-amber-100/70">
-                Il collegamento Google non è più valido. Ricollega YouTube per riattivare le pubblicazioni.
+                {account.last_error_code === "SHARED_GRANT_REAUTH_REQUIRED"
+                  ? "Il collegamento Google condiviso non è più valido per i canali collegati. Ricollega YouTube per riattivare le pubblicazioni."
+                  : "Il collegamento Google non è più valido. Ricollega YouTube per riattivare le pubblicazioni."}
               </p>
             </div>
             <a

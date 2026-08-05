@@ -141,6 +141,33 @@ func (r *TokenRepository) UpdateOAuthConnectionStatusTx(ctx context.Context, tx 
 	return updateOAuthConnectionStatusExec(ctx, tx, oauthConnectionID, status, lastError)
 }
 
+// MarkInvalidGrantTx atomically records the failed shared grant and fans the
+// reconnect state out to every linked account except explicitly disconnected
+// accounts. The caller owns the transaction; both updates therefore commit or
+// roll back with the advisory lock held by CredentialVault.Renew.
+func (r *TokenRepository) MarkInvalidGrantTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64, code, message string) error {
+	if tx == nil {
+		return fmt.Errorf("mark invalid grant: nil tx")
+	}
+	if err := updateOAuthConnectionStatusExec(ctx, tx, oauthConnectionID, "reauth_required", "invalid_grant"); err != nil {
+		return fmt.Errorf("mark invalid grant: update OAuth connection: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE platform_accounts
+		    SET status = 'reauth_required',
+		        reauth_required_at = NOW(),
+		        last_error_code = $1,
+		        last_error_message = $2,
+		        updated_at = NOW()
+		  WHERE oauth_connection_id = $3
+		    AND status <> 'disconnected'`,
+		code, message, oauthConnectionID,
+	); err != nil {
+		return fmt.Errorf("mark invalid grant: propagate platform accounts: %w", err)
+	}
+	return nil
+}
+
 // FindLatestToken reads canonical columns and normalizes legacy aliases for
 // callers that still use the pre-083 model fields.
 func (r *TokenRepository) FindLatestToken(oauthConnectionID int64, tokenType string) (*models.Token, error) {

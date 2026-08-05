@@ -32,6 +32,8 @@ export type AccountDetail = {
   status: string;
   account_state?: "valid" | "reconnect_required" | "suspended" | "deleted";
   is_publishable?: boolean;
+  reauth_required_at?: string;
+  last_error_code?: string;
   created_at: string;
   resource?: AccountResource;
 };

@@ -107,6 +107,23 @@ type GrantStatusTxStore interface {
 	UpdateOAuthConnectionStatusTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64, status, lastError string) error
 }
 
+// InvalidGrantTxStore atomically records a revoked OAuth grant and propagates
+// the reconnect state to every linked account. It is optional for legacy test
+// stores; production implements it so invalid_grant cannot leave sibling
+// accounts looking active after the shared grant has failed.
+type InvalidGrantTxStore interface {
+	MarkInvalidGrantTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64, code, message string) error
+}
+
+const invalidGrantAccountErrorMessage = "Shared OAuth grant requires reauthorization"
+
+// InvalidGrantAccountErrorMessage is the stable, provider-safe message used
+// when propagating invalid_grant to linked platform accounts.
+const (
+	InvalidGrantAccountErrorMessage = invalidGrantAccountErrorMessage
+	SharedGrantReauthRequiredCode   = "SHARED_GRANT_REAUTH_REQUIRED"
+)
+
 // VaultAPI is the narrow contract the HTTP router and publish worker use
 // to talk to the credential layer. It is implemented by *CredentialVault
 // in production and by test mocks in pkg/api and internal/worker.

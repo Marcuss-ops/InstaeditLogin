@@ -20,6 +20,9 @@ export type PlatformAccount = {
   account_state?: AccountState;
   /** False accounts must never be offered as publishing targets. */
   is_publishable?: boolean;
+  /** Safe lifecycle diagnostics for reconnect UX; never provider payloads. */
+  reauth_required_at?: string;
+  last_error_code?: string;
   created_at: string;
 };
 

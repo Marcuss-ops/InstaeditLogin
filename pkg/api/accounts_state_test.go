@@ -45,10 +45,11 @@ func TestClassifyAccountStatus(t *testing.T) {
 
 func TestAccountListItemFromAccountIncludesStableState(t *testing.T) {
 	item := accountListItemFromAccount(&models.PlatformAccount{
-		ID:       42,
-		Platform: models.PlatformYouTube,
-		Username: "needs-reconnect",
-		Status:   models.AccountStatusReauthRequired,
+		ID:            42,
+		Platform:      models.PlatformYouTube,
+		Username:      "needs-reconnect",
+		Status:        models.AccountStatusReauthRequired,
+		LastErrorCode: "SHARED_GRANT_REAUTH_REQUIRED",
 	})
 
 	if item.AccountState != AccountStateReconnectRequired {
@@ -59,6 +60,9 @@ func TestAccountListItemFromAccountIncludesStableState(t *testing.T) {
 	}
 	if item.Status != models.AccountStatusReauthRequired {
 		t.Fatalf("legacy status changed: got %q", item.Status)
+	}
+	if item.LastErrorCode != "SHARED_GRANT_REAUTH_REQUIRED" {
+		t.Fatalf("last_error_code: got %q", item.LastErrorCode)
 	}
 }
 

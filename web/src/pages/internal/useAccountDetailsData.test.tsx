@@ -60,6 +60,31 @@ describe("useAccountDetailsData", () => {
     }
   });
 
+  it("preserves the safe shared-grant reconnect code for the banner", async () => {
+    const account = {
+      ...ACCOUNT,
+      status: "reauth_required",
+      account_state: "reconnect_required" as const,
+      is_publishable: false,
+      reauth_required_at: "2026-08-05T07:00:00Z",
+      last_error_code: "SHARED_GRANT_REAUTH_REQUIRED",
+    };
+    authedFetchMock.mockResolvedValueOnce(jsonResponse(account));
+
+    const { result } = renderHook(() => useAccountDetailsData("7"));
+    await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+
+    if (result.current.state.kind !== "ready") {
+      throw new Error("account should be ready");
+    }
+    expect(result.current.state.account.last_error_code).toBe(
+      "SHARED_GRANT_REAUTH_REQUIRED",
+    );
+    expect(result.current.state.account.reauth_required_at).toBe(
+      "2026-08-05T07:00:00Z",
+    );
+  });
+
   it("redirects AuthError failures to login", async () => {
     authedFetchMock.mockRejectedValueOnce(new AuthError("expired"));
 

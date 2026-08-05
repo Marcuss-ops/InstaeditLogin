@@ -50,36 +50,52 @@ func classifyAccountStatus(status string) (AccountState, bool) {
 // We deliberately do NOT return PlatformAccount directly because it leaks
 // internal ownership, error and metadata columns.
 type accountListItem struct {
-	ID             int64        `json:"id"`
-	Platform       string       `json:"platform"`
-	PlatformUserID string       `json:"platform_user_id"`
-	Username       string       `json:"username"`
-	AvatarURL      string       `json:"avatar_url,omitempty"`
-	Language       string       `json:"language,omitempty"`
-	Status         string       `json:"status"`
-	AccountState   AccountState `json:"account_state"`
-	IsPublishable  bool         `json:"is_publishable"`
-	CreatedAt      time.Time    `json:"created_at"`
+	ID               int64        `json:"id"`
+	Platform         string       `json:"platform"`
+	PlatformUserID   string       `json:"platform_user_id"`
+	Username         string       `json:"username"`
+	AvatarURL        string       `json:"avatar_url,omitempty"`
+	Language         string       `json:"language,omitempty"`
+	Status           string       `json:"status"`
+	AccountState     AccountState `json:"account_state"`
+	IsPublishable    bool         `json:"is_publishable"`
+	ReauthRequiredAt *time.Time   `json:"reauth_required_at,omitempty"`
+	LastErrorCode    string       `json:"last_error_code,omitempty"`
+	CreatedAt        time.Time    `json:"created_at"`
 }
 
 func accountListItemFromAccount(account *models.PlatformAccount) accountListItem {
 	state, publishable := classifyAccountStatus(account.Status)
 	return accountListItem{
-		ID:             account.ID,
-		Platform:       account.Platform,
-		PlatformUserID: account.PlatformUserID,
-		Username:       account.Username,
-		AvatarURL:      avatarURLFromMetadata(account),
-		Language:       accountLanguage(account),
-		Status:         account.Status,
-		AccountState:   state,
-		IsPublishable:  publishable,
-		CreatedAt:      account.CreatedAt,
+		ID:               account.ID,
+		Platform:         account.Platform,
+		PlatformUserID:   account.PlatformUserID,
+		Username:         account.Username,
+		AvatarURL:        avatarURLFromMetadata(account),
+		Language:         accountLanguage(account),
+		Status:           account.Status,
+		AccountState:     state,
+		IsPublishable:    publishable,
+		ReauthRequiredAt: account.ReauthRequiredAt,
+		LastErrorCode:    safeAccountErrorCode(account),
+		CreatedAt:        account.CreatedAt,
 	}
 }
 
 // accountLanguage exposes the user-editable language preference through a
 // dedicated response field. The rest of the provider metadata stays private.
+func safeAccountErrorCode(account *models.PlatformAccount) string {
+	if account == nil || account.Status != models.AccountStatusReauthRequired {
+		return ""
+	}
+	switch account.LastErrorCode {
+	case "SHARED_GRANT_REAUTH_REQUIRED", "youtube_channel_mismatch":
+		return account.LastErrorCode
+	default:
+		return ""
+	}
+}
+
 func accountLanguage(account *models.PlatformAccount) string {
 	if account == nil || account.Metadata == nil {
 		return ""

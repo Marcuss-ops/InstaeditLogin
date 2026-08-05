@@ -107,6 +107,29 @@ func TestHandleListAccounts_Happy(t *testing.T) {
 // SPA JSON decoders rely on `accounts` being an array, never null —
 // returning {"accounts": null} would crash `accounts.map(...)` in the
 // /connections page.
+func TestHandleListAccounts_SafeReauthCodeOnly(t *testing.T) {
+	fixtures := []*models.PlatformAccount{
+		{ID: 21, UserID: 1, Platform: "youtube", PlatformUserID: "UC-shared", Username: "shared", Status: models.AccountStatusReauthRequired, LastErrorCode: "SHARED_GRANT_REAUTH_REQUIRED", LastErrorMessage: "provider SQL token=secret must never leak"},
+		{ID: 22, UserID: 1, Platform: "youtube", PlatformUserID: "UC-unknown", Username: "unknown", Status: models.AccountStatusReauthRequired, LastErrorCode: "provider_secret_code", LastErrorMessage: "provider body with secret"},
+	}
+	store := &mockUserStore{listFn: func(int64, string) ([]*models.PlatformAccount, error) { return fixtures, nil }}
+	r := newTestRouter(&mockProvider{platform: "youtube"}, store, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "SHARED_GRANT_REAUTH_REQUIRED") {
+		t.Fatalf("safe shared-grant code missing from response: %s", body)
+	}
+	if strings.Contains(body, "provider_secret_code") || strings.Contains(body, "provider body with secret") || strings.Contains(body, "last_error_message") {
+		t.Fatalf("provider/SQL details leaked in response: %s", body)
+	}
+}
+
 func TestHandleListAccounts_EmptyList_ReturnsAccountsArrayKey(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
