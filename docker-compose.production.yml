@@ -10,3 +10,13 @@ services:
 
   # The base stack already binds API to 127.0.0.1 only. Worker and MinIO
   # have no host ports in the canonical stack.
+
+# Pin the data volumes to the canonical project-scoped names (mirrors the
+# base docker-compose.yml). If this overlay is ever loaded with a different
+# COMPOSE_PROJECT_NAME the pinned names still resolve to the real volumes,
+# so a deploy can never create an empty orphan volume that shadows the data.
+volumes:
+  instaedit_pg_data:
+    name: instaeditlogin_instaedit_pg_data
+  instaedit_minio_data:
+    name: instaeditlogin_instaedit_minio_data

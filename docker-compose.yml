@@ -266,9 +266,16 @@ services:
       exit 0;
       "
 
+# Volumes are pinned to the canonical project-scoped names. Without an
+# explicit `name:`, docker compose derives the volume name from
+# COMPOSE_PROJECT_NAME (defaults to the working-directory basename), so a
+# deploy launched from a differently-named directory would silently create
+# an empty orphan volume and the real data volume would keep its own name.
 volumes:
   instaedit_pg_data:
+    name: instaeditlogin_instaedit_pg_data
   instaedit_minio_data:
+    name: instaeditlogin_instaedit_minio_data
 
 # Velox internal bridge — see docs/ARCHITECTURE.md §Velox integration.
 #
