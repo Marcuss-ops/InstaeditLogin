@@ -17,9 +17,14 @@ import (
 var _ OAuthClientUsageCounter = (*repository.OAuthTokenCapacityRepository)(nil)
 
 const (
-	testPoolClientAID     = "client-a-id.apps.googleusercontent.com"
-	testPoolClientBID     = "client-b-id.apps.googleusercontent.com"
-	testPoolSecret        = "super-secret-pool-client-0123456789abcdef" // 40 chars, never in logs/errors
+	testPoolClientAID = "client-a-id.apps.googleusercontent.com"
+	testPoolClientBID = "client-b-id.apps.googleusercontent.com"
+	testPoolSecret    = "super-secret-pool-client-0123456789abcdef" // 40 chars, never in logs/errors
+	// testPoolSecretB is pool B's OWN secret. The two clients are
+	// DISTINCT Google OAuth clients, so they MUST have distinct
+	// secrets: the "never a pool A token with pool B's secret" DoD
+	// line is only provable when the fixture separates the two.
+	testPoolSecretB       = "pool-b-secret-9876543210fedcba9876543210abcdef" // 42 chars, distinct from pool A's
 	testPoolRedirectA     = "https://instaedit.example.com/oauth/youtube/callback"
 	testPoolRedirectB     = "https://instaedit.example.com/oauth/youtube/callback"
 	testPoolGoogleSubject = "google-subject-1234567890"
@@ -30,7 +35,7 @@ const (
 func testPoolClients() []YouTubeOAuthClientConfig {
 	return []YouTubeOAuthClientConfig{
 		{Key: "youtube_pool_a", ClientID: testPoolClientAID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectA},
-		{Key: "youtube_pool_b", ClientID: testPoolClientBID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectB},
+		{Key: "youtube_pool_b", ClientID: testPoolClientBID, ClientSecret: testPoolSecretB, RedirectURI: testPoolRedirectB},
 	}
 }
 
@@ -60,7 +65,7 @@ func TestYouTubeOAuthClientRegistry_New_EmptyClients(t *testing.T) {
 func TestYouTubeOAuthClientRegistry_New_SkipsFullyEmptyEntryAndDefaultsCapacity(t *testing.T) {
 	r, err := NewYouTubeOAuthClientRegistry([]YouTubeOAuthClientConfig{
 		{}, // fully empty: skipped as caller convenience
-		{Key: "youtube_pool_b", ClientID: testPoolClientBID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectB},
+		{Key: "youtube_pool_b", ClientID: testPoolClientBID, ClientSecret: testPoolSecretB, RedirectURI: testPoolRedirectB},
 	})
 	if err != nil {
 		t.Fatalf("NewYouTubeOAuthClientRegistry: %v", err)
@@ -209,7 +214,7 @@ func TestYouTubeOAuthClientRegistry_Select_LeastLoaded(t *testing.T) {
 func TestYouTubeOAuthClientRegistry_Select_OverCapacityPicksOther(t *testing.T) {
 	r, err := NewYouTubeOAuthClientRegistry([]YouTubeOAuthClientConfig{
 		{Key: "youtube_pool_a", ClientID: testPoolClientAID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectA, RecommendedCapacity: 50},
-		{Key: "youtube_pool_b", ClientID: testPoolClientBID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectB, RecommendedCapacity: 50},
+		{Key: "youtube_pool_b", ClientID: testPoolClientBID, ClientSecret: testPoolSecretB, RedirectURI: testPoolRedirectB, RecommendedCapacity: 50},
 	}, WithYouTubeOAuthClientUsageCounter(&fakeOAuthClientUsageCounter{usage: map[string]int64{
 		"youtube_pool_a": 61, // over the recommended soft ceiling
 		"youtube_pool_b": 20,
@@ -305,7 +310,7 @@ func TestYouTubeOAuthClientRegistryFromConfig_WiresUsageCounter(t *testing.T) {
 					ClientID: testPoolClientAID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectA,
 				},
 				ClientB: config.YouTubeOAuthPoolClient{
-					ClientID: testPoolClientBID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectB,
+					ClientID: testPoolClientBID, ClientSecret: testPoolSecretB, RedirectURI: testPoolRedirectB,
 				},
 			},
 		},
@@ -454,7 +459,7 @@ func TestYouTubeOAuthClientRegistry_FromConfig_BuildsBothClients(t *testing.T) {
 				},
 				ClientB: config.YouTubeOAuthPoolClient{
 					ClientID:     testPoolClientBID,
-					ClientSecret: testPoolSecret,
+					ClientSecret: testPoolSecretB,
 					RedirectURI:  testPoolRedirectB,
 				},
 			},

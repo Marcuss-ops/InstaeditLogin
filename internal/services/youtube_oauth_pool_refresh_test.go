@@ -76,8 +76,8 @@ func TestYouTubeRefresh_WithPoolBKey_UsesPoolBClient(t *testing.T) {
 	if gotClientID != testPoolClientBID {
 		t.Errorf("refresh client_id: want %q (pool B), got %q", testPoolClientBID, gotClientID)
 	}
-	if gotSecret != testPoolSecret {
-		t.Errorf("refresh client_secret: want the pool secret, got %q", gotSecret)
+	if gotSecret != testPoolSecretB {
+		t.Errorf("refresh client_secret: want pool B's own secret, got %q", gotSecret)
 	}
 	if result == nil || result.AccessToken != "refreshed-access" {
 		t.Errorf("refresh result access token: want refreshed-access, got %+v", result)
@@ -220,9 +220,10 @@ func TestYouTubeRefresh_Chain_VaultToServicePool(t *testing.T) {
 		stampedKey      string
 		wantClientID    string
 		wantNotClientID string
+		wantSecret      string
 	}{
-		{"pool_a_uses_client_a", "youtube_pool_a", testPoolClientAID, testPoolClientBID},
-		{"pool_b_uses_client_b", "youtube_pool_b", testPoolClientBID, testPoolClientAID},
+		{"pool_a_uses_client_a", "youtube_pool_a", testPoolClientAID, testPoolClientBID, testPoolSecret},
+		{"pool_b_uses_client_b", "youtube_pool_b", testPoolClientBID, testPoolClientAID, testPoolSecretB},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -288,8 +289,11 @@ func TestYouTubeRefresh_Chain_VaultToServicePool(t *testing.T) {
 			if gotClientID == tc.wantNotClientID {
 				t.Errorf("grant %q refreshed with the OTHER pool client: cross-pool refresh detected", tc.stampedKey)
 			}
-			if gotSecret != testPoolSecret {
-				t.Errorf("chain refresh client_secret: want pool secret, got %q", gotSecret)
+			// The secret must be the grant's OWN pool secret — pool B's
+			// secret is distinct from pool A's, so a cross-pool secret
+			// (wrong client_id with the other client's secret) fails here.
+			if gotSecret != tc.wantSecret {
+				t.Errorf("chain refresh client_secret: want %q (grant stamped %q), got %q", tc.wantSecret, tc.stampedKey, gotSecret)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Errorf("sqlmock expectations: %v", err)

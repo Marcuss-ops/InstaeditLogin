@@ -347,18 +347,32 @@ func TestDoD_ConcurrentRefresh_100ExpiredGrants_OwnClient_NoDuplicates(t *testin
 		seen[r.refreshToken] = true
 	}
 
-	// (3) Each grant was refreshed with ITS OWN pool client.
+	// (3) Each grant was refreshed with ITS OWN pool client AND its own
+	// pool secret. The two pools carry DISTINCT secrets in this fixture
+	// (testPoolSecret vs testPoolSecretB), so the literal DoD line
+	// "no token A with secret B" is provable: a pool A grant sent to
+	// the token endpoint with pool B's secret fails the assertions
+	// below exactly like the invalid_client error Google would return.
 	for _, r := range requests {
-		want := testPoolClientAID
+		wantID := testPoolClientAID
+		wantSecret := testPoolSecret
+		otherSecret := testPoolSecretB
 		if strings.HasPrefix(r.refreshToken, "rt-youtube_pool_b-") {
-			want = testPoolClientBID
+			wantID = testPoolClientBID
+			wantSecret = testPoolSecretB
+			otherSecret = testPoolSecret
 		}
-		if r.clientID != want {
+		if r.clientID != wantID {
 			t.Errorf("grant %s refreshed with client %q; want %q (its own pool — cross-pool refresh detected)",
-				r.refreshToken, r.clientID, want)
+				r.refreshToken, r.clientID, wantID)
 		}
-		if r.clientSecret != testPoolSecret {
-			t.Errorf("grant %s: client_secret %q, want the pool secret", r.refreshToken, r.clientSecret)
+		if r.clientSecret != wantSecret {
+			t.Errorf("grant %s: client_secret %q, want its own pool secret %q — a cross-pool secret would surface as invalid_client",
+				r.refreshToken, r.clientSecret, wantSecret)
+		}
+		if r.clientSecret == otherSecret {
+			t.Errorf("grant %s sent with the OTHER pool's secret %q: literal 'no token A with secret B' violation",
+				r.refreshToken, r.clientSecret)
 		}
 	}
 
@@ -486,7 +500,7 @@ func TestDoD_Restart_ConservesOAuthClientKey_NoReassignment(t *testing.T) {
 //     to pool B, no HTTP call, no secret in the error or in the logs.
 func TestDoD_PoolASecretDisabled_BNeverAffected_NoSecretLeak(t *testing.T) {
 	regB, err := NewYouTubeOAuthClientRegistry([]YouTubeOAuthClientConfig{
-		{Key: "youtube_pool_b", ClientID: testPoolClientBID, ClientSecret: testPoolSecret, RedirectURI: testPoolRedirectB},
+		{Key: "youtube_pool_b", ClientID: testPoolClientBID, ClientSecret: testPoolSecretB, RedirectURI: testPoolRedirectB},
 	})
 	if err != nil {
 		t.Fatalf("registry (pool B only): %v", err)
@@ -495,7 +509,7 @@ func TestDoD_PoolASecretDisabled_BNeverAffected_NoSecretLeak(t *testing.T) {
 	// (1) Pool A is gone: Resolve fails, error never carries the secret.
 	if _, err := regB.Resolve("youtube_pool_a"); !errors.Is(err, ErrYouTubeOAuthClientUnknown) {
 		t.Fatalf("Resolve(youtube_pool_a) after disable: want ErrYouTubeOAuthClientUnknown, got %v", err)
-	} else if strings.Contains(err.Error(), testPoolSecret) {
+	} else if strings.Contains(err.Error(), testPoolSecret) || strings.Contains(err.Error(), testPoolSecretB) {
 		t.Fatalf("Resolve error leaked the client secret: %v", err)
 	}
 
@@ -541,14 +555,14 @@ func TestDoD_PoolASecretDisabled_BNeverAffected_NoSecretLeak(t *testing.T) {
 		if !strings.Contains(err.Error(), "unknown client key") {
 			t.Errorf("error must identify the configuration failure; got %v", err)
 		}
-		if strings.Contains(err.Error(), testPoolSecret) {
+		if strings.Contains(err.Error(), testPoolSecret) || strings.Contains(err.Error(), testPoolSecretB) {
 			t.Fatalf("error leaked the client secret: %v", err)
 		}
 	}
 	if got := recorder.snapshot(); len(got) != 1 {
 		t.Errorf("pool A grant must NOT reach the token endpoint (no token moved to B); calls=%d", len(got))
 	}
-	if got := logBuf.String(); strings.Contains(got, testPoolSecret) {
+	if got := logBuf.String(); strings.Contains(got, testPoolSecret) || strings.Contains(got, testPoolSecretB) {
 		t.Fatalf("client secret appeared in the logs: %s", got)
 	}
 }
