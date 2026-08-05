@@ -263,22 +263,25 @@ func (v *CredentialVault) resolveOAuthClientKey(ctx context.Context, tx *sql.Tx,
 }
 
 // recordInvalidGrantMetric bumps youtube_oauth_invalid_grant_total for
-// the grant's pool client (oauth_client_key). YouTube-ONLY: the vault's
+// the grant's (google subject, pool client). YouTube-ONLY: the vault's
 // Renew path is platform-agnostic (shared by TikTok, Instagram, X, …),
 // so the increment is gated on the connection's provider to avoid
 // polluting a YouTube metric with other platforms' invalid_grants.
 // Best-effort and never allowed to fail the refresh path: on a
-// pre-migration-099 database the column does not exist (DEBUG skip),
-// and a non-YouTube connection is skipped silently.
+// pre-migration-099 database the oauth_client_key column does not
+// exist (DEBUG skip), and a non-YouTube connection is skipped silently.
+// A grant with an empty/NULL subject is never counted (fail-closed —
+// the label contract forbids an empty google_subject).
 func (v *CredentialVault) recordInvalidGrantMetric(ctx context.Context, tx *sql.Tx, oauthConnectionID int64) {
 	clientKey := "youtube_pool_a"
+	var subject sql.NullString
 	err := tx.QueryRowContext(ctx,
-		`SELECT oc.oauth_client_key
+		`SELECT oc.oauth_client_key, oc.provider_subject_id
 		   FROM oauth_connections oc
 		  WHERE oc.id = $1
 		    AND oc.provider = 'youtube'`,
 		oauthConnectionID,
-	).Scan(&clientKey)
+	).Scan(&clientKey, &subject)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Non-YouTube grant (or row already gone): not this metric's
 		// jurisdiction. No increment, no log noise.
@@ -294,5 +297,7 @@ func (v *CredentialVault) recordInvalidGrantMetric(ctx context.Context, tx *sql.
 	if clientKey == "" {
 		clientKey = "youtube_pool_a"
 	}
-	metrics.RecordYouTubeOAuthInvalidGrant(clientKey)
+	// A NULL subject (legacy row) reaches the explicit fail-closed
+	// check below instead of a misleading scan error.
+	metrics.RecordYouTubeOAuthInvalidGrant(subject.String, clientKey)
 }

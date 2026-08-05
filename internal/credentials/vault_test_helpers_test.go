@@ -170,6 +170,20 @@ func expectOAuthClientKeyLookup(mock sqlmock.Sqlmock, oauthConnectionID int64, k
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_client_key"}).AddRow(key))
 }
 
+// expectInvalidGrantMetricLookup installs the (subject, client-key)
+// resolution recordInvalidGrantMetric issues on an invalid_grant
+// detection. The SQL must match recordInvalidGrantMetric exactly
+// (QueryMatcherEqual). A grant with an empty subject must never be
+// counted, so the returned subject drives the metric assertion.
+func expectInvalidGrantMetricLookup(mock sqlmock.Sqlmock, oauthConnectionID int64, key, subject string) {
+	mock.ExpectQuery(`SELECT oc.oauth_client_key, oc.provider_subject_id
+		   FROM oauth_connections oc
+		  WHERE oc.id = $1
+		    AND oc.provider = 'youtube'`).
+		WithArgs(oauthConnectionID).
+		WillReturnRows(sqlmock.NewRows([]string{"oauth_client_key", "provider_subject_id"}).AddRow(key, subject))
+}
+
 func newEncryptedToken(t *testing.T, v *CredentialVault, accountID int64, expiresIn time.Duration, refreshToken string) *models.Token {
 	t.Helper()
 	encAccess, err := v.encryptor.Encrypt("old-access-token")

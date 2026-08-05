@@ -151,7 +151,13 @@ func WireWorkers(core *Core) *worker.Registry {
 		Name:     "metrics",
 		Critical: true,
 		Run: func(ctx context.Context) error {
-			return metrics.RunPeriodicCollector(ctx, core.DB, metrics.DefaultCollectorInterval, slog.Default())
+			opts := []metrics.CollectorOption{}
+			if poolRegistry, regErr := services.NewYouTubeOAuthClientRegistryFromConfig(core.Cfg); regErr != nil {
+				slog.Warn("metrics collector: youtube oauth pool registry unavailable; pool health zero-fill skipped", "error", regErr)
+			} else if poolRegistry != nil {
+				opts = append(opts, metrics.WithYouTubeOAuthPoolKeys(poolRegistry.Keys()))
+			}
+			return metrics.RunPeriodicCollector(ctx, core.DB, metrics.DefaultCollectorInterval, slog.Default(), opts...)
 		},
 	})
 

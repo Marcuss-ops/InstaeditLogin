@@ -219,13 +219,27 @@ func (a *App) registerWebhookWorker() {
 }
 
 // registerMetricsCollector wires goroutine 5: the metrics collector —
-// periodic gauges.
+// periodic gauges. When the YouTube OAuth Client Pool is configured
+// (YOUTUBE_OAUTH_CLIENT_A/B_* env vars), the pool registry's client
+// Keys() are passed to the collector so youtube_oauth_pool_health is
+// zero-filled for every configured client (a client with no grants yet
+// emits 0 / healthy instead of vanishing from /metrics).
 func (a *App) registerMetricsCollector() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "metrics",
 		Critical: true,
 		Run: func(ctx context.Context) error {
-			return metrics.RunPeriodicCollector(ctx, a.DB, metrics.DefaultCollectorInterval, slog.Default())
+			opts := []metrics.CollectorOption{}
+			if poolRegistry, regErr := services.NewYouTubeOAuthClientRegistryFromConfig(a.Cfg); regErr != nil {
+				// Half-configured A/B env vars degrade the health-gauge
+				// zero-fill only — warn instead of failing the metrics
+				// goroutine (the router wiring already hard-fails on the
+				// same error at boot, so this is unreachable in practice).
+				slog.Warn("metrics collector: youtube oauth pool registry unavailable; pool health zero-fill skipped", "error", regErr)
+			} else if poolRegistry != nil {
+				opts = append(opts, metrics.WithYouTubeOAuthPoolKeys(poolRegistry.Keys()))
+			}
+			return metrics.RunPeriodicCollector(ctx, a.DB, metrics.DefaultCollectorInterval, slog.Default(), opts...)
 		},
 	})
 }

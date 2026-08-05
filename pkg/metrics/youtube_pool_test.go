@@ -79,12 +79,14 @@ func TestYouTubeOAuthPoolMetrics_CapacityRemaining_RegisteredAndValue(t *testing
 }
 
 // TestYouTubeOAuthPoolMetrics_InvalidGrantTotal_Counter pins the
-// counter family: each Record call increments the per-client series.
+// counter family: each Record call increments the per-(subject,
+// client) series, and an empty subject is never counted (fail-closed).
 func TestYouTubeOAuthPoolMetrics_InvalidGrantTotal_Counter(t *testing.T) {
 	youtubeOAuthInvalidGrantTotal.Reset()
-	RecordYouTubeOAuthInvalidGrant("youtube_pool_b")
-	RecordYouTubeOAuthInvalidGrant("youtube_pool_b")
-	RecordYouTubeOAuthInvalidGrant("")
+	RecordYouTubeOAuthInvalidGrant("google-subject-1", "youtube_pool_b")
+	RecordYouTubeOAuthInvalidGrant("google-subject-1", "youtube_pool_b")
+	RecordYouTubeOAuthInvalidGrant("google-subject-2", "")
+	RecordYouTubeOAuthInvalidGrant("", "youtube_pool_a") // empty subject: must NOT count
 
 	family := gatherFamily(t, "youtube_oauth_invalid_grant_total")
 	if family == nil {
@@ -108,6 +110,79 @@ func TestYouTubeOAuthPoolMetrics_InvalidGrantTotal_Counter(t *testing.T) {
 	}
 	if values["youtube_pool_a"] != 1 {
 		t.Errorf("youtube_oauth_invalid_grant_total with empty key must default to youtube_pool_a: want 1, got %v", values["youtube_pool_a"])
+	}
+	// The empty-subject series must not exist at all.
+	for _, m := range family.GetMetric() {
+		for _, lp := range m.GetLabel() {
+			if lp.GetName() == "google_subject" && lp.GetValue() == "" {
+				t.Errorf("youtube_oauth_invalid_grant_total: empty google_subject series must not be emitted")
+			}
+		}
+	}
+}
+
+// TestYouTubeOAuthPoolMetrics_Health_Bands pins the health-level
+// mapping (0 healthy … 4 blocked) and the per-client gauge emission.
+func TestYouTubeOAuthPoolMetrics_Health_Bands(t *testing.T) {
+	ResetYouTubeOAuthPoolHealthMetrics()
+	cases := []struct {
+		active int64
+		want   float64
+	}{
+		{0, 0}, {60, 0}, {61, 1}, {75, 1}, {76, 2}, {85, 2},
+		{86, 3}, {90, 3}, {91, 4}, {100, 4},
+	}
+	for _, tc := range cases {
+		if got := YouTubeOAuthPoolHealthFor(tc.active); got != tc.want {
+			t.Errorf("YouTubeOAuthPoolHealthFor(%d): want %v, got %v", tc.active, tc.want, got)
+		}
+	}
+
+	SetYouTubeOAuthPoolHealth("youtube_pool_b", YouTubeOAuthPoolHealthFor(80))
+	family := gatherFamily(t, "youtube_oauth_pool_health")
+	if family == nil {
+		t.Fatal("youtube_oauth_pool_health: not present in gatherer after Set call")
+	}
+	metrics := family.GetMetric()
+	if len(metrics) != 1 {
+		t.Fatalf("youtube_oauth_pool_health: want exactly 1 series, got %d", len(metrics))
+	}
+	if got := metrics[0].GetGauge().GetValue(); got != 2 {
+		t.Errorf("youtube_oauth_pool_health value: want 2 (high for 80 active), got %v", got)
+	}
+	labels := map[string]string{}
+	for _, lp := range metrics[0].GetLabel() {
+		labels[lp.GetName()] = lp.GetValue()
+	}
+	if labels["oauth_client_key"] != "youtube_pool_b" {
+		t.Errorf("oauth_client_key label: want youtube_pool_b, got %q", labels["oauth_client_key"])
+	}
+}
+
+// TestYouTubeOAuthPoolMetrics_Health_ZeroFillPinsClient pins the
+// zero-fill contract: a configured client with no grants emits 0
+// (healthy) so dashboards never lose the client series.
+func TestYouTubeOAuthPoolMetrics_Health_ZeroFillPinsClient(t *testing.T) {
+	ResetYouTubeOAuthPoolHealthMetrics()
+	SetYouTubeOAuthPoolHealth("youtube_pool_b", 0)
+	family := gatherFamily(t, "youtube_oauth_pool_health")
+	if family == nil || len(family.GetMetric()) != 1 {
+		t.Fatal("youtube_oauth_pool_health: zero-filled client must emit a series")
+	}
+	if got := family.GetMetric()[0].GetGauge().GetValue(); got != 0 {
+		t.Errorf("zero-filled client value: want 0 (healthy), got %v", got)
+	}
+	ResetYouTubeOAuthPoolHealthMetrics()
+}
+
+// TestYouTubeOAuthPoolMetrics_Health_ResetRemovesSeries pins the reset
+// contract on the health gauge.
+func TestYouTubeOAuthPoolMetrics_Health_ResetRemovesSeries(t *testing.T) {
+	SetYouTubeOAuthPoolHealth("youtube_pool_a", 1)
+	ResetYouTubeOAuthPoolHealthMetrics()
+	family := gatherFamily(t, "youtube_oauth_pool_health")
+	if family != nil && len(family.GetMetric()) != 0 {
+		t.Errorf("youtube_oauth_pool_health: want 0 series after Reset, got %d", len(family.GetMetric()))
 	}
 }
 

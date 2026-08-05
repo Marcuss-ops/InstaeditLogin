@@ -33,7 +33,37 @@ const (
 	// sync with services.defaultYouTubePoolCapacity (50); the collector
 	// computes remaining as this constant minus the active-grant count.
 	YouTubeOAuthPoolRecommendedCapacity = 50
+
+	// YouTubeOAuthPoolHealthyThreshold: 0–60 active grants = healthy.
+	YouTubeOAuthPoolHealthyThreshold int64 = 60
+	// YouTubeOAuthPoolWarningThreshold: 61–75 = warning.
+	YouTubeOAuthPoolWarningThreshold int64 = 75
+	// YouTubeOAuthPoolHighThreshold: 76–85 = high.
+	YouTubeOAuthPoolHighThreshold int64 = 85
+	// YouTubeOAuthPoolCriticalThreshold: 86–90 = critical. Active
+	// grants ABOVE this threshold block new connections on that client.
+	YouTubeOAuthPoolCriticalThreshold int64 = 90
 )
+
+// YouTubeOAuthPoolHealthFor maps an active-grant count to its
+// youtube_oauth_pool_health level: 0=healthy, 1=warning, 2=high,
+// 3=critical, 4=blocked. Mirrors services.YouTubeOAuthPoolHealthFor
+// (kept in sync here because pkg/metrics must not import
+// internal/services).
+func YouTubeOAuthPoolHealthFor(active int64) float64 {
+	switch {
+	case active > YouTubeOAuthPoolCriticalThreshold:
+		return 4 // blocked (no new connections)
+	case active > YouTubeOAuthPoolHighThreshold:
+		return 3 // critical
+	case active > YouTubeOAuthPoolWarningThreshold:
+		return 2 // high
+	case active > YouTubeOAuthPoolHealthyThreshold:
+		return 1 // warning
+	default:
+		return 0 // healthy
+	}
+}
 
 var (
 	// youtubeOAuthRefreshTokensActive is the number of ACTIVE refresh
@@ -59,13 +89,28 @@ var (
 	)
 
 	// youtubeOAuthInvalidGrantTotal counts invalid_grant detections per
-	// pool client. Each increment means Google rejected the stored
-	// refresh token (revoked, expired beyond TTL, or exceeding the cap);
-	// the affected grant + sibling channels are flagged reauth_required.
+	// (google_subject, pool client). Each increment means Google
+	// rejected the stored refresh token (revoked, expired beyond TTL, or
+	// exceeding the cap); the affected grant + sibling channels are
+	// flagged reauth_required.
 	youtubeOAuthInvalidGrantTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "youtube_oauth_invalid_grant_total",
-			Help: "YouTube OAuth refresh attempts rejected with invalid_grant, by pool client. Each increment flags the grant (and its sibling channels) reauth_required.",
+			Help: "YouTube OAuth refresh attempts rejected with invalid_grant, per Google subject and pool client. Each increment flags the grant (and its sibling channels) reauth_required.",
+		},
+		[]string{"google_subject", "oauth_client_key"},
+	)
+
+	// youtubeOAuthPoolHealth is the load band of a pool client: the
+	// worst band observed across every Google subject on that client
+	// (0=healthy, 1=warning, 2=high, 3=critical, 4=blocked). Label is
+	// per client so the collector can zero-fill every configured client
+	// from the pool registry Keys() — a configured-but-unused client
+	// emits 0 (healthy) instead of disappearing from /metrics.
+	youtubeOAuthPoolHealth = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "youtube_oauth_pool_health",
+			Help: "YouTube OAuth pool client load band (worst across its Google subjects): 0 healthy (0-60 active grants), 1 warning (61-75), 2 high (76-85), 3 critical (86-90), 4 blocked (>90, no new connections).",
 		},
 		[]string{"oauth_client_key"},
 	)
@@ -86,6 +131,7 @@ func init() {
 		youtubeOAuthRefreshTokensActive,
 		youtubeOAuthPoolCapacityRemaining,
 		youtubeOAuthInvalidGrantTotal,
+		youtubeOAuthPoolHealth,
 		youtubeOAuthReauthRequiredChannels,
 	)
 }
@@ -120,12 +166,29 @@ func ResetYouTubeOAuthPoolCapacityRemainingMetrics() {
 }
 
 // RecordYouTubeOAuthInvalidGrant increments the invalid_grant counter
-// for the pool client that issued the rejected grant.
-func RecordYouTubeOAuthInvalidGrant(oauthClientKey string) {
+// for the (google_subject, pool client) that issued the rejected
+// grant. The subject is label-truncated like every other subject label;
+// an empty subject is never a valid label (fail-closed: no increment).
+func RecordYouTubeOAuthInvalidGrant(subject, oauthClientKey string) {
 	if oauthClientKey == "" {
 		oauthClientKey = "youtube_pool_a"
 	}
-	youtubeOAuthInvalidGrantTotal.WithLabelValues(oauthClientKey).Inc()
+	if subject == "" {
+		return
+	}
+	youtubeOAuthInvalidGrantTotal.WithLabelValues(TruncateSubjectForLabel(subject), oauthClientKey).Inc()
+}
+
+// SetYouTubeOAuthPoolHealth writes the health band (0-4) for a pool
+// client.
+func SetYouTubeOAuthPoolHealth(oauthClientKey string, level float64) {
+	youtubeOAuthPoolHealth.WithLabelValues(oauthClientKey).Set(level)
+}
+
+// ResetYouTubeOAuthPoolHealthMetrics clears ALL series on the health
+// gauge. Called once per collector tick BEFORE the SET loop.
+func ResetYouTubeOAuthPoolHealthMetrics() {
+	youtubeOAuthPoolHealth.Reset()
 }
 
 // SetYouTubeOAuthReauthRequiredChannels writes the count of channels in

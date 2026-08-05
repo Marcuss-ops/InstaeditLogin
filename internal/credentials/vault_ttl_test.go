@@ -227,6 +227,9 @@ func TestVault_Renew_TestingMode_T7d_FailsInvalidGrant(t *testing.T) {
 
 	const accountID int64 = 102
 	expectSlowPathRefreshChain(mock, accountID)
+	// The Testing-mode T+7d refresh fails with invalid_grant, so the
+	// (subject, client-key) metric resolution runs too.
+	expectInvalidGrantMetricLookup(mock, accountID, "youtube_pool_a", "google-subject-ttl")
 	seedExpired(t, v, store, fc, accountID, "old-refresh-testing-7d")
 
 	// Advance to T0 + 7d. Crossing the boundary under AppMode=testing

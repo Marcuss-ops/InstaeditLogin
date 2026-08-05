@@ -71,6 +71,7 @@ func TestVault_Lifecycle_InvalidGrantMarksGrantReauthRequired(t *testing.T) {
 		WithArgs(accountID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	expectOAuthClientKeyLookup(mock, accountID, "youtube_pool_a")
+	expectInvalidGrantMetricLookup(mock, accountID, "youtube_pool_a", "google-subject-lifecycle")
 	mock.ExpectExec(`UPDATE oauth_connections SET status = $2::text, last_refresh_error = NULLIF($3::text, ''), last_refresh_at = CASE WHEN $2::text = 'active' THEN NOW() ELSE last_refresh_at END, updated_at = NOW() WHERE id = $1`).
 		WithArgs(accountID, models.AccountStatusReauthRequired, "invalid_grant").
 		WillReturnResult(sqlmock.NewResult(0, 1))

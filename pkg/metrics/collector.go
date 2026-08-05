@@ -125,6 +125,29 @@ var knownDeadLetterSources = []string{
 	DeadLetterSourceWebhook,
 }
 
+// collectorConfig holds the per-run options of a collector tick
+// (CollectOnce / RunPeriodicCollector).
+type collectorConfig struct {
+	// poolClientKeys are the YouTube OAuth Client Pool client keys
+	// (youtube_pool_a / youtube_pool_b, from the pool registry's
+	// Keys()). Used to zero-fill the youtube_oauth_pool_health gauge so
+	// a configured-but-unused client still emits 0 (healthy) instead of
+	// disappearing from /metrics. Empty when no pool is configured.
+	poolClientKeys []string
+}
+
+// CollectorOption configures a collector tick. See the option
+// constructors below.
+type CollectorOption func(*collectorConfig)
+
+// WithYouTubeOAuthPoolKeys wires the configured YouTube OAuth Client
+// Pool client keys so the collector zero-fills the per-client pool
+// health gauge. Callers pass services.YouTubeOAuthClientRegistry.Keys()
+// (empty when no pool is configured — the pre-pool behaviour).
+func WithYouTubeOAuthPoolKeys(keys []string) CollectorOption {
+	return func(c *collectorConfig) { c.poolClientKeys = keys }
+}
+
 // RunPeriodicCollector runs the metrics-collector tick loop until
 // ctx is cancelled. The first tick runs BEFORE the first ticker
 // fire so a freshly-started process has metrics within
@@ -138,7 +161,7 @@ var knownDeadLetterSources = []string{
 // outbox dispatcher, webhook worker) so main.go's parallel
 // shutdown drain can reuse the existing 15s-per-leaf timeout
 // pattern.
-func RunPeriodicCollector(ctx context.Context, db *sql.DB, interval time.Duration, logger *slog.Logger) error {
+func RunPeriodicCollector(ctx context.Context, db *sql.DB, interval time.Duration, logger *slog.Logger, opts ...CollectorOption) error {
 	if interval <= 0 {
 		interval = DefaultCollectorInterval
 	}
@@ -148,7 +171,7 @@ func RunPeriodicCollector(ctx context.Context, db *sql.DB, interval time.Duratio
 	logger.Info("metrics collector started", "interval_seconds", interval.Seconds())
 	defer logger.Info("metrics collector stopped")
 
-	if err := CollectOnce(ctx, db, logger); err != nil {
+	if err := CollectOnce(ctx, db, logger, opts...); err != nil {
 		logger.Warn("metrics collector initial tick error", "error", err)
 	}
 
@@ -159,7 +182,7 @@ func RunPeriodicCollector(ctx context.Context, db *sql.DB, interval time.Duratio
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if err := CollectOnce(ctx, db, logger); err != nil {
+			if err := CollectOnce(ctx, db, logger, opts...); err != nil {
 				logger.Warn("metrics collector tick error", "error", err)
 			}
 		}
@@ -188,16 +211,20 @@ func RunPeriodicCollector(ctx context.Context, db *sql.DB, interval time.Duratio
 // caller (RunPeriodicCollector) logs the WARN. Avoids double-logging
 // across all error paths; the WARN line is the single canonical
 // "this tick failed" emit.
-func CollectOnce(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
+func CollectOnce(ctx context.Context, db *sql.DB, logger *slog.Logger, opts ...CollectorOption) error {
 	if db == nil {
 		return fmt.Errorf("metrics collector: nil *sql.DB")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+	cfg := &collectorConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
 
 	collectPoolGauges(db)
-	return collectDBGaugesXact(ctx, db, logger)
+	return collectDBGaugesXact(ctx, db, logger, cfg)
 }
 
 // collectPoolGauges reads *sql.DB.Stats() and writes the 4
@@ -231,7 +258,7 @@ func collectPoolGauges(db *sql.DB) {
 // reason: tokens.refresh_token_expires_at was added by migration
 // 083, so a pre-083 database skips that series (DEBUG) instead of
 // aborting the tick.
-func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
+func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger, cfg *collectorConfig) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -379,7 +406,7 @@ func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 	// database skips those two series at DEBUG while the
 	// reauth_required_channels gauge (which only joins existing
 	// columns) still emits.
-	collectYouTubeOAuthPoolMetrics(ctx, tx, logger)
+	collectYouTubeOAuthPoolMetrics(ctx, tx, logger, cfg.poolClientKeys)
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
@@ -406,10 +433,19 @@ func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 // contract): an error is surfaced at DEBUG and the tick proceeds — a
 // pre-migration-099 database has no oauth_client_key column and simply
 // emits fewer series until the migration lands.
-func collectYouTubeOAuthPoolMetrics(ctx context.Context, tx *sql.Tx, logger *slog.Logger) {
+func collectYouTubeOAuthPoolMetrics(ctx context.Context, tx *sql.Tx, logger *slog.Logger, poolClientKeys []string) {
 	ResetYouTubeOAuthRefreshTokensActiveMetrics()
 	ResetYouTubeOAuthPoolCapacityRemainingMetrics()
+	ResetYouTubeOAuthPoolHealthMetrics()
 	ResetYouTubeOAuthReauthRequiredChannelsMetrics()
+
+	// Zero-fill the per-client health gauge from the pool registry
+	// Keys(): a configured client with no grants yet emits 0 (healthy)
+	// instead of disappearing from /metrics. The SET loop below
+	// overwrites each client with its worst observed band.
+	for _, key := range poolClientKeys {
+		SetYouTubeOAuthPoolHealth(key, 0)
+	}
 
 	// 8a. active grants + capacity headroom, per (subject, client).
 	rows, err := tx.QueryContext(ctx,
@@ -430,6 +466,9 @@ func collectYouTubeOAuthPoolMetrics(ctx context.Context, tx *sql.Tx, logger *slo
 		logger.Debug("youtube oauth pool active-grant gauges skipped (oauth_client_key column may not exist on pre-migration-099 database)",
 			"error", err)
 	} else {
+		// Track the WORST band per client across its subjects so the
+		// per-client health gauge reflects the most-loaded subject.
+		worstByClient := map[string]int64{}
 		for rows.Next() {
 			var subject, clientKey string
 			var active int64
@@ -443,11 +482,17 @@ func collectYouTubeOAuthPoolMetrics(ctx context.Context, tx *sql.Tx, logger *slo
 			}
 			SetYouTubeOAuthRefreshTokensActive(subject, clientKey, active)
 			SetYouTubeOAuthPoolCapacityRemaining(subject, clientKey, YouTubeOAuthPoolRecommendedCapacity-active)
+			if active > worstByClient[clientKey] {
+				worstByClient[clientKey] = active
+			}
 		}
 		if err := rows.Err(); err != nil {
 			logger.Debug("youtube oauth pool active-grant rows skipped", "error", err)
 		}
 		rows.Close()
+		for clientKey, active := range worstByClient {
+			SetYouTubeOAuthPoolHealth(clientKey, YouTubeOAuthPoolHealthFor(active))
+		}
 	}
 
 	// 8b. reauth_required channels per Google subject (no new-column
