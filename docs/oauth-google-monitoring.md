@@ -55,6 +55,53 @@ gets garbage-collected.
    click the CTA, get redirected through the OAuth flow, and the
    new refresh token overwrites the dead one.
 
+## Silent refresh-token eviction diagnostic
+
+Google silently invalidates the oldest refresh token of a
+`(Google Account, OAuth client)` pair once the pair reaches ~50-100
+active tokens (see [oauth-google-limits.md](oauth-google-limits.md)).
+There is no push notification; the operator notices only when a
+refresh comes back `invalid_grant`. The repository ships a read-only
+diagnostic that surfaces both the risk (tokens per subject+client
+pair vs the 50/90/100 bands) and the observable symptoms
+(`invalid_grant`, `reauth_required_at`, non-active connections,
+orphaned token rows):
+
+```bash
+# Static privacy/read-only test (no DB needed)
+make refresh-token-eviction-diagnostic-test
+
+# Run against the real database (password-free URL + protected
+# PGPASSFILE; never a password-bearing DSN in process args)
+PGPASSFILE="$HOME/.pgpass-instaedit" \
+  psql "postgresql://db-host:5432/instaedit?sslmode=verify-full" \
+  -X -q -w -v ON_ERROR_STOP=1 \
+  -f scripts/db/refresh-token-eviction-diagnostic.sql
+```
+
+Sections and thresholds:
+
+- `subject_client` — token rows per `(provider_subject_id,
+  oauth_client_key)`; flags at 40 (near recommended 50), 50 (at/over
+  the recommended soft cap), 90 (pool critical, new grants blocked)
+  and 100 (Google's hard cap). Any pair ≥ 50 is an eviction-risk pair
+  that must be drained by rebalancing across clients/accounts.
+- `eviction_signals` — connections with `reauth_required_at` set,
+  `last_refresh_error` matching `invalid_grant`/`quota`, or a
+  non-active status: the observable eviction symptom.
+- `orphan_tokens` — token rows whose `oauth_connection_id` no longer
+  resolves (grant deleted without the token rows).
+- `channel_grant_consistency` — grant fan-out + channel status per
+  connection.
+- `summary` — `PASS`/`CHECK` aggregates; run it as the 24h
+  post-rollout check after adding a large channel fleet.
+
+The script never selects token/ciphertext columns — it projects
+identifiers, statuses, timestamps, error codes and counts only. The
+`test-refresh-token-eviction-diagnostic.sh` gate re-verifies that
+contract in CI (see the `refresh-token-eviction-diagnostic-test`
+Makefile target).
+
 ## How to verify the current mode quickly
 
 The `scripts/verify-google-oauth-mode.sh` (YouTube grant) and
