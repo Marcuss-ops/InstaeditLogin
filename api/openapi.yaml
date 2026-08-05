@@ -308,6 +308,155 @@ paths:
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
 
+  /api/v1/accounts:
+    get:
+      tags: [Auth]
+      operationId: accountsList
+      summary: List the caller's platform accounts.
+      description: |
+        Returns the platform accounts owned by the authenticated user.
+        Accounts in the deleted state (`account_state=deleted` — i.e.
+        `disconnected`, `revoked`, or tombstoned via
+        `DELETE /api/v1/accounts/{id}/data`) are HIDDEN by default; pass
+        `?include_deleted=true` to include them (`true`, `1`, `yes` are
+        accepted, case-insensitive).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: include_deleted
+          in: query
+          required: false
+          description: Include deleted-state accounts (disconnected / revoked / tombstoned).
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of owned accounts (deleted-state hidden unless `include_deleted`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /api/v1/accounts/{id}:
+    get:
+      tags: [Auth]
+      operationId: accountsGet
+      summary: Get a single owned platform account.
+      description: |
+        Returns the account owned by the authenticated user (404 for
+        cross-tenant ids — no existence leak). A cached `resource` payload
+        is included when a provider snapshot exists.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: The account (plus a cached `resource` payload when a snapshot exists).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Auth]
+      operationId: accountsDeleteDeprecated
+      summary: DEPRECATED — the old DELETE soft-disconnect is removed (410).
+      description: |
+        Removed by the account-lifecycle audit: the method used to perform a
+        misleading soft-delete (the row stayed, and shared-grant tokens were
+        kept). The endpoint now answers `410 Gone` with guidance. Use
+        `POST /api/v1/accounts/{id}/disconnect` (soft disconnect, history
+        kept) or `DELETE /api/v1/accounts/{id}/data` (permanent delete /
+        tombstone).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '410':
+          description: Removed. The body guides towards the explicit commands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /api/v1/accounts/{id}/disconnect:
+    post:
+      tags: [Auth]
+      operationId: accountDisconnect
+      summary: Soft-disconnect one channel (row kept for audit).
+      description: |
+        Explicit channel disconnect: `status=disconnected` (the row stays for
+        audit), removal from every group and from the publishable
+        destinations, future jobs cancelled (parent aggregates recomputed) —
+        all in one transaction. When the channel is the LAST active one on
+        its shared Google grant, the grant is revoked and its tokens are
+        deleted; while a sibling channel still uses the grant, BOTH the grant
+        and the tokens are preserved so the sibling keeps working.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '204':
+          description: Channel disconnected.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/accounts/{id}/data:
+    delete:
+      tags: [Auth]
+      operationId: accountDeleteData
+      summary: Permanently delete a channel (tombstone).
+      description: |
+        Permanent account deletion / tombstone — deliberately stronger than
+        disconnect. The row is tombstoned (`status=deleted`,
+        `username=[deleted]`, `metadata={}`) so it disappears from every
+        normal query while historical foreign keys (publications, livestreams,
+        thumbnail assignments) stay intact. Channel-scoped data is removed in
+        the same transaction: group memberships, workspace channels,
+        snapshots and future jobs. The shared Google grant is revoked — and
+        its tokens plus the `oauth_connections` row removed — ONLY when this
+        is the last active channel of the grant; otherwise the grant and the
+        tokens are preserved for the siblings. Audit and outbox records are
+        written inside the transaction.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '204':
+          description: Account permanently deleted (tombstoned).
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '502':
+          description: Remote OAuth grant revocation failed (permanent provider error).
+        '503':
+          description: Remote OAuth revocation temporarily unavailable; retry later.
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /api/v1/accounts/{id}/oauth-grant:
     delete:
       tags: [Auth]
@@ -318,8 +467,10 @@ paths:
         the caller. The server atomically marks the grant and every linked
         platform account as disconnected, deletes grant-scoped tokens, and
         writes the audit and outbox records in the same database transaction.
-        This is distinct from `DELETE /api/v1/accounts/{id}`, which only
-        disconnects one channel and preserves a shared grant for its siblings.
+        This is distinct from `POST /api/v1/accounts/{id}/disconnect`, which
+        only disconnects one channel and preserves a shared grant for its
+        siblings. (The legacy `DELETE /api/v1/accounts/{id}` is removed and
+        answers 410.)
       security:
         - ApiKeyAuth: []
         - JwtCookie: []
@@ -3547,6 +3698,52 @@ components:
         carry the same string so a peer can pattern-match on
         either key without coupling to the message prose.
 
+    # ────── Accounts (lifecycle) ─────────────────────────────────────
+
+    Account:
+      type: object
+      required: [id, platform, platform_user_id, username, status, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        platform:
+          type: string
+          description: Provider identifier (e.g. `youtube`, `instagram`, `facebook`).
+        platform_user_id:
+          type: string
+          description: Provider-scoped stable id of the channel.
+        username:
+          type: string
+          nullable: true
+        status:
+          type: string
+          description: Internal lifecycle value (`active`, `disconnected`, `deleted`, …).
+        account_state:
+          type: string
+          enum: [valid, reconnect_required, suspended, deleted]
+          description: Normalized state the UI renders against.
+        is_publishable:
+          type: boolean
+          description: Whether the account can be a publishing destination right now.
+        reauth_required_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error_code:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    AccountListResponse:
+      type: object
+      required: [accounts]
+      properties:
+        accounts:
+          type: array
+          items: { $ref: '#/components/schemas/Account' }
+
   examples:
     VeloxSceneCompositeJob:
       summary: Composite documentary job
@@ -3633,4 +3830,3 @@ components:
         output: { width: 1920, height: 1080, fps: 30, format: mp4 }
         delivery_plan:
           destinations: [{ external_destination_id: extdst_01J }]
-
