@@ -27,10 +27,23 @@
 # failure pattern is infrastructure-flake-on-ephemeral-postgres, which
 # would mask product regressions with infra noise if it held bundles.
 #
+# Why prebuilt (no re-build in this job):
+# The old flow ran `npm ci` + `tsc`/`vite build` a SECOND time inside
+# this job via amondnet/vercel-action (~1-2 min wasted per deploy and a
+# second chance for the bundle to differ from what CI validated).
+# integration-fast now uploads `web/dist` as the `web-dist` artifact;
+# this job downloads it and runs `vercel deploy --prebuilt`, which
+# uploads the Build Output API v3 layout in `.vercel/output/` as-is.
+# Because `--prebuilt` bypasses vercel.json routing, the host-based
+# apex redirects AND the SPA catch-all rewrite are replicated in
+# `.vercel/output/config.json` (Build Output API v3 semantics).
+#
 # Trigger model:
 #   - This workflow runs when the `integration-fast` workflow completes.
 #   - The deploy job only starts if `integration-fast` concluded with success.
-#   - `workflow_dispatch` remains available as a manual override.
+#   - `workflow_dispatch` remains available as a manual override; in that
+#     lane the artifact is pulled from the most recent successful
+#     integration-fast run on `main`.
 #
 # SAFETY: if you ever need to bypass the CI gate (true emergency),
 # use `workflow_dispatch` after documented approval, not a silent push.
@@ -47,34 +60,6 @@
 #   VERCEL_ORG_ID    /v2/teams → id of team owning the project (or /v2/user for personal account)
 #   VERCEL_PROJECT_ID /v9/projects → id of the InstaEdit project
 #
-# Required GitHub repository secrets (Settings → Secrets and variables →
-# Actions → New repository secret). Every variable MUST be set BEFORE
-# the first push hits this workflow, otherwise the action fails fast:
-#
-#   VERCEL_TOKEN       https://vercel.com/account/tokens → "Create Token".
-#                       Pick scope "Full Account" so the token can resolve
-#                       which project/org it belongs to without needing
-#                       additional context. Expiry: leave at default 24h
-#                       (token is auto-issued per-deploy, low blast radius
-#                       if leaked).
-#
-#   VERCEL_ORG_ID      Visible in the response of:
-#                         curl -H "Authorization: Bearer $VERCEL_TOKEN" \
-#                              https://api.vercel.com/v2/teams
-#                       The `id` field on the team entry that owns the
-#                       project. If the project belongs to a personal
-#                       account (no team), use the personal-account `id`
-#                       returned by `/v2/user`.
-#
-#   VERCEL_PROJECT_ID  Visible in:
-#                         curl -H "Authorization: Bearer $VERCEL_TOKEN" \
-#                              https://api.vercel.com/v9/projects
-#                       The `id` of the InstaEdit project. Persisted
-#                       after the first successful Vercel-for-Git deploy
-#                       even if that integration is now broken — copy
-#                       from the Vercel dashboard → Project Settings
-#                       → General → "Project ID".
-#
 # ⚠️ DEPLOY-DUPLICATION NOTE:
 # If the Vercel-for-Git integration is STILL partially active in
 # vercel.com/dashboard (Settings → Git → Connected Git Repository),
@@ -86,18 +71,19 @@
 name: deploy
 
 # Minimum-needed scopes.
-#   - contents: read       → checkout repo + read root vercel.json
-#   - actions: read        → workflow_run trigger needs to read sibling
-#                            workflow conclusions to gate on success
-#                            (without it some runners say: "GitHub Actions
-#                            is not permitted to access actions in this
-#                            repository")
+#   - contents: read     → checkout repo + read root vercel.json
+#   - actions: read      → workflow_run trigger needs to read sibling
+#                          workflow conclusions to gate on success
+#                          (without it some runners say: "GitHub Actions
+#                          is not permitted to access actions in this
+#                          repository") AND to download the `web-dist`
+#                          artifact uploaded by integration-fast.
 permissions:
   contents: read
   actions: read
 
 # NOTE: GitHub Actions YAML 1.2 treats `on` as a normal string, but
-# some YAML tools (yaml.safe_load in Python ≤1.1 mode, older SDK
+# some YAML tools (yaml.safe_load in Python ≤1.1 mode, older NSIS
 # parsers) interpret `on` as boolean true. Quoting the key keeps the
 # file portable across both. (Existing integration-fast.yml + integration-slow.yml use
 # the same convention — keep them aligned.)
@@ -136,7 +122,7 @@ concurrency:
 
 jobs:
   vercel:
-    name: Deploy web/app to Vercel (production)
+    name: Deploy web/app to Vercel (production, prebuilt)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Only deploy when the integration-fast workflow succeeded on main,
@@ -148,9 +134,7 @@ jobs:
        github.event.workflow_run.head_branch == 'main')
 
     steps:
-      # ─── 1. Checkout ─────────────────────────────────────────────        # actions/checkout@v4 is the pinned major used by integration-fast.yml.
-      # Stay aligned so both workflows have identical checkout semantics.
-      #
+      # ─── 1. Checkout ─────────────────────────────────────────────
       # `ref:` pins the checkout to the EXACT commit this run was
       # spawned for. Without it:
       #   - on workflow_run (the production path) the runner checks
@@ -167,63 +151,116 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      # ─── 2. Deploy ───────────────────────────────────────────────
-      # amondnet/vercel-action runs from the repository root and reads
-      # ./vercel.json:
-      #   install  →  npm --prefix web ci
-      #   build    →  npm --prefix web run build  (tsc -b && vite build)
-      #   upload   →  ./web/dist/ → Vercel production CDN
-      #
-      # We do NOT need a local Node setup step here — the Vercel action
-      # sets up its own Node toolchain matching vercel.json's build image
-      # (Node 24 currently), so adding `actions/setup-node` would only
-      # pin to the GHA runner's version (20 by default) and risk a
-      # version skew vs Vercel's own build image.
-      - name: Deploy web/app to Vercel (production)
-        # Pinned to amondnet/vercel-action v42.3.0 (commit SHA) to avoid
-        # silent breaking changes from floating tags. The action reads
-        # ./vercel.json for build/install/output configuration.
-        #
-        # Pin history:
-        #   - v25.1.1 (@f1452eb59d0b1aa6af4c60d5f1b11e0c2d6d8e7) — 26 Jul,
-        #     SHA deleted upstream → GitHub Actions returned 422 on every
-        #     attempt. Replaced with the current latest stable v42.3.0,
-        #     the only v25.x...v41.x intermediate releases were also removed.
-        #   - v42.3.0 (@de09aeac2ace6599ec9b11ef87558759a496bac4) — current.
-        uses: amondnet/vercel-action@de09aeac2ace6599ec9b11ef87558759a496bac4
+      # ─── 1.5. Node toolchain for the Vercel CLI ─────────────────
+      # The old amondnet/vercel-action provisioned its own Node; now
+      # that we invoke `npx vercel` directly we pin Node 20 explicitly
+      # (Vercel CLI 57 requires >= 18; 20 matches integration-fast).
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          # Pinned Vercel CLI version. Upgrade intentionally after testing.
-          # Pin history:
-          #   - 39.2.0 — paired with v25.1.1 action. Failed on Node 24
-          #     (GitHub forced runners onto Node 24 after the 2025-09-19
-          #     Node 20 deprecation). Bumped to 42.3.0.
-          #   - 42.3.0 — matched action v42.3.0 + Node 24 forward-compat.
-          #     Failed at upload with: "Your Vercel CLI version is
-          #     outdated. This endpoint requires version 47.2.2 or later."
-          #     Bumped to 47.2.2.
-          #   - 47.2.2 — FAILS the npm install step with `ETARGET: no
-          #     matching version found for vercel@47.2.2`. The 47.x line
-          #     on npm goes 47.0.0 → 47.1.4 only — 47.2.2 was never
-          #     published. Vercel's API error message referenced a
-          #     hypothetical minimum that doesn't exist on npm, so any
-          #     version with semver ≥ 47.2.2 (i.e., 48.0.0+) satisfies
-          #     the API contract. Bumped to current npm `latest`
-          #     (57.0.0) which is the smallest known published version
-          #     that satisfies the requirement AND gives us runway
-          #     before the next API bump forces another pin dance.
-          #   - 57.0.0 — current.
-          vercel-version: '57.0.0'
-          # `--prod` → promote the deployment to production alias.
-          # Without it, the action would create an unscoped preview URL
-          # which our DNS (instaedit.org → apex) does NOT point at.
-          vercel-args: '--prod'
-          # working-directory intentionally omitted.
-          #
-          # The Vercel project's Root Directory must remain empty (repository root).
-          # The root `vercel.json` explicitly targets the `web/` workspace.
-          # Keep this action at the checkout root and do not add
-          # `working-directory: ./web`: doing so would bypass the canonical
-          # root config and can select a different linked project.
+          node-version: 20
+
+      # ─── 1.6. Resolve the CI run that produced the bundle ────────
+      # workflow_run → the run that triggered us; workflow_dispatch →
+      # the most recent integration-fast run on main (the bundle it
+      # uploaded is the freshest green artifact available).
+      - name: Resolve CI run id for artifact download
+        id: ci-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "run_id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+          else
+            # Manual override: pick the most recent integration-fast run
+            # that COMPLETED with success on main (its web-dist artifact
+            # is guaranteed to exist). Avoids grabbing a still-running or
+            # failed run whose artifact was never uploaded.
+            RUN_ID="$(gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow integration-fast.yml \
+              --branch main \
+              --status completed \
+              --limit 20 \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion == "success")][0].databaseId')"
+            if [ -z "${RUN_ID}" ]; then
+              echo "::error::Nessun run integration-fast completato con successo su main: impossibile scaricare l'artefatto web-dist."
+              exit 1
+            fi
+            echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ─── 2. Download the bundle built & validated by CI ──────────
+      # integration-fast uploads `web/dist` as the `web-dist` artifact
+      # (see integration-fast.yml step 8.5). This is the SAME bundle
+      # that passed vitest + tsc + vite build — no re-build here.
+      - name: Download frontend bundle (web-dist)
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: /tmp/web-dist
+          run-id: ${{ steps.ci-run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── 3. Deploy (prebuilt — no npm ci, no tsc/vite) ───────────
+      # Assembles the Build Output API v3 layout that `vercel deploy
+      # --prebuilt` uploads verbatim:
+      #   .vercel/project.json  → project + org linkage
+      #   .vercel/output/static → the built web/dist files
+      #   .vercel/output/config.json → routing rules. NOTE: with
+      #   --prebuilt, vercel.json's redirects/rewrites are NOT applied,
+      #   so the apex host redirects (instaedit.org / www.instaedit.org
+      #   → app.instaedit.org) AND the SPA catch-all rewrite to
+      #   /index.html are replicated here explicitly.
+      #
+      # `--meta githubCommitSha=...` keeps scripts/push-deploy-verify.sh
+      # able to locate this deployment by commit SHA.
+      - name: Deploy web/app to Vercel (production, prebuilt)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          # Build Output API v3 layout
+          mkdir -p .vercel/output/static
+          if [ -d /tmp/web-dist/dist ]; then
+            cp -r /tmp/web-dist/dist/. .vercel/output/static/
+          else
+            cp -r /tmp/web-dist/. .vercel/output/static/
+          fi
+
+          # Project linkage (matches the secrets the old action used)
+          printf '{"projectId":"%s","orgId":"%s"}\n' \
+            "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID" > .vercel/project.json
+
+          # Routing: apex redirects + SPA rewrite (quoted heredoc keeps
+          # $1 literal inside the JSON).
+          cat > .vercel/output/config.json <<'JSON'
+          {
+            "version": 3,
+            "routes": [
+              {
+                "has": [{ "type": "host", "value": "instaedit.org" }],
+                "src": "/(.*)",
+                "dest": "https://app.instaedit.org/$1",
+                "status": 308
+              },
+              {
+                "has": [{ "type": "host", "value": "www.instaedit.org" }],
+                "src": "/(.*)",
+                "dest": "https://app.instaedit.org/$1",
+                "status": 308
+              },
+              { "handle": "filesystem" },
+              { "src": "/(.*)", "dest": "/index.html" }
+            ]
+          }
+          JSON
+
+          # Deploy the prebuilt output — no install, no build.
+          npx --yes vercel@57.0.0 deploy --prebuilt --prod --yes \
+            --token "$VERCEL_TOKEN" \
+            --meta "githubCommitSha=${{ github.event.workflow_run.head_sha || github.sha }}"

@@ -44,12 +44,14 @@
 
 name: integration-fast
 
-# Least-privilege: checkout + build + test don't need write or
-# deploy scopes. The default GITHUB_TOKEN has PR / deployment scopes
-# but we explicitly gate contents: read to make the intent obvious
-# to reviewers.
+# Least-privilege: checkout + build + test don't need deploy scopes,
+# but step 8.5 uploads `web/dist` as the `web-dist` artifact that
+# deploy.yml consumes (`vercel deploy --prebuilt`) — and
+# actions/upload-artifact@v4 requires `actions: write` on the token.
+# Deploy credentials (VERCEL_*) stay exclusively in deploy.yml.
 permissions:
   contents: read
+  actions: write
 
 # NOTE: GitHub Actions YAML 1.2 treats `on` as a normal string, but
 # some YAML tools (yaml.safe_load in Python ≤1.1 mode, older SDK
@@ -240,6 +242,18 @@ jobs:
           echo
           echo "✓ frontend gateway passed"
 
+
+      # ─── 8.5. Upload frontend bundle (consumed by deploy.yml) ────
+      # deploy.yml runs `vercel deploy --prebuilt`, which uploads the
+      # bundle built HERE — so the deploy job never re-runs npm ci or
+      # tsc/vite build (saves ~1-2 min per deploy). The artifact name
+      # must stay in sync with deploy.yml's download step.
+      - name: Upload frontend bundle (web-dist)
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
 
       # ─── 8.6. OAuth scope canary unit tests (PR-lane only) ────────
       # The canary binary's *pure-function* test suite runs here so

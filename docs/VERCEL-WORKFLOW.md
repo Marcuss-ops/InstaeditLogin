@@ -148,6 +148,18 @@ The CLI is already authenticated for every agent: the token is stored in
 `~/.bashrc` / `~/.profile`. Never write the token into commits or project
 files.
 
+## CI-driven deploy (prebuilt)
+
+The production deploy is driven by `.github/workflows/deploy.yml` after
+`integration-fast` passes. To avoid building the frontend twice per push,
+`integration-fast` uploads `web/dist` as the `web-dist` artifact and the
+deploy job runs `vercel deploy --prebuilt --prod` — it never re-runs
+`npm ci` / `vite build`. The routing rules (`instaedit.org`/`www` host
+redirects + the SPA rewrite to `/index.html`) are replicated in
+`.vercel/output/config.json` (Build Output API v3), because `--prebuilt`
+ignores `vercel.json` routing. Manual redeploys (`workflow_dispatch`)
+reuse the last successful `integration-fast` artifact on `main`.
+
 ## Verifying after the deploy
 
 Check that the deployed bundle is the new one (cache `age` should reset to a
