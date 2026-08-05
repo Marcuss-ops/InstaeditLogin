@@ -71,6 +71,74 @@ func TestAuthorizeChannel_ReconnectSameSubjectReusesConnection(t *testing.T) {
 	}
 }
 
+// TestAuthorizeChannel_DoD_Reconnect10Times_SingleActiveConnection
+// certifies the reconnect DoD line at the service layer: re-linking the
+// SAME channel 10 times (alternating pools A/B) must return the SAME
+// oauth_connection_id every time — one channel → one active
+// connection → one canonical refresh token, never a pile of parallel
+// grants. Each pass issues exactly one subject-keyed UPSERT (the
+// DO UPDATE SET flips oauth_client_key in place); sqlmock's
+// byte-exact expectations would fail if a second connection row were
+// ever inserted.
+func TestAuthorizeChannel_DoD_Reconnect10Times_SingleActiveConnection(t *testing.T) {
+	svc, mock, _, cleanup := newSvcHarness(t)
+	defer cleanup()
+
+	const userID, oauthConnID int64 = 99, 777
+	const channel = "UC012345678901234567890123"
+	scopes := []string{"https://www.googleapis.com/auth/youtube.upload"}
+
+	// 10 reconnect passes. The first pass promotes the account from
+	// pending_authorization; every later pass finds it already active.
+	for i := 0; i < 10; i++ {
+		key := "youtube_pool_a"
+		if i%2 == 1 {
+			key = "youtube_pool_b"
+		}
+		status := models.AccountStatusPendingAuthorization
+		if i > 0 {
+			status = models.AccountStatusActive
+		}
+		mock.ExpectBegin()
+		expectLoadAccount(mock, 7, userID, models.PlatformYouTube, channel, status)
+		expectSubjectUpsertOCR(mock, userID, models.PlatformYouTube, "google-subject-1", channel, key, scopes, oauthConnID)
+		expectInsertTokenTx(mock, true)
+		expectPromoteAccount(mock, oauthConnID, 7)
+		mock.ExpectCommit()
+	}
+
+	token := &models.TokenData{
+		AccessToken:       "fresh-access",
+		RefreshToken:      "fresh-refresh",
+		ProviderSubjectID: "google-subject-1",
+		TokenType:         models.TokenTypeBearer,
+		ExpiresIn:         3600,
+		Scopes:            scopes,
+	}
+
+	prev := int64(0)
+	for i := 0; i < 10; i++ {
+		key := "youtube_pool_a"
+		if i%2 == 1 {
+			key = "youtube_pool_b"
+		}
+		got, err := svc.AuthorizeChannel(context.Background(), 7, channel, key, scopes, token)
+		if err != nil {
+			t.Fatalf("reconnect pass %d: %v", i+1, err)
+		}
+		if got != oauthConnID {
+			t.Fatalf("reconnect pass %d returned oauth_connection_id=%d want %d — a second grant was created", i+1, got, oauthConnID)
+		}
+		if i > 0 && got != prev {
+			t.Fatalf("connection id drifted between passes: pass %d=%d pass %d=%d", i, prev, i+1, got)
+		}
+		prev = got
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v (10 reconnects must produce exactly 10 single-row upserts, no duplicate grants)", err)
+	}
+}
+
 // TestAuthorizeChannel_EmptyClientKeyDefaultsToPoolA pins the legacy
 // fallback: a YouTube subject-keyed authorize that carries no pool
 // client key (legacy single-client caller) must persist the migration

@@ -110,6 +110,7 @@ func integrationDB(t *testing.T) *sql.DB {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE(user_id, provider, provider_resource_id)
 		)`,
+		`ALTER TABLE oauth_connections ADD COLUMN IF NOT EXISTS oauth_client_key VARCHAR(50) NOT NULL DEFAULT 'youtube_pool_a'`,
 		`CREATE TABLE IF NOT EXISTS platform_accounts (
 			id BIGSERIAL PRIMARY KEY,
 			user_id BIGINT NOT NULL DEFAULT 1,
@@ -435,6 +436,160 @@ func TestVault_Renew_ConcurrentDifferentAccounts_BothRefresherCalls(t *testing.T
 	}
 	if got := counter.Load(); got != 2 {
 		t.Errorf("refresher call count for DIFFERENT account_ids: want 2 (no false serialization), got %d (lock is over-coarse)", got)
+	}
+}
+
+// -----------------------------------------------------------------------
+// Definition of Done — concurrent refresh of 100 grants across two pools
+// -----------------------------------------------------------------------
+
+// seedYouTubePoolGrant inserts a youtube oauth_connection carrying the
+// given pool client key (oauth_client_key), a linked platform_account
+// and one expired bearer token. Returns the connection and account ids.
+func seedYouTubePoolGrant(t *testing.T, db *sql.DB, enc *crypto.Encryptor, refreshPlaintext, clientKey string) (connID, accountID int64) {
+	t.Helper()
+	ctx := context.Background()
+	resourceID := fmt.Sprintf("yt-%s-%d", clientKey, time.Now().UnixNano())
+	if err := db.QueryRowContext(ctx,
+		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, oauth_client_key)
+		 VALUES (1, 'youtube', $1, $2) RETURNING id`,
+		resourceID, clientKey,
+	).Scan(&connID); err != nil {
+		t.Fatalf("insert youtube oauth_connection: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		`INSERT INTO platform_accounts (user_id, platform, platform_user_id, oauth_connection_id)
+		 VALUES (1, 'youtube', $2, $1) RETURNING id`,
+		connID, resourceID,
+	).Scan(&accountID); err != nil {
+		t.Fatalf("insert platform_account: %v", err)
+	}
+	encAccess, err := enc.Encrypt("stale-access")
+	if err != nil {
+		t.Fatalf("encrypt access: %v", err)
+	}
+	encRefresh, err := enc.Encrypt(refreshPlaintext)
+	if err != nil {
+		t.Fatalf("encrypt refresh: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW() - INTERVAL '1 minute')`,
+		accountID, connID, models.TokenTypeBearer, encAccess, encRefresh,
+	); err != nil {
+		t.Fatalf("insert token: %v", err)
+	}
+	return connID, accountID
+}
+
+// TestVault_Renew_DoD_100ConcurrentGrants_OwnClient_NoDuplicates
+// certifies the "refresh concorrente" Definition of Done line against a
+// REAL Postgres (the advisory lock cannot be faked): 100 expired grants
+// — 50 issued by pool A, 50 by pool B — are renewed concurrently, each
+// through vault.Renew. The refresher records the pool client key the
+// vault stamped on its ctx (OAuthClientKeyFromContext), so the test
+// proves:
+//
+//   - every grant was refreshed with ITS OWN pool client key (the key
+//     stamped on ctx equals the key seeded on the grant's connection
+//     row — a pool A token never rides a pool B client);
+//   - each grant was refreshed EXACTLY once (no duplicate refresh);
+//   - all 100 renewals succeeded — the resolver caused no
+//     invalid_grant.
+//
+// The service layer maps key → client_id/client_secret (certified in
+// internal/services/youtube_oauth_pool_refresh_test.go), so the vault
+// stamping the right key completes the chain.
+func TestVault_Renew_DoD_100ConcurrentGrants_OwnClient_NoDuplicates(t *testing.T) {
+	db := integrationDB(t)
+	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: "5K4XAVO7LCtv/C6+x0ZWMM8Xa6XUaRkhIc7K2lbqffM="})
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
+	store := repository.NewTokenRepository(db)
+	v := NewCredentialVault(enc, db, store)
+
+	const grants = 100
+	type seededGrant struct {
+		accountID int64
+		poolKey   string
+		refresh   string
+	}
+	seeded := make([]seededGrant, grants)
+	for i := 0; i < grants; i++ {
+		poolKey := "youtube_pool_a"
+		if i%2 == 1 {
+			poolKey = "youtube_pool_b"
+		}
+		refresh := fmt.Sprintf("rt-%s-%d", poolKey, i)
+		_, accountID := seedYouTubePoolGrant(t, db, enc, refresh, poolKey)
+		seeded[i] = seededGrant{accountID: accountID, poolKey: poolKey, refresh: refresh}
+	}
+
+	// Each concurrent Renew receives a ctx stamped with the grant's own
+	// pool client key. The refresher records (refresh token → stamped
+	// key) and the per-grant call count.
+	var (
+		mu        sync.Mutex
+		byRefresh = map[string]string{}
+		counts    = map[string]int{}
+	)
+	refresher := func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+		stamped := OAuthClientKeyFromContext(ctx)
+		mu.Lock()
+		byRefresh[refreshToken] = stamped
+		counts[refreshToken]++
+		mu.Unlock()
+		return &models.TokenData{
+			AccessToken: "fresh-" + refreshToken,
+			TokenType:   models.TokenTypeBearer,
+			ExpiresIn:   3600,
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	errs := make([]error, grants)
+	var wg sync.WaitGroup
+	for i, g := range seeded {
+		i, g := i, g
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = v.Renew(ctx, g.accountID, models.TokenTypeBearer, refresher)
+		}()
+	}
+	wg.Wait()
+
+	// (1) All 100 renewals succeeded (no invalid_grant from the resolver).
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("grant %d (%s): %v", i, seeded[i].refresh, err)
+		}
+	}
+
+	// (2) Every grant was refreshed, each exactly once.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(byRefresh) != grants {
+		t.Errorf("refreshed grants: want %d, got %d", grants, len(byRefresh))
+	}
+	for _, g := range seeded {
+		if counts[g.refresh] != 1 {
+			t.Errorf("grant %s refreshed %d times; want exactly 1 (no duplicate refresh)", g.refresh, counts[g.refresh])
+		}
+		stamped, ok := byRefresh[g.refresh]
+		if !ok {
+			t.Errorf("grant %s was never refreshed", g.refresh)
+			continue
+		}
+		// (3) The vault stamped the grant's OWN pool client key — never
+		// the other pool's (cross-pool refresh would surface as
+		// invalid_client from Google).
+		if stamped != g.poolKey {
+			t.Errorf("grant %s stamped with pool %s; want its own pool %s (cross-pool refresh)",
+				g.refresh, stamped, g.poolKey)
+		}
 	}
 }
 

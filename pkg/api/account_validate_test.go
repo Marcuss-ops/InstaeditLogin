@@ -249,6 +249,102 @@ func TestHandleValidateAccount_YouTube_MissingForceSSL_ReauthRequired(t *testing
 	}
 }
 
+// TestHandleValidateAccount_YouTube_ChannelBindingMismatch_422Reauth
+// certifies the DoD "CHANNEL_BINDING_MISMATCH senza salvare token"
+// line at the HTTP layer: the grant's fresh token passes steps 1-2
+// (refresh + tokeninfo with all three canonical scopes), but
+// channels.list(mine=true) reports a DIFFERENT channel than the
+// platform_account row (UC123) → the handler responds 422 with the
+// "channel_binding_mismatch" code and flags the account
+// reauth_required via MarkReauthRequired. No token is persisted on
+// this path (validate only ever READS credentials; the service-layer
+// guard in AuthorizeChannel separately proves a mismatched token is
+// never saved at attach time).
+func TestHandleValidateAccount_YouTube_ChannelBindingMismatch_422Reauth(t *testing.T) {
+	account := &models.PlatformAccount{
+		ID:             42,
+		UserID:         1,
+		Platform:       models.PlatformYouTube,
+		PlatformUserID: "UC123",
+		Username:       "testchannel",
+		Status:         models.AccountStatusActive,
+	}
+	var flaggedCode, flaggedMessage string
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return account, nil
+		},
+		markReauthRequiredFn: func(ctx context.Context, accountID int64, code, message string) error {
+			flaggedCode, flaggedMessage = code, message
+			return nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "fresh-token", TokenType: tokenType}, nil
+		},
+	}
+
+	// The test server answers BOTH Google endpoints the pipeline hits:
+	// tokeninfo (all three scopes present → step 2 passes) and
+	// channels.list (a channel that is NOT UC123 → step 3 mismatch).
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "tokeninfo"):
+			fmt.Fprint(w, `{"aud":"test-youtube-client-id","azp":"test-youtube-client-id","scope":"https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl openid email profile","expires_in":600}`)
+		case strings.Contains(r.URL.Path, "/channels"):
+			fmt.Fprint(w, `{"kind":"youtube#channelListResponse","items":[{"id":"UCOtherChannelId0000000000000"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	tsURL, _ := url.Parse(ts.URL)
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			YouTubeClientID:     "test-youtube-client-id",
+			YouTubeClientSecret: "secret-01234567890123456789012345678901",
+			YouTubeRedirectURI:  "http://localhost/callback",
+		},
+	}
+	realSvc, svcErr := services.NewYouTubeOAuthService(cfg, services.ProviderDependencies{
+		HTTPClient: &http.Client{Transport: &urlRewriter{base: tsURL}},
+	})
+	if svcErr != nil {
+		t.Fatalf("NewYouTubeOAuthService: %v", svcErr)
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		store,
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithYouTubeService(realSvc),
+		WithCredentialVault(vault),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/42/validate", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("channel-binding mismatch: want 422, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "channel_binding_mismatch") {
+		t.Errorf("response must carry the channel_binding_mismatch code, got: %s", w.Body.String())
+	}
+	if flaggedCode != "channel_binding_mismatch" {
+		t.Errorf("MarkReauthRequired code: want channel_binding_mismatch, got %q (message=%q)", flaggedCode, flaggedMessage)
+	}
+}
+
 // urlRewriter is a test RoundTripper that rewrites every request's
 // Host/Scheme to point at a single test server base URL (mirrors the
 // rewriteRoundTripper used in internal/services tests).
