@@ -294,18 +294,51 @@ func (r *YouTubeOAuthClientRegistry) SelectForNewConnection(ctx context.Context,
 	if r.usageCounter == nil {
 		return &r.clients[0], nil
 	}
-	if googleSubjectID == "" {
-		return nil, fmt.Errorf("youtube oauth client pool: googleSubjectID is required for capacity-aware selection")
+	selected, _, err := selectLeastLoadedPoolClient(ctx, r.clients, r.usageCounter, googleSubjectID)
+	if err != nil {
+		return nil, err
 	}
-	selected := 0
-	bestRemaining := int64(-1)
+	return selected, nil
+}
+
+// selectLeastLoadedPoolClient is the shared capacity-aware selection
+// heuristic used by YouTubeOAuthClientRegistry.SelectForNewConnection
+// and OAuthTokenCapacityManager.SelectPool.
+//
+// Among the given clients, the one with the most remaining capacity
+// (RecommendedCapacity − active refresh grants) wins; ties break by
+// lower usage, then registration order (deterministic, never random —
+// a new grant must not land on a different pool across retries).
+// Clients over the critical threshold (90 active grants) are excluded;
+// if every client is blocked, ErrYouTubeOAuthClientPoolExhausted is
+// returned (new grants refused until a pool drains below critical).
+// Counter failures fail closed — the caller refuses to guess. An empty
+// googleSubjectID is rejected (a per-subject usage query would be
+// meaningless).
+//
+// Returns the selected client config and its active-grant count.
+func selectLeastLoadedPoolClient(ctx context.Context, clients []YouTubeOAuthClientConfig, counter OAuthClientUsageCounter, googleSubjectID string) (*YouTubeOAuthClientConfig, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(clients) == 0 {
+		return nil, 0, ErrYouTubeOAuthClientPoolEmpty
+	}
+	if counter == nil {
+		return nil, 0, fmt.Errorf("youtube oauth client pool: usage counter is required for capacity-aware selection")
+	}
+	if googleSubjectID == "" {
+		return nil, 0, fmt.Errorf("youtube oauth client pool: googleSubjectID is required for capacity-aware selection")
+	}
+	selected := -1 // -1 sentinel: the first available client becomes the baseline
+	bestRemaining := int64(0)
 	bestUsed := int64(0)
 	available := false
-	for i := range r.clients {
-		c := &r.clients[i]
-		used, err := r.usageCounter.CountActiveRefreshTokens(ctx, googleSubjectID, c.Key)
+	for i := range clients {
+		c := &clients[i]
+		used, err := counter.CountActiveRefreshTokens(ctx, googleSubjectID, c.Key)
 		if err != nil {
-			return nil, fmt.Errorf("youtube oauth client pool: count usage for %s: %w", c.Redacted(), err)
+			return nil, 0, fmt.Errorf("youtube oauth client pool: count usage for %s: %w", c.Redacted(), err)
 		}
 		if used > YouTubeOAuthPoolCriticalThreshold {
 			// Over the hard block threshold (90): this client must not
@@ -315,7 +348,7 @@ func (r *YouTubeOAuthClientRegistry) SelectForNewConnection(ctx context.Context,
 		}
 		available = true
 		remaining := int64(c.RecommendedCapacity) - used
-		if remaining > bestRemaining ||
+		if selected == -1 || remaining > bestRemaining ||
 			(remaining == bestRemaining && (used < bestUsed || (used == bestUsed && i < selected))) {
 			selected = i
 			bestRemaining = remaining
@@ -323,7 +356,7 @@ func (r *YouTubeOAuthClientRegistry) SelectForNewConnection(ctx context.Context,
 		}
 	}
 	if !available {
-		return nil, ErrYouTubeOAuthClientPoolExhausted
+		return nil, 0, ErrYouTubeOAuthClientPoolExhausted
 	}
-	return &r.clients[selected], nil
+	return &clients[selected], bestUsed, nil
 }
