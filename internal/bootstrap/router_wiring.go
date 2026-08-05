@@ -239,6 +239,19 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		)
 	}
 
+	// YouTube OAuth Client Pool — optional A/B client registry. When
+	// YOUTUBE_OAUTH_CLIENT_A/B_* env vars are configured, the registry
+	// is wired so /api/v1/auth/youtube/login selects a pool client,
+	// bakes it into the signed state, and the callback exchanges the
+	// code with exactly that client. Nil registry keeps the legacy
+	// single-client flow untouched.
+	if ytPoolRegistry, regErr := services.NewYouTubeOAuthClientRegistryFromConfig(s.cfg); regErr != nil {
+		return nil, nil, fmt.Errorf("build youtube oauth client pool registry: %w", regErr)
+	} else if ytPoolRegistry != nil {
+		opts = append(opts, api.WithYouTubeOAuthClientRegistry(ytPoolRegistry))
+		slog.Info("YouTube OAuth client pool configured", "clients", ytPoolRegistry.Keys())
+	}
+
 	// Blocco #5.3 — Sentry init (lazy). Empty DSN disables the SDK.
 	var hub *sentry.Hub
 	if s.cfg.Monitoring.SentryDSN != "" {

@@ -17,6 +17,54 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
+// YouTubePoolAwareLogin is the optional capability on the YouTube
+// OAuth provider that lets handleLogin build the consent URL against a
+// pool client selected from the YouTube OAuth Client Pool (instead of
+// the legacy single client). The provider's GetLoginURLWithPoolClient
+// uses the client's client_id + redirect_uri so the URL Google echoes
+// back is bound to the same client that will exchange the code in the
+// callback.
+type YouTubePoolAwareLogin interface {
+	GetLoginURLWithPoolClient(state string, options services.OAuthLoginOptions, client *services.YouTubeOAuthClientConfig) string
+}
+
+// YouTubePoolAwareCallback is the optional capability on the YouTube
+// OAuth provider that lets handleCallback exchange the authorization
+// code with the pool client selected at login time (baked into the
+// signed state's oauth_client_key). Handlers MUST route through this
+// when the state carries a client key: re-selecting a client at
+// callback time would exchange the code against a different client_id
+// than the one that built the consent URL, and Google rejects such an
+// exchange with invalid_grant. If the provider cannot honour the
+// keyed exchange the request fails closed — never silently fall back
+// to the default client.
+type YouTubePoolAwareCallback interface {
+	HandleCallbackWithClient(ctx context.Context, state, code string, client *services.YouTubeOAuthClientConfig) (*models.PlatformProfile, *models.TokenData, error)
+}
+
+// exchangeOAuthCode runs the code→token exchange in step 2 of
+// handleCallback. When the signed state carries an oauth_client_key
+// (YouTube OAuth Client Pool), the exchange MUST use exactly that pool
+// client — see YouTubePoolAwareCallback. An empty key keeps the legacy
+// single-client exchange.
+func (r *Router) exchangeOAuthCode(ctx context.Context, provider string, p services.OAuthProvider, state, code, oauthClientKey string) (*models.PlatformProfile, *models.TokenData, error) {
+	if oauthClientKey == "" {
+		return p.HandleCallback(ctx, state, code)
+	}
+	if r.youtubeOAuthClientRegistry == nil {
+		return nil, nil, fmt.Errorf("oauth state selected youtube pool client %q but no pool registry is configured", oauthClientKey)
+	}
+	client, err := r.youtubeOAuthClientRegistry.Resolve(oauthClientKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve youtube pool client from oauth state: %w", err)
+	}
+	keyed, ok := p.(YouTubePoolAwareCallback)
+	if !ok {
+		return nil, nil, fmt.Errorf("provider %s cannot exchange the authorization code with the state-selected pool client %q", provider, oauthClientKey)
+	}
+	return keyed.HandleCallbackWithClient(ctx, state, code, client)
+}
+
 func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	provider := req.PathValue("provider")
 	p, ok := r.capabilities.OAuth(provider)
@@ -59,7 +107,61 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	state, err := generateOAuthState(w, provider, expectedChannelID, r.cookieDomain)
+	// YouTube OAuth Client Pool path: when a pool registry is
+	// configured the state stops being a cookie-backed CSRF nonce and
+	// becomes a short-lived HS256-signed JWT carrying the selected
+	// oauth_client_key + expected_channel_id + workspace_id + a
+	// single-use nonce (jti). The callback then exchanges the code
+	// with EXACTLY the client that built this consent URL — never
+	// re-selects at callback time. Without a registry the legacy
+	// cookie path is preserved unchanged.
+	var state string
+	if provider == models.PlatformYouTube && r.youtubeOAuthClientRegistry != nil {
+		// The Google subject is unknown until the operator picks an
+		// account on the consent screen, so the pool selection at login
+		// time is subject-less. The registry's no-counter path returns
+		// the first client deterministically; once the storage usage
+		// counter is wired (it rejects an empty subject), this step
+		// MUST switch to a global/least-loaded selection — see
+		// internal/services/youtube_oauth_client_pool.go.
+		client, selErr := r.youtubeOAuthClientRegistry.SelectForNewConnection(req.Context(), "")
+		if selErr != nil {
+			logAndError(w, req, "failed to select youtube oauth pool client", selErr, "provider", provider)
+			return
+		}
+		workspaceID := int64(0)
+		if identity := auth.IdentityFromContext(req.Context()); identity != nil {
+			workspaceID = identity.WorkspaceID()
+		}
+		signedState, nonce, expiresAt, issErr := r.auth.IssueOAuthFlowState(client.Key, expectedChannelID, workspaceID)
+		if issErr != nil {
+			logAndError(w, req, "failed to issue oauth flow state", issErr, "provider", provider)
+			return
+		}
+		if r.connectLinkNonceStore == nil {
+			logAndError(w, req, "connect-link nonce store not configured", errors.New("connect-link nonce store not configured"), "provider", provider)
+			return
+		}
+		// Persist the jti so the callback can atomically consume it
+		// (single-use). Reuses the connect-link store: same nonce /
+		// expiry / atomic-consume contract, and it is already wired
+		// and required by validateRequiredDeps.
+		if createErr := r.connectLinkNonceStore.Create(nonce, expectedChannelID, expiresAt); createErr != nil {
+			logAndError(w, req, "failed to persist oauth flow nonce", createErr, "provider", provider)
+			return
+		}
+		keyedLogin, ok := p.(YouTubePoolAwareLogin)
+		if !ok {
+			logAndError(w, req, "youtube provider cannot build a pool-client login URL", errors.New("YouTubePoolAwareLogin not implemented"), "provider", provider)
+			return
+		}
+		state = signedState
+		http.Redirect(w, req, keyedLogin.GetLoginURLWithPoolClient(state, options, client), http.StatusFound)
+		return
+	}
+
+	var err error
+	state, err = generateOAuthState(w, provider, expectedChannelID, r.cookieDomain)
 	if err != nil {
 		logAndError(w, req, "failed to start oauth flow", err, "provider", provider)
 		return
@@ -92,14 +194,17 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Step 1 — state validation (connect-link JWT or CSRF cookie).
-	expectedChannelID, fromConnectLinkState, stop := r.resolveCallbackState(w, req, provider, state)
+	// Step 1 — state validation (connect-link JWT, oauth-flow JWT or
+	// CSRF cookie).
+	expectedChannelID, oauthClientKey, fromConnectLinkState, stop := r.resolveCallbackState(w, req, provider, state)
 	if stop {
 		return
 	}
 
 	// Step 2 — exchange the authorization code for profile + tokens.
-	profile, tokenData, err := p.HandleCallback(req.Context(), state, code)
+	// When the state carries an oauth_client_key (YouTube OAuth Client
+	// Pool) the exchange ALWAYS uses that client — never re-selects.
+	profile, tokenData, err := r.exchangeOAuthCode(req.Context(), provider, p, state, code, oauthClientKey)
 	if err != nil {
 		metrics.RecordOAuthLoginError(provider, metrics.ErrorKind(err))
 		logAndError(w, req, "OAuth authentication failed", err, "provider", provider)
@@ -142,63 +247,120 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 }
 
 // resolveCallbackState is step 1 of handleCallback: validate the OAuth
-// state parameter and resolve the expected YouTube channel binding.
+// state parameter and resolve the expected YouTube channel binding +
+// the pool client that must exchange the code.
 //
-// P2 — admin connect-link. When the state param is JWT-shaped
-// (2 dots: header.payload.sig), it was issued by the admin
-// POST /admin/channels/{channel_id}/connect-link handler and
-// already carries the expected_channel_id, signed HS256 with
-// the same secret as the auth JWTs. We re-verify here so the
-// callback can refuse forged / replayed connect-link state
-// without involving the CSRF state-cookie row (the connect
-// flow has the manager browser, not the admin's). The
-// fromConnectLink boolean return is threaded down so the
-// ErrYouTubeChannelMismatch mapping in callbackAttachDiscovered can
-// switch its status code from 409 (legacy cookie path) to 422 (P2
-// connect-link per the operator's intent).
+// Three state shapes are accepted, in order:
+//
+//  1. P2 — admin connect-link JWT (2 dots, state_type=connect_link):
+//     issued by POST /admin/channels/{channel_id}/connect-link, already
+//     carries the expected_channel_id signed HS256 with the same secret
+//     as the auth JWTs. We re-verify here so the callback can refuse
+//     forged / replayed connect-link state without involving the CSRF
+//     state-cookie row (the connect flow has the manager browser, not
+//     the admin's). The fromConnectLink boolean return is threaded down
+//     so the ErrYouTubeChannelMismatch mapping in
+//     callbackAttachDiscovered can switch its status code from 409
+//     (legacy cookie path) to 422 (P2 connect-link per the operator's
+//     intent).
+//
+//  2. YouTube OAuth Client Pool JWT (2 dots, state_type=oauth_flow):
+//     issued by handleLogin when a pool registry is configured. It
+//     carries the oauth_client_key that MUST exchange the code (the
+//     same client that built the consent URL) + expected_channel_id +
+//     workspace_id + a single-use jti. The jti is consumed atomically
+//     here, exactly like the connect-link nonce, so a state cannot be
+//     replayed within its 10-minute window.
+//
+//  3. Legacy cookie-backed CSRF nonce: verified against the
+//     oauth_state_{provider} cookie (constant-time compare) and its
+//     optional expected_channel sibling cookie.
 //
 // On failure it writes the HTTP error itself and returns stop=true.
-func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, provider, state string) (expectedChannelID string, fromConnectLink bool, stop bool) {
+func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, provider, state string) (expectedChannelID string, oauthClientKey string, fromConnectLink bool, stop bool) {
 	if strings.Count(state, ".") == 2 {
+		// Connect-link states are tried first (they predate the pool
+		// and carry no oauth_client_key); oauth-flow states fall
+		// through because VerifyConnectLinkState rejects any
+		// state_type that is not "connect_link".
 		claims, sErr := r.auth.VerifyConnectLinkState(state)
-		if sErr != nil {
-			writeError(w, http.StatusBadRequest, "invalid connect-link state: "+sErr.Error())
-			return "", false, true
+		if sErr == nil {
+			// Atomically consume the connect-link jti so the same
+			// signed URL cannot be replayed. Missing/expired/already-
+			// consumed jti are treated as a replay attempt.
+			if r.connectLinkNonceStore != nil {
+				consumeErr := r.connectLinkNonceStore.Consume(claims.ID)
+				if consumeErr != nil {
+					reason := connectLinkConsumeReason(consumeErr)
+					if reason != "" {
+						// Known rejection: log structured diagnostics and
+						// emit a metric so operators can distinguish
+						// missing/expired/consumed links from genuine
+						// failures.
+						slog.WarnContext(req.Context(), "connect-link nonce rejected",
+							"reason", reason,
+							"provider", provider,
+							"expected_channel_id", claims.ExpectedChannelID,
+						)
+						metrics.RecordConnectLinkConsume(reason)
+						writeError(w, http.StatusGone, "connect-link already consumed or expired")
+						return "", "", false, true
+					}
+					logAndError(w, req, "could not verify connect-link state", consumeErr)
+					return "", "", false, true
+				}
+				metrics.RecordConnectLinkConsume("ok")
+			}
+			return claims.ExpectedChannelID, "", true, false
 		}
-		// Atomically consume the connect-link jti so the same
-		// signed URL cannot be replayed. Missing/expired/already-
-		// consumed jti are treated as a replay attempt.
+		// Fall through to the oauth-flow verifier only when the token
+		// was well-formed and carried a different state_type keyword
+		// (i.e. it IS an oauth-flow state, just not a connect-link one).
+		// Signature/expiry/issuer failures on a connect-link-shaped
+		// token keep the pre-pool "invalid connect-link state" error
+		// surface instead of a misleading oauth-flow one.
+		if !strings.Contains(sErr.Error(), "state_type=") {
+			writeError(w, http.StatusBadRequest, "invalid connect-link state: "+sErr.Error())
+			return "", "", false, true
+		}
+		// OAuth Client Pool state — issued by handleLogin. Same
+		// single-use nonce contract as connect-link.
+		flowClaims, fErr := r.auth.VerifyOAuthFlowState(state)
+		if fErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid oauth state: "+fErr.Error())
+			return "", "", false, true
+		}
+		slog.DebugContext(req.Context(), "oauth flow state verified",
+			"provider", provider,
+			"oauth_client_key", flowClaims.OAuthClientKey,
+			"workspace_id", flowClaims.WorkspaceID,
+			"expected_channel_id", flowClaims.ExpectedChannelID,
+		)
 		if r.connectLinkNonceStore != nil {
-			consumeErr := r.connectLinkNonceStore.Consume(claims.ID)
+			consumeErr := r.connectLinkNonceStore.Consume(flowClaims.ID)
 			if consumeErr != nil {
 				reason := connectLinkConsumeReason(consumeErr)
 				if reason != "" {
-					// Known rejection: log structured diagnostics and
-					// emit a metric so operators can distinguish
-					// missing/expired/consumed links from genuine
-					// failures.
-					slog.WarnContext(req.Context(), "connect-link nonce rejected",
+					slog.WarnContext(req.Context(), "oauth flow nonce rejected",
 						"reason", reason,
 						"provider", provider,
-						"expected_channel_id", claims.ExpectedChannelID,
+						"oauth_client_key", flowClaims.OAuthClientKey,
 					)
-					metrics.RecordConnectLinkConsume(reason)
-					writeError(w, http.StatusGone, "connect-link already consumed or expired")
-					return "", false, true
+					writeError(w, http.StatusGone, "oauth state already consumed or expired")
+					return "", "", false, true
 				}
-				logAndError(w, req, "could not verify connect-link state", consumeErr)
-				return "", false, true
+				logAndError(w, req, "could not verify oauth flow state", consumeErr)
+				return "", "", false, true
 			}
-			metrics.RecordConnectLinkConsume("ok")
 		}
-		return claims.ExpectedChannelID, true, false
+		return flowClaims.ExpectedChannelID, flowClaims.OAuthClientKey, false, false
 	}
 	expectedChannelID, stateErr := verifyOAuthState(w, req, provider, state, r.cookieDomain)
 	if stateErr != nil {
 		writeError(w, http.StatusBadRequest, "invalid state: "+stateErr.Error())
-		return "", false, true
+		return "", "", false, true
 	}
-	return expectedChannelID, false, false
+	return expectedChannelID, "", false, false
 }
 
 // callbackAttachDiscovered is the AccountDiscoverer branch of step 3:

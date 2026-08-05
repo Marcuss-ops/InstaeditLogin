@@ -182,10 +182,33 @@ func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 // canonicalScopes OR the docs table should be rejected.
 const youtubeOAuthScopes = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl openid email profile"
 
+// GetLoginURLWithOptions builds the Google authorize URL using the
+// legacy single-client config (cfg.Auth.YouTubeClientID/
+// YouTubeRedirectURI). YouTube OAuth Client Pool deployments route
+// through GetLoginURLWithPoolClient instead; this method keeps the
+// pre-pool behaviour for callers that never wire a registry (admin
+// connect-link, legacy tests).
 func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuthLoginOptions) string {
+	return s.GetLoginURLWithPoolClient(state, options, nil)
+}
+
+// GetLoginURLWithPoolClient builds the Google authorize URL for a pool
+// client (YouTube OAuth Client Pool). The client's client_id and
+// redirect_uri replace the legacy single-client config; every other
+// parameter (canonical scope set, access_type=offline, prompt,
+// login_hint) is identical to GetLoginURLWithOptions. A nil client
+// falls back to the legacy single-client config — the handler only
+// passes non-nil clients selected from the pool registry, so the
+// consent URL is always built against the client that will later
+// exchange the code.
+func (s *YouTubeOAuthService) GetLoginURLWithPoolClient(state string, options OAuthLoginOptions, client *YouTubeOAuthClientConfig) string {
+	clientID, redirectURI := s.cfg.Auth.YouTubeClientID, s.cfg.Auth.YouTubeRedirectURI
+	if client != nil {
+		clientID, redirectURI = client.ClientID, client.RedirectURI
+	}
 	params := url.Values{}
-	params.Set("client_id", s.cfg.Auth.YouTubeClientID)
-	params.Set("redirect_uri", s.cfg.Auth.YouTubeRedirectURI)
+	params.Set("client_id", clientID)
+	params.Set("redirect_uri", redirectURI)
 	params.Set("state", state)
 	// Bug #3 fix: pass the canonical scope set (no yt-analytics
 	// scopes) directly. See youtubeOAuthScopes above for the full
@@ -214,9 +237,20 @@ func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuth
 }
 
 func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
-	slog.Info("YouTube: exchanging code for token")
+	return s.HandleCallbackWithClient(ctx, state, code, nil)
+}
 
-	tokenResp, err := s.exchangeCodeForToken(ctx, code)
+// HandleCallbackWithClient exchanges the authorization code using the
+// given pool client (YouTube OAuth Client Pool). The callback MUST use
+// the client that built the consent URL — the authorization code was
+// issued against that client_id + redirect_uri and Google rejects an
+// exchange against a different client. The pkg/api handler resolves the
+// client from the signed state's oauth_client_key and passes it here;
+// a nil client falls back to the legacy single-client config.
+func (s *YouTubeOAuthService) HandleCallbackWithClient(ctx context.Context, state, code string, client *YouTubeOAuthClientConfig) (*models.PlatformProfile, *models.TokenData, error) {
+	slog.Info("YouTube: exchanging code for token", "oauth_client_key", clientKeyForLog(client))
+
+	tokenResp, err := s.exchangeCodeForTokenWithClient(ctx, code, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("youtube token exchange: %w", err)
 	}
@@ -238,6 +272,16 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 	}
 
 	return profile, tokenData, nil
+}
+
+// clientKeyForLog returns a log-safe pool-client label: the client's
+// Key when present, the legacy marker otherwise. Never includes
+// credential material.
+func clientKeyForLog(client *YouTubeOAuthClientConfig) string {
+	if client == nil {
+		return "legacy_single_client"
+	}
+	return client.Key
 }
 
 // Revoke calls Google's OAuth 2.0 token revocation endpoint. It remains as
@@ -356,12 +400,25 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 }
 
 func (s *YouTubeOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*youtubeTokenResponse, error) {
+	return s.exchangeCodeForTokenWithClient(ctx, code, nil)
+}
+
+// exchangeCodeForTokenWithClient performs the authorization-code
+// exchange against the given pool client. A nil client falls back to
+// the legacy single-client config; a non-nil client supplies its own
+// client_id / client_secret / redirect_uri (the redirect_uri must match
+// the one registered for that client on the Google Cloud console).
+func (s *YouTubeOAuthService) exchangeCodeForTokenWithClient(ctx context.Context, code string, client *YouTubeOAuthClientConfig) (*youtubeTokenResponse, error) {
+	clientID, clientSecret, redirectURI := s.cfg.Auth.YouTubeClientID, s.cfg.Auth.YouTubeClientSecret, s.cfg.Auth.YouTubeRedirectURI
+	if client != nil {
+		clientID, clientSecret, redirectURI = client.ClientID, client.ClientSecret, client.RedirectURI
+	}
 	body := url.Values{}
-	body.Set("client_id", s.cfg.Auth.YouTubeClientID)
-	body.Set("client_secret", s.cfg.Auth.YouTubeClientSecret)
+	body.Set("client_id", clientID)
+	body.Set("client_secret", clientSecret)
 	body.Set("code", code)
 	body.Set("grant_type", "authorization_code")
-	body.Set("redirect_uri", s.cfg.Auth.YouTubeRedirectURI)
+	body.Set("redirect_uri", redirectURI)
 
 	return s.postTokenRequest(ctx, body)
 }

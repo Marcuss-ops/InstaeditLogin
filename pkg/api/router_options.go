@@ -329,11 +329,27 @@ func WithChannelAnalyticsService(s *ChannelAnalyticsService) RouterOption {
 type RouterOption func(*Router)
 
 // WithConnectLinkNonceStore wires the store used to persist and
-// atomically consume connect-link nonces. When nil, replay
-// protection is disabled (tests and legacy deployments).
+// atomically consume connect-link nonces (and the signed oauth-flow
+// state nonces issued by handleLogin when a YouTube OAuth Client Pool
+// is configured). When nil, replay protection is disabled (tests and
+// legacy deployments).
 func WithConnectLinkNonceStore(store ConnectLinkNonceStore) RouterOption {
 	return func(r *Router) {
 		r.connectLinkNonceStore = store
+	}
+}
+
+// WithYouTubeOAuthClientRegistry wires the YouTube OAuth Client Pool
+// registry used by handleLogin to select the pool client that issues
+// the next grant and by handleCallback to resolve the oauth_client_key
+// carried in the signed state. When nil (the default), the legacy
+// single-client flow is preserved: cookie-backed CSRF state + the
+// cfg.Auth.YouTubeClientID exchange path. Production wiring builds the
+// registry via services.NewYouTubeOAuthClientRegistryFromConfig(cfg)
+// whenever YOUTUBE_OAUTH_CLIENT_A/B_* env vars are configured.
+func WithYouTubeOAuthClientRegistry(reg *services.YouTubeOAuthClientRegistry) RouterOption {
+	return func(r *Router) {
+		r.youtubeOAuthClientRegistry = reg
 	}
 }
 

@@ -205,10 +205,23 @@ type Router struct {
 	externalDeliveries ExternalDeliveryStore
 
 	// connectLinkNonceStore persists the jti (RegisteredClaims.ID)
-	// embedded in each admin connect-link state JWT. The jti is
-	// consumed atomically on first callback so a link can only be
-	// used once within its 30-minute validity window.
+	// embedded in each admin connect-link state JWT (and in the
+	// signed oauth-flow states issued by handleLogin when a YouTube
+	// OAuth Client Pool is configured). The jti is consumed
+	// atomically on first callback so a state can only be used once
+	// within its validity window.
 	connectLinkNonceStore ConnectLinkNonceStore
+
+	// youtubeOAuthClientRegistry (YouTube OAuth Client Pool) resolves
+	// and selects the optional A/B Google OAuth clients used to spread
+	// refresh tokens (Google caps them at 100 per account+client).
+	// Wired via WithYouTubeOAuthClientRegistry; nil keeps the legacy
+	// single-client flow (cookie-backed CSRF state + cfg.Auth.
+	// YouTubeClientID). When non-nil, handleLogin selects a pool
+	// client and bakes it into a signed short-lived state JWT, and
+	// handleCallback exchanges the code with EXACTLY that client
+	// (never re-selects at callback time).
+	youtubeOAuthClientRegistry *services.YouTubeOAuthClientRegistry
 
 	// veloxBFFClient (P2 Velox BFF) is the typed client used by
 	// the user-facing /api/v1/velox/* routes (jobs, workers, assets).
