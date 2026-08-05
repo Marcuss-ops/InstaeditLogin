@@ -255,6 +255,7 @@ jobs:
                 "status": 308
               },
               { "handle": "filesystem" },
+              { "src": "/api/(.*)", "dest": "https://api.instaedit.org/api/$1" },
               { "src": "/(.*)", "dest": "/index.html" }
             ]
           }
