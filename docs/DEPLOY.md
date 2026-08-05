@@ -312,6 +312,50 @@ truth.
 
 ## 5. Docker Compose deployment
 
+> **⚠️ Actual VPS production configuration (differs from the canonical shape).**
+> The canonical runbook deploys with `docker-compose.production.yml` and
+> `/opt/instaedit/secrets/.env.production`. **The production VPS that currently
+> serves `api.instaedit.org` does not use that shape.** The live stack
+> (`pierone@51.91.11.36`, repo `~/Projects/company/InstaeditLogin`) runs:
+>
+> ```text
+> compose files : docker-compose.yml + docker-compose.local.yml
+> env file     : INSTAEDIT_ENV_FILE=.env.dev  (holds MINIO_ROOT_* and the
+>                API_HOST_PORT override)
+> api binding  : 127.0.0.1:${API_HOST_PORT:-8080}:8080  → must stay 8080
+> Caddy target : api.instaedit.org → 127.0.0.1:8080
+> ```
+>
+> The effective release command on that host is:
+>
+> ```bash
+> cd ~/Projects/company/InstaeditLogin
+> git pull --ff-only origin main
+> INSTAEDIT_ENV_FILE=.env.dev docker compose \
+>   --env-file .env.dev \
+>   -f docker-compose.yml -f docker-compose.local.yml \
+>   config --quiet
+> INSTAEDIT_ENV_FILE=.env.dev docker compose \
+>   --env-file .env.dev \
+>   -f docker-compose.yml -f docker-compose.local.yml \
+>   up -d --build
+> ```
+>
+> **Orphaned-binary pitfall (incident 2026-08-05):** Caddy only ever talks to
+> `127.0.0.1:8080`. If `API_HOST_PORT` drifts from `8080` (it was `8082`), the
+> rebuilt container publishes elsewhere while Caddy keeps proxying to the old
+> port — where an orphaned single-process dev binary
+> (`/usr/local/bin/instaeditlogin-dev`, launched by the deprecated
+> `instaeditlogin.service` systemd unit) shadows the stack and serves stale
+> code, so **new API routes return 404**. Before deploying, verify the port
+> owner and remove the stale unit:
+>
+> ```bash
+> ss -ltnp | grep ':8080'                   # must be the Compose api container
+> pgrep -af instaeditlogin-dev              # must be empty; else:
+> sudo systemctl disable --now instaeditlogin.service
+> ```
+
 ### 5.1 First deployment
 
 Run the migration-gated stack from the repository root:
@@ -655,6 +699,7 @@ state, migration completion, Caddy routing, and the frontend API base URL.
 | API is unreachable | DNS, firewall, `systemctl status caddy`, Caddy validation | Fix DNS/firewall/Caddy before changing application containers |
 | Uploads fail | MinIO health/logs, S3 env names, bucket initialization | Correct MinIO credentials/endpoint and recreate `api`/`worker` |
 | Frontend calls the wrong host | Vercel production `VITE_API_BASE_URL`, published asset | Correct the Vercel variable and redeploy the frontend |
+| New API routes return 404 after a deploy | `ss -ltnp \| grep :8080` (who owns the port), `pgrep -af instaeditlogin-dev`, `docker port api`, `API_HOST_PORT` in `.env.dev` | Kill the orphaned dev binary, `sudo systemctl disable --now instaeditlogin.service`, recreate `api` with `API_HOST_PORT=8080` (see §5 note) |
 | Worker is idle | worker logs, database connectivity, pending job state | Recreate `worker` only after confirming API and migrations are healthy |
 
 Do not solve a deployment failure by publishing private service ports or by
