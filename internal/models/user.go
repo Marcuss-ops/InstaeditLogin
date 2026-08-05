@@ -51,6 +51,7 @@ const (
 	AccountStatusReauthRequired = "reauth_required"
 	AccountStatusRevoked        = "revoked"
 	AccountStatusDisconnected   = "disconnected"
+	AccountStatusDeleted        = "deleted"
 	AccountStatusError          = "error"
 	// AccountStatusPendingAuthorization is the reset state stamped
 	// on rows imported via the CSV operator path (P2 — admin

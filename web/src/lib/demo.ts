@@ -214,6 +214,17 @@ export function handleDemoRequest(
     return json({ ok: true }, 204);
   }
 
+  // Permanent delete (P1): the real endpoint tombstones the account row
+  // (kept for FK integrity) but removes it from every app surface; the demo
+  // list mirrors that by dropping it entirely.
+  const deleteDataMatch = /^\/api\/v1\/accounts\/(\d+)\/data$/.exec(path);
+  if (deleteDataMatch && method === "DELETE") {
+    const id = Number(deleteDataMatch[1]);
+    const idx = demoAccounts.findIndex((a) => a.id === id);
+    if (idx >= 0) demoAccounts.splice(idx, 1);
+    return json({ ok: true }, 204);
+  }
+
   // "Rimuovi dalla cartella": dedicated DELETE for a single membership.
   // The demo aggregate stays read-only, so the write is acknowledged as
   // a no-op success (mirrors the real 204 endpoint contract).

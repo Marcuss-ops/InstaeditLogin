@@ -317,6 +317,11 @@ type mockUserStore struct {
 	disconnectPlatformAccountFn          func(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
 	disconnectOAuthGrantFn               func(ctx context.Context, oauthConnectionID int64) error
 	disconnectOAuthGrantWithRevocationFn func(ctx context.Context, oauthConnectionID int64, revoke func(context.Context, *sql.Tx) error) error
+	// permanentlyDeleteAccountFn models the production permanent-delete /
+	// tombstone transaction (DELETE /accounts/{id}/data). Default (nil fn)
+	// reports handled=false so the handler falls back to the tombstone-via-
+	// UpdatePlatformAccount path, mirroring secureDisconnectStore.
+	permanentlyDeleteAccountFn func(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (handled bool, err error)
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -444,6 +449,21 @@ func (m *mockUserStore) DisconnectOAuthGrantWithAccountRevocationTx(ctx context.
 		return err
 	}
 	return m.DisconnectOAuthGrantTx(ctx, oauthConnectionID)
+}
+
+func (m *mockUserStore) PermanentlyDeleteAccountTx(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (bool, error) {
+	if m.permanentlyDeleteAccountFn != nil {
+		return m.permanentlyDeleteAccountFn(ctx, accountID, revoke)
+	}
+	// Default: run the revoke callback (mirrors the production ordering) and
+	// report handled=false so the handler uses the UpdatePlatformAccount
+	// tombstone fallback (the legacy path, like secureDisconnectStore).
+	if revoke != nil {
+		if err := revoke(ctx, nil); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.

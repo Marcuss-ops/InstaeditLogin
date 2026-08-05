@@ -10,7 +10,10 @@
 //	                          handleUpdateAccount (metadata PATCH)
 //	accounts_write_handlers.go — this file: auditAccountEvent (shared audit
 //	                          helper used by validate/reauth/disconnect) +
-//	                          handleDeleteAccount (soft-disconnect)
+//	                          handleDeleteAccount (deprecated 410) +
+//	                          handleDisconnectAccount (explicit soft
+//	                          disconnect) + handleDeleteAccountData
+//	                          (permanent delete / tombstone)
 package api
 
 import (
@@ -193,6 +196,136 @@ func writeOAuthGrantDisconnectError(w http.ResponseWriter, err error) {
 // route answers 410 Gone with guidance instead of silently soft-deleting.
 func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 	writeError(w, http.StatusGone, "DELETE /api/v1/accounts/{id} is removed; use POST /api/v1/accounts/{id}/disconnect (disconnect, keeps history) or DELETE /api/v1/accounts/{id}/data (permanent delete)")
+}
+
+// permanentAccountDeleteStore is the optional repository capability behind
+// DELETE /api/v1/accounts/{id}/data. Production's UserRepository tombstones
+// the account and removes every channel-scoped artifact (groups, workspace
+// channels, snapshots, future jobs) in one transaction, revoking the shared
+// Google grant only when this is the last active channel. The guarded
+// fallback below (tombstone via UpdatePlatformAccount) is TEST-ONLY — it
+// flips the row but performs no channel-scoped cleanup, exactly like the
+// secureDisconnectStore fallback.
+type permanentAccountDeleteStore interface {
+	PermanentlyDeleteAccountTx(ctx context.Context, accountID int64, revoke func(context.Context, *sql.Tx) error) (handled bool, err error)
+}
+
+// writeAccountDeleteError maps repository errors from the permanent-delete
+// path. Remote revocation failures reuse the typed OAuth-grant mapping
+// (503 transient / 502 permanent); local failures get a delete-specific
+// 500 message.
+func writeAccountDeleteError(w http.ResponseWriter, err error) {
+	var revocationErr *services.OAuthGrantRevocationError
+	if errors.As(err, &revocationErr) {
+		if revocationErr.IsTransient() {
+			if revocationErr.RetryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(int(revocationErr.RetryAfter/time.Second)))
+			}
+			writeError(w, http.StatusServiceUnavailable, "remote OAuth revocation is temporarily unavailable; retry later")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "remote OAuth revocation failed")
+		return
+	}
+	if strings.Contains(err.Error(), "token is unavailable") {
+		writeError(w, http.StatusServiceUnavailable, "OAuth grant revocation token is unavailable")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "failed to permanently delete account")
+}
+
+// handleDeleteAccountData is the permanent-delete / tombstone endpoint:
+// DELETE /api/v1/accounts/{id}/data. It is deliberately STRONGER than the
+// soft disconnect:
+//
+//  1. loadOwnAccountByID (auth + ownership + 404 on cross-tenant).
+//  2. The repository runs one transaction that locks the account row (and
+//     the shared grant, if any), removes the account from every group and
+//     from the publishable destinations (workspace_channels, which also
+//     cascades thumbnail assignments), deletes its account snapshots,
+//     cancels its future jobs (post_targets → draft + parent aggregates
+//     recomputed), and tombstones the row (status='deleted',
+//     username='[deleted]', metadata='{}'). The row is NOT physically
+//     deleted: historical publications (post_targets, livestreams,
+//     thumbnail_assignments) keep referencing it, so the tombstone keeps
+//     those foreign keys intact while the account disappears from every
+//     normal query (GET /accounts already hides account_state=deleted).
+//  3. Shared-grant awareness (migrations 084/085): when this is the LAST
+//     active channel on its oauth_connection, the grant is revoked
+//     remotely (YouTube, best-effort wiring via the vault TX reader),
+//     its token rows are deleted and the oauth_connections row is
+//     removed. When an active sibling still uses the grant, BOTH the grant
+//     and the shared tokens are preserved so the sibling keeps working.
+//  4. Outbox (platform_account.deleted) + audit (account_deleted) are
+//     written inside the same transaction.
+//
+// A remote-revocation failure rolls the whole delete back and surfaces a
+// typed 502/503; the local tombstone never silently proceeds with a live
+// Google grant.
+func (r *Router) handleDeleteAccountData(w http.ResponseWriter, req *http.Request) {
+	id, ok := parsePathIDAsInt64(w, req, "id")
+	if !ok {
+		return
+	}
+	account, _, ok := r.loadOwnAccountByID(w, req, id)
+	if !ok {
+		return
+	}
+	ctx := req.Context()
+
+	// Revoke callback (YouTube + vault TX reader wired): the repository
+	// invokes it ONLY when this channel is the last active one on the grant
+	// (and only if the account actually has an oauth_connection), while the
+	// grant lock is held and before the token rows are removed.
+	var revoke func(context.Context, *sql.Tx) error
+	if account.OAuthConnectionID != nil && *account.OAuthConnectionID > 0 &&
+		account.Platform == models.PlatformYouTube && r.youtubeRevoker != nil {
+		if reader, ok := r.vault.(RefreshTokenTxReader); ok {
+			revoke = func(ctx context.Context, tx *sql.Tx) error {
+				refreshToken, err := reader.GetRefreshTokenForOAuthConnectionTx(ctx, tx, *account.OAuthConnectionID)
+				if err != nil || refreshToken == "" {
+					return fmt.Errorf("OAuth grant revocation token is unavailable")
+				}
+				revokeCtx, cancel := context.WithTimeout(ctx, services.OAuthGrantRevocationTimeout)
+				defer cancel()
+				err = r.youtubeRevoker.Revoke(revokeCtx, refreshToken)
+				if err == nil || errors.Is(err, services.OAuthGrantRevocationAlreadyCompleted) {
+					return nil
+				}
+				var revocationErr *services.OAuthGrantRevocationError
+				if !errors.As(err, &revocationErr) {
+					return &services.OAuthGrantRevocationError{Class: services.OAuthGrantRevocationPermanent, Cause: err}
+				}
+				return err
+			}
+		}
+	}
+
+	if store, ok := r.userRepo.(permanentAccountDeleteStore); ok {
+		handled, err := store.PermanentlyDeleteAccountTx(ctx, account.ID, revoke)
+		if err != nil {
+			writeAccountDeleteError(w, err)
+			return
+		}
+		if handled {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	// Test/legacy fallback: tombstone the in-memory account and persist the
+	// status flip. No channel-scoped cleanup here — the real cleanup lives
+	// in the production repository transaction (see the interface comment).
+	account.Status = models.AccountStatusDeleted
+	account.Username = "[deleted]"
+	account.Metadata = models.Metadata{}
+	account.LastErrorCode = "DELETED"
+	account.LastErrorMessage = "account permanently deleted by user"
+	if err := r.userRepo.UpdatePlatformAccount(account); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to permanently delete account: "+err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleDisconnectAccount soft-disconnects a platform account — the

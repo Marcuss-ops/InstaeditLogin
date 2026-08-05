@@ -26,7 +26,7 @@ Providers: `meta`, `tiktok`, `twitter`, `youtube`, `linkedin`.
 | POST | `/api/v1/accounts/{id}/disconnect` | Explicit channel disconnect: `status=disconnected` (row kept for audit), removal from all groups and publishable destinations, future jobs cancelled (parent aggregates recomputed), shared Google grant/token preserved while an active sibling channel remains; 204 on success |
 | DELETE | `/api/v1/accounts/{id}` | **Deprecated** — answered with `410 Gone` and guidance; use `POST /api/v1/accounts/{id}/disconnect` (soft) or `DELETE /api/v1/accounts/{id}/data` (permanent, P1) |
 | DELETE | `/api/v1/accounts/{id}/oauth-grant` | Revoke a Google account and every channel sharing its grant (YouTube only); 204 on success |
-| DELETE | `/api/v1/accounts/{id}/data` | Permanent account deletion / tombstone (P1, not yet implemented) |
+| DELETE | `/api/v1/accounts/{id}/data` | Permanent account deletion / tombstone: `status=deleted`, `username=[deleted]`, `metadata={}` (row kept for FK integrity of historical publications), removal from groups/workspace channels/snapshots, future jobs cancelled, Google grant revoked + tokens/`oauth_connections` removed only when this is the last active channel of the grant; 204 on success |
 
 ## Workspaces
 
