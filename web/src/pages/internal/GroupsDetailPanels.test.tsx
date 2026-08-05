@@ -53,7 +53,7 @@ describe("GroupDetailPanel batch settings", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Remove channel-two from group/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/groups/7/settings"),
@@ -65,7 +65,7 @@ describe("GroupDetailPanel batch settings", () => {
       }),
     ));
     expect(onSaved).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: /Remove channel-two from group/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Rimuovi channel-two dalla cartella/i })).not.toBeInTheDocument();
   });
 
   it("saves language and remaining membership settings", async () => {

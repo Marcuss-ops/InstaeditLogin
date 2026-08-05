@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
+import { ChannelActions } from "../../features/channels/components/ChannelActions";
 import { PLATFORM_GRADIENT, type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 
@@ -218,7 +219,7 @@ export function GroupDetailPanel({
                   {LANGUAGE_OPTIONS.map(({ code, flag, name }) => <option key={code} value={code}>{flag} {name}</option>)}
                 </select>
                 {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]}>!</span> : null}
-                <button type="button" onClick={() => void removeAccount(a.id)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-red-500/15 hover:text-red-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Remove ${a.username} from group`} title="Rimuovi dal gruppo"><Trash2 size={14} /></button>
+                <button type="button" onClick={() => void removeAccount(a.id)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-red-500/15 hover:text-red-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username} dalla cartella`} title="Rimuovi dalla cartella"><Trash2 size={14} /></button>
               </div>
             ))}
           </div>
@@ -239,7 +240,7 @@ export function AccountDetailPanel({
   onClose: () => void;
   onUpdated: () => void;
 }) {
-  const [busy, setBusy] = useState<null | "reconnect" | "validate" | "remove">(null);
+  const [busy, setBusy] = useState<null | "reconnect" | "validate">(null);
   const [details, setDetails] = useState<{ user_id?: number; posts?: { queued: number; published: number; failed: number } } | null>(null);
 
   useEffect(() => {
@@ -275,19 +276,15 @@ export function AccountDetailPanel({
     PauseCircle;
 
   const runAction = async (
-    action: "reconnect" | "validate" | "remove",
+    action: "reconnect" | "validate",
     method: string,
     endpoint: string,
     body?: string,
   ) => {
-    if (action === "remove" && !window.confirm(`Disconnect ${account.platform} @${account.username}? This will cancel scheduled posts targeting this account.`)) {
-      return;
-    }
     setBusy(action);
     try {
       await authedFetch(endpoint, { method, body });
       onUpdated();
-      if (action === "remove") onClose();
     } finally {
       setBusy(null);
     }
@@ -333,8 +330,8 @@ export function AccountDetailPanel({
         <StatMini icon={PauseCircle} label="Workspace failed" value={details?.posts?.failed ?? "—"} accent="text-red-300" />
       </div>
 
-      {/* Actions */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {/* Quick actions */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <ActionTile
           icon={RefreshCw}
           label="Reconnect"
@@ -349,13 +346,22 @@ export function AccountDetailPanel({
           onClick={() => void runAction("validate", "POST", `/api/v1/accounts/${account.id}/validate`)}
           busy={busy === "validate"}
         />
-        <ActionTile
-          icon={Trash2}
-          label="Disconnect"
-          description="Removes this account and its tokens."
-          onClick={() => void runAction("remove", "DELETE", `/api/v1/accounts/${account.id}`)}
-          busy={busy === "remove"}
-          danger
+      </div>
+
+      {/* Channel lifecycle actions — three distinct commands, never the
+          same trash icon for different operations (account-lifecycle
+          audit). Disconnect preserves the row and the shared grant;
+          permanent delete and shared-grant revoke are explicit. */}
+      <div className="mt-6">
+        <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa] mb-2">
+          Channel actions
+        </h3>
+        <ChannelActions
+          account={{ id: account.id, platform: account.platform, username: account.username }}
+          onDone={() => {
+            onUpdated();
+            onClose();
+          }}
         />
       </div>
 
@@ -398,14 +404,12 @@ function ActionTile({
   description,
   onClick,
   busy,
-  danger,
 }: {
   icon: ElementType;
   label: string;
   description: string;
   onClick: () => void;
   busy: boolean;
-  danger?: boolean;
 }) {
   return (
     <button
@@ -414,15 +418,13 @@ function ActionTile({
       disabled={busy}
       className={cn(
         "text-left p-4 rounded-xl border transition-colors",
-        danger
-          ? "bg-red-500/[0.08] border-red-500/30 hover:bg-red-500/[0.16] hover:border-red-500/50"
-          : "bg-white/[0.06] border-white/[0.12] hover:bg-white/[0.10] hover:border-white/[0.20]",
+        "bg-white/[0.06] border-white/[0.12] hover:bg-white/[0.10] hover:border-white/[0.20]",
         busy && "opacity-60 cursor-progress",
       )}
     >
       <div className="flex items-center gap-2 mb-1">
-        <Icon size={16} className={danger ? "text-red-300" : "text-white"} />
-        <span className={cn("text-[14px] font-bold", danger ? "text-red-200" : "text-white")}>
+        <Icon size={16} className="text-white" />
+        <span className="text-[14px] font-bold text-white">
           {label}
         </span>
         {busy && <RefreshCw size={12} className="animate-spin text-[#9aa0aa] ml-auto" />}
