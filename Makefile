@@ -1,4 +1,5 @@
 .PHONY: dev stop seed lint lint-check backend-test test-integration \
+        test-integration-db test-integration-worker \
         verify-entrypoint-topology oauth-preflight-check oauth-preflight-test \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
@@ -98,11 +99,24 @@ backend-test:
 # The runtime package's unit tests (WaitReady + WaitReadyMatch)
 # run under `go test -race ./...` via the `backend-test` target — no
 # integration tag needed.
-# This Makefile target is the canonical command invoked by
-# .github/workflows/integration-fast.yml — if you change the command here,
-# CI follows automatically.
+# This Makefile target is the canonical local command; the CI workflow
+# (integration-fast.yml) invokes the two SPLIT targets below so the
+# database lane and the worker+redis lane run on parallel runners
+# instead of one sequential ~90s job. `-count=1` defeats go's test
+# cache (the ephemeral containers must actually exercise the code),
+# and `-v` was dropped — it only added log I/O, not coverage.
 test-integration:
-	go test -tags=integration -v -timeout 10m ./internal/database/... ./internal/worker/... ./internal/testutil/redis/...
+	go test -tags=integration -count=1 -timeout 10m ./internal/database/... ./internal/worker/... ./internal/testutil/redis/...
+
+# Database lane — migrations, order-independence, multi-tenancy.
+test-integration-db:
+	go test -tags=integration -count=1 -timeout 10m ./internal/database/...
+
+# Worker + redis lane — PublishWorker + ReconcileWorker pipeline on
+# testcontainer postgres:17-alpine + real httptest.Server TikTok wire,
+# plus the redis:7-alpine PING/SET/GET smoke.
+test-integration-worker:
+	go test -tags=integration -count=1 -timeout 10m ./internal/worker/... ./internal/testutil/redis/...
 
 # Task 9/10: end-to-end pipeline suite. Spins up Postgres via
 # testcontainers-go + boots in-process httptest fakes for Drive /

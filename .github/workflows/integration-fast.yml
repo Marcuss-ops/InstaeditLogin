@@ -11,11 +11,32 @@
 # disproportionate. The slow lane preserves the coverage; the fast
 # lane preserves the gate.
 #
+# PARALLEL-JOB TOPOLOGY (this revision):
+# The old single `ci` job ran everything sequentially (~5 min wall):
+#   gofmt/vet(21s) → go test -race ./...(116s) → go build → frontend
+#   (64s) → integration testcontainers (94s).
+# It is now split into FIVE parallel jobs so wall time is bounded by
+# the SLOWEST lane (~90-100s) instead of the SUM:
+#   - go-static   : gofmt / vet / entrypoint / loc-check / build /
+#                   oauth-canary (fast checks, no long test runs)
+#   - go-test     : `go test -race` sharded 3-way via a matrix
+#                   (shard-a: pkg/cmd/tests/scripts; shard-b: the
+#                   thumbnailrender monolith ~45s alone; shard-c: the
+#                   rest of internal). 49/49 packages covered — see
+#                   the shard commands' comments.
+#   - frontend    : npm ci + lint + vitest + vite build + uploads the
+#                   web-dist artifact consumed by deploy.yml.
+#   - integration : testcontainers suite split into db / worker+redis
+#                   lanes (each ~30-60s instead of one 94s job).
+#   - test-parse-envfile: fast pure-Python regression (unchanged).
+# The deploy gate still requires the WHOLE workflow to conclude
+# `success` — parallel lanes don't weaken the contract.
+#
 # Coverage (this file):
 #   1. Go files are gofmt-clean (Blocco #3.1 hard requirement).
 #   2. `go vet ./...` produces no output.
-#   3. `go test -race -count=1 -timeout 120s ./...` passes with
-#      the race detector (full unit suite).
+#   3. `go test -race -count=1 -timeout 120s` passes with the race
+#      detector (full unit suite, sharded across 3 parallel jobs).
 #   4. `go build ./...` builds the project end-to-end.
 #   5. Frontend `npm ci` succeeds with the committed lockfile.
 #   6. Frontend `npm run lint` (oxlint) is clean.
@@ -25,8 +46,9 @@
 #      stays in oauth-canary.yml because it requires a fork-PR-
 #      inaccessible repo secret).
 #  10. Integration tests against an ephemeral Postgres via
-#      testcontainers-go pass (`make test-integration`). Covers
-#      TestMigrations_OrderIndependent without a bash migrate step.
+#      testcontainers-go pass (database lane: migrations /
+#      TestMigrations_OrderIndependent; worker+redis lane:
+#      PublishWorker + ReconcileWorker pipeline + redis smoke).
 #  11. Envfile parser regression test (Python, fast).
 #  12. Source-file size regression gate (`make loc-check`): fails when a
 #      tracked go/ts/tsx file GROWS past 800 lines vs. origin/main.
@@ -45,8 +67,8 @@
 name: integration-fast
 
 # Least-privilege: checkout + build + test don't need deploy scopes,
-# but step 8.5 uploads `web/dist` as the `web-dist` artifact that
-# deploy.yml consumes (`vercel deploy --prebuilt`) — and
+# but the frontend job uploads `web/dist` as the `web-dist` artifact
+# that deploy.yml consumes (`vercel deploy --prebuilt`) — and
 # actions/upload-artifact@v4 requires `actions: write` on the token.
 # Deploy credentials (VERCEL_*) stay exclusively in deploy.yml.
 permissions:
@@ -54,10 +76,10 @@ permissions:
   actions: write
 
 # NOTE: GitHub Actions YAML 1.2 treats `on` as a normal string, but
-# some YAML tools (yaml.safe_load in Python ≤1.1 mode, older SDK
-# parsers) interpret `on` as boolean true. Quoting the key makes the
-# file portable across both parsers — matches the sibling conventions in integration-fast.yml + integration-slow.yml (legacy integration.yml retired at this commit)
-# existing convention.
+# some YAML tools (yaml.safe_load in Python ≤1.1 mode, older parsers)
+# interpret `on` as boolean true. Quoting the key makes the file
+# portable across both parsers — matches the sibling conventions in
+# integration-slow.yml (legacy integration.yml retired at this commit).
 "on":
   push:
     branches: [main]
@@ -66,26 +88,30 @@ permissions:
   workflow_dispatch:
 
 # Docker is pre-installed on ubuntu-runners (testcontainers-go relies
-# on it for the Postgres + Redis integration tests in step 10).
-# Runner's default Docker has full socket access in CI; locally the
-# README documents the requirement.
+# on it for the Postgres + Redis integration tests). Runner's default
+# Docker has full socket access in CI; locally the README documents
+# the requirement.
+
+# Cancel in-progress runs in the same group so a fast follow-up push
+# doesn't spawn duplicate runners re-pulling postgres:17-alpine + node
+# modules + Go module cache. Group by workflow + PR number (PR events)
+# OR ref (push events): `github.event.pull_request.number` is 0 outside
+# PR contexts so we OR with github.ref. NOTE: every parallel job shares
+# this same group so ONE new push cancels ALL in-flight lanes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  ci:
+  # ──────────────────────────────────────────────────────────────
+  # go-static — fast checks that don't run the long race suite.
+  # Wall ~35-45s. (Vet takes ~21s; build ~4s; the rest is <1s.)
+  # ──────────────────────────────────────────────────────────────
+  go-static:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # Cancel in-progress runs in the same group so a fast follow-up
-    # push doesn't spawn duplicate runners re-pulling postgres:17-alpine
-    # + node modules + Go module cache. Group by workflow + PR number
-    # (PR events) OR ref (push events): `github.event.pull_request.number`
-    # is 0 outside PR contexts so we OR with github.ref.
-    concurrency:
-      group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
-
     steps:
-      # ─── 1. Checkout ──────────────────────────────────────────────
       # fetch-depth: 0 so `make loc-check` can resolve origin/main as
       # the diff base for the size-regression gate (a shallow checkout
       # would not have the base ref available).
@@ -93,8 +119,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ─── 2. Validate GitHub Actions workflow YAML syntax ────────
-      # Loads every workflow file with PyYAML so a malformed YAML
+      # Validates every workflow file with PyYAML so a malformed YAML
       # check-in fails the build before any expensive job runs.
       - name: Validate workflow YAML syntax
         run: |
@@ -139,20 +164,12 @@ jobs:
           sys.exit(1 if failed else 0)
           PY
 
-      # ─── 3. Go toolchain ──────────────────────────────────────────
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Drive the Go version from go.mod so a future bump
-          # propagates here automatically.
           go-version-file: go.mod
           cache: true
 
-      # ─── 4. Go formatting check (Blocco #3.1 hard requirement) ────
-      # Use `gofmt -l .` to LIST files that would be reformatted
-      # (empty == clean). Output piped to `cat` so the actual
-      # offending filenames show up in the CI log when this fails.
-      # NO `-w` — CI must FAIL not silently rewrite the working tree.
       - name: Check Go formatting (gofmt)
         run: |
           UNFORMATTED=$(gofmt -l .)
@@ -166,60 +183,101 @@ jobs:
           fi
           echo "✓ gofmt clean"
 
-      # ─── 4. Go vet ────────────────────────────────────────────────
       - name: Run go vet
         run: go vet ./...
 
-      # ─── 4.5. Entrypoint topology regression check ───────────────
-      # Confirms production uses api + worker + migrate only while the
-      # deprecated single-process wrapper remains explicit for local recovery.
       - name: Verify entrypoint topology
         run: make verify-entrypoint-topology
 
-      # ─── 4.6. Source-file size regression gate ────────────────────
-      # `make loc-check` fails when a tracked go/ts/tsx file GROWS past
-      # 800 lines relative to origin/main. Diff-based: files already over
-      # the threshold are reported but do not block, so the existing
-      # backlog (see scripts/loc-report.sh) doesn't break CI while any
-      # NEW size regression hard-fails. Local: `make loc-check`;
-      # strict full-tree: `make loc-check LOC_AGAINST=none`.
       - name: Check source-file size regressions (loc-check)
         run: make loc-check
 
-      # ─── 5. Go test -race (full unit suite) ───────────────────────
-      # Equivalent to `make backend-test`. Runs WITHOUT the integration
-      # build tag so a Docker absence on the runner does NOT block
-      # this step. (Integration-tagged tests live below as their own
-      # step that DOES require Docker.)
-      - name: Run Go tests with race detector
-        # No `|| true`: race-detector hits MUST hard-fail the job
-        # (the "workflow fails = deploy doesn't happen" contract).
-        #
-        # Integration-tagged suites in internal/database,
-        # internal/worker and internal/testutil/redis are guarded by
-        # `//go:build integration` at the top of those files; without
-        # the `-tags=integration` flag they compile to empty test
-        # binaries and pass vacuously, so no explicit package-list
-        # filter is needed here.
-        run: go test -race -count=1 -timeout 120s ./...
-
-      # ─── 6. Go build (sanity — works without -tags) ──────────────
       - name: Verify Go build
         run: go build ./...
 
-      # ─── 7. Node toolchain ────────────────────────────────────────
+      - name: OAuth scope canary + secrets coherence smoke
+        run: go test -count=1 ./cmd/oauth-scope-canary/...
+
+      - name: Dump test summary on failure
+        if: failure()
+        run: |
+          echo "=== Likely causes ==="
+          echo "  - gofmt file list detected (rerun 'gofmt -w .' locally then re-push)"
+          echo "  - go vet flagged a suspicious construct (e.g. printf %s on user input)"
+          echo "  - npm ci failure: lockfile out of sync → re-run 'npm install' locally, commit web/package-lock.json"
+          echo "  - npm run lint failure (oxlint): fix in web/, re-push"
+          echo "  - npm run test failure (vitest): fix the failing test"
+          echo "  - npm run build failure (tsc + vite): check the bundle error + type errors"
+          echo "  - loc-check: a tracked file grew past 800 lines vs origin/main — refactor or revert"
+
+  # ──────────────────────────────────────────────────────────────
+  # go-test — `go test -race` sharded across 3 parallel runners.
+  # Rationale: a single 116s race run was the CI bottleneck.
+  #   shard-a: pkg + cmd + tests + scripts          (~25s local)
+  #   shard-b: internal/thumbnailrender — ~45s ALONE (monolith)
+  #   shard-c: the rest of internal                 (~18s local)
+  # Union of the three shards = `go list ./...` exactly (49/49),
+  # verified at authoring time via comm(1). fail-fast: false so one
+  # shard's failure doesn't cancel the other lanes mid-run.
+  # ──────────────────────────────────────────────────────────────
+  go-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [a, b, c]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run Go tests with race detector (shard ${{ matrix.shard }})
+        run: |
+          set -euo pipefail
+          case "${{ matrix.shard }}" in
+            a)
+              # pkg/api + cmd + tests/e2e build-tag stubs + scripts helpers
+              go test -race -count=1 -timeout 120s \
+                ./pkg/... ./cmd/... ./tests/... ./scripts/...
+              ;;
+            b)
+              # thumbnailrender is the single slowest package (~45s local);
+              # giving it its own runner keeps it off the critical path.
+              go test -race -count=1 -timeout 120s ./internal/thumbnailrender/...
+              ;;
+            c)
+              # every internal package EXCEPT thumbnailrender (shard-b owns it).
+              # go list + grep keeps this stable as packages are added/removed.
+              PKGS="$(go list ./internal/... | grep -v '/internal/thumbnailrender')"
+              go test -race -count=1 -timeout 120s $PKGS
+              ;;
+          esac
+
+  # ──────────────────────────────────────────────────────────────
+  # frontend — lint + vitest + vite build, then upload the bundle.
+  # The `web-dist` artifact is consumed by deploy.yml via
+  # `vercel deploy --prebuilt` (no re-build in the deploy job).
+  # ──────────────────────────────────────────────────────────────
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          # Pin to web/package.json's declared engines.node (when
-          # present) else fall back to the current LTS 20. The lockfile
-          # is what `npm ci` actually keys off of; the version here
-          # just sets up cache + binary.
           node-version: 20
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      # ─── 8. Frontend CI block ─────────────────────────────────────
       # `npm ci` (NOT `npm install`) — uses the committed lockfile,
       # fails fast if the lockfile is stale. pretest/prebuild hooks
       # (scripts/generate-favicon-ico.mjs) run automatically as part
@@ -242,8 +300,6 @@ jobs:
           echo
           echo "✓ frontend gateway passed"
 
-
-      # ─── 8.5. Upload frontend bundle (consumed by deploy.yml) ────
       # deploy.yml runs `vercel deploy --prebuilt`, which uploads the
       # bundle built HERE — so the deploy job never re-runs npm ci or
       # tsc/vite build (saves ~1-2 min per deploy). The artifact name
@@ -255,79 +311,66 @@ jobs:
           path: web/dist
           if-no-files-found: error
 
-      # ─── 8.6. OAuth scope canary unit tests (PR-lane only) ────────
-      # The canary binary's *pure-function* test suite runs here so
-      # structural drift (docs/OAUTH-PRODUCTION.md missing a canonical
-      # scope, fly secrets lists incoherent, provider-triple missing)
-      # fails PRs immediately. The LIVE tokeninfo leg is deferred to
-      # the separate .github/workflows/oauth-canary.yml workflow
-      # because it requires a repository secret (DRIVE_OAUTH_CANARY_TOKEN)
-      # that forked PRs cannot bring.
-      - name: OAuth scope canary + secrets coherence smoke
-        run: go test -count=1 ./cmd/oauth-scope-canary/...
+  # ──────────────────────────────────────────────────────────────
+  # integration — testcontainers suite split into two parallel lanes
+  # so neither pays the other's container spin-up + migration runs.
+  #   db      : internal/database — migrations, order-independence,
+  #             multi-tenancy (the heavy lane).
+  #   worker  : internal/worker (Publish+Reconcile pipeline on real
+  #             Postgres + httptest TikTok wire) + redis smoke.
+  # `-count=1` defeats go's test cache so the ephemeral containers
+  # actually exercise the code on every run (matches the previous
+  # semantics of the single Makefile target; `-v` was dropped — it
+  # only added log I/O, not coverage).
+  # ──────────────────────────────────────────────────────────────
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [db, worker]
 
-      # ─── 8.7. OAuth DB preflight script regression ───────────────
-      # Uses a local fake psql client; no production/staging credentials
-      # or database connection are involved.
-      - name: OAuth DB preflight script regression
-        run: make oauth-preflight-test
+    steps:
+      - uses: actions/checkout@v4
 
-      # ─── 9. Integration tests (Postgres via testcontainers-go) ────
-      # Delegates to the Makefile — single source of truth for the
-      # test command. Edit `make test-integration`, not this step.
-      #
-      # Includes internally:
-      #   - TestMigrations_OrderIndependent (postgresql 17-alpine +
-      #     twice-apply fingerprint diff) — covers the user's "apply
-      #     migrations on empty DB + apply again (idempotency)" rule
-      #     WITHOUT a bash migrate step that would hit bootstrap.Wire's
-      #     fail-fast S3 / JWT_SECRET / ENCRYPTION_KEYS validation.
-      #   - PublishWorker + ReconcileWorker pipeline (uses real PG +
-      #     real httptest.Server for the TikTok wire).
-      #   - internal/testutil/redis PING/SET/GET roundtrip (validates
-      #     the runtime abstraction works for non-SQL backends).
-      - name: Run integration tests (database + worker + redis smoke)
-        run: make test-integration
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
-      # ─── 10. Dump test summary on failure ─────────────────────────
-      - name: Dump test summary on failure
+      - name: Run integration tests (${{ matrix.lane }} lane)
+        run: |
+          if [ "${{ matrix.lane }}" = "db" ]; then
+            make test-integration-db
+          else
+            make test-integration-worker
+          fi
+
+      # Integration was historically the flaky lane — keep the operator
+      # hints close to the failure instead of burying them in go-static.
+      - name: Dump integration failure summary
         if: failure()
         run: |
-          echo "=== Likely causes ==="
-          echo "  - gofmt file list detected (rerun 'gofmt -w .' locally then re-push)"
-          echo "  - go vet flagged a suspicious construct (e.g. printf %s on user input)"
-          echo "  - go test -race hit a data race (look at the failing test's stack)"
-          echo "  - npm ci failure: lockfile out of sync → re-run 'npm install' locally, commit web/package-lock.json"
-          echo "  - npm run lint failure (oxlint): fix in web/, re-push"
-          echo "  - npm run test failure (vitest): fix the failing test"
-          echo "  - npm run build failure (tsc + vite): check the bundle error + type errors"
+          echo "=== Integration lane likely causes (${{ matrix.lane }}) ==="
           echo "  - Docker not available on runner (impossible on ubuntu-latest)"
           echo "  - Migration added a column Go model expects (must add to requiredColumns in internal/database/migrations_integration_test.go)"
           echo "  - Migration lost idempotency (a non-IF NOT EXISTS ALTER on re-run)"
           echo "  - Worker integration test hung — check the per-leaf 15s parallel-drain ceiling"
-          echo "  - loc-check: a tracked file grew past 800 lines vs origin/main — refactor or revert"
-          echo
-          echo "Run locally:"
-          echo "  make lint-check"
-          echo "  make loc-check"
-          echo "  make test-integration"
-          echo "  cd web && npm ci && npm run lint && npm run test && npm run build"
+          echo "  - Testcontainer image pull flake (postgres:17-alpine / redis:7-alpine) — re-run"
 
-  # ─── envfile parser regression test (formerly integrated in legacy integration.yml step 8.5; that workflow was retired at the CI-split commit and the test was lifted into this file) ───
+  # ──────────────────────────────────────────────────────────────
+  # Envfile parser regression test (formerly integrated in legacy
+  # integration.yml step 8.5; that workflow was retired at the CI-split
+  # commit and the test was lifted into this file).
   # The archived Fly .env parser in scripts/_parse_envfile.py remains
   # a historical regression fixture only; it is not a deploy/runtime
-  # path. The `python3 scripts/test_parse_envfile.py` Makefile target
-  # was retired alongside the Fly cutover, so CI runs the compatibility
-  # regression directly.
-  # Fast (<1s) pure-python — no Docker / no external services needed.
-  # Mirrors the `integration.yml::test-parse-envfile` shape (legacy file retired at the CI-split commit; the test now lives in this file).
+  # path. Fast (<1s) pure-python — no Docker / no external services.
+  # ──────────────────────────────────────────────────────────────
   test-parse-envfile:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-
-    concurrency:
-      group: test-parse-envfile-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
 
     steps:
       - uses: actions/checkout@v4
