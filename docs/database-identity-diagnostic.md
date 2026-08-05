@@ -75,3 +75,37 @@ Continue with `make oauth-preflight-check` to verify migrations `084/085`,
 token uniqueness, encrypted refresh-token presence, and grant/account status
 consistency. That preflight also reports aggregate results only; it does not
 print token material.
+
+## Inspect duplicate token groups safely
+
+When the preflight reports duplicate grant/token-type groups, run the
+read-only follow-up query with `psql` using credentials supplied by the
+operator's protected environment:
+
+```bash
+# Use a password-free URL and a protected .pgpass (mode 0600).
+# Never put a password-bearing DATABASE_URL in this command.
+PGPASSFILE="$HOME/.pgpass-instaedit" \
+  psql "postgresql://db-host:5432/instaedit?sslmode=verify-full" \
+  -X -q -w -v ON_ERROR_STOP=1 \
+  -f scripts/db/duplicate-token-diagnostic.sql
+```
+
+The result contains only (the connection URL above is illustrative; use the
+operator's protected host/database values without embedding a password):
+
+- `oauth_connection_id`;
+- `token_type`;
+- `token_row_count`.
+
+A healthy database returns zero rows. If `oauth_connection_id` is `NULL`, the
+row represents orphaned/unbound token records grouped together by PostgreSQL;
+this is a binding anomaly and must not be treated as a valid grant.
+ The query never selects, decrypts, or
+prints access tokens, refresh tokens, encrypted ciphertext, usernames, or
+connection secrets. Do not paste the DSN or query output containing production
+identifiers into tickets or chat. Run its static privacy checks with:
+
+```bash
+make duplicate-token-diagnostic-test
+```

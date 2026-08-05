@@ -3,6 +3,7 @@
         test-integration-worker \
         verify-entrypoint-topology oauth-preflight-check oauth-preflight-test \
         installation-identity-diagnostic installation-identity-diagnostic-test \
+        duplicate-token-diagnostic-test \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
@@ -59,6 +60,10 @@ installation-identity-diagnostic:
 # Static and mocked tests for the redacted installation identity check.
 installation-identity-diagnostic-test:
 	./scripts/db/test-installation-identity-diagnostic.sh
+
+# Static privacy and query-shape tests for the duplicate-token diagnostic.
+duplicate-token-diagnostic-test:
+	./scripts/db/test-duplicate-token-diagnostic.sh
 
 # HTTP server only (cmd/api). No workers spawned.
 run-api:
