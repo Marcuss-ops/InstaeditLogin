@@ -30,21 +30,38 @@ func Load() (*Config, error) {
 			SentryRelease:     getEnv("SENTRY_RELEASE", ""),
 		},
 		Auth: AuthConfig{
-			MetaAppID:               getEnv("META_APP_ID", ""),
-			MetaAppSecret:           getEnv("META_APP_SECRET", ""),
-			MetaRedirectURI:         getEnv("META_REDIRECT_URI", ""),
-			InstagramRedirectURI:    getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
-			FacebookRedirectURI:     getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
-			ThreadsRedirectURI:      getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
-			TikTokClientID:          getEnv("TIKTOK_CLIENT_ID", ""),
-			TikTokClientSecret:      getEnv("TIKTOK_CLIENT_SECRET", ""),
-			TikTokRedirectURI:       getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
-			XClientID:               getEnv("X_CLIENT_ID", ""),
-			XClientSecret:           getEnv("X_CLIENT_SECRET", ""),
-			XRedirectURI:            getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
-			YouTubeClientID:         getEnv("YOUTUBE_CLIENT_ID", ""),
-			YouTubeClientSecret:     getEnv("YOUTUBE_CLIENT_SECRET", ""),
-			YouTubeRedirectURI:      getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+			MetaAppID:            getEnv("META_APP_ID", ""),
+			MetaAppSecret:        getEnv("META_APP_SECRET", ""),
+			MetaRedirectURI:      getEnv("META_REDIRECT_URI", ""),
+			InstagramRedirectURI: getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
+			FacebookRedirectURI:  getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
+			ThreadsRedirectURI:   getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
+			TikTokClientID:       getEnv("TIKTOK_CLIENT_ID", ""),
+			TikTokClientSecret:   getEnv("TIKTOK_CLIENT_SECRET", ""),
+			TikTokRedirectURI:    getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
+			XClientID:            getEnv("X_CLIENT_ID", ""),
+			XClientSecret:        getEnv("X_CLIENT_SECRET", ""),
+			XRedirectURI:         getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
+			YouTubeClientID:      getEnv("YOUTUBE_CLIENT_ID", ""),
+			YouTubeClientSecret:  getEnv("YOUTUBE_CLIENT_SECRET", ""),
+			YouTubeRedirectURI:   getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+			// YouTube OAuth Client Pool — optional second OAuth client
+			// used to spread YouTube refresh tokens across two clients
+			// (Google caps refresh tokens per account+client pair at
+			// 100). Each pool client is independent: all three fields
+			// must be set together, or none.
+			YouTubeOAuthClientPool: YouTubeOAuthClientPoolConfig{
+				ClientA: YouTubeOAuthPoolClient{
+					ClientID:     getEnv("YOUTUBE_OAUTH_CLIENT_A_ID", ""),
+					ClientSecret: getEnv("YOUTUBE_OAUTH_CLIENT_A_SECRET", ""),
+					RedirectURI:  getEnv("YOUTUBE_OAUTH_CLIENT_A_REDIRECT_URI", ""),
+				},
+				ClientB: YouTubeOAuthPoolClient{
+					ClientID:     getEnv("YOUTUBE_OAUTH_CLIENT_B_ID", ""),
+					ClientSecret: getEnv("YOUTUBE_OAUTH_CLIENT_B_SECRET", ""),
+					RedirectURI:  getEnv("YOUTUBE_OAUTH_CLIENT_B_REDIRECT_URI", ""),
+				},
+			},
 			GoogleDriveClientID:     getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
 			GoogleDriveClientSecret: getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
 			GoogleDriveRedirectURI:  getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),

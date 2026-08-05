@@ -393,6 +393,100 @@ func TestLoad_AppModeNormalizesWhitespaceAndCase(t *testing.T) {
 	}
 }
 
+// TestLoad_YouTubeOAuthClientPool_EnvRoundTrip pins the env contract of
+// the YouTube OAuth Client Pool: each pool client (A/B) loads its three
+// fields verbatim from YOUTUBE_OAUTH_CLIENT_{A,B}_{ID,SECRET,REDIRECT_URI}.
+func TestLoad_YouTubeOAuthClientPool_EnvRoundTrip(t *testing.T) {
+	t.Setenv("JWT_SECRET", validJWTSecret())
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	const redirect = "https://instaedit.example.com/oauth/youtube/callback"
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_ID", "client-a-id")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_SECRET", strings.Repeat("a", 32))
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_REDIRECT_URI", redirect)
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_B_ID", "client-b-id")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_B_SECRET", strings.Repeat("b", 32))
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_B_REDIRECT_URI", redirect)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with pool env: want nil, got %v", err)
+	}
+	pool := cfg.Auth.YouTubeOAuthClientPool
+	if pool.ClientA.ClientID != "client-a-id" || pool.ClientA.ClientSecret != strings.Repeat("a", 32) || pool.ClientA.RedirectURI != redirect {
+		t.Errorf("pool A round-trip failed: %+v", pool.ClientA)
+	}
+	if pool.ClientB.ClientID != "client-b-id" || pool.ClientB.ClientSecret != strings.Repeat("b", 32) || pool.ClientB.RedirectURI != redirect {
+		t.Errorf("pool B round-trip failed: %+v", pool.ClientB)
+	}
+}
+
+// TestLoad_YouTubeOAuthClientPool_UnsetDefaultsEmpty pins the default:
+// with no pool env vars the pool is empty and the legacy single-client
+// YouTube path stays authoritative.
+func TestLoad_YouTubeOAuthClientPool_UnsetDefaultsEmpty(t *testing.T) {
+	t.Setenv("JWT_SECRET", validJWTSecret())
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_ID", "")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_SECRET", "")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_REDIRECT_URI", "")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_B_ID", "")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_B_SECRET", "")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_B_REDIRECT_URI", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() without pool env: want nil, got %v", err)
+	}
+	if cfg.Auth.YouTubeOAuthClientPool.ClientA.ClientID != "" || cfg.Auth.YouTubeOAuthClientPool.ClientA.ClientSecret != "" {
+		t.Errorf("pool A must default to empty, got %+v", cfg.Auth.YouTubeOAuthClientPool.ClientA)
+	}
+	if cfg.Auth.YouTubeOAuthClientPool.ClientB.ClientID != "" || cfg.Auth.YouTubeOAuthClientPool.ClientB.ClientSecret != "" {
+		t.Errorf("pool B must default to empty, got %+v", cfg.Auth.YouTubeOAuthClientPool.ClientB)
+	}
+}
+
+// TestLoad_YouTubeOAuthClientPool_HalfConfiguredRejected pins the
+// fail-at-boot contract: a pool client with only some fields set is a
+// misconfiguration and must be rejected, naming the offending env var
+// (never the secret value).
+func TestLoad_YouTubeOAuthClientPool_HalfConfiguredRejected(t *testing.T) {
+	t.Setenv("JWT_SECRET", validJWTSecret())
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_ID", "client-a-id")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_SECRET", "")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_REDIRECT_URI", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() with half-configured pool A: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "YOUTUBE_OAUTH_CLIENT_A_SECRET is required") {
+		t.Errorf("error must name the missing env var; got %v", err)
+	}
+}
+
+// TestLoad_YouTubeOAuthClientPool_ShortSecretRejected pins the secret
+// length gate: a pool secret below 32 chars fails at boot, and the
+// error reports the length without echoing the secret itself.
+func TestLoad_YouTubeOAuthClientPool_ShortSecretRejected(t *testing.T) {
+	t.Setenv("JWT_SECRET", validJWTSecret())
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_ID", "client-a-id")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_SECRET", "short-secret")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_REDIRECT_URI", "https://instaedit.example.com/oauth/youtube/callback")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() with short pool secret: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "YOUTUBE_OAUTH_CLIENT_A_SECRET must be at least 32 characters") {
+		t.Errorf("error must name the env var and the length gate; got %v", err)
+	}
+	if strings.Contains(err.Error(), "short-secret") {
+		t.Errorf("error must never echo the secret value; got %v", err)
+	}
+}
+
 func TestLoad_Production_RequiresMetricsBasicAuth(t *testing.T) {
 	// Provide the minimum required env vars so the only failure path
 	// under test is the production metrics-auth check.

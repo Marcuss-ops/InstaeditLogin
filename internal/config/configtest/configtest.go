@@ -34,6 +34,12 @@ func ClearOptionalOAuthEnv() {
 		"X_CLIENT_SECRET",
 		"YOUTUBE_CLIENT_ID",
 		"YOUTUBE_CLIENT_SECRET",
+		"YOUTUBE_OAUTH_CLIENT_A_ID",
+		"YOUTUBE_OAUTH_CLIENT_A_SECRET",
+		"YOUTUBE_OAUTH_CLIENT_A_REDIRECT_URI",
+		"YOUTUBE_OAUTH_CLIENT_B_ID",
+		"YOUTUBE_OAUTH_CLIENT_B_SECRET",
+		"YOUTUBE_OAUTH_CLIENT_B_REDIRECT_URI",
 		"GOOGLE_DRIVE_CLIENT_ID",
 		"GOOGLE_DRIVE_CLIENT_SECRET",
 		"LINKEDIN_CLIENT_ID",
@@ -42,4 +48,8 @@ func ClearOptionalOAuthEnv() {
 	for _, v := range vars {
 		os.Setenv(v, "")
 	}
+	// Tests that explicitly enable YouTube often use APP_ENV=production
+	// to exercise production validation. Give those fixtures the canonical
+	// HTTPS callback while preserving the real loader's local default.
+	os.Setenv("YOUTUBE_REDIRECT_URI", "https://api.instaedit.org/api/v1/auth/youtube/callback")
 }

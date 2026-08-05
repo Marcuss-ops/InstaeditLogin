@@ -149,6 +149,14 @@ func (c *Config) validate() error {
 	if err := c.validateOptionalPlatform("YOUTUBE", c.Auth.YouTubeClientID, c.Auth.YouTubeClientSecret); err != nil {
 		return err
 	}
+	if err := c.validateYouTubeOAuthClientPool(); err != nil {
+		return err
+	}
+	if c.Auth.YouTubeClientID != "" {
+		if err := validateYouTubeRedirectURI(c.Auth.YouTubeRedirectURI, c.HTTP.AppEnv); err != nil {
+			return err
+		}
+	}
 
 	// P1#6 — YouTube resumable-upload tuning. Gated behind YouTube being
 	// enabled (the same pattern as validateOptionalPlatform above): when
@@ -238,6 +246,77 @@ func (c *Config) validate() error {
 		return err
 	}
 
+	return nil
+}
+
+// validateYouTubeOAuthClientPool enforces the YouTube OAuth Client Pool
+// contract: each pool client (A/B) is either fully configured (ID +
+// secret + redirect URI, secret ≥ 32 chars) or completely absent.
+// Half-configured pool clients fail at boot rather than surfacing at
+// the first OAuth redirect, mirroring validateOptionalPlatform. The
+// secret value is never echoed in errors — only its presence/length.
+// validateYouTubeRedirectURI enforces the production callback contract.
+// Local development and staging intentionally retain their existing HTTP
+// localhost/test-host compatibility; production must use the exact public
+// InstaEdit callback endpoint registered in Google Cloud.
+func validateYouTubeRedirectURI(rawURI, appEnv string) error {
+	const callbackPath = "/api/v1/auth/youtube/callback"
+	const canonicalHost = "api.instaedit.org"
+
+	if appEnv != "production" {
+		return nil
+	}
+	uri, err := url.Parse(strings.TrimSpace(rawURI))
+	if err != nil {
+		return fmt.Errorf("YOUTUBE_REDIRECT_URI must be a valid URL in production: %w", err)
+	}
+	if uri.Scheme != "https" {
+		return fmt.Errorf("YOUTUBE_REDIRECT_URI must use HTTPS in production")
+	}
+	if uri.User != nil || uri.Port() != "" || uri.RawQuery != "" || uri.Fragment != "" {
+		return fmt.Errorf("YOUTUBE_REDIRECT_URI must not include credentials, a port, query parameters, or a fragment in production")
+	}
+	if strings.EqualFold(uri.Hostname(), "localhost") ||
+		strings.EqualFold(uri.Hostname(), "127.0.0.1") ||
+		strings.EqualFold(uri.Hostname(), "::1") {
+		return fmt.Errorf("YOUTUBE_REDIRECT_URI must not use localhost or loopback in production")
+	}
+	host := strings.ToLower(uri.Hostname())
+	if host != canonicalHost {
+		return fmt.Errorf("YOUTUBE_REDIRECT_URI host must be %s in production", canonicalHost)
+	}
+	if uri.Path != callbackPath {
+		return fmt.Errorf("YOUTUBE_REDIRECT_URI path must be %s in production", callbackPath)
+	}
+	return nil
+}
+
+func (c *Config) validateYouTubeOAuthClientPool() error {
+	clients := []struct {
+		name   string
+		client YouTubeOAuthPoolClient
+	}{
+		{"YOUTUBE_OAUTH_CLIENT_A", c.Auth.YouTubeOAuthClientPool.ClientA},
+		{"YOUTUBE_OAUTH_CLIENT_B", c.Auth.YouTubeOAuthClientPool.ClientB},
+	}
+	for _, cl := range clients {
+		configured := cl.client.ClientID != "" || cl.client.ClientSecret != "" || cl.client.RedirectURI != ""
+		if !configured {
+			continue
+		}
+		if cl.client.ClientID == "" {
+			return fmt.Errorf("%s_ID is required when any %s_* field is set (set all three or unset all three)", cl.name, cl.name)
+		}
+		if cl.client.ClientSecret == "" {
+			return fmt.Errorf("%s_SECRET is required when any %s_* field is set (set all three or unset all three)", cl.name, cl.name)
+		}
+		if cl.client.RedirectURI == "" {
+			return fmt.Errorf("%s_REDIRECT_URI is required when any %s_* field is set (set all three or unset all three)", cl.name, cl.name)
+		}
+		if len(cl.client.ClientSecret) < secretMinChars {
+			return fmt.Errorf("%s_SECRET must be at least %d characters (got %d)", cl.name, secretMinChars, len(cl.client.ClientSecret))
+		}
+	}
 	return nil
 }
 

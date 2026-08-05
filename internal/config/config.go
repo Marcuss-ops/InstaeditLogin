@@ -98,6 +98,18 @@ type AuthConfig struct {
 	YouTubeClientSecret string
 	YouTubeRedirectURI  string
 
+	// YouTubeOAuthClientPool (optional) — the YouTube OAuth Client Pool.
+	// Google caps the number of refresh tokens issued for one
+	// (Google account, OAuth client) pair at 100. A fleet of 100+
+	// channels under a single Google manager therefore spreads its
+	// tokens across two OAuth clients instead of exhausting one
+	// client. The pool is an additive, optional layer: when no pool
+	// client is configured, the legacy single-client path
+	// (YouTubeClientID/Secret/RedirectURI) keeps working unchanged.
+	// Pool client secrets live in memory only (loaded from env) and
+	// must never enter the database, the logs or error messages.
+	YouTubeOAuthClientPool YouTubeOAuthClientPoolConfig
+
 	// Google Drive OAuth (read-only import of video clips)
 	GoogleDriveClientID     string
 	GoogleDriveClientSecret string
@@ -133,6 +145,29 @@ type AuthConfig struct {
 	// rotate via `flyctl secrets import`. NOT logged, NOT exposed
 	// in error messages.
 	AdminInviteToken string
+}
+
+// YouTubeOAuthClientPoolConfig holds the optional second Google OAuth
+// client (pool B) beside the primary YouTube client. The registry in
+// internal/services resolves either client by key and selects the
+// least-loaded pool for new connections.
+type YouTubeOAuthClientPoolConfig struct {
+	// ClientA is the first pool client (env YOUTUBE_OAUTH_CLIENT_A_ID /
+	// _SECRET / _REDIRECT_URI).
+	ClientA YouTubeOAuthPoolClient
+	// ClientB is the second pool client (env YOUTUBE_OAUTH_CLIENT_B_ID /
+	// _SECRET / _REDIRECT_URI).
+	ClientB YouTubeOAuthPoolClient
+}
+
+// YouTubeOAuthPoolClient is one Google OAuth client credential set in
+// the YouTube OAuth client pool. ClientSecret is a credential: it is
+// loaded from env, kept in process memory and never persisted,
+// logged or included in error strings.
+type YouTubeOAuthPoolClient struct {
+	ClientID     string
+	ClientSecret string
+	RedirectURI  string
 }
 
 // VeloxConfig holds the Velox integration secrets.
