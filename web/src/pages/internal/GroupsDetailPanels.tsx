@@ -107,7 +107,7 @@ export function GroupDetailPanel({
           })),
         }),
       });
-      if (!response.ok) throw new Error("Unable to remove account from group");
+      if (!response.ok) throw new Error("Impossibile rimuovere il canale dalla cartella");
       await onSaved();
     } catch (error) {
       setRemovedAccountIds((current) => {
@@ -115,7 +115,7 @@ export function GroupDetailPanel({
         next.delete(accountId);
         return next;
       });
-      setSaveError(error instanceof Error ? error.message : "Unable to remove account from group");
+      setSaveError(error instanceof Error ? error.message : "Impossibile rimuovere il canale dalla cartella");
     } finally {
       setSaving(false);
     }

@@ -110,4 +110,60 @@ describe("ChannelActions", () => {
     );
     expect(authedFetchMock).not.toHaveBeenCalled();
   });
+
+  // P0 (account-lifecycle audit): the labels and confirmations must stay
+  // honest and distinct — the old "Removes this account and its tokens"
+  // description was misleading (the backend keeps the row and preserves
+  // shared grants). This test pins the required wording so a regression
+  // cannot silently reintroduce the fake description.
+  it("uses honest, distinct confirmation texts (never 'tokens' in labels)", async () => {
+    const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(true);
+    confirmMock.mockClear();
+    render(<ChannelActions account={youtubeAccount} onDone={() => {}} />);
+
+    // Disconnect confirmation carries the three required lines verbatim.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Disconnetti canale/i }),
+    );
+    const disconnectMsg = confirmMock.mock.calls[0]?.[0] ?? "";
+    expect(disconnectMsg).toContain(
+      "Il canale non sarà più utilizzabile da InstaEdit",
+    );
+    expect(disconnectMsg).toContain("La cronologia verrà conservata");
+    expect(disconnectMsg).toContain(
+      "Gli altri canali dello stesso account Google non saranno interessati",
+    );
+    // The disconnect path must not threaten token deletion: siblings share
+    // the grant and the row is kept for audit.
+    expect(disconnectMsg).not.toMatch(/token/i);
+
+    // Wait for the disconnect request to finish so the busy state resets
+    // and the other tiles are clickable again.
+    await waitFor(() =>
+      expect(authedFetchMock).toHaveBeenCalledWith("/api/v1/accounts/21", {
+        method: "DELETE",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Elimina definitivamente/i }),
+      ).not.toBeDisabled(),
+    );
+
+    // Permanent delete confirmation states the irreversibility.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Elimina definitivamente/i }),
+    );
+    const deleteMsg = confirmMock.mock.calls[1]?.[0] ?? "";
+    expect(deleteMsg).toContain("non può essere annullata");
+
+    // No visible label or description uses the old misleading vocabulary.
+    expect(screen.queryByText(/tokens/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Removes this account/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Disconnect/i }),
+    ).not.toBeInTheDocument();
+  });
 });
