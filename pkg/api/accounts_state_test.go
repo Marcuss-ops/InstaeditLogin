@@ -93,7 +93,10 @@ func TestHandleListAccounts_ExposesStableStateAndPublishability(t *testing.T) {
 		},
 	}
 	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
+	// include_deleted=true exposes the full lifecycle vocabulary — the
+	// default (P0) hides deleted-state accounts (covered by
+	// TestHandleListAccounts_HidesDeletedStateByDefault).
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts?include_deleted=true", nil)
 	req = req.WithContext(auth.WithIdentity(req.Context(), auth.NewUserIdentity(7, 1, 1)))
 	w := httptest.NewRecorder()
 
@@ -132,6 +135,64 @@ func TestHandleListAccounts_ExposesStableStateAndPublishability(t *testing.T) {
 		}
 		if item.AccountState != expected.state || item.IsPublishable != expected.publishable {
 			t.Errorf("account %d: got state=%q publishable=%v, want state=%q publishable=%v", item.ID, item.AccountState, item.IsPublishable, expected.state, expected.publishable)
+		}
+	}
+}
+
+// TestHandleListAccounts_HidesDeletedStateByDefault locks the P0
+// contract: the plain GET /api/v1/accounts (no flag) must NOT return
+// accounts classified as account_state="deleted" (status
+// disconnected/revoked/legacy deleted aliases). They only appear with
+// ?include_deleted=true.
+func TestHandleListAccounts_HidesDeletedStateByDefault(t *testing.T) {
+	accounts := []*models.PlatformAccount{
+		{ID: 1, UserID: 7, Platform: models.PlatformYouTube, PlatformUserID: "UC-valid", Username: "valid", Status: models.AccountStatusActive},
+		{ID: 4, UserID: 7, Platform: models.PlatformYouTube, PlatformUserID: "UC-disconnected", Username: "disconnected", Status: models.AccountStatusDisconnected},
+		{ID: 5, UserID: 7, Platform: models.PlatformYouTube, PlatformUserID: "UC-revoked", Username: "revoked", Status: models.AccountStatusRevoked},
+		{ID: 6, UserID: 7, Platform: models.PlatformYouTube, PlatformUserID: "UC-deleted-alias", Username: "deleted-alias", Status: "deleted"},
+		{ID: 7, UserID: 7, Platform: models.PlatformYouTube, PlatformUserID: "UC-cancelled", Username: "cancelled", Status: "cancelled"},
+		{ID: 8, UserID: 7, Platform: models.PlatformYouTube, PlatformUserID: "UC-canceled", Username: "canceled", Status: "canceled"},
+	}
+	store := &mockUserStore{
+		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
+			return accounts, nil
+		},
+	}
+	r := newTestRouter(&mockProvider{platform: models.PlatformYouTube}, store, "")
+
+	decodeIDs := func(req *http.Request) []int64 {
+		req = req.WithContext(auth.WithIdentity(req.Context(), auth.NewUserIdentity(7, 1, 1)))
+		w := httptest.NewRecorder()
+		r.handleListAccounts(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var response struct {
+			Accounts []struct {
+				ID int64 `json:"id"`
+			} `json:"accounts"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		ids := make([]int64, 0, len(response.Accounts))
+		for _, a := range response.Accounts {
+			ids = append(ids, a.ID)
+		}
+		return ids
+	}
+
+	// Default: only the active account; every deleted-state alias is hidden.
+	ids := decodeIDs(httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil))
+	if len(ids) != 1 || ids[0] != 1 {
+		t.Fatalf("default list must hide deleted-state accounts: got %v, want [1]", ids)
+	}
+
+	// Flag variants (true / 1 / yes, case-insensitive) include everything.
+	for _, flag := range []string{"include_deleted=true", "include_deleted=1", "include_deleted=yes", "include_deleted=TRUE"} {
+		ids := decodeIDs(httptest.NewRequest(http.MethodGet, "/api/v1/accounts?"+flag, nil))
+		if len(ids) != len(accounts) {
+			t.Fatalf("flag %q: got %d accounts, want %d: %v", flag, len(ids), len(accounts), ids)
 		}
 	}
 }

@@ -117,6 +117,13 @@ func accountLanguage(account *models.PlatformAccount) string {
 // workspace the user is a member of; this matches the Taglio 2.4
 // "OAuth is one identity per user, not per workspace" contract).
 //
+// P0 (account-lifecycle audit): accounts classified as
+// account_state="deleted" (status disconnected / revoked / legacy
+// deleted aliases) are hidden by default so a soft-disconnected
+// channel stops surfacing in every app view. Pass
+// ?include_deleted=true to include them — needed by audit / admin
+// surfaces and reconnect flows that require the full history.
+//
 // Response always uses the {"accounts": [...]} wrapper so the SPA's
 // JSON decoder can iterate unconditionally — never nil-vs-empty,
 // always an array (possibly empty).
@@ -137,9 +144,18 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list accounts: "+err.Error())
 		return
 	}
+	includeDeleted := false
+	switch strings.ToLower(req.URL.Query().Get("include_deleted")) {
+	case "true", "1", "yes":
+		includeDeleted = true
+	}
 	items := make([]accountListItem, 0, len(accounts))
 	for _, a := range accounts {
-		items = append(items, accountListItemFromAccount(a))
+		item := accountListItemFromAccount(a)
+		if item.AccountState == AccountStateDeleted && !includeDeleted {
+			continue
+		}
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": items})
 }

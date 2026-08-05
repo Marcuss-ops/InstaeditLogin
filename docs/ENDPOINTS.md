@@ -22,7 +22,7 @@ Providers: `meta`, `tiktok`, `twitter`, `youtube`, `linkedin`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/accounts` | List connected platform accounts |
+| GET | `/api/v1/accounts` | List connected platform accounts. Deleted-state accounts (`account_state=deleted`, i.e. disconnected/revoked) are hidden by default; pass `?include_deleted=true` to include them |
 
 ## Workspaces
 
