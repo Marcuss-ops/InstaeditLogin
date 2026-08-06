@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { clearAccountsCache } from "../../features/channels/api/channelsApi";
+import { clearSessionCache } from "../../lib/auth";
+import { clearSharedQueryCache } from "../../lib/queryRegistry";
 import { InternalDashboard } from "./Dashboard";
 
 function mockJsonResponse(data: unknown, ok = true, status = 200) {
@@ -26,6 +28,8 @@ describe("InternalDashboard", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     clearAccountsCache();
+    clearSessionCache();
+    clearSharedQueryCache();
   });
 
   it("renders the dashboard heading and stats", async () => {
@@ -65,10 +69,9 @@ describe("InternalDashboard", () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /Dashboard/i })).toBeInTheDocument();
+      expect(screen.getByText("Connected accounts")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Connected accounts")).toBeInTheDocument();
     expect(screen.getByText("Upload in coda")).toBeInTheDocument();
     expect(screen.getByText("Upload in coda")).toBeInTheDocument();
   });
@@ -167,7 +170,7 @@ describe("InternalDashboard", () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /Dashboard/i })).toBeInTheDocument();
+      expect(screen.getByText("Connected accounts")).toBeInTheDocument();
     });
 
     // The stat cards render a tick after the heading appears; wait for the

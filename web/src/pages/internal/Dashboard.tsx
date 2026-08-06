@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -7,50 +7,10 @@ import {
   Clock,
   Folder,
 } from "lucide-react";
-import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
+import { authedFetch } from "../../lib/auth";
 import { Skeleton, ErrorState } from "../../components/feedback";
-import type { Group } from "./groupsTypes";
+import { useDashboardData } from "./useDashboardData";
 import { isPublishableAccount } from "../../types/uploads";
-import { listAllAccounts, type PlatformAccount } from "../../features/channels/api/channelsApi";
-
-
-type GroupSummary = {
-  group: Group;
-  accountIds: number[];
-  accounts: PlatformAccount[];
-  scheduled: number;
-};
-
-type Post = {
-  id: number;
-  status: string;
-  scheduled_at?: string | null;
-};
-
-type AccountProgrammatoCount = {
-  count: number;
-  nextAt: string | null;
-};
-
-type DashboardData = {
-  accounts: PlatformAccount[];
-  posts: Post[];
-  // totalUploads is the DISTINCT count of pending upload_jobs from
-  // /uploads/counts — multi-target rows count ONCE (instead of once
-  // per target). This keeps the dashboard page-load path local and
-  // avoids one provider request per YouTube account.
-  pendingUploads: number;
-  // Per-account pending count + earliest scheduled_at, derived from
-  // GET /api/v1/uploads/counts. The dashboard widget renders from
-  // this map; the calendar page hits /uploads/by-account separately.
-  countMap: Map<number, AccountProgrammatoCount>;
-  groupSummaries: GroupSummary[];
-};
-
-type FetchState =
-  | { kind: "loading" }
-  | { kind: "ready"; data: DashboardData }
-  | { kind: "error"; message: string };
 
 function StatCard({
   label,
@@ -83,141 +43,13 @@ function StatCard({
 
 export function InternalDashboard() {
   const navigate = useNavigate();
-  const [state, setState] = useState<FetchState>({ kind: "loading" });
-  const abortRef = useRef<AbortController | null>(null);
+  const { state, refetch: load } = useDashboardData();
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [draggedAccountId, setDraggedAccountId] = useState<number | null>(null);
   const [savingDrop, setSavingDrop] = useState<number | null>(null);
 
-  const load = useCallback(async () => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setState({ kind: "loading" });
-
-    try {
-      const [accounts, postsResp, countsResp] = await Promise.all([
-        listAllAccounts({ signal: controller.signal }),
-        authedFetch("/api/v1/posts", { signal: controller.signal }),
-        // /uploads/counts is the cheap GROUP BY per-target aggregate
-        // (single query, no row cap). The widget only needs the per-account
-        // N + next publish date, not the full upload list. The calendar
-        // page that opens on click hits /uploads/by-account for the
-        // per-day buckets. Avoids the O(200) payload the previous
-        // /uploads?status=pending&limit=200 fetch required.
-        authedFetch("/api/v1/uploads/counts", {
-          signal: controller.signal,
-        }),
-      ]);
-      if (controller.signal.aborted) return;
-      const accountsData = { accounts };
-      const postsData = (await postsResp.json()) as { posts: Post[] };
-      const countsData = (await countsResp.json()) as {
-        counts: Array<{
-          account_id: number;
-          count: number;
-          next_publish_at: string | null;
-        }>;
-        total_uploads: number;
-      };
-      // Do not fan out to /accounts/{id}/content here. That endpoint
-      // reaches YouTube and belongs to an explicit video-management
-      // action, not the dashboard shell. The local upload aggregate is
-      // the page-load metric and is constant in query count.
-      const pendingUploads = countsData.total_uploads ?? 0;
-      let groupSummaries: GroupSummary[] = [];
-      try {
-        // The aggregate endpoint resolves the active workspace from the
-        // authenticated identity, so the dashboard does not need a separate
-        // workspace lookup before loading groups and memberships.
-        const groupsResp = await authedFetch("/api/v1/groups/aggregate", { signal: controller.signal });
-        const groupsData = (await groupsResp.json()) as {
-          groups: Array<Group & { account_ids?: number[] }>;
-        };
-        const accountIndex = new Map((accountsData.accounts ?? []).map((account) => [account.id, account]));
-        const directMemberships = new Map(
-          (groupsData.groups ?? []).map((group) => [group.id, group.account_ids ?? []] as const),
-        );
-        const children = new Map<number, Group[]>();
-        for (const group of groupsData.groups ?? []) {
-          if (group.parent_group_id != null) {
-            const list = children.get(group.parent_group_id) ?? [];
-            list.push(group);
-            children.set(group.parent_group_id, list);
-          }
-        }
-        const collect = (group: Group): number[] => {
-          const ids = new Set(directMemberships.get(group.id) ?? []);
-          for (const child of children.get(group.id) ?? []) collect(child).forEach((id) => ids.add(id));
-          return [...ids];
-        };
-        groupSummaries = (groupsData.groups ?? [])
-          .filter((group) => group.parent_group_id == null)
-          .map((group) => {
-            const accountIds = collect(group);
-            const groupAccounts = accountIds.map((id) => accountIndex.get(id)).filter((account): account is PlatformAccount => account != null && isPublishableAccount(account));
-            return {
-              group,
-              accountIds,
-              accounts: groupAccounts,
-              scheduled: accountIds.reduce((sum, id) => sum + (countsData.counts?.find((count) => count.account_id === id)?.count ?? 0), 0),
-            };
-          });
-      } catch {
-        // Groups are an optional dashboard projection; account cards still work if unavailable.
-      }
-      // Project the count-rollup into a Map<account_id, count + nextAt>
-      // so the per-account widget can O(1)-look-up instead of doing an
-      // inner N×M loop on a fetched upload list.
-      const countMap = new Map<
-        number,
-        { count: number; nextAt: string | null }
-      >();
-      for (const c of countsData.counts ?? []) {
-        countMap.set(c.account_id, {
-          count: c.count,
-          nextAt: c.next_publish_at ?? null,
-        });
-      }
-      setState({
-        kind: "ready",
-        data: {
-          accounts: accountsData.accounts ?? [],
-          posts: postsData.posts ?? [],
-          countMap,
-          pendingUploads,
-          groupSummaries,
-        },
-      });
-    } catch (err) {
-      if (controller.signal.aborted) return;
-      if (err instanceof AuthError) {
-        navigate("/login", { replace: true });
-        return;
-      }
-      const message = err instanceof Error ? err.message : "Unable to load dashboard.";
-      setState({ kind: "error", message });
-    }
-  }, [navigate]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const session = await fetchSession();
-      if (cancelled) return;
-      if (!session) {
-        navigate("/login", { replace: true });
-        return;
-      }
-      void load();
-    })();
-    return () => {
-      cancelled = true;
-      abortRef.current?.abort();
-    };
-  }, [load, navigate]);
 
   const stats =
     state.kind === "ready"

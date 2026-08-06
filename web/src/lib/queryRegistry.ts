@@ -16,6 +16,8 @@ export interface QueryOptions<T> {
   fetchOnMount?: boolean;
   staleTime?: number;
   pollingInterval?: PollingInterval<T>;
+  /** Refetch once when the visible browser window regains focus. */
+  refetchOnWindowFocus?: boolean;
   fetcher: (signal: AbortSignal) => Promise<T>;
 }
 
@@ -44,6 +46,8 @@ const MAX_ERROR_RETRY_MS = 60_000;
 const entries = new Map<string, Entry<unknown>>();
 const activeEntries = new Set<Entry<unknown>>();
 let visibilityListenerInstalled = false;
+let focusListenerInstalled = false;
+let sessionClearedListenerInstalled = false;
 
 function isHidden(): boolean {
   return typeof document !== "undefined" &&
@@ -62,8 +66,9 @@ function clearTimer<T>(entry: Entry<T>): void {
 }
 
 function installVisibilityListener(): void {
-  if (visibilityListenerInstalled || typeof document === "undefined") return;
-  visibilityListenerInstalled = true;
+  if (typeof document === "undefined") return;
+  if (!visibilityListenerInstalled) {
+    visibilityListenerInstalled = true;
   document.addEventListener("visibilitychange", () => {
     if (document.hidden || document.visibilityState === "hidden") return;
     for (const entry of activeEntries) {
@@ -76,8 +81,24 @@ function installVisibilityListener(): void {
       });
     }
   });
+  }
   if (typeof window !== "undefined") {
-    window.addEventListener("instaedit:session-cleared", () => registry.clear());
+    if (!focusListenerInstalled) {
+      focusListenerInstalled = true;
+      window.addEventListener("focus", () => {
+        if (isHidden()) return;
+        for (const entry of activeEntries) {
+          if (entry.options.refetchOnWindowFocus !== true) continue;
+          void fetchEntry(entry, true).catch(() => {
+            // Focus refresh errors remain available through the snapshot.
+          });
+        }
+      });
+    }
+    if (!sessionClearedListenerInstalled) {
+      sessionClearedListenerInstalled = true;
+      window.addEventListener("instaedit:session-cleared", () => registry.clear());
+    }
   }
 }
 
@@ -160,7 +181,10 @@ async function fetchEntry<T>(entry: Entry<T>, force: boolean): Promise<T | undef
       entry.failureCount += 1;
       entry.snapshot = {
         ...entry.snapshot,
-        isLoading: entry.snapshot.data === undefined,
+        // The initial request has settled, even when there is no
+        // last-known data. Consumers must be able to render an error
+        // state instead of remaining stuck in loading forever.
+        isLoading: false,
         isFetching: false,
         error,
       };
@@ -289,7 +313,7 @@ export function useSharedQuery<T>(key: string, options: QueryOptions<T>): UseSha
     registry.update(key, optionsRef.current, sameKey && previousEnabledRef.current);
     previousKeyRef.current = key;
     previousEnabledRef.current = optionsRef.current.enabled !== false;
-  }, [key, options.enabled, options.fetcher, options.pollingInterval, options.staleTime]);
+  }, [key, options.enabled, options.fetcher, options.pollingInterval, options.staleTime, options.refetchOnWindowFocus]);
 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const refetch = useCallback(() => registry.refetch(key, optionsRef.current), [key]);

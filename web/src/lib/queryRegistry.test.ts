@@ -69,6 +69,30 @@ describe("useSharedQuery", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it("refetches on focus only when explicitly enabled", async () => {
+    const focusedFetcher = vi.fn().mockResolvedValue(1);
+    const defaultFetcher = vi.fn().mockResolvedValue(1);
+    renderHook(() => useSharedQuery("focus-enabled", {
+      staleTime: 60_000,
+      refetchOnWindowFocus: true,
+      fetcher: focusedFetcher,
+    }));
+    renderHook(() => useSharedQuery("focus-default", {
+      staleTime: 60_000,
+      fetcher: defaultFetcher,
+    }));
+    await flush();
+    expect(focusedFetcher).toHaveBeenCalledTimes(1);
+    expect(defaultFetcher).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    expect(focusedFetcher).toHaveBeenCalledTimes(2);
+    expect(defaultFetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("skips hidden-tab polling and refetches on visibility restore", async () => {
     vi.useFakeTimers();
     const fetcher = vi.fn().mockResolvedValue(1);
