@@ -15,7 +15,26 @@ Use this module for third-party provider identity:
 
 `PROVIDER_REGISTRY` is the source of truth. New provider artwork or provider metadata belongs there, not in a page, landing component, or Lucide catalog.
 
-## 2. Functional icons — product actions and UI meaning
+## 2. Language flags — inline SVG country flags
+
+**Canonical module:** `web/src/components/brand/LanguageFlag.tsx`
+
+Use `LanguageFlag` to render a channel's ISO-639-1 language as a crisp
+inline-SVG flag (with `Globe` fallback for empty/unknown codes). Flag emoji
+are rendered as letter pairs on several platforms, so the groups surfaces
+draw SVG flags instead:
+
+```tsx
+import { LanguageFlag, languageLabel } from "../../components/brand/LanguageFlag";
+
+<LanguageFlag code="it" className="h-4 w-4" />
+```
+
+The supported codes are: `it en es fr de pt pl ru tr hi id ar`. New codes
+require both an SVG artwork branch and a `languageLabel` entry. The marker
+regexes in `web/src/pages/internal/groupChannelLanguage.ts` mirror this set.
+
+## 3. Functional icons — product actions and UI meaning
 
 **Canonical module:** `web/src/components/icons/FunctionalIcons.tsx`
 

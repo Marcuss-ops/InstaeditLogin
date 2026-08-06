@@ -12,32 +12,6 @@ export function safeAssetUrl(value?: string): string | undefined {
   }
 }
 
-const LANGUAGE_FLAGS: Record<string, string> = {
-  pl: "🇵🇱",
-  ru: "🇷🇺",
-  id: "🇮🇩",
-  fr: "🇫🇷",
-  tr: "🇹🇷",
-  de: "🇩🇪",
-  es: "🇪🇸",
-  it: "🇮🇹",
-  en: "🇬🇧",
-  hi: "🇮🇳",
-};
-
-/**
- * Render the channel's configured ISO-639-1 language as a flag.
- *
- * Empty/unknown values deliberately use a neutral globe instead of
- * silently claiming that the channel is English. This makes missing
- * metadata visible and prevents an incorrect flag from being cached in
- * the group video response.
- */
-export function languageFlag(value?: string): string {
-  const language = value?.trim().toLowerCase();
-  return language ? LANGUAGE_FLAGS[language] ?? "🌐" : "🌐";
-}
-
 export function publicationState(video: GroupYouTubeVideo): {
   label: string;
   tone: "success" | "warning" | "info" | "neutral";
