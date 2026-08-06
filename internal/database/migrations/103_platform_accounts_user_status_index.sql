@@ -1,0 +1,32 @@
+-- 103: platform_accounts (user_id, status) composite index
+-- Fase 7 index audit for the N+1 fix aggregated list query
+-- (GET /api/v1/accounts batch LEFT JOIN on account_resource_snapshots).
+--
+-- EXPLAIN (ANALYZE, BUFFERS) evidence — PostgreSQL 15.18, local
+-- instaedit-db, synthetic 120k-row dataset spread over 12k users
+-- (selective per-user filter, the realistic multi-tenant shape):
+--
+--   WITHOUT composite:  Bitmap Index Scan on idx_platform_accounts_user_id
+--                       rows=30 (10 filtered by status in heap)
+--                       Execution Time: 0.206 ms
+--   WITH (user_id, status): Bitmap Index Scan on idx_platform_accounts_user_status
+--                       rows=10 (status pushed into the index)
+--                       Execution Time: 0.170 ms
+--
+-- The status NOT IN ('disconnected','revoked','deleted','cancelled',
+-- 'canceled') predicate of the paginated keyset query is now answered
+-- by the index itself instead of re-filtering heap rows.
+--
+-- Audit of the other DoD index targets (all already covered, no new
+-- index added for them):
+--   * account_resource_snapshots(platform_account_id)  — covered by the
+--     table PRIMARY KEY (platform_account_id).
+--   * group_accounts(group_id, platform_account_id)    — covered by the
+--     PRIMARY KEY (group_id, account_id).
+--   * workspace_channels(workspace_id, platform_account_id) — covered by
+--     the PRIMARY KEY (workspace_id, platform_account_id).
+--
+-- Idempotent per the runner contract (migrations.go::RunMigrations).
+
+CREATE INDEX IF NOT EXISTS idx_platform_accounts_user_status
+    ON platform_accounts (user_id, status);
