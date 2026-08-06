@@ -580,7 +580,9 @@ type mockPostStore struct {
 	createFn          func(*models.Post, []*models.PostTarget) error
 	findByIDFn        func(id int64) (*models.Post, error)
 	updateFn          func(*models.Post) error
-	listByWorkspaceFn func(workspaceID int64) ([]models.Post, error)
+	listByWorkspaceFn      func(workspaceID int64) ([]models.Post, error)
+	listByWorkspacePageFn  func(workspaceID int64, afterTime *time.Time, afterID int64, limit int) ([]models.Post, bool, error)
+	listByWorkspacesPageFn func(workspaceIDs []int64, afterTime *time.Time, afterID int64, limit int) ([]models.Post, bool, error)
 	// listByPostFn + findTargetByIDFn added for the
 	// Taglio 5.1 step 2 polling endpoint suite (closes the
 	// empty-array handleGetPostTargets gap and adds the single
@@ -630,6 +632,18 @@ func (m *mockPostStore) ListByWorkspace(workspaceID int64) ([]models.Post, error
 		return nil, nil
 	}
 	return m.listByWorkspaceFn(workspaceID)
+}
+func (m *mockPostStore) ListByWorkspacePage(workspaceID int64, afterTime *time.Time, afterID int64, limit int) ([]models.Post, bool, error) {
+	if m.listByWorkspacePageFn == nil {
+		return nil, false, nil
+	}
+	return m.listByWorkspacePageFn(workspaceID, afterTime, afterID, limit)
+}
+func (m *mockPostStore) ListByWorkspacesPage(workspaceIDs []int64, afterTime *time.Time, afterID int64, limit int) ([]models.Post, bool, error) {
+	if m.listByWorkspacesPageFn == nil {
+		return nil, false, nil
+	}
+	return m.listByWorkspacesPageFn(workspaceIDs, afterTime, afterID, limit)
 }
 func (m *mockPostStore) ListByPost(postID int64) ([]models.PostTarget, error) {
 	if m.listByPostFn == nil {

@@ -49,12 +49,14 @@ import (
 // returning to the BFF handler. WorkspaceID is included so the BFF
 // can verify ownership (defense-in-depth on top of the signed JWT).
 type jobResponse struct {
-	ID           string    `json:"id" validate:"required,min=1"`
-	WorkspaceID  int64     `json:"workspace_id" validate:"required,gte=1"`
-	ProjectID    string    `json:"project_id,omitempty"`
-	RenderStatus string    `json:"render_status" validate:"required,min=1"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                string    `json:"id" validate:"required,min=1"`
+	WorkspaceID       int64     `json:"workspace_id" validate:"required,gte=1"`
+	ProjectID         string    `json:"project_id,omitempty"`
+	RenderStatus      string    `json:"render_status" validate:"required,min=1"`
+	PublicationStatus string    `json:"publication_status,omitempty"`
+	OverallStatus     string    `json:"overall_status,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // jobDetailResponse is the aggregated Velox response for GET
@@ -101,9 +103,12 @@ type assetResponse struct {
 	DownloadURL string `json:"download_url,omitempty" validate:"omitempty,url"`
 }
 
-// listJobsResponse wraps the Velox list endpoint envelope.
+// listJobsResponse wraps the Velox list endpoint envelope. Velox may omit
+// next_cursor/has_more for legacy deployments; both fields are optional.
 type listJobsResponse struct {
-	Jobs []jobResponse `json:"jobs"`
+	Jobs       []jobResponse `json:"jobs"`
+	NextCursor string        `json:"next_cursor,omitempty"`
+	HasMore    bool          `json:"has_more,omitempty"`
 }
 
 // listWorkersResponse wraps the Velox list endpoint envelope.

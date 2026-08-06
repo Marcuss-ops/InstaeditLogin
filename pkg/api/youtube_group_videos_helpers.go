@@ -1,10 +1,13 @@
 package api
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +54,30 @@ func collectDescendantGroups(all []models.Group, rootGroupID int64) []*models.Gr
 		}
 	}
 	return out
+}
+
+type groupVideosCursor struct {
+	Version   int    `json:"v"`
+	Context   string `json:"c"`
+	AccountID int64  `json:"a"`
+	VideoID   string `json:"i"`
+}
+
+func encodeGroupVideosCursor(context string, accountID int64, videoID string) string {
+	payload, _ := json.Marshal(groupVideosCursor{Version: 1, Context: context, AccountID: accountID, VideoID: videoID})
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeGroupVideosCursor(raw, context string) (int64, string, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid list cursor: encoding")
+	}
+	var cursor groupVideosCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != 1 || cursor.Context != context || cursor.AccountID <= 0 || strings.TrimSpace(cursor.VideoID) == "" {
+		return 0, "", fmt.Errorf("invalid list cursor: malformed token or filter scope")
+	}
+	return cursor.AccountID, cursor.VideoID, nil
 }
 
 func parseGroupVideosPagination(req *http.Request, cfg YouTubeGroupVideosConfig) (int, int, error) {
@@ -246,6 +273,10 @@ func (r *Router) writeGroupVideosOK(
 	recencyDays int,
 	cfg YouTubeGroupVideosConfig,
 	offset, limit int,
+	cursorMode bool,
+	cursorContext string,
+	cursorAccountID int64,
+	cursorVideoID string,
 ) bool {
 	// 7. Aggregate. Each YouTube row joins with the existing session
 	// map by (account_id, youtube_video_id) — O(1) per row.
@@ -337,12 +368,32 @@ func (r *Router) writeGroupVideosOK(
 	// and YouTube reads therefore happen before slicing, while callers
 	// receive a bounded response independent of group size.
 	lenEntriesBeforeCap := len(entries)
+	if cursorMode {
+		// Cursor pages use a deterministic tuple order. This avoids
+		// encoding a fragile array offset while retaining the legacy
+		// per-account/provider order for offset callers.
+		sort.SliceStable(entries, func(i, j int) bool {
+			if entries[i].PlatformAccountID != entries[j].PlatformAccountID {
+				return entries[i].PlatformAccountID < entries[j].PlatformAccountID
+			}
+			return entries[i].YouTubeVideoID < entries[j].YouTubeVideoID
+		})
+	}
 	totalVideos := lenEntriesBeforeCap
 	if totalVideos > cfg.MaxVideos {
 		totalVideos = cfg.MaxVideos
 		entries = entries[:cfg.MaxVideos]
 	}
-	if offset > totalVideos {
+	if cursorMode {
+		offset = 0
+		for i, entry := range entries {
+			if entry.PlatformAccountID > cursorAccountID || (entry.PlatformAccountID == cursorAccountID && entry.YouTubeVideoID > cursorVideoID) {
+				offset = i
+				break
+			}
+			offset = len(entries)
+		}
+	} else if offset > totalVideos {
 		offset = totalVideos
 	}
 	end := offset + limit
@@ -364,7 +415,12 @@ func (r *Router) writeGroupVideosOK(
 		HasMore: hasMore,
 	}
 	if hasMore {
-		resp.NextOffset = end
+		if cursorMode {
+			last := pagedEntries[len(pagedEntries)-1]
+			resp.NextCursor = encodeGroupVideosCursor(cursorContext, last.PlatformAccountID, last.YouTubeVideoID)
+		} else {
+			resp.NextOffset = end
+		}
 	}
 	if len(warnings) == len(accountLookup) && len(accountLookup) > 0 {
 		// Every per-account fetch failed → propagate as 502, while

@@ -1,6 +1,7 @@
 package velox
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,6 +21,7 @@ import (
 //
 //	?status=<render_status>   filter by Velox render status
 //	?limit=<int>              cap on rows (default 100, max 500)
+//	?cursor=<opaque>          optional continuation cursor
 //
 // The workspace scope comes from the session identity; the Client
 // signs it into the outbound JWT so Velox scopes the query.
@@ -31,6 +33,7 @@ func (b *bff) listJobs(w http.ResponseWriter, req *http.Request) {
 	filter := ListJobsFilter{
 		Status: req.URL.Query().Get("status"),
 		Limit:  100,
+		Cursor: strings.TrimSpace(req.URL.Query().Get("cursor")),
 	}
 	if l := req.URL.Query().Get("limit"); l != "" {
 		n, err := strconv.Atoi(l)
@@ -43,7 +46,15 @@ func (b *bff) listJobs(w http.ResponseWriter, req *http.Request) {
 		}
 		filter.Limit = n
 	}
-	jobs, err := b.deps.Client.ListJobs(req.Context(), wsID, userID, filter)
+	var page JobsPage
+	var err error
+	if pager, ok := b.deps.Client.(interface {
+		ListJobsPage(context.Context, int64, int64, ListJobsFilter) (JobsPage, error)
+	}); ok {
+		page, err = pager.ListJobsPage(req.Context(), wsID, userID, filter)
+	} else {
+		page.Jobs, err = b.deps.Client.ListJobs(req.Context(), wsID, userID, filter)
+	}
 	if err != nil {
 		slog.Error("velox bff: list jobs failed", "workspace_id", wsID, "err", err)
 		writeError(w, http.StatusInternalServerError, "upstream call failed")
@@ -53,15 +64,20 @@ func (b *bff) listJobs(w http.ResponseWriter, req *http.Request) {
 	// the session. Velox should already scope by the signed JWT, but
 	// this prevents a misconfigured Velox from leaking cross-tenant
 	// rows. Mirrors the same pattern used by listWorkers.
-	safe := jobs[:0]
-	for _, j := range jobs {
+	safe := page.Jobs[:0]
+	for _, j := range page.Jobs {
 		if j.WorkspaceID == wsID {
 			safe = append(safe, j)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"jobs": safe,
-	})
+	response := map[string]interface{}{"jobs": safe}
+	if filter.Cursor != "" || page.HasMore || page.NextCursor != "" {
+		response["has_more"] = page.HasMore
+		if page.NextCursor != "" {
+			response["next_cursor"] = page.NextCursor
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // createCanonicalJob implements POST /api/v1/jobs with the strict

@@ -95,6 +95,26 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	cursorRaw := strings.TrimSpace(req.URL.Query().Get("cursor"))
+	// A limit-only request starts the cursor contract; explicit offset
+	// keeps the legacy response shape for existing callers.
+	cursorMode := cursorRaw != "" || (req.URL.Query().Get("limit") != "" && req.URL.Query().Get("offset") == "")
+	cursorContext := fmt.Sprintf("group_id=%d&include_subgroups=%t&days=%d", groupID, includeSubgroups, recencyDays)
+	var cursorAccountID int64
+	var cursorVideoID string
+	if cursorMode {
+		if strings.TrimSpace(req.URL.Query().Get("offset")) != "" {
+			writeError(w, http.StatusBadRequest, "cursor and offset cannot be combined")
+			return
+		}
+		if cursorRaw != "" {
+			cursorAccountID, cursorVideoID, err = decodeGroupVideosCursor(cursorRaw, cursorContext)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
 
 	if r.groupStore == nil {
 		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
@@ -150,7 +170,7 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	// per-account timeout).
 	forceRefresh := strings.EqualFold(strings.TrimSpace(req.URL.Query().Get("refresh")), "true")
 	resultsByAccount, sortedAccountIDs := r.fanOutGroupYouTubeVideos(req, accountLookup, cfg, forceRefresh)
-	if !r.writeGroupVideosOK(w, req, resultsByAccount, sortedAccountIDs, accountLookup, sessions, sessionMap, recencyDays, cfg, offset, limit) {
+	if !r.writeGroupVideosOK(w, req, resultsByAccount, sortedAccountIDs, accountLookup, sessions, sessionMap, recencyDays, cfg, offset, limit, cursorMode, cursorContext, cursorAccountID, cursorVideoID) {
 		return
 	}
 }

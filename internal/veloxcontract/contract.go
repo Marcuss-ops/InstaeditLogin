@@ -190,6 +190,23 @@ func (d *DeliveryDestination) UnmarshalJSON(data []byte) error {
 type ListJobsFilter struct {
 	Status string
 	Limit  int
+	Cursor string
+}
+
+// JobsPage is the cursor-paginated Velox jobs response exposed by the
+// optional paging capability. The legacy ListJobs method remains available
+// for callers that only need a bounded first page.
+type JobsPage struct {
+	Jobs       []Job
+	NextCursor string
+	HasMore    bool
+}
+
+// JobsPager is an additive capability: old Client implementations can keep
+// implementing ListJobs, while the concrete client can expose upstream
+// cursor metadata without changing the legacy method's return type.
+type JobsPager interface {
+	ListJobsPage(ctx context.Context, workspaceID, userID int64, filter ListJobsFilter) (JobsPage, error)
 }
 
 // --- Client interface -----------------------------------------------------

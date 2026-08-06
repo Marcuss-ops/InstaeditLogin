@@ -181,4 +181,5 @@ type groupYouTubeVideosResponse struct {
 	Error      string                    `json:"error,omitempty"`
 	HasMore    bool                      `json:"has_more,omitempty"`
 	NextOffset int                       `json:"next_offset,omitempty"`
+	NextCursor string                    `json:"next_cursor,omitempty"`
 }

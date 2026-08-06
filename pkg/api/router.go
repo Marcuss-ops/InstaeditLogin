@@ -29,6 +29,8 @@ type Router struct {
 	postStore             PostStore
 	storageProvider       StorageProvider
 	mediaStore            MediaStore
+	mediaPreviewCacheMu   sync.Mutex
+	mediaPreviewCache     map[string]mediaPreviewCacheEntry
 	auditLogStore         AuditLogStore
 	auth                  *auth.Manager
 	apiKeyAuth            *auth.Authenticator

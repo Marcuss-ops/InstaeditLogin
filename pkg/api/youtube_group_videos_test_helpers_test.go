@@ -6,20 +6,23 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"testing"
+	"time"
 )
 
 type mockGroupStore struct {
-	findByIDFn                    func(id int64) (*models.Group, error)
-	listByWorkspaceFn             func(workspaceID int64) ([]models.Group, error)
-	listByWorkspaceWithAccountsFn func(workspaceID int64) ([]models.GroupWithAccounts, error)
-	listAccountsInGroupFn         func(groupID int64) ([]int64, error)
-	validateAccountOwnershipFn    func(userID, workspaceID int64, accountIDs []int64) ([]int64, error)
-	createFn                      func(g *models.Group) error
-	updateFn                      func(g *models.Group) error
-	deleteFn                      func(id int64) error
-	setAccountsFn                 func(groupID int64, accountIDs []int64) error
-	updateSettingsFn              func(ctx context.Context, groupID, workspaceID, userID int64, updates []models.GroupAccountLanguageUpdate) error
-	removeAccountFromGroupTxFn    func(ctx context.Context, groupID, workspaceID, accountID int64) error
+	findByIDFn                        func(id int64) (*models.Group, error)
+	listByWorkspaceFn                 func(workspaceID int64) ([]models.Group, error)
+	listByWorkspaceWithAccountsFn     func(workspaceID int64) ([]models.GroupWithAccounts, error)
+	listByWorkspacePageFn             func(workspaceID int64, afterTime *time.Time, afterID int64, limit int) ([]models.Group, bool, error)
+	listByWorkspaceWithAccountsPageFn func(workspaceID int64, afterTime *time.Time, afterID int64, limit int) ([]models.GroupWithAccounts, bool, error)
+	listAccountsInGroupFn             func(groupID int64) ([]int64, error)
+	validateAccountOwnershipFn        func(userID, workspaceID int64, accountIDs []int64) ([]int64, error)
+	createFn                          func(g *models.Group) error
+	updateFn                          func(g *models.Group) error
+	deleteFn                          func(id int64) error
+	setAccountsFn                     func(groupID int64, accountIDs []int64) error
+	updateSettingsFn                  func(ctx context.Context, groupID, workspaceID, userID int64, updates []models.GroupAccountLanguageUpdate) error
+	removeAccountFromGroupTxFn        func(ctx context.Context, groupID, workspaceID, accountID int64) error
 }
 
 func (m *mockGroupStore) FindByID(id int64) (*models.Group, error) {
@@ -41,6 +44,18 @@ func (m *mockGroupStore) ListByWorkspaceWithAccounts(workspaceID int64) ([]model
 		return m.listByWorkspaceWithAccountsFn(workspaceID)
 	}
 	return nil, nil
+}
+func (m *mockGroupStore) ListByWorkspacePage(workspaceID int64, afterTime *time.Time, afterID int64, limit int) ([]models.Group, bool, error) {
+	if m.listByWorkspacePageFn != nil {
+		return m.listByWorkspacePageFn(workspaceID, afterTime, afterID, limit)
+	}
+	return nil, false, nil
+}
+func (m *mockGroupStore) ListByWorkspaceWithAccountsPage(workspaceID int64, afterTime *time.Time, afterID int64, limit int) ([]models.GroupWithAccounts, bool, error) {
+	if m.listByWorkspaceWithAccountsPageFn != nil {
+		return m.listByWorkspaceWithAccountsPageFn(workspaceID, afterTime, afterID, limit)
+	}
+	return nil, false, nil
 }
 
 func (m *mockGroupStore) ListAccountsInGroup(groupID int64) ([]int64, error) {

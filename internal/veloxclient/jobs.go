@@ -18,12 +18,26 @@ import (
 //
 // Permission: jobs.read.
 func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter veloxapi.ListJobsFilter) ([]veloxapi.Job, error) {
+	page, err := c.ListJobsPage(ctx, workspaceID, userID, filter)
+	if err != nil {
+		return nil, err
+	}
+	return page.Jobs, nil
+}
+
+// ListJobsPage is the additive cursor-aware jobs read. The upstream
+// envelope remains backward-compatible because next_cursor/has_more are
+// optional, while the BFF can use them whenever the provider supports it.
+func (c *Client) ListJobsPage(ctx context.Context, workspaceID, userID int64, filter veloxapi.ListJobsFilter) (veloxapi.JobsPage, error) {
 	q := url.Values{}
 	if filter.Status != "" {
 		q.Set("status", filter.Status)
 	}
 	if filter.Limit > 0 {
 		q.Set("limit", strconv.Itoa(filter.Limit))
+	}
+	if filter.Cursor != "" {
+		q.Set("cursor", filter.Cursor)
 	}
 	path := "/api/v1/instaedit/jobs"
 	if encoded := q.Encode(); encoded != "" {
@@ -34,20 +48,22 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter
 	// sub and workspace_id so the verifier has a non-zero subject.
 	var resp listJobsResponse
 	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeVeloxJobsRead}, nil, &resp); err != nil {
-		return nil, err
+		return veloxapi.JobsPage{}, err
 	}
 	jobs := make([]veloxapi.Job, 0, len(resp.Jobs))
 	for _, j := range resp.Jobs {
 		jobs = append(jobs, veloxapi.Job{
-			ID:           j.ID,
-			WorkspaceID:  j.WorkspaceID,
-			ProjectID:    j.ProjectID,
-			RenderStatus: j.RenderStatus,
-			CreatedAt:    j.CreatedAt,
-			UpdatedAt:    j.UpdatedAt,
+			ID:                j.ID,
+			WorkspaceID:       j.WorkspaceID,
+			ProjectID:         j.ProjectID,
+			RenderStatus:      j.RenderStatus,
+			PublicationStatus: j.PublicationStatus,
+			OverallStatus:     j.OverallStatus,
+			CreatedAt:         j.CreatedAt,
+			UpdatedAt:         j.UpdatedAt,
 		})
 	}
-	return jobs, nil
+	return veloxapi.JobsPage{Jobs: jobs, NextCursor: resp.NextCursor, HasMore: resp.HasMore}, nil
 }
 
 // CreateJob implements veloxapi.Client.CreateJob. The body carries the

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -256,11 +257,65 @@ func (r *Router) handleListByWorkspace(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	wid, err := strconv.ParseInt(chi.URLParam(req, "wid"), 10, 64)
-	if err != nil {
+	if err != nil || wid <= 0 {
 		writeError(w, http.StatusBadRequest, "invalid workspace id: "+err.Error())
 		return
 	}
-	posts, err := r.postStore.ListByWorkspace(wid)
+	if req.URL.Query().Get("cursor") == "" && req.URL.Query().Get("limit") == "" {
+		posts, listErr := r.postStore.ListByWorkspace(wid)
+		if listErr != nil {
+			code, msg := mapRepoError(listErr)
+			writeError(w, code, "failed to list posts: "+msg)
+			return
+		}
+		if posts == nil {
+			posts = []models.Post{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"posts": posts})
+		return
+	}
+	limit, rawCursor, err := parseListPageWithBounds(req.URL.Query(), 50, 100)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cursorContext := "workspace_id=" + strconv.FormatInt(wid, 10)
+	cursorTime, cursorID, cursorNull, err := decodeListCursorDetails(rawCursor, "posts", cursorContext)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if cursorNull && rawCursor != "" {
+		writeError(w, http.StatusBadRequest, "invalid list cursor: post cursor timestamp is required")
+		return
+	}
+	var posts []models.Post
+	hasMore := false
+	if paged, ok := r.postStore.(interface {
+		ListByWorkspacePage(int64, *time.Time, int64, int) ([]models.Post, bool, error)
+	}); ok {
+		var afterTime *time.Time
+		var afterID int64
+		if rawCursor != "" {
+			afterTime = &cursorTime
+			afterID, err = strconv.ParseInt(cursorID, 10, 64)
+			if err != nil || afterID <= 0 {
+				writeError(w, http.StatusBadRequest, "invalid list cursor")
+				return
+			}
+		}
+		posts, hasMore, err = paged.ListByWorkspacePage(wid, afterTime, afterID, limit)
+	} else {
+		if rawCursor != "" {
+			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this post store")
+			return
+		}
+		posts, err = r.postStore.ListByWorkspace(wid)
+		if len(posts) > limit {
+			hasMore = true
+			posts = posts[:limit]
+		}
+	}
 	if err != nil {
 		code, msg := mapRepoError(err)
 		writeError(w, code, "failed to list posts: "+msg)
@@ -269,7 +324,7 @@ func (r *Router) handleListByWorkspace(w http.ResponseWriter, req *http.Request)
 	if posts == nil {
 		posts = []models.Post{}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"posts": posts})
+	writeJSON(w, http.StatusOK, postListResponse(posts, hasMore, cursorContext))
 }
 
 // handleListPosts lists all posts for the authenticated user across their
@@ -300,15 +355,68 @@ func (r *Router) handleListPosts(w http.ResponseWriter, req *http.Request) {
 			writeError(w, http.StatusForbidden, "workspace not owned by this user")
 			return
 		}
-		posts, err := r.postStore.ListByWorkspace(wid)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list posts: "+err.Error())
+		if req.URL.Query().Get("cursor") == "" && req.URL.Query().Get("limit") == "" {
+			posts, listErr := r.postStore.ListByWorkspace(wid)
+			if listErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to list posts: "+listErr.Error())
+				return
+			}
+			if posts == nil {
+				posts = []models.Post{}
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"posts": posts})
+			return
+		}
+		limit, rawCursor, pageErr := parseListPageWithBounds(req.URL.Query(), 50, 100)
+		if pageErr != nil {
+			writeError(w, http.StatusBadRequest, pageErr.Error())
+			return
+		}
+		cursorContext := listCursorFilterContext(req.URL.Query(), "workspace_id")
+		cursorTime, cursorID, cursorNull, pageErr := decodeListCursorDetails(rawCursor, "posts", cursorContext)
+		if pageErr != nil {
+			writeError(w, http.StatusBadRequest, pageErr.Error())
+			return
+		}
+		if cursorNull && rawCursor != "" {
+			writeError(w, http.StatusBadRequest, "invalid list cursor: post cursor timestamp is required")
+			return
+		}
+		var posts []models.Post
+		hasMore := false
+		if paged, ok := r.postStore.(interface {
+			ListByWorkspacePage(int64, *time.Time, int64, int) ([]models.Post, bool, error)
+		}); ok {
+			var afterTime *time.Time
+			var afterID int64
+			if rawCursor != "" {
+				afterTime = &cursorTime
+				afterID, pageErr = strconv.ParseInt(cursorID, 10, 64)
+				if pageErr != nil || afterID <= 0 {
+					writeError(w, http.StatusBadRequest, "invalid list cursor")
+					return
+				}
+			}
+			posts, hasMore, pageErr = paged.ListByWorkspacePage(wid, afterTime, afterID, limit)
+		} else {
+			if rawCursor != "" {
+				writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this post store")
+				return
+			}
+			posts, pageErr = r.postStore.ListByWorkspace(wid)
+			if len(posts) > limit {
+				hasMore = true
+				posts = posts[:limit]
+			}
+		}
+		if pageErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list posts: "+pageErr.Error())
 			return
 		}
 		if posts == nil {
 			posts = []models.Post{}
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"posts": posts})
+		writeJSON(w, http.StatusOK, postListResponse(posts, hasMore, cursorContext))
 		return
 	}
 	wss, err := r.workspaceStore.ListByOwner(userID)
@@ -316,15 +424,79 @@ func (r *Router) handleListPosts(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list workspaces: "+err.Error())
 		return
 	}
-	all := make([]models.Post, 0)
+	workspaceIDs := make([]int64, 0, len(wss))
 	for _, ws := range wss {
-		posts, err := r.postStore.ListByWorkspace(ws.ID)
-		if err != nil {
-			continue
+		if ws.ID > 0 {
+			workspaceIDs = append(workspaceIDs, ws.ID)
 		}
-		all = append(all, posts...)
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"posts": all})
+	sort.Slice(workspaceIDs, func(i, j int) bool { return workspaceIDs[i] < workspaceIDs[j] })
+	if req.URL.Query().Get("cursor") == "" && req.URL.Query().Get("limit") == "" {
+		all := make([]models.Post, 0)
+		for _, ws := range wss {
+			posts, listErr := r.postStore.ListByWorkspace(ws.ID)
+			if listErr == nil {
+				all = append(all, posts...)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"posts": all})
+		return
+	}
+	limit, rawCursor, pageErr := parseListPageWithBounds(req.URL.Query(), 50, 100)
+	if pageErr != nil {
+		writeError(w, http.StatusBadRequest, pageErr.Error())
+		return
+	}
+	cursorContext := "workspaces=" + joinInt64List(workspaceIDs)
+	cursorTime, cursorID, cursorNull, pageErr := decodeListCursorDetails(rawCursor, "posts", cursorContext)
+	if pageErr != nil {
+		writeError(w, http.StatusBadRequest, pageErr.Error())
+		return
+	}
+	if cursorNull && rawCursor != "" {
+		writeError(w, http.StatusBadRequest, "invalid list cursor: post cursor timestamp is required")
+		return
+	}
+	var all []models.Post
+	hasMore := false
+	if paged, ok := r.postStore.(interface {
+		ListByWorkspacesPage([]int64, *time.Time, int64, int) ([]models.Post, bool, error)
+	}); ok {
+		var afterTime *time.Time
+		var afterID int64
+		if rawCursor != "" {
+			afterTime = &cursorTime
+			afterID, pageErr = strconv.ParseInt(cursorID, 10, 64)
+			if pageErr != nil || afterID <= 0 {
+				writeError(w, http.StatusBadRequest, "invalid list cursor")
+				return
+			}
+		}
+		all, hasMore, pageErr = paged.ListByWorkspacesPage(workspaceIDs, afterTime, afterID, limit)
+	} else {
+		if rawCursor != "" {
+			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this post store")
+			return
+		}
+		for _, ws := range wss {
+			posts, listErr := r.postStore.ListByWorkspace(ws.ID)
+			if listErr == nil {
+				all = append(all, posts...)
+			}
+		}
+		if len(all) > limit {
+			hasMore = true
+			all = all[:limit]
+		}
+	}
+	if pageErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list posts: "+pageErr.Error())
+		return
+	}
+	if all == nil {
+		all = []models.Post{}
+	}
+	writeJSON(w, http.StatusOK, postListResponse(all, hasMore, cursorContext))
 }
 
 // handlePatchPost updates the editable fields of an existing post.

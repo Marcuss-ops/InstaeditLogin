@@ -66,6 +66,8 @@ type (
 	DeliveryDestination = veloxcontract.DeliveryDestination
 	// ListJobsFilter carries optional query parameters for GET /api/v1/velox/jobs.
 	ListJobsFilter = veloxcontract.ListJobsFilter
+	// JobsPage is the additive cursor-paginated jobs response.
+	JobsPage = veloxcontract.JobsPage
 	// Client is the contract the BFF handlers depend on.
 	Client = veloxcontract.Client
 	// JobRegistry resolves canonical technical job types.

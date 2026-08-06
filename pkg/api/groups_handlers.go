@@ -16,6 +16,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -137,7 +138,61 @@ func (r *Router) handleListGroups(w http.ResponseWriter, req *http.Request) {
 	if ok, _ := r.requireWorkspaceOwnership(w, req, wid); !ok {
 		return
 	}
-	groups, err := r.groupStore.ListByWorkspace(wid)
+	if req.URL.Query().Get("cursor") == "" && req.URL.Query().Get("limit") == "" {
+		groups, listErr := r.groupStore.ListByWorkspace(wid)
+		if listErr != nil {
+			status, msg := mapGroupError(listErr)
+			writeError(w, status, msg)
+			return
+		}
+		if groups == nil {
+			groups = []models.Group{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"groups": groups})
+		return
+	}
+	limit, rawCursor, err := parseListPageWithBounds(req.URL.Query(), 50, 100)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cursorContext := listCursorFilterContext(req.URL.Query(), "workspace_id")
+	cursorTime, cursorID, cursorNull, err := decodeListCursorDetails(rawCursor, "groups", cursorContext)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if cursorNull && rawCursor != "" {
+		writeError(w, http.StatusBadRequest, "invalid list cursor: group cursor timestamp is required")
+		return
+	}
+	var groups []models.Group
+	hasMore := false
+	if paged, ok := r.groupStore.(interface {
+		ListByWorkspacePage(int64, *time.Time, int64, int) ([]models.Group, bool, error)
+	}); ok {
+		var afterTime *time.Time
+		var afterID int64
+		if rawCursor != "" {
+			afterTime = &cursorTime
+			afterID, err = strconv.ParseInt(cursorID, 10, 64)
+			if err != nil || afterID <= 0 {
+				writeError(w, http.StatusBadRequest, "invalid list cursor")
+				return
+			}
+		}
+		groups, hasMore, err = paged.ListByWorkspacePage(wid, afterTime, afterID, limit)
+	} else {
+		if rawCursor != "" {
+			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this group store")
+			return
+		}
+		groups, err = r.groupStore.ListByWorkspace(wid)
+		if len(groups) > limit {
+			hasMore = true
+			groups = groups[:limit]
+		}
+	}
 	if err != nil {
 		status, msg := mapGroupError(err)
 		writeError(w, status, msg)
@@ -146,7 +201,7 @@ func (r *Router) handleListGroups(w http.ResponseWriter, req *http.Request) {
 	if groups == nil {
 		groups = []models.Group{}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"groups": groups})
+	writeJSON(w, http.StatusOK, groupListResponse(groups, hasMore, cursorContext))
 }
 
 // handleListGroupsWithAccounts returns all groups and their direct account
@@ -180,7 +235,61 @@ func (r *Router) handleListGroupsWithAccounts(w http.ResponseWriter, req *http.R
 	if ok, _ := r.requireWorkspaceOwnership(w, req, workspaceID); !ok {
 		return
 	}
-	groups, err := r.groupStore.ListByWorkspaceWithAccounts(workspaceID)
+	if req.URL.Query().Get("cursor") == "" && req.URL.Query().Get("limit") == "" {
+		groups, listErr := r.groupStore.ListByWorkspaceWithAccounts(workspaceID)
+		if listErr != nil {
+			status, msg := mapGroupError(listErr)
+			writeError(w, status, msg)
+			return
+		}
+		if groups == nil {
+			groups = []models.GroupWithAccounts{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"groups": groups})
+		return
+	}
+	limit, rawCursor, err := parseListPageWithBounds(req.URL.Query(), 50, 100)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cursorContext := listCursorFilterContext(req.URL.Query(), "workspace_id")
+	cursorTime, cursorID, cursorNull, err := decodeListCursorDetails(rawCursor, "groups-aggregate", cursorContext)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if cursorNull && rawCursor != "" {
+		writeError(w, http.StatusBadRequest, "invalid list cursor: group cursor timestamp is required")
+		return
+	}
+	var groups []models.GroupWithAccounts
+	hasMore := false
+	if paged, ok := r.groupStore.(interface {
+		ListByWorkspaceWithAccountsPage(int64, *time.Time, int64, int) ([]models.GroupWithAccounts, bool, error)
+	}); ok {
+		var afterTime *time.Time
+		var afterID int64
+		if rawCursor != "" {
+			afterTime = &cursorTime
+			afterID, err = strconv.ParseInt(cursorID, 10, 64)
+			if err != nil || afterID <= 0 {
+				writeError(w, http.StatusBadRequest, "invalid list cursor")
+				return
+			}
+		}
+		groups, hasMore, err = paged.ListByWorkspaceWithAccountsPage(workspaceID, afterTime, afterID, limit)
+	} else {
+		if rawCursor != "" {
+			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this group store")
+			return
+		}
+		groups, err = r.groupStore.ListByWorkspaceWithAccounts(workspaceID)
+		if len(groups) > limit {
+			hasMore = true
+			groups = groups[:limit]
+		}
+	}
 	if err != nil {
 		status, msg := mapGroupError(err)
 		writeError(w, status, msg)
@@ -189,7 +298,12 @@ func (r *Router) handleListGroupsWithAccounts(w http.ResponseWriter, req *http.R
 	if groups == nil {
 		groups = []models.GroupWithAccounts{}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"groups": groups})
+	response := map[string]interface{}{"groups": groups, "has_more": hasMore}
+	if hasMore && len(groups) > 0 {
+		last := groups[len(groups)-1].Group
+		response["next_cursor"] = encodeListCursorForContext("groups-aggregate", cursorContext, last.CreatedAt, strconv.FormatInt(last.ID, 10))
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // handleCreateGroup creates a new group in the supplied workspace. The

@@ -176,6 +176,7 @@ func (r *Router) Setup() http.Handler {
 		DriveBatchStatus:   r.handleDriveBatchStatus,
 		CompleteMedia:      r.handleCompleteMedia,
 		ListMedia:          r.handleListMediaAssets,
+		GetMedia:           r.handleGetMediaAsset,
 	}))
 	reg.Register(NewPublishingModule(PublishingModuleDeps{
 		RateLimitSvc:         r.rateLimitSvc,

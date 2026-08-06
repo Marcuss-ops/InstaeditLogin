@@ -80,7 +80,7 @@ func stubAuthNoWorkspace(next http.Handler) http.Handler {
 
 // newMux builds a chi mux with the BFF routes registered against the
 // given mock client and the stub auth middleware.
-func newMux(t *testing.T, mc *mockClient, authMw func(http.Handler) http.Handler) *chi.Mux {
+func newMux(t *testing.T, mc Client, authMw func(http.Handler) http.Handler) *chi.Mux {
 	t.Helper()
 	mux := chi.NewRouter()
 	Register(mux, Deps{

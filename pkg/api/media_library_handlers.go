@@ -8,24 +8,27 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/go-chi/chi/v5"
 )
 
-// MediaLibraryItem is one row of GET /api/v1/media — the Media Library
-// row the live wizard's step 3 renders. The probe fields
-// (duration/resolution/FPS/audio/codecs) stay null until the upload
-// worker probes the asset (migration 092); live_compatibility is
-// derived server-side so clients never re-implement the profile check.
-type MediaLibraryItem struct {
-	ID          string    `json:"id"`
-	Filename    string    `json:"filename"`
-	ContentType string    `json:"content_type"`
-	SizeBytes   int64     `json:"size_bytes"`
-	CreatedAt   time.Time `json:"created_at"`
-	// PreviewURL is a short-lived presigned GET URL (15 min) minted
-	// per row so the wizard can render <video preload="metadata">.
+// MediaLibraryListItem is the deliberately small row DTO returned by
+// GET /api/v1/media. Probe metadata and signed object URLs are loaded on
+// demand by GET /api/v1/media/{id}.
+type MediaLibraryListItem struct {
+	ID                string    `json:"id"`
+	Filename          string    `json:"filename"`
+	ContentType       string    `json:"content_type"`
+	SizeBytes         int64     `json:"size_bytes"`
+	CreatedAt         time.Time `json:"created_at"`
+	LiveCompatibility string    `json:"live_compatibility"`
+}
+
+// MediaLibraryDetail is returned by GET /api/v1/media/{id}. The signed
+// preview URL is minted only for this explicitly requested asset.
+type MediaLibraryDetail struct {
+	MediaLibraryListItem
 	PreviewURL string `json:"preview_url,omitempty"`
 
-	// Probe fields — nil until probed.
 	DurationSeconds *float64   `json:"duration_seconds,omitempty"`
 	Width           *int       `json:"width,omitempty"`
 	Height          *int       `json:"height,omitempty"`
@@ -34,32 +37,49 @@ type MediaLibraryItem struct {
 	VideoCodec      string     `json:"video_codec,omitempty"`
 	AudioCodec      string     `json:"audio_codec,omitempty"`
 	ProbedAt        *time.Time `json:"probed_at,omitempty"`
+}
 
-	// LiveCompatibility: "ready" | "needs_normalization" | "unknown".
-	// "unknown" = never probed (compatibility can't be asserted);
-	// "needs_normalization" = probed but off-profile (the file must
-	// be normalised before it can feed a live encoder).
-	LiveCompatibility string `json:"live_compatibility"`
+// MediaLibraryItem remains available for existing API tests and internal
+// helpers that model the previous complete row shape.
+type MediaLibraryItem struct {
+	ID                string     `json:"id"`
+	Filename          string     `json:"filename"`
+	ContentType       string     `json:"content_type"`
+	SizeBytes         int64      `json:"size_bytes"`
+	CreatedAt         time.Time  `json:"created_at"`
+	PreviewURL        string     `json:"preview_url,omitempty"`
+	DurationSeconds   *float64   `json:"duration_seconds,omitempty"`
+	Width             *int       `json:"width,omitempty"`
+	Height            *int       `json:"height,omitempty"`
+	FPS               *float64   `json:"fps,omitempty"`
+	HasAudio          *bool      `json:"has_audio,omitempty"`
+	VideoCodec        string     `json:"video_codec,omitempty"`
+	AudioCodec        string     `json:"audio_codec,omitempty"`
+	ProbedAt          *time.Time `json:"probed_at,omitempty"`
+	LiveCompatibility string     `json:"live_compatibility"`
 }
 
 const (
 	liveCompatReady              = "ready"
 	liveCompatNeedsNormalization = "needs_normalization"
 	liveCompatUnknown            = "unknown"
+
+	// The server cache is shorter than the 15-minute URL validity period,
+	// leaving enough time for a browser to finish a metadata request.
+	mediaLibraryPreviewCacheTTL = 5 * time.Minute
+	mediaLibraryPreviewTTL      = 15 * time.Minute
 )
 
-// mediaLibraryPreviewTTL is how long each row's presigned preview URL
-// stays valid. Browsers fetch metadata lazily, so 15 minutes covers a
-// long wizard session without leaking signed URLs forever.
-const mediaLibraryPreviewTTL = 15 * time.Minute
+type mediaPreviewCacheEntry struct {
+	url       string
+	expiresAt time.Time
+}
 
-// handleListMediaAssets (GET /api/v1/media, protected) returns the
-// caller's ready, non-expired media assets newest-first with their
-// ffprobe metadata + a server-derived live-compatibility flag. Powers
-// the live wizard's step 3 Media Library picker. Optional ?limit=
-// (default 100, max 500).
+// handleListMediaAssets (GET /api/v1/media, protected) returns only the
+// fields needed to render a list. It intentionally performs no storage
+// signing and no per-row detail expansion.
 func (r *Router) handleListMediaAssets(w http.ResponseWriter, req *http.Request) {
-	if r.mediaStore == nil || r.storageProvider == nil {
+	if r.mediaStore == nil {
 		writeError(w, http.StatusNotImplemented, "media not configured on this server")
 		return
 	}
@@ -82,6 +102,7 @@ func (r *Router) handleListMediaAssets(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid list cursor: media cursor timestamp is required")
 		return
 	}
+
 	var assets []models.MediaAsset
 	hasMore := false
 	if paged, ok := r.mediaStore.(interface {
@@ -107,29 +128,18 @@ func (r *Router) handleListMediaAssets(w http.ResponseWriter, req *http.Request)
 		logAndError(w, req, "failed to list media library", err, "user_id", userID)
 		return
 	}
-	items := make([]MediaLibraryItem, 0, len(assets))
+
+	items := make([]MediaLibraryListItem, 0, len(assets))
 	for i := range assets {
 		asset := &assets[i]
-		item := MediaLibraryItem{
+		items = append(items, MediaLibraryListItem{
 			ID:                asset.ID,
 			Filename:          mediaAssetFilename(asset.UploadKey),
 			ContentType:       asset.ContentType,
 			SizeBytes:         asset.SizeBytes,
 			CreatedAt:         asset.CreatedAt,
-			DurationSeconds:   asset.DurationSeconds,
-			Width:             asset.Width,
-			Height:            asset.Height,
-			FPS:               asset.FPS,
-			HasAudio:          asset.HasAudio,
-			VideoCodec:        asset.VideoCodec,
-			AudioCodec:        asset.AudioCodec,
-			ProbedAt:          asset.ProbedAt,
 			LiveCompatibility: mediaLiveCompatibility(asset),
-		}
-		if url, urlErr := r.storageProvider.GetObject(req.Context(), asset.UploadKey, mediaLibraryPreviewTTL); urlErr == nil {
-			item.PreviewURL = url
-		}
-		items = append(items, item)
+		})
 	}
 	response := map[string]any{"items": items, "has_more": hasMore}
 	if hasMore && len(assets) > 0 {
@@ -139,13 +149,81 @@ func (r *Router) handleListMediaAssets(w http.ResponseWriter, req *http.Request)
 	writeJSON(w, http.StatusOK, response)
 }
 
-// mediaAssetFilename recovers the display name from the S3 object key
-// ("uploads/{userID}/{uuid}_{sanitized}" → "{sanitized}"). The uuid
-// token is 36 hex/dash chars and NEVER contains an underscore, so the
-// FIRST underscore after path.Base is the separator — a sanitized
-// filename may itself contain underscores (e.g. "my_clip.mp4") and
-// must survive intact. Keys without the uuid prefix (legacy shapes)
-// fall back to the base name.
+// handleGetMediaAsset (GET /api/v1/media/{id}, protected) returns the
+// detail DTO and mints a signed URL only for this requested asset.
+func (r *Router) handleGetMediaAsset(w http.ResponseWriter, req *http.Request) {
+	if r.mediaStore == nil || r.storageProvider == nil {
+		writeError(w, http.StatusNotImplemented, "media not configured on this server")
+		return
+	}
+	userID, ok := requireUserID(w, req, r)
+	if !ok {
+		return
+	}
+	id := strings.TrimSpace(chi.URLParam(req, "id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "media id is required")
+		return
+	}
+	asset, err := r.mediaStore.FindByID(id)
+	if err != nil {
+		logAndError(w, req, "failed to find media asset", err, "asset_id", id)
+		return
+	}
+	if asset == nil || asset.UserID != userID || asset.Status != models.MediaAssetStatusReady || time.Now().After(asset.ExpiresAt) {
+		writeError(w, http.StatusNotFound, "media asset not found")
+		return
+	}
+
+	item := MediaLibraryDetail{
+		MediaLibraryListItem: MediaLibraryListItem{
+			ID:                asset.ID,
+			Filename:          mediaAssetFilename(asset.UploadKey),
+			ContentType:       asset.ContentType,
+			SizeBytes:         asset.SizeBytes,
+			CreatedAt:         asset.CreatedAt,
+			LiveCompatibility: mediaLiveCompatibility(asset),
+		},
+		DurationSeconds: asset.DurationSeconds,
+		Width:           asset.Width,
+		Height:          asset.Height,
+		FPS:             asset.FPS,
+		HasAudio:        asset.HasAudio,
+		VideoCodec:      asset.VideoCodec,
+		AudioCodec:      asset.AudioCodec,
+		ProbedAt:        asset.ProbedAt,
+	}
+
+	if url, cached := r.mediaPreviewURL(id); cached {
+		item.PreviewURL = url
+	} else if url, urlErr := r.storageProvider.GetObject(req.Context(), asset.UploadKey, mediaLibraryPreviewTTL); urlErr == nil {
+		item.PreviewURL = url
+		r.storeMediaPreviewURL(id, url)
+	} else {
+		logAndError(w, req, "failed to sign media preview", urlErr, "asset_id", id)
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (r *Router) mediaPreviewURL(id string) (string, bool) {
+	r.mediaPreviewCacheMu.Lock()
+	defer r.mediaPreviewCacheMu.Unlock()
+	entry, ok := r.mediaPreviewCache[id]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return "", false
+	}
+	return entry.url, true
+}
+
+func (r *Router) storeMediaPreviewURL(id, url string) {
+	r.mediaPreviewCacheMu.Lock()
+	defer r.mediaPreviewCacheMu.Unlock()
+	if r.mediaPreviewCache == nil {
+		r.mediaPreviewCache = make(map[string]mediaPreviewCacheEntry)
+	}
+	r.mediaPreviewCache[id] = mediaPreviewCacheEntry{url: url, expiresAt: time.Now().Add(mediaLibraryPreviewCacheTTL)}
+}
+
 func mediaAssetFilename(uploadKey string) string {
 	if uploadKey == "" {
 		return ""
@@ -158,10 +236,6 @@ func mediaAssetFilename(uploadKey string) string {
 	return base
 }
 
-// mediaLiveCompatibility derives the wizard badge from the asset's
-// probe columns. Unprobed assets are "unknown"; probed assets either
-// match one of the canonical live profiles ("ready") or need
-// normalization before they can feed a live encoder.
 func mediaLiveCompatibility(asset *models.MediaAsset) string {
 	if asset == nil || asset.ProbedAt == nil {
 		return liveCompatUnknown
