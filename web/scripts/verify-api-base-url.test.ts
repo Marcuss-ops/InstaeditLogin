@@ -62,6 +62,13 @@ describe("validateApiBaseUrl", () => {
       expect(r.messages[0]).toMatch(/empty/);
     });
 
+    it("error on the legacy dev API host", () => {
+      const r = validateApiBaseUrl(
+        env({ VITE_API_BASE_URL: "https://dev.instaedit.org", VERCEL_ENV: "preview" }),
+      );
+      expect(r.level).toBe("error");
+    });
+
     it("error on localhost", () => {
       const r = validateApiBaseUrl(
         env({ VITE_API_BASE_URL: "http://localhost:8080", VERCEL_ENV: "preview" }),
@@ -107,6 +114,14 @@ describe("validateApiBaseUrl", () => {
       );
       expect(r.level).toBe("error");
       expect(r.messages[0]).toMatch(/DEPLOYMENT_NOT_FOUND|DEPLOYMENT/);
+    });
+
+    it("error on the legacy dev API host", () => {
+      const r = validateApiBaseUrl(
+        env({ VITE_API_BASE_URL: "https://dev.instaedit.org", VERCEL_ENV: "production" }),
+      );
+      expect(r.level).toBe("error");
+      expect(r.messages.some((message) => message.includes("legacy dev.instaedit.org"))).toBe(true);
     });
 
     it("error on localhost with port", () => {

@@ -254,7 +254,7 @@ I valori OAuth production devono essere:
 ```env
 FRONTEND_URL=https://app.instaedit.org
 YOUTUBE_REDIRECT_URI=https://dev.instaedit.org/api/v1/auth/youtube/callback
-CORS_ALLOWED_ORIGINS=https://app.instaedit.org,https://dev.instaedit.org
+CORS_ALLOWED_ORIGINS=https://app.instaedit.org
 COOKIE_DOMAIN=.instaedit.org
 ```
 
@@ -283,11 +283,11 @@ Il progetto Vercel usa la root del repository, il file `vercel.json` e il workfl
 Per una build locale equivalente:
 
 ```bash
-VITE_API_BASE_URL=https://dev.instaedit.org npm --prefix web ci
-VITE_API_BASE_URL=https://dev.instaedit.org npm --prefix web run build
+VITE_API_BASE_URL=https://api.instaedit.org npm --prefix web ci
+VITE_API_BASE_URL=https://api.instaedit.org npm --prefix web run build
 ```
 
-Il bundle deve contenere `https://dev.instaedit.org`, mai `api.instaedit.org`,
+Il bundle deve contenere `https://api.instaedit.org`, mai `dev.instaedit.org`,
 `fly.dev`, `vercel.app` come API o `localhost`.
 
 ### Verifica dopo il deploy

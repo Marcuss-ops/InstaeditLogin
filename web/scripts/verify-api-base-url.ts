@@ -148,6 +148,18 @@ export function validateApiBaseUrl(env: Env = process.env): ValidationResult {
   const messages: string[] = [];
   let level: ValidationLevel = "ok";
 
+  // ---- Legacy public API host check ----
+  // `dev.instaedit.org` is a compatibility-only backend host. Public
+  // preview/production bundles must use the canonical API host so the
+  // browser receives the same session/cookie policy as the current app.
+  if (isDeployed && parsed.hostname.toLowerCase() === "dev.instaedit.org") {
+    messages.push(
+      "VITE_API_BASE_URL points to the legacy dev.instaedit.org host.\n" +
+        "   Fix: set it to https://api.instaedit.org and redeploy the frontend.",
+    );
+    level = "error";
+  }
+
   // ---- Localhost / loopback check ----
   if (isDeployed && LOCAL_LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
     messages.push(

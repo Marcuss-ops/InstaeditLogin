@@ -13,7 +13,7 @@ in English.
 - Public landing: `https://app.instaedit.org`
 - `https://instaedit.org` and `https://www.instaedit.org`: redirect to the
   canonical landing.
-- Backend API used by the frontend: `https://dev.instaedit.org`
+- Backend API used by the frontend: `https://api.instaedit.org`
 
 Never use the server IP address in application links or Vercel variables. The
 IP is only useful for local host diagnostics.
@@ -35,7 +35,7 @@ If the landing must call the API, the frontend variable must use the public
 API domain:
 
 ```text
-VITE_API_BASE_URL=https://dev.instaedit.org
+VITE_API_BASE_URL=https://api.instaedit.org
 ```
 
 Set it at least for the `Production` environment. Do not use:
@@ -177,6 +177,7 @@ landing sections (hero, founder story, testimonials, FAQ, final CTA).
 If the UI still shows an old version:
 
 1. verify Vercel published the correct commit;
+2. verify the bundle does not contain the legacy `dev.instaedit.org` API host;
 2. check `VITE_API_BASE_URL` is set in the correct environment;
 3. do a redeploy after any `VITE_*` change;
 4. hard-refresh the browser (the CDN cache can take a moment to invalidate).

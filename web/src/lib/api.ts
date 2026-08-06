@@ -21,13 +21,50 @@
  *     pointing at the deployed Go API host.
  *
  */
-const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
-const publicHost =
-  typeof window !== "undefined" && window.location.hostname.endsWith("instaedit.org");
+const CANONICAL_PUBLIC_API_BASE_URL = "https://api.instaedit.org";
 
-// Never let a production/dev-host bundle call the browser's localhost. The
-// explicit VITE value remains the deployment override; this host-aware
-// fallback keeps a manually built public bundle usable even when the build
-// environment forgot to provide it.
-export const API_BASE_URL: string =
-  configuredApiBaseUrl || (publicHost ? "https://api.instaedit.org" : "http://localhost:8080");
+function isPublicInstaEditHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return normalized === "instaedit.org" || normalized.endsWith(".instaedit.org");
+}
+
+/**
+ * Resolves the API URL used by the browser.
+ *
+ * `dev.instaedit.org` is a legacy compatibility host. Public bundles must not
+ * keep using it: a Vercel environment variable pointing there can send the
+ * session request to the stale deployment and produce an apparently random
+ * 401. Keep the override for local/non-public environments, but canonicalize
+ * that one legacy host whenever the SPA is served on an InstaEdit domain.
+ */
+export function resolveApiBaseUrl(
+  configuredUrl: string | undefined,
+  hostname: string | undefined,
+): string {
+  const configured = configuredUrl?.trim() ?? "";
+  const publicHost = hostname ? isPublicInstaEditHost(hostname) : false;
+
+  if (configured && publicHost) {
+    try {
+      const parsed = new URL(configured);
+      if (parsed.hostname.toLowerCase() === "dev.instaedit.org") {
+        parsed.hostname = "api.instaedit.org";
+        return parsed.toString().replace(/\/$/, "");
+      }
+    } catch {
+      // Preserve the configured value so the existing build-time validator or
+      // backend error remains visible instead of hiding a malformed setting.
+    }
+  }
+
+  // Never let a production/public bundle call the browser's localhost. The
+  // explicit VITE value remains the deployment override; this host-aware
+  // fallback keeps a manually built public bundle usable when the build
+  // environment forgot to provide it.
+  return configured || (publicHost ? CANONICAL_PUBLIC_API_BASE_URL : "http://localhost:8080");
+}
+
+export const API_BASE_URL: string = resolveApiBaseUrl(
+  import.meta.env.VITE_API_BASE_URL,
+  typeof window !== "undefined" ? window.location.hostname : undefined,
+);
