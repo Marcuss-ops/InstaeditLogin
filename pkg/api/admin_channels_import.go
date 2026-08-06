@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -61,13 +62,41 @@ type AdminImportChannelsResponse struct {
 // (workspace_id is the FK on platform_accounts). Unresolvable
 // names surface as RowErrors with reason "no such workspace: NAME".
 // See internal/channelimport for the parse + upsert contract.
+const (
+	// adminCSVMaxUploadBytes bounds the complete multipart request, including
+	// multipart headers and owner_email. The CSV itself is normally tiny, but
+	// the boundary must be enforced before parsing so a client cannot make the
+	// multipart parser consume unbounded memory or disk.
+	adminCSVMaxUploadBytes int64 = 20 << 20
+	// Keep only small multipart parts in memory. Larger file parts are spooled
+	// by net/http to a temporary file and removed by the deferred cleanup below.
+	adminCSVMultipartMemory int64 = 1 << 20
+)
+
 func (m *AdminModule) handleAdminImportChannelsCSV(w http.ResponseWriter, req *http.Request) {
 	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
-	if err := req.ParseMultipartForm(20 << 20); err != nil {
-		// 20 MiB cap: a 200-channel CSV is roughly 20 KB; well below.
+
+	// MaxBytesReader is the authoritative cap: Content-Length is optional and
+	// client-controlled, so it cannot be used as the only protection. Install
+	// cleanup before parsing so temporary multipart files are removed on both
+	// success and every parse/validation error path.
+	req.Body = http.MaxBytesReader(w, req.Body, adminCSVMaxUploadBytes)
+	defer req.Body.Close()
+	defer func() {
+		if req.MultipartForm != nil {
+			_ = req.MultipartForm.RemoveAll()
+		}
+	}()
+	if err := req.ParseMultipartForm(adminCSVMultipartMemory); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeError(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("multipart upload exceeds %d bytes", adminCSVMaxUploadBytes))
+			return
+		}
 		writeError(w, http.StatusBadRequest, "could not parse multipart form: "+err.Error())
 		return
 	}

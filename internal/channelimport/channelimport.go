@@ -150,14 +150,13 @@ func Parse(r io.Reader, platform string, workspaceLookup func(name string) (id i
 	}
 	csvReader := csv.NewReader(r)
 	csvReader.FieldsPerRecord = -1 // accept variable column counts so we can give a per-row Reason
-	records, err := csvReader.ReadAll()
+	headerRow, err := csvReader.Read()
+	if err == io.EOF {
+		return nil, nil, errors.New("channelimport: empty CSV (no header row)")
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("channelimport: csv read: %w", err)
 	}
-	if len(records) == 0 {
-		return nil, nil, errors.New("channelimport: empty CSV (no header row)")
-	}
-	headerRow := records[0]
 	// Header validation: every CSVHeaderColumns must appear, by name,
 	// in the header row. Extra columns are allowed (forward compat)
 	// but silently ignored. Missing columns are a hard error so the
@@ -172,11 +171,18 @@ func Parse(r io.Reader, platform string, workspaceLookup func(name string) (id i
 			return nil, nil, fmt.Errorf("channelimport: missing required header column %q (got %v)", want, headerRow)
 		}
 	}
-
-	rows := make([]ImportRow, 0, len(records)-1)
+	rows := make([]ImportRow, 0)
 	errs := make([]RowError, 0)
-	for i, rec := range records[1:] {
-		rowNumber := i + 2 // 1-based; row 1 is the header
+	for rowNumber := 2; ; rowNumber++ {
+		rec, readErr := csvReader.Read()
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, nil, fmt.Errorf("channelimport: csv read: %w", readErr)
+		}
+		// Row numbers are 1-based and include the header.
+
 		// Pad the record so missing columns surface as empty strings
 		// for the parser (the channel_id check below distinguishes
 		// "missing" from "empty").
