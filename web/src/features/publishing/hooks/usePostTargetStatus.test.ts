@@ -9,6 +9,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, AuthError } from "../../../lib/auth";
+import { clearSharedQueryCache } from "../../../lib/queryRegistry";
 import { usePostTargetStatus } from "./usePostTargetStatus";
 
 const { getPostTargetsMock } = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ const advance = async (ms: number) => {
 };
 
 afterEach(() => {
+  clearSharedQueryCache();
   vi.useRealTimers();
   // Reset the document.hidden override in case a test changed it.
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
@@ -58,7 +60,7 @@ describe("usePostTargetStatus", () => {
 
     expect(result.current.status).toBe("polling");
     expect(result.current.targets).toHaveLength(1);
-    expect(getPostTargetsMock).toHaveBeenCalledWith(1);
+    expect(getPostTargetsMock).toHaveBeenCalledWith(1, expect.any(AbortSignal));
   });
 
   it("transitions to terminal when every target is in a terminal state", async () => {
@@ -123,7 +125,8 @@ describe("usePostTargetStatus", () => {
     getPostTargetsMock.mockResolvedValueOnce([
       { id: 1, post_id: 1, platform_account_id: 9, status: "published" },
     ]);
-    await advance(3000);
+    // A failed poll uses a bounded 2x backoff: 6s instead of 3s.
+    await advance(6000);
     expect(result.current.status).toBe("terminal");
     expect(result.current.error).toBeNull();
   });
@@ -161,11 +164,15 @@ describe("usePostTargetStatus", () => {
     await advance(6_000);
     expect(getPostTargetsMock).toHaveBeenCalledTimes(1);
 
-    // Unhide; the interval is still armed, so it keeps firing.
+    // Unhide and emit the browser event: the shared registry performs
+    // one immediate refetch, then resumes its recursive 3s cadence.
     Object.defineProperty(document, "hidden", { configurable: true, value: false });
-    await advance(6_000);
-    // 2 ticks from the unhidden interval. (Initial 1 + 2 = 3.)
-    expect(getPostTargetsMock).toHaveBeenCalledTimes(3);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+    expect(getPostTargetsMock).toHaveBeenCalledTimes(2);
   });
 
   it("refetch() is exposed and bypasses the interval", async () => {
@@ -204,16 +211,13 @@ describe("usePostTargetStatus", () => {
     await advance(9_000);
     expect(getPostTargetsMock).toHaveBeenCalledTimes(1);
 
-    // Resolve the hung promise.
+    // Resolve the hung promise. The result is terminal, so the
+    // adaptive registry intentionally stops scheduling more polls.
     await act(async () => {
       resolveFirst([{ id: 1, status: "published" }]);
+      await Promise.resolve();
     });
-    // Now the next tick is allowed through.
-    getPostTargetsMock.mockResolvedValueOnce([
-      { id: 1, post_id: 1, platform_account_id: 9, status: "published" },
-    ]);
-    await advance(3_000);
-    expect(getPostTargetsMock).toHaveBeenCalledTimes(2);
+    expect(getPostTargetsMock).toHaveBeenCalledTimes(1);
   });
 
   it("silently swallows AuthError thrown by an interval tick (no unhandled rejection)", async () => {
@@ -257,7 +261,7 @@ describe("usePostTargetStatus", () => {
       getPostTargetsMock.mockResolvedValueOnce([
         { id: 1, post_id: 1, platform_account_id: 9, status: "published" },
       ]);
-      await advance(3_000);
+      await advance(6_000);
       expect(result.current.status).toBe("terminal");
       expect(
         getPostTargetsMock.mock.calls.length,

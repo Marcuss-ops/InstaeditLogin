@@ -1,5 +1,6 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearSharedQueryCache } from "../lib/queryRegistry";
 import { countActiveLives, livestreamsURL, useActiveLiveCount } from "./useActiveLiveCount";
 
 describe("countActiveLives", () => {
@@ -41,6 +42,7 @@ describe("livestreamsURL", () => {
 
 describe("useActiveLiveCount", () => {
   afterEach(() => {
+    clearSharedQueryCache();
     vi.unstubAllGlobals();
   });
 
@@ -56,12 +58,12 @@ describe("useActiveLiveCount", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       expect.stringMatching(/\/api\/v1\/auth\/me$/),
-      { credentials: "include" },
+      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       expect.stringMatching(/\/api\/v1\/livestreams\?workspace_id=7$/),
-      { credentials: "include" },
+      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
     );
     unmount();
   });

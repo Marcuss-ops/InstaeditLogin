@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AuthError, authedFetch } from "../lib/auth";
+import { useSharedPolling } from "../lib/queryRegistry";
 import { listAllAccounts } from "../features/channels/api/channelsApi";
 import { useToast } from "../components/toast";
 import type {
@@ -49,7 +50,7 @@ export function useUploads() {
     maxJitterSeconds: DEFAULT_MAX_JITTER_SEC,
   });
   const abortRef = useRef<AbortController | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingBatchRef = useRef<string | null>(null);
 
   useEffect(() => {
     setLoadState({ kind: "loading" });
@@ -150,10 +151,7 @@ export function useUploads() {
     (form.startAt === "" || !isNaN(new Date(form.startAt).getTime()));
 
   const handleRunAnother = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    pollingBatchRef.current = null;
     setSubmitState({ kind: "idle" });
     setForm((f) => ({
       ...f,
@@ -164,51 +162,50 @@ export function useUploads() {
   }, []);
 
   const resetSubmit = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    pollingBatchRef.current = null;
     setSubmitState({ kind: "idle" });
   }, []);
 
   const startPolling = useCallback(
     (batchId: string) => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      pollingBatchRef.current = batchId;
       setSubmitState({ kind: "polling", batchId });
-
-      const poll = async () => {
-        try {
-          const resp = await authedFetch(
-            `/api/v1/media/import/drive/folder/async/${batchId}`,
-          );
-          if (!resp.ok) {
-            return;
-          }
-          const data = (await resp.json()) as BatchStatusResponse;
-          if (TERMINAL_STATUSES.has(data.status)) {
-            if (pollRef.current) {
-              clearInterval(pollRef.current);
-              pollRef.current = null;
-            }
-            if (data.status === "completed") {
-              setSubmitState({ kind: "queued", batchId });
-              toast.success(
-                `Batch completed — ${data.processed_count} file${data.processed_count === 1 ? "" : "s"} processed.`,
-              );
-            } else {
-              setSubmitState({ kind: "error", message: `Batch ${data.status}` });
-            }
-          }
-        } catch {
-          // Network hiccup — keep polling.
-        }
-      };
-
-      pollRef.current = setInterval(poll, POLL_INTERVAL_MS);
-      void poll();
     },
-    [toast],
+    [],
   );
+
+  const pollingBatchID = pollingBatchRef.current;
+  const pollBatch = useSharedPolling(`upload-batch:${pollingBatchID ?? "none"}`, {
+    enabled: pollingBatchID != null && submitState.kind === "polling",
+    interval: POLL_INTERVAL_MS,
+    task: async (signal) => {
+      if (!pollingBatchID) return;
+      try {
+        const resp = await authedFetch(
+          `/api/v1/media/import/drive/folder/async/${pollingBatchID}`,
+          { signal },
+        );
+        if (!resp.ok) return;
+        const data = (await resp.json()) as BatchStatusResponse;
+        if (!TERMINAL_STATUSES.has(data.status)) return;
+        pollingBatchRef.current = null;
+        if (data.status === "completed") {
+          setSubmitState({ kind: "queued", batchId: pollingBatchID });
+          toast.success(
+            `Batch completed — ${data.processed_count} file${data.processed_count === 1 ? "" : "s"} processed.`,
+          );
+        } else {
+          setSubmitState({ kind: "error", message: `Batch ${data.status}` });
+        }
+      } catch {
+        // Network hiccup — the shared scheduler retries later.
+      }
+    },
+  });
+  useEffect(() => {
+    if (pollingBatchID == null || submitState.kind !== "polling") return;
+    void pollBatch();
+  }, [pollBatch, pollingBatchID, submitState.kind]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {

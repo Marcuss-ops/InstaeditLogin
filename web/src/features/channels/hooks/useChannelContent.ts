@@ -86,6 +86,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, AuthError } from "../../../lib/auth";
+import { useSharedPolling } from "../../../lib/queryRegistry";
 import { listChannelContent } from "../api/channelContentApi";
 import type { ChannelVideo, PrivacyFilter } from "../types";
 
@@ -397,28 +398,21 @@ export function useChannelContent({
     };
   }, [enabled, refetchOnWindowFocus, accountId]);
 
-  // ─── refetchInterval ───────────────────────────────────────────────
-  // Resolve the predicate to a concrete ms value whenever the
-  // state changes. The interval reschedules when the result
-  // changes (null → 5000 → null all clear+restart the timer).
-  const intervalMs = (() => {
-    if (refetchInterval == null) return null;
-    if (typeof refetchInterval === "number") return refetchInterval;
-    return refetchInterval(state);
-  })();
-  useEffect(() => {
-    if (!enabled || intervalMs == null) return;
-    if (typeof window === "undefined") return;
-    const id = window.setInterval(() => {
-      void cfetchFnRef.current().catch((err: unknown) => {
-        if (err instanceof AuthError) return;
-        throw err;
-      });
-    }, intervalMs);
-    return () => {
-      window.clearInterval(id);
-    };
-  }, [intervalMs, enabled]);
+  // ─── shared adaptive polling ───────────────────────────────────────
+  // The registry owns recursive scheduling, deduplication and hidden-tab
+  // suspension. A null predicate result removes the timer completely.
+  const intervalMs = refetchInterval == null
+    ? null
+    : typeof refetchInterval === "number"
+      ? refetchInterval
+      : refetchInterval(state);
+  useSharedPolling(`channel-content:${accountId ?? "none"}:${privacy}`, {
+    enabled: enabled && accountId != null && intervalMs != null,
+    interval: intervalMs,
+    task: async () => {
+      await cfetchFnRef.current();
+    },
+  });
 
   // Unmount cleanup.
   useEffect(() => {

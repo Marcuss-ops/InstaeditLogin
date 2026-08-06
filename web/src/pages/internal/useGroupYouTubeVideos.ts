@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useSharedPolling } from "../../lib/queryRegistry";
 import { ApiError, authedFetch, AuthError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import {
@@ -177,7 +178,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = false) {
   );
 
   const refreshVideos = useCallback(
-    (resetPolling = true, forceRefresh = false): void => {
+    (resetPolling = true, forceRefresh = false): Promise<void> => {
       if (resetPolling) pollingAttemptsRef.current = 0;
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -185,7 +186,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = false) {
       if (resetPolling) {
         setState({ kind: "loading" });
       }
-      void loadVideos(controller.signal, 0, false, forceRefresh);
+      return loadVideos(controller.signal, 0, false, forceRefresh);
     },
     [loadVideos],
   );
@@ -217,19 +218,19 @@ export function useGroupYouTubeVideos(groupId: number, enabled = false) {
     state.kind === "ready" &&
     state.videos.some((video) => video.youtube_sync_status === "pending");
 
-  useEffect(() => {
-    if (!hasPendingVideos) return;
-    if (pollingAttemptsRef.current >= 12) return;
-    const interval = window.setInterval(() => {
-      if (pollingAttemptsRef.current >= 12) {
-        window.clearInterval(interval);
-        return;
-      }
+  const pollPendingVideos = useSharedPolling(`group-youtube-videos:${groupId}:${recencyDays}`, {
+    enabled: hasPendingVideos && pollingAttemptsRef.current < 12,
+    interval: 10_000,
+    task: async () => {
+      if (pollingAttemptsRef.current >= 12) return;
       pollingAttemptsRef.current += 1;
-      refreshVideos(false);
-    }, 10_000);
-    return () => window.clearInterval(interval);
-  }, [hasPendingVideos, refreshVideos]);
+      await refreshVideos(false);
+    },
+  });
+
+  useEffect(() => {
+    if (hasPendingVideos) void pollPendingVideos();
+  }, [hasPendingVideos, pollPendingVideos]);
 
   return {
     state,

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
 import { API_BASE_URL } from "../lib/api";
 import { isDemoMode } from "../lib/demo";
+import { useSharedQuery } from "../lib/queryRegistry";
 
 /**
  * A livestream row as returned by GET /api/v1/livestreams (see the
@@ -19,12 +19,7 @@ export function livestreamsURL(workspaceID: number): string {
   return `${API_BASE_URL}/api/v1/livestreams?${params}`;
 }
 
-/**
- * Count how many rows are actually live.
- *
- * Accepts both the `{ items: [...] }` envelope and a bare array so the
- * badge keeps working no matter which shape the endpoint settles on.
- */
+/** Count only rows whose actual state is live. */
 export function countActiveLives(payload: unknown): number {
   if (!payload) return 0;
   const items = Array.isArray(payload)
@@ -39,69 +34,38 @@ export function countActiveLives(payload: unknown): number {
   );
 }
 
+type WorkspaceResponse = { workspace_id?: number };
+
+async function fetchActiveLiveCount(signal: AbortSignal): Promise<number | null> {
+  const meResponse = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
+    credentials: "include",
+    signal,
+  });
+  if (!meResponse.ok) return null;
+  const me = (await meResponse.json()) as WorkspaceResponse;
+  const workspaceID = me.workspace_id;
+  if (typeof workspaceID !== "number" || !Number.isInteger(workspaceID) || workspaceID <= 0) {
+    return null;
+  }
+  const response = await fetch(livestreamsURL(workspaceID), {
+    credentials: "include",
+    signal,
+  });
+  if (!response.ok) return null;
+  return countActiveLives(await response.json());
+}
+
 /**
- * Polls the livestreams endpoint and reports how many streams are
- * actually live. Returns `null` while the endpoint is unavailable (or
- * the user is in demo mode) so the sidebar simply hides the badge
- * instead of spamming error toasts for a hint that is not yet backed
- * by the API.
+ * Shared, deduplicated sidebar badge query. The registry keeps one
+ * request/polling loop when multiple layout surfaces mount the badge,
+ * pauses it while the tab is hidden, and wakes it on visibility restore.
  */
 export function useActiveLiveCount(): number | null {
-  const [count, setCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (isDemoMode()) return;
-
-    let cancelled = false;
-
-    const refresh = async () => {
-      if (document.visibilityState === "hidden") return;
-      try {
-        const meResponse = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
-          credentials: "include",
-        });
-        if (!meResponse.ok) {
-          if (!cancelled) setCount(null);
-          return; // not authenticated → badge must stay hidden
-        }
-        const me = (await meResponse.json()) as { workspace_id?: number };
-        const workspaceID = me.workspace_id;
-        if (typeof workspaceID !== "number" || !Number.isInteger(workspaceID) || workspaceID <= 0) {
-          if (!cancelled) setCount(null);
-          return;
-        }
-
-        const response = await fetch(livestreamsURL(workspaceID), {
-          credentials: "include",
-        });
-        if (!response.ok) {
-          if (!cancelled) setCount(null);
-          return; // endpoint unavailable → keep badge hidden
-        }
-        const payload: unknown = await response.json();
-        if (!cancelled) setCount(countActiveLives(payload));
-      } catch {
-        if (!cancelled) setCount(null);
-        // Never toast for a sidebar hint; a missing backend is expected
-        // until the livestream module lands.
-      }
-    };
-
-    // Pause while the tab is hidden so a sidebar hint never polls a
-    // background session; refresh immediately when it becomes visible.
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, []);
-
-  return count;
+  const query = useSharedQuery<number | null>("active-live-count", {
+    enabled: !isDemoMode(),
+    staleTime: 15_000,
+    pollingInterval: POLL_INTERVAL_MS,
+    fetcher: fetchActiveLiveCount,
+  });
+  return query.data ?? null;
 }

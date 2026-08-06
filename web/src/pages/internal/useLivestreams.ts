@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSharedPolling } from "../../lib/queryRegistry";
 import { authedFetch, AuthError } from "../../lib/auth";
 import { isDemoMode } from "../../lib/demo";
 import { toastBus } from "../../components/toast/toast-bus";
@@ -85,20 +86,19 @@ export function useLivestreams() {
 
   useEffect(() => {
     void load(true);
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void load(false);
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      void load(false);
-    }, POLL_INTERVAL_MS);
-    return () => {
-      abortRef.current?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
+    return () => abortRef.current?.abort();
   }, [load]);
+
+  const pollLivestreams = useSharedPolling("livestreams", {
+    interval: POLL_INTERVAL_MS,
+    task: async () => {
+      await load(false);
+    },
+  });
+
+  useEffect(() => {
+    void pollLivestreams();
+  }, [pollLivestreams]);
 
   const loadMore = useCallback(async () => {
     if (state.kind !== "ready" || !state.hasMore || !state.nextCursor || state.loadingMore) return;

@@ -146,9 +146,7 @@ describe("listAllAccounts — shared manifest cache (N+1 DoD)", () => {
     await listAllAccounts({ force: true });
 
     expect(calls).toBe(2);
-  });
-
-  // DoD "refetchOnWindowFocus: false": the manifest cache registers NO
+  });  // DoD "refetchOnWindowFocus: false": the manifest cache registers NO
   // window-focus listener, so returning to the tab must never re-fetch
   // /api/v1/accounts. Header, Linking page, groups and the account
   // selector all share this single source of truth within the stale
@@ -176,4 +174,28 @@ describe("listAllAccounts — shared manifest cache (N+1 DoD)", () => {
     expect(served).toEqual(fixture);
   });
 
+  // Review finding #1: a failed shared request must NOT poison the cache
+  // for the whole session. The in-flight promise is reset in a finally
+  // block, so after a rejection the next call starts a fresh request
+  // instead of re-serving the rejected promise.
+  it("recovers after a failed request — the in-flight promise is reset", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("network down");
+        }
+        return jsonResponse({ accounts: [account({ id: 9 })] });
+      }),
+    );
+
+    await expect(listAllAccounts()).rejects.toThrow("network down");
+
+    // Second call must issue a NEW request (in-flight was reset), not
+    // re-throw the cached rejection.
+    await expect(listAllAccounts()).resolves.toHaveLength(1);
+    expect(calls).toBe(2);
+  });
 });
