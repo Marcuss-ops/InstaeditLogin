@@ -13,6 +13,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
+	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/providers"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -80,7 +81,7 @@ func WireCore(ctx context.Context) (*Core, error) {
 	if cfg.HTTP.LogLevel == "debug" {
 		logLevel = slog.LevelDebug
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
+	logger := appLogging.NewLogger(os.Stdout, appLogging.Options{Level: logLevel, SampleEvery: 10})
 	slog.SetDefault(logger)
 
 	slog.Info("Environment", "app_env", cfg.HTTP.AppEnv)

@@ -36,6 +36,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"io"
 	"log/slog"
 	"os"
@@ -61,7 +62,7 @@ type runConfig struct {
 }
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	log := appLogging.NewLogger(os.Stderr, appLogging.Options{Level: slog.LevelInfo, SampleEvery: 10})
 	cfg, err := parseFlags(log)
 	if err != nil {
 		log.Error("flag parse failed", "err", err.Error())

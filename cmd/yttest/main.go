@@ -20,6 +20,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
+	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -31,6 +32,7 @@ const (
 )
 
 func main() {
+	log.SetOutput(appLogging.NewRedactingWriter(os.Stderr))
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 

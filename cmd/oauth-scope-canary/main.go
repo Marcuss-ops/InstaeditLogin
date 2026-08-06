@@ -38,6 +38,7 @@ import (
 	"strings"
 	"time"
 
+	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -102,12 +103,12 @@ const (
 const envTokeninfoURL = "OAUTH_TOKENINFO_URL"
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := appLogging.NewLogger(os.Stderr, appLogging.Options{Level: slog.LevelInfo, SampleEvery: 10})
 	if err := run(logger); err != nil {
 		if errors.Is(err, errScopeDrift) {
 			os.Exit(int(resultScopeDrift))
 		}
-		fmt.Fprintln(os.Stderr, "oauth-scope-canary: unexpected:", err)
+		fmt.Fprintln(os.Stderr, "oauth-scope-canary: unexpected failure (details withheld from logs)")
 		os.Exit(1)
 	}
 }
@@ -158,12 +159,11 @@ func checkLiveScopeDrift(ctx context.Context, logger *slog.Logger, token, endpoi
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: tokeninfo status %d: %s",
-			errScopeDrift, resp.StatusCode, string(body))
+		return fmt.Errorf("%w: tokeninfo status %d", errScopeDrift, resp.StatusCode)
 	}
 	var parsed tokenInfoResponse
 	if jsonErr := json.Unmarshal(body, &parsed); jsonErr != nil {
-		return fmt.Errorf("%w: parse tokeninfo response: %v", errScopeDrift, jsonErr)
+		return fmt.Errorf("%w: parse tokeninfo response", errScopeDrift)
 	}
 	granted := strings.Fields(parsed.Scope)
 	logger.Info("live tokeninfo received",

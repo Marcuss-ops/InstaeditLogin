@@ -11,6 +11,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
+	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
@@ -73,7 +74,7 @@ func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
 	if cfg.HTTP.LogLevel == "debug" {
 		logLevel = slog.LevelDebug
 	}
-	s.logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
+	s.logger = appLogging.NewLogger(os.Stdout, appLogging.Options{Level: logLevel, SampleEvery: 10})
 	slog.SetDefault(s.logger)
 
 	slog.Info("Environment", "app_env", cfg.HTTP.AppEnv)

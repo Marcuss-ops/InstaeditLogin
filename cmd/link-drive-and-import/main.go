@@ -21,6 +21,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
+	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -53,6 +54,7 @@ type driveTokenFile struct {
 }
 
 func main() {
+	slog.SetDefault(appLogging.NewLogger(os.Stderr, appLogging.Options{Level: slog.LevelInfo, SampleEvery: 10}))
 	if err := run(); err != nil {
 		slog.Error("link_drive_and_import failed", "error", err)
 		os.Exit(1)

@@ -50,6 +50,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/bootstrap"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
+	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -99,7 +100,7 @@ func loadE2EConfig() (e2eConfig, error) {
 func requiredString(key string) string {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
-		fmt.Fprintf(os.Stderr, "fatal: %s is required\n", key)
+		safeFprintf("fatal: %s is required\n", key)
 		os.Exit(2)
 	}
 	return v
@@ -108,12 +109,12 @@ func requiredString(key string) string {
 func requiredInt64(key string) int64 {
 	s := strings.TrimSpace(os.Getenv(key))
 	if s == "" {
-		fmt.Fprintf(os.Stderr, "fatal: %s is required\n", key)
+		safeFprintf("fatal: %s is required\n", key)
 		os.Exit(2)
 	}
 	v, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fatal: %s must be an integer (got %q): %v\n", key, s, err)
+		safeFprintf("fatal: %s must be an integer (got %q): %v\n", key, s, err)
 		os.Exit(2)
 	}
 	return v
@@ -128,29 +129,39 @@ func optionalString(key, def string) string {
 
 // --- Main ------------------------------------------------------------------
 
+var (
+	safeStdout io.Writer = appLogging.NewRedactingWriter(os.Stdout)
+	safeStderr io.Writer = appLogging.NewRedactingWriter(os.Stderr)
+)
+
+func safePrintf(format string, args ...any)  { _, _ = fmt.Fprintf(safeStdout, format, args...) }
+func safePrintln(args ...any)                { _, _ = fmt.Fprintln(safeStdout, args...) }
+func safeFprintf(format string, args ...any) { _, _ = fmt.Fprintf(safeStderr, format, args...) }
+func safeFprintln(args ...any)               { _, _ = fmt.Fprintln(safeStderr, args...) }
+
 func main() {
 	cfg, err := loadE2EConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		safeFprintf("config error: %v\n", err)
 		os.Exit(2)
 	}
 
 	ctx := context.Background()
 
-	fmt.Println("InstaEdit E2E YouTube upload test")
-	fmt.Printf("  user_id=%d workspace_id=%d account_id=%d\n", cfg.UserID, cfg.WorkspaceID, cfg.AccountID)
-	fmt.Printf("  video=%s privacy=%s\n", cfg.TestVideoURL, cfg.Privacy)
-	fmt.Println()
+	safePrintln("InstaEdit E2E YouTube upload test")
+	safePrintf("  user_id=%d workspace_id=%d account_id=%d\n", cfg.UserID, cfg.WorkspaceID, cfg.AccountID)
+	safePrintf("  video_configured=%t privacy=%s\n", cfg.TestVideoURL != "", cfg.Privacy)
+	safePrintln()
 
 	// --- Wire ---------------------------------------------------------------
-	fmt.Println("[1/7] Wiring bootstrap (DB + Vault + CapRouter) ...")
+	safePrintln("[1/7] Wiring bootstrap (DB + Vault + CapRouter) ...")
 	app, err := bootstrap.Wire(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "wire failed: %v\n", err)
+		safeFprintln("wire failed (details withheld from logs)")
 		os.Exit(1)
 	}
 	if err := database.VerifyInstallationIdentity(ctx, app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
-		fmt.Fprintln(os.Stderr, "database identity verification failed: DATABASE_IDENTITY_MISMATCH")
+		safeFprintln("database identity verification failed: DATABASE_IDENTITY_MISMATCH")
 		os.Exit(1)
 	}
 	defer app.DB.Close()
@@ -159,35 +170,35 @@ func main() {
 	postRepo := repository.NewPostRepository(app.DB)
 
 	// --- Load account -------------------------------------------------------
-	fmt.Printf("[2/7] Loading platform_account id=%d ...\n", cfg.AccountID)
+	safePrintf("[2/7] Loading platform_account id=%d ...\n", cfg.AccountID)
 	account, err := userRepo.FindPlatformAccountByID(cfg.AccountID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FindPlatformAccountByID failed: %v\n", err)
+		safeFprintln("FindPlatformAccountByID failed (details withheld from logs)")
 		os.Exit(1)
 	}
 	if account == nil {
-		fmt.Fprintf(os.Stderr, "platform_account id=%d not found\n", cfg.AccountID)
+		safeFprintf("platform_account id=%d not found\n", cfg.AccountID)
 		os.Exit(1)
 	}
 	if account.Platform != models.PlatformYouTube {
-		fmt.Fprintf(os.Stderr, "platform_account id=%d is platform=%q, expected youtube\n",
+		safeFprintf("platform_account id=%d is platform=%q, expected youtube\n",
 			cfg.AccountID, account.Platform)
 		os.Exit(1)
 	}
-	fmt.Printf("  platform_user_id=%s username=%s status=%s\n",
+	safePrintf("  platform_user_id=%s username=%s status=%s\n",
 		account.PlatformUserID, account.Username, account.Status)
 
 	// --- Refresh token ------------------------------------------------------
 	// Vault.Renew handles fetching the stored refresh token, calling the
 	// provider's RefreshOAuthToken, and saving the new access token.
-	fmt.Println("[3/7] Refreshing OAuth bearer token via Vault.Renew ...")
+	safePrintln("[3/7] Refreshing OAuth bearer token via Vault.Renew ...")
 	youtubeSvc, err := services.NewYouTubeOAuthService(app.Cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "NewYouTubeOAuthService failed: %v\n", err)
+		safeFprintln("NewYouTubeOAuthService failed (details withheld from logs)")
 		os.Exit(1)
 	}
 	if youtubeSvc == nil {
-		fmt.Fprintln(os.Stderr, "YouTube provider is disabled (YOUTUBE_CLIENT_ID not set)")
+		safeFprintln("YouTube provider is disabled (YOUTUBE_CLIENT_ID not set)")
 		os.Exit(2)
 	}
 
@@ -198,84 +209,79 @@ func main() {
 	if err != nil {
 		oauthToken, err = app.Vault.Renew(ctx, cfg.AccountID, models.TokenTypeLongLived, refresher)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Vault.Renew failed (bearer + long_lived): %v\n", err)
+			safeFprintln("Vault.Renew failed (details withheld from logs)")
 			os.Exit(1)
 		}
 	}
 	accessToken := oauthToken.AccessToken
-	fmt.Printf("  access_token len=%d expires_at=%v scopes=%v\n",
-		len(accessToken), oauthToken.ExpiresAt, oauthToken.Scopes)
+	safePrintf("  oauth_token_refreshed=true expires_at=%v scope_count=%d\n",
+		oauthToken.ExpiresAt, len(oauthToken.Scopes))
 
 	// --- Verify channel ownership -------------------------------------------
-	fmt.Printf("[4/7] Verifying channel ownership (channels.list id=%s) ...\n",
+	safePrintf("[4/7] Verifying channel ownership (channels.list id=%s) ...\n",
 		account.PlatformUserID)
 	chInfo, err := getChannelInfo(ctx, accessToken, account.PlatformUserID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "channels.list failed: %v\n", err)
+		safeFprintln("channels.list failed (details withheld from logs)")
 		os.Exit(1)
 	}
-	fmt.Printf("  channel_title=%s subscriber_count=%d view_count=%d video_count=%d\n",
+	safePrintf("  channel_title=%s subscriber_count=%d view_count=%d video_count=%d\n",
 		chInfo.Snippet.Title, chInfo.Statistics.SubscriberCount,
 		chInfo.Statistics.ViewCount, chInfo.Statistics.VideoCount)
 
 	if cfg.VerifyVideoID != "" {
-		fmt.Printf("[5/5] Verifying existing video (videos.list id=%s) ...\n", cfg.VerifyVideoID)
+		safePrintf("[5/5] Verifying existing video (videos.list id=%s) ...\n", cfg.VerifyVideoID)
 		videoInfo, err := getVideoInfo(ctx, accessToken, cfg.VerifyVideoID)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "videos.list failed: %v\n", err)
+			safeFprintln("videos.list failed (details withheld from logs)")
 			os.Exit(1)
 		}
-		fmt.Printf("  video_title=%s channel_id=%s privacy=%s upload_status=%s\n",
+		safePrintf("  video_title=%s channel_id=%s privacy=%s upload_status=%s\n",
 			videoInfo.Snippet.Title, videoInfo.Snippet.ChannelID,
 			videoInfo.Status.PrivacyStatus, videoInfo.Status.UploadStatus)
-		fmt.Printf("  thumbnails: default=%s medium=%s high=%s standard=%s maxres=%s\n",
-			videoInfo.Snippet.Thumbnails.Default.URL,
-			videoInfo.Snippet.Thumbnails.Medium.URL,
-			videoInfo.Snippet.Thumbnails.High.URL,
-			videoInfo.Snippet.Thumbnails.Standard.URL,
-			videoInfo.Snippet.Thumbnails.Maxres.URL)
+		safePrintf("  thumbnail_available=%t\n", videoInfo.Snippet.Thumbnails.Default.URL != "")
 		if videoInfo.Snippet.ChannelID != account.PlatformUserID {
-			fmt.Fprintf(os.Stderr, "FAIL: video channel mismatch: expected %s, got %s\n", account.PlatformUserID, videoInfo.Snippet.ChannelID)
+			safeFprintf("FAIL: video channel mismatch: expected %s, got %s\n", account.PlatformUserID, videoInfo.Snippet.ChannelID)
 			os.Exit(1)
 		}
 		if videoInfo.Snippet.Thumbnails.Default.URL == "" {
-			fmt.Fprintln(os.Stderr, "FAIL: YouTube returned no thumbnail")
+			safeFprintln("FAIL: YouTube returned no thumbnail")
 			os.Exit(1)
 		}
-		fmt.Println("VERIFY PASSED: channel binding and thumbnail are present ✓")
+		safePrintln("VERIFY PASSED: channel binding and thumbnail are present ✓")
 		return
 	}
 
 	if os.Getenv("YOUTUBE_LIST_LIBRARY") == "1" {
-		fmt.Println("[5/5] Listing existing editable YouTube videos ...")
+		safePrintln("[5/5] Listing existing editable YouTube videos ...")
 		page, err := youtubeSvc.ListEditableVideos(ctx, accessToken, account.PlatformUserID, "")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "youtube library failed: %v\n", err)
+			safeFprintln("youtube library failed (details withheld from logs)")
 			os.Exit(1)
 		}
-		fmt.Printf("  returned=%d\n", len(page.Items))
+		safePrintf("  returned=%d\n", len(page.Items))
 		for _, item := range page.Items {
 			published := "unknown"
 			if item.PublishedAt != nil {
 				published = item.PublishedAt.Format(time.RFC3339)
 			}
-			fmt.Printf("  %s privacy=%s published_at=%s title=%q\n", item.ID, item.Privacy, published, item.Title)
+			safePrintf("  %s privacy=%s published_at=%s title=%q\n", item.ID, item.Privacy, published, item.Title)
 		}
 		return
 	}
 
 	if videoID := strings.TrimSpace(os.Getenv("YOUTUBE_SET_PRIVATE_VIDEO_ID")); videoID != "" {
-		fmt.Printf("[5/5] Setting existing video private (id=%s) ...\n", videoID)
+		safePrintf("[5/5] Setting existing video private (id=%s) ...\n", videoID)
 		if err := setVideoPrivate(ctx, accessToken, videoID); err != nil {
-			fmt.Fprintf(os.Stderr, "videos.update failed: %v\n", err)
+			safeFprintln("videos.update failed (details withheld from logs)")
 			os.Exit(1)
 		}
-		fmt.Println("  privacy=private")
+		safePrintln("  privacy=private")
 		return
 	}
 
 	// --- Create Post --------------------------------------------------------
-	fmt.Println("[5/7] Creating Post + PostTarget (queued) ...")
+	safePrintln("[5/7] Creating Post + PostTarget (queued) ...")
 	now := time.Now()
 	post := &models.Post{
 		WorkspaceID: cfg.WorkspaceID,
@@ -290,13 +296,13 @@ func main() {
 	}
 
 	if err := postRepo.Create(post, []*models.PostTarget{target}); err != nil {
-		fmt.Fprintf(os.Stderr, "Create post failed: %v\n", err)
+		safeFprintln("Create post failed (details withheld from logs)")
 		os.Exit(1)
 	}
-	fmt.Printf("  post_id=%d target_id=%d\n", post.ID, target.ID)
+	safePrintf("  post_id=%d target_id=%d\n", post.ID, target.ID)
 
 	// --- Wait for PublishWorker ---------------------------------------------
-	fmt.Printf("[6/7] Waiting for PublishWorker (polling every %v, timeout %v) ...\n",
+	safePrintf("[6/7] Waiting for PublishWorker (polling every %v, timeout %v) ...\n",
 		cfg.PollInterval, cfg.PollTimeout)
 	deadline := time.Now().Add(cfg.PollTimeout)
 	var publishedTarget *models.PostTarget
@@ -305,77 +311,76 @@ func main() {
 
 		targets, err := postRepo.ListByPost(post.ID)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  FindTargetsByPostID failed: %v\n", err)
+			safeFprintln("  FindTargetsByPostID failed (details withheld from logs)")
 			continue
 		}
 		if len(targets) == 0 {
 			continue
 		}
 		t := &targets[0]
-		fmt.Printf("  target_status=%s attempt=%d remote_post_id=%q provider_state=%q error=%q\n",
-			t.Status, t.AttemptCount, t.RemotePostID, t.ProviderState, t.ErrorMessage)
+		safePrintf("  target_status=%s attempt=%d remote_post_id_present=%t provider_state=%s error_present=%t\n",
+			t.Status, t.AttemptCount, t.RemotePostID != "", t.ProviderState, t.ErrorMessage != "")
 
 		switch t.Status {
 		case models.PostStatusPublished:
 			publishedTarget = t
 			goto DONE
 		case models.PostStatusFailed, models.PostStatusDLQ:
-			fmt.Fprintf(os.Stderr, "Target reached terminal status %s. error=%q\n",
-				t.Status, t.ErrorMessage)
+			safeFprintf("Target reached terminal status %s (error details withheld)\n", t.Status)
 			os.Exit(1)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "Poll timeout after %v — worker did not process the post in time.\n", cfg.PollTimeout)
+	safeFprintf("Poll timeout after %v — worker did not process the post in time.\n", cfg.PollTimeout)
 	os.Exit(3)
 
 DONE:
-	fmt.Printf("  published! remote_post_id=%s remote_post_url=%s\n",
-		publishedTarget.RemotePostID, publishedTarget.RemotePostURL)
+	safePrintf("  published=true remote_post_id_present=%t remote_post_url_present=%t\n",
+		publishedTarget.RemotePostID != "", publishedTarget.RemotePostURL != "")
 
 	// --- Verify uploaded video ----------------------------------------------
-	fmt.Println("[7/7] Verifying uploaded video (videos.list) ...")
+	safePrintln("[7/7] Verifying uploaded video (videos.list) ...")
 	videoID := publishedTarget.RemotePostID
 	if videoID == "" {
-		fmt.Fprintln(os.Stderr, "remote_post_id is empty — cannot verify video")
+		safeFprintln("remote_post_id is empty — cannot verify video")
 		os.Exit(1)
 	}
 
 	videoInfo, err := getVideoInfo(ctx, accessToken, videoID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "videos.list failed: %v\n", err)
+		safeFprintln("videos.list failed (details withheld from logs)")
 		os.Exit(1)
 	}
 
-	fmt.Printf("  video_title=%s channel_id=%s privacy=%s\n",
+	safePrintf("  video_title=%s channel_id=%s privacy=%s\n",
 		videoInfo.Snippet.Title, videoInfo.Snippet.ChannelID, videoInfo.Status.PrivacyStatus)
 
 	// --- Assertions ---------------------------------------------------------
 	var failures int
 
 	if videoInfo.Snippet.ChannelID != account.PlatformUserID {
-		fmt.Fprintf(os.Stderr,
+		safeFprintf(
 			"FAIL: video uploaded to wrong channel: expected %s, got %s\n",
 			account.PlatformUserID, videoInfo.Snippet.ChannelID)
 		failures++
 	} else {
-		fmt.Println("  PASS: snippet.channelId matches platform_user_id")
+		safePrintln("  PASS: snippet.channelId matches platform_user_id")
 	}
 
 	if strings.ToLower(videoInfo.Status.PrivacyStatus) != "private" {
-		fmt.Fprintf(os.Stderr,
+		safeFprintf(
 			"WARN: privacy is %q (expected private) — unverified apps may force private\n",
 			videoInfo.Status.PrivacyStatus)
 	} else {
-		fmt.Println("  PASS: privacy=private")
+		safePrintln("  PASS: privacy=private")
 	}
 
-	fmt.Println()
+	safePrintln()
 	if failures > 0 {
-		fmt.Fprintf(os.Stderr, "E2E FAILED with %d assertion failure(s)\n", failures)
+		safeFprintf("E2E FAILED with %d assertion failure(s)\n", failures)
 		os.Exit(1)
 	}
-	fmt.Println("E2E PASSED ✓")
-	fmt.Printf("  Video: https://www.youtube.com/watch?v=%s\n", videoID)
+	safePrintln("E2E PASSED ✓")
+	safePrintln("  Video published successfully (URL withheld from logs)")
 }
 
 // --- YouTube API helpers ---------------------------------------------------
@@ -423,7 +428,7 @@ func getChannelInfo(ctx context.Context, accessToken, channelID string) (*channe
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("channels.list returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("channels.list returned %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -489,7 +494,7 @@ func getVideoInfo(ctx context.Context, accessToken, videoID string) (*videoInfo,
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("videos.list returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("videos.list returned %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -527,9 +532,9 @@ func setVideoPrivate(ctx context.Context, accessToken, videoID string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("videos.update returned %d: %s", resp.StatusCode, string(responseBody))
+		return fmt.Errorf("videos.update returned %d", resp.StatusCode)
 	}
 	return nil
 }

@@ -51,6 +51,7 @@ import (
 	"syscall"
 	"time"
 
+	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -489,7 +490,8 @@ func bootLog(out io.Writer, cfg Config) {
 }
 
 func main() {
-	out := os.Stdout
+	slog.SetDefault(appLogging.NewLogger(os.Stderr, appLogging.Options{Level: slog.LevelInfo, SampleEvery: 10}))
+	out := appLogging.NewRedactingWriter(os.Stdout)
 
 	cfg, err := loadConfig()
 	if err != nil {
