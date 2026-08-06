@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-06
 **Branch:** `main`
-**HEAD verified:** `3ca8405` (`fix(logging): redact secrets and sample noisy events`)
+**HEAD verified before this follow-up:** `7fd7d47` (`docs(acceptance): record final scalability verification`)
 **Remote:** `main` was aligned with `origin/main` before this report was created.
 
 This document records the final verification of the scalability acceptance criteria. It separates deterministic offline evidence from tests that require PostgreSQL, Docker, OAuth credentials, or a live provider. A passing handler benchmark is **not** presented as a live HTTP + PostgreSQL p95.
@@ -16,11 +16,11 @@ This document records the final verification of the scalability acceptance crite
 | OAuth refresh deduplicated | **PASS offline** | `go test -race` concurrent shared-grant and same-grant singleflight tests pass; one provider refresh is observed while callers are concurrent. |
 | Upload streaming and bounds | **PASS for covered multipart/body paths** | Admin CSV multipart spooling/cleanup tests, explicit body-limit tests, and request-body bound/close tests pass with the race detector. This is not a constant-RSS proof for every video upload handler or a 2 GB live upload. |
 | Cursor pagination | **PASS for covered endpoints** | Cursor primitives, accounts, groups, posts/jobs and related list-handler tests pass with the race detector. Coverage is endpoint-specific; this row does not claim that every list endpoint has been exhaustively exercised. |
-| Safe job claim | **PASS for SQL contract/backoff; DB concurrency pending** | SQL contract tests verify `FOR UPDATE SKIP LOCKED`; empty-queue backoff test passes. The PostgreSQL multi-worker integration test is build-tagged `integration` and was not run in this environment. |
+| Safe job claim | **PASS** | SQL contract tests verify `FOR UPDATE SKIP LOCKED`; empty-queue backoff test passes; the PostgreSQL multi-worker integration test passed with 8 concurrent workers and 24 jobs under the race detector. |
 | Accounts p95 below 300–500 ms | **PARTIAL** | Repeated fake-store handler benchmark runs had an approximate 95th percentile of **165,055 ns/op (0.165 ms)**. This is a percentile across benchmark-run samples, not an HTTP request p95. Real HTTP + PostgreSQL + network p95 was not measured in this environment. |
-| Full live E2E | **NOT FULLY GREEN** | 9 pass, 1 intentional skip, 2 failures. Details are documented below. |
+| Full live E2E | **NOT FULLY GREEN** | Named runner events include the 12 pipeline scenarios and other passing scenarios, 1 intentional skip, and 2 failures. Details are documented below. |
 
-The implementation satisfies the acceptance criteria that can be proven for the tested paths in this repository. The remaining acceptance gaps are operational and coverage-related: measure `GET /api/v1/accounts` against a running PostgreSQL/API deployment, run the PostgreSQL claim-concurrency test, broaden upload/provider coverage if required, and repair the two E2E environment/test-harness failures before calling the live suite fully green.
+The implementation satisfies the acceptance criteria that can be proven for the tested paths in this repository. The remaining acceptance gaps are operational and coverage-related: measure `GET /api/v1/accounts` against a running PostgreSQL/API deployment, broaden upload/provider coverage if required, and repair the two E2E environment/test-harness failures before calling the live suite fully green.
 
 ## Commands and results
 
@@ -111,14 +111,16 @@ go test -race ./internal/worker \
 
 `TestClaimBatch_SQLContract` verifies the production claim SQL contract, including `FOR UPDATE SKIP LOCKED`. Repository empty-claim behavior and worker bounded backoff are covered separately.
 
-The stronger PostgreSQL concurrency test is available as:
+The PostgreSQL concurrency test was executed with its Docker-backed testcontainers setup:
 
 ```bash
 go test -tags=integration -race ./internal/repository \
-  -run TestClaimBatch_MultipleWorkersDoNotDoubleClaim -count=1
+  -run '^TestClaimBatch_MultipleWorkersDoNotDoubleClaim$' -count=1 -timeout 10m
 ```
 
-It was not treated as an offline pass because it requires a running PostgreSQL test instance and migrations. When available, it starts multiple workers, claims all seeded jobs, and asserts no duplicate IDs and the expected leased-row count.
+**Result:** PASS in 4.257s.
+
+The test started an ephemeral PostgreSQL 17 container, applied migrations, seeded 24 pending jobs, and ran 8 concurrent workers. It observed 24 distinct claimed IDs, no duplicate claims, and 24 rows in `leased` status. The race detector reported no race.
 
 ### 7. Accounts latency benchmark
 
@@ -171,7 +173,7 @@ Because of these two failures, the full E2E verdict is **not green**. They remai
 | OAuth singleflight | `go test -race ./internal/credentials -run 'TestVault_Renew_Concurrent' -count=1` |
 | Upload limits/cleanup | `go test -race ./pkg/api -run 'TestAdminImportChannelsCSV_' -count=1` |
 | Cursor/pagination | `go test -race ./pkg/api -run 'Test.*(Cursor|Pagination)' -count=1` |
-| Claim SQL/backoff | `go test -race ./internal/repository -run 'TestClaimBatch.*' -count=1 && go test -race ./internal/worker -run 'TestRunPoolLoop_EmptyQueueUsesBoundedBackoff' -count=1` |
+| Claim SQL/backoff and PostgreSQL concurrency | `go test -race ./internal/repository -run 'TestClaimBatch.*' -count=1 && go test -race ./internal/worker -run 'TestRunPoolLoop_EmptyQueueUsesBoundedBackoff' -count=1`; `go test -tags=integration -race ./internal/repository -run '^TestClaimBatch_MultipleWorkersDoNotDoubleClaim$' -count=1 -timeout 10m` |
 | 100-account handler benchmark | `cd pkg/api && go test -run '^$' -bench '^BenchmarkHandleListAccounts_100$' -benchmem -benchtime=100x -count=20` |
 | Full tagged E2E | `go test -tags=e2e -race -timeout 15m -v ./tests/e2e/...` |
 
@@ -180,7 +182,6 @@ Because of these two failures, the full E2E verdict is **not green**. They remai
 1. Run the accounts p95 benchmark against a staging deployment with a real PostgreSQL database, connection pool, HTTP server, and representative 100-channel data. Record p50/p95/p99 and SQL/pool metrics.
 2. Ensure the E2E database setup applies the migration that creates `account_resource_snapshots` before the shared-grant scenario.
 3. Make router setup safe for concurrent E2E use, or serialize setup in the lifecycle harness, then rerun the tagged suite with `-race`.
-4. Run the `integration`-tagged multi-worker claim test against PostgreSQL to validate no double claims at the database boundary.
 
 ## Worktree safety
 
