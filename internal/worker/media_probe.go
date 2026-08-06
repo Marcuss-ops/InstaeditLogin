@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // ErrProbeUnavailable is returned by the ffprobe runner when the
@@ -61,6 +62,8 @@ func (r *ffprobeRunner) Probe(ctx context.Context, mediaURL string) (*models.Med
 		"-show_streams",
 		mediaURL,
 	)
+	metrics.StartMediaProcess("ffprobe")
+	defer metrics.EndMediaProcess("ffprobe")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe: %w", err)

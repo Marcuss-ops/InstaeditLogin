@@ -6,7 +6,10 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // NewHTTPClient returns a shared *http.Client with sensible defaults for
@@ -216,10 +219,45 @@ type loggingRoundTripper struct {
 	next http.RoundTripper
 }
 
+func isGoogleAPIRequest(req *http.Request) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
+	host := req.URL.Hostname()
+	return host == "googleapis.com" || len(host) > len(".googleapis.com") && host[len(host)-len(".googleapis.com"):] == ".googleapis.com" || host == "google.com" || len(host) > len(".google.com") && host[len(host)-len(".google.com"):] == ".google.com"
+}
+
+func googleOperation(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return "google_api"
+	}
+	path := req.URL.Path
+	if req.Method == http.MethodPost && strings.Contains(path, "/youtube/v3/videos") {
+		return "youtube_videos_insert"
+	}
+	if strings.Contains(path, "/youtube/") {
+		return "youtube_api"
+	}
+	if strings.Contains(path, "/oauth2/") || req.URL.Hostname() == "oauth2.googleapis.com" {
+		return "google_oauth"
+	}
+	if strings.Contains(path, "/drive/") {
+		return "google_drive"
+	}
+	return "google_api"
+}
+
 func (lrt *loggingRoundTripper) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	start := time.Now()
 	resp, err = lrt.next.RoundTrip(req)
 	elapsed := time.Since(start)
+	if isGoogleAPIRequest(req) {
+		statusCode := 0
+		if resp != nil {
+			statusCode = resp.StatusCode
+		}
+		metrics.RecordGoogleAPICall(googleOperation(req), statusCode, elapsed)
+	}
 
 	if err != nil {
 		slog.Debug("http: request failed",

@@ -12,6 +12,10 @@ import (
 // rate-limiting, logging, recovery and security headers).
 func (r *Router) Setup() http.Handler {
 	r.mux = chi.NewRouter()
+	// Register inside chi so the route context is populated before metrics
+	// labels are derived. Applying this middleware outside the mux would
+	// observe only the raw URL and lose the bounded route pattern.
+	r.mux.Use(r.metricsMiddleware)
 
 	// Build the route registry in the order the modules should mount.
 	// This is the single place that decides which modules are wired

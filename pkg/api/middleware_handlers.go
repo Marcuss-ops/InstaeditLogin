@@ -1,10 +1,17 @@
 package api
 
 import (
+	"bufio"
 	"crypto/subtle"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
@@ -52,6 +59,114 @@ func (r *Router) loggingMiddleware(next http.Handler) http.Handler {
 		slog.Info("HTTP request", "method", req.Method, "path", req.URL.Path, "remote_addr", req.RemoteAddr)
 		next.ServeHTTP(w, req)
 	})
+}
+
+// metricsMiddleware measures the complete request, including SQL work
+// performed by repositories. Route labels use chi's matched pattern rather
+// than the raw URL so IDs cannot create unbounded Prometheus series.
+func (r *Router) metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		stats := metrics.NewRequestStats()
+		start := time.Now()
+		rw := &measurementResponseWriter{ResponseWriter: w}
+		req = req.WithContext(metrics.WithRequestStats(req.Context(), stats))
+		defer func() {
+			recovered := recover()
+			if recovered != nil {
+				rw.status = http.StatusInternalServerError
+			}
+			route := "unknown"
+			if pattern := chiRoutePattern(req); pattern != "" {
+				route = pattern
+			}
+			status := rw.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+			metrics.ObserveHTTPRequestDetails(route, req.Method, strconv.Itoa(status), time.Since(start).Seconds(), int64(rw.bytes), stats)
+			if recovered != nil {
+				panic(recovered)
+			}
+		}()
+		next.ServeHTTP(rw, req)
+	})
+}
+
+type measurementResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *measurementResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *measurementResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += n
+	return n, err
+}
+
+func (w *measurementResponseWriter) Flush() {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *measurementResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (w *measurementResponseWriter) Push(target string, opts *http.PushOptions) error {
+	if pusher, ok := w.ResponseWriter.(http.Pusher); ok {
+		return pusher.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+func (w *measurementResponseWriter) ReadFrom(src io.Reader) (int64, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	if readerFrom, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		n, err := readerFrom.ReadFrom(src)
+		w.bytes += int(n)
+		return n, err
+	}
+	n, err := io.Copy(w.ResponseWriter, src)
+	w.bytes += int(n)
+	return n, err
+}
+
+func (w *measurementResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func chiRoutePattern(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	if ctx := chi.RouteContext(req.Context()); ctx != nil {
+		if pattern := ctx.RoutePattern(); pattern != "" {
+			return pattern
+		}
+	}
+	return "unknown"
 }
 
 // MetricsHandler returns the /metrics HTTP handler gated by the

@@ -61,6 +61,7 @@ func TestObservability_MetricNamesRegistered(t *testing.T) {
 	// `{provider!="__registration_probe__"}` excludes them).
 	publishQueueDepth.Set(0)
 	publishQueueLagSeconds.Set(0)
+	uploadJobQueueDepth.Set(0)
 	publishTargetsByStatus.WithLabelValues("__registration_probe__").Set(0)
 	deadLetterCount.WithLabelValues("__registration_probe__").Set(0)
 	databasePoolUsage.WithLabelValues("__registration_probe__").Set(0)
@@ -81,6 +82,7 @@ func TestObservability_MetricNamesRegistered(t *testing.T) {
 		// Periodic gauges
 		"publish_queue_depth",
 		"publish_queue_lag_seconds",
+		"upload_job_queue_depth",
 		"publish_targets_by_status",
 		"dead_letter_count",
 		"database_pool_usage",
@@ -110,7 +112,7 @@ func TestObservability_MetricNamesRegistered(t *testing.T) {
 func TestObservability_GaugesHaveNoTotalSuffix(t *testing.T) {
 	mfs := gatherMetricFamilies(t)
 	gauges := []string{
-		"publish_queue_depth", "publish_queue_lag_seconds",
+		"publish_queue_depth", "publish_queue_lag_seconds", "upload_job_queue_depth",
 		"publish_targets_by_status", "dead_letter_count", "database_pool_usage",
 		"refresh_tokens_near_expiry",
 	}

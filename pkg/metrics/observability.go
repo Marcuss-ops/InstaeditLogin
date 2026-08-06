@@ -128,6 +128,17 @@ var (
 		},
 	)
 
+	// uploadJobQueueDepth counts durable upload jobs waiting for either the
+	// ingest or publish worker. It complements publish_queue_depth, which is
+	// the post-target queue, and makes worker backlog visible before a Post
+	// exists.
+	uploadJobQueueDepth = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "upload_job_queue_depth",
+			Help: "Durable upload jobs waiting for ingest or publish workers, sampled by the metrics collector.",
+		},
+	)
+
 	// publishTargetsByStatus is the per-status count of post_targets.
 	// The labels are the canonical 6 statuses from SPRINTs 5.0-5.2:
 	// draft/queued/retrying/publishing/published/failed/dlq. Sampled
@@ -160,6 +171,12 @@ var (
 			Help: "*sql.DB pool stats from db.Stats() (in_use/idle/open/wait). Sampled every 10s by the metrics collector goroutine. wait grows when the pool saturates; in_use close to MaxOpenConns (25) is a saturation signal.",
 		},
 		[]string{"state"},
+	)
+	databasePoolWaitDurationSeconds = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "database_pool_wait_duration_seconds",
+			Help: "Cumulative time callers have waited for a database connection, from database/sql DBStats.WaitDuration.",
+		},
 	)
 
 	// refreshTokensNearExpiry counts OAuth refresh grants whose
@@ -443,9 +460,11 @@ func init() {
 	prometheus.MustRegister(
 		publishQueueDepth,
 		publishQueueLagSeconds,
+		uploadJobQueueDepth,
 		publishTargetsByStatus,
 		deadLetterCount,
 		databasePoolUsage,
+		databasePoolWaitDurationSeconds,
 		refreshTokensNearExpiry,
 		publishAttempts,
 		providerLatency,

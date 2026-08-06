@@ -13,7 +13,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 	"log/slog"
-	"net/http"
 	"time"
 )
 
@@ -131,7 +130,7 @@ func (a *App) registerPublishWorker() {
 						driveSessionRepo,
 						driveTokenProvider,
 						a.Encryptor,
-						&http.Client{Timeout: 30 * time.Second},
+						services.NewHTTPClient(),
 						16*1024*1024,
 					)
 					if destErr == nil {

@@ -247,6 +247,7 @@ func collectPoolGauges(db *sql.DB) {
 	SetDatabasePoolUsage(PoolStateIdle, stats.Idle)
 	SetDatabasePoolUsage(PoolStateOpen, stats.OpenConnections)
 	SetDatabasePoolUsage(PoolStateWait, int(stats.WaitCount))
+	SetDatabasePoolWaitDuration(stats.WaitDuration.Seconds())
 }
 
 // collectDBGaugesXact runs the 5 DB-backed gauges inside a single
@@ -289,6 +290,18 @@ func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger, c
 		return fmt.Errorf("queue_depth query: %w", err)
 	}
 	SetQueueDepth(queueDepth)
+
+	// 1b. upload_job_queue_depth — durable jobs waiting for either pool.
+	// Keep this query deliberately bounded to the canonical non-terminal
+	// worker states; leased rows are active work, not backlog.
+	var uploadQueueDepth int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM upload_jobs
+		 WHERE status IN ('pending', 'retry_wait', 'ingest_completed')`,
+	).Scan(&uploadQueueDepth); err != nil {
+		return fmt.Errorf("upload_job_queue_depth query: %w", err)
+	}
+	SetUploadJobQueueDepth(uploadQueueDepth)
 
 	// 2. publish_queue_lag_seconds — age of the oldest queued row, 0
 	// when empty. The MIN+NULLS handling relies on COALESCE so the

@@ -11,7 +11,7 @@ import (
 
 // Connect establishes a connection to the PostgreSQL database.
 func Connect(cfg *config.DatabaseConfig) (*sql.DB, error) {
-	db, err := sql.Open("postgres", cfg.DSN())
+	db, err := sql.Open(instrumentedPostgresDriverName, cfg.DSN())
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database connection: %w", err)
 	}
