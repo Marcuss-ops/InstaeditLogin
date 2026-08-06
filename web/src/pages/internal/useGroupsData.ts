@@ -230,7 +230,8 @@ export function useGroupsData() {
 
     const renameGroup = useCallback(async (groupId: number, name: string) => {
       const trimmedName = name.trim();
-      if (!trimmedName) return;
+      if (!trimmedName) throw new Error("Il nome del gruppo è obbligatorio.");
+      if (trimmedName.length > 80) throw new Error("Il nome del gruppo può contenere al massimo 80 caratteri.");
       await authedFetch(`/api/v1/groups/${groupId}`, {
         method: "PATCH",
         body: JSON.stringify({ name: trimmedName }),

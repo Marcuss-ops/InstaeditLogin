@@ -14,8 +14,9 @@ import {
 } from "lucide-react";
 import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
-import { PLATFORM_GRADIENT, type PlatformAccount, type TreeNode } from "./groupsTypes";
+import { type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 
 const LANGUAGE_OPTIONS = [
   { code: "it", flag: "🇮🇹", name: "Italiano" },
@@ -47,12 +48,13 @@ export function GroupDetailPanel({
   onCreateSubgroup: (name: string) => void;
   onDeleteGroup: () => void;
   onSaved: () => void | Promise<void>;
-  onRename?: (name: string) => void | Promise<void>;
+  onRename: (name: string) => void | Promise<void>;
 }) {
   const [subName, setSubName] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [groupName, setGroupName] = useState(group.name);
   const [savingName, setSavingName] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [languages, setLanguages] = useState<Record<number, string>>(() => Object.fromEntries(group.accounts.map((account) => [account.id, account.language ?? ""])));
   const [savingLanguageId, setSavingLanguageId] = useState<number | null>(null);
   const [languageError, setLanguageError] = useState<Record<number, string>>({});
@@ -62,6 +64,7 @@ export function GroupDetailPanel({
   useEffect(() => {
     setGroupName(group.name);
     setEditingName(false);
+    setRenameError(null);
     setLanguages((current) => {
       const next = { ...current };
       for (const account of group.accounts) {
@@ -166,18 +169,26 @@ export function GroupDetailPanel({
               onSubmit={async (event) => {
                 event.preventDefault();
                 const nextName = groupName.trim();
-                if (!nextName || nextName === group.name || savingName) {
-                  setEditingName(false);
-                  setGroupName(group.name);
+                if (savingName) return;
+                if (!nextName) {
+                  setRenameError("Il nome del gruppo è obbligatorio.");
                   return;
                 }
+                if (nextName.length > 80) {
+                  setRenameError("Il nome del gruppo può contenere al massimo 80 caratteri.");
+                  return;
+                }
+                if (nextName === group.name) {
+                  setRenameError("Inserisci un nome diverso da quello attuale.");
+                  return;
+                }
+                setRenameError(null);
                 setSavingName(true);
                 try {
-                  await onRename?.(nextName);
+                  await onRename(nextName);
                   setEditingName(false);
-                } catch {
-                  // authedFetch already surfaces the error via the global toast.
-                  setGroupName(group.name);
+                } catch (error) {
+                  setRenameError(error instanceof Error ? error.message : "Impossibile rinominare il gruppo.");
                 } finally {
                   setSavingName(false);
                 }
@@ -187,12 +198,17 @@ export function GroupDetailPanel({
               <input
                 autoFocus
                 value={groupName}
-                onChange={(event) => setGroupName(event.target.value)}
+                onChange={(event) => {
+                  setGroupName(event.target.value);
+                  if (renameError) setRenameError(null);
+                }}
+                maxLength={80}
                 aria-label="Nome del gruppo"
                 className="min-w-0 flex-1 rounded-lg border border-violet-400/50 bg-black/30 px-2.5 py-1.5 text-[16px] font-bold text-white outline-none focus:ring-2 focus:ring-violet-500/30"
               />
-              <button type="submit" disabled={savingName || !groupName.trim()} className="rounded-lg bg-white px-2.5 py-1.5 text-[11px] font-bold text-black disabled:opacity-50">{savingName ? "Salvo…" : "Salva"}</button>
-              <button type="button" onClick={() => { setEditingName(false); setGroupName(group.name); }} disabled={savingName} className="rounded-lg p-1.5 text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Annulla rinomina"><XIcon /></button>
+              <button type="submit" disabled={savingName} className="rounded-lg bg-white px-2.5 py-1.5 text-[11px] font-bold text-black disabled:opacity-50">{savingName ? "Salvo…" : "Salva"}</button>
+              <button type="button" onClick={() => { setEditingName(false); setGroupName(group.name); setRenameError(null); }} disabled={savingName} className="rounded-lg p-1.5 text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Annulla rinomina"><XIcon /></button>
+              {renameError ? <p className="basis-full text-[11px] text-red-300" role="alert">{renameError}</p> : null}
             </form>
           ) : (
             <div className="flex items-center gap-2">
@@ -200,7 +216,7 @@ export function GroupDetailPanel({
                 <Folder size={20} className="shrink-0 text-amber-300/80" />
                 {group.name}
               </h2>
-              {onRename ? <button type="button" onClick={() => setEditingName(true)} className="rounded-md p-1.5 text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Rinomina gruppo" title="Rinomina gruppo"><Pencil size={14} /></button> : null}
+              <button type="button" onClick={() => setEditingName(true)} className="rounded-md p-1.5 text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Rinomina gruppo" title="Rinomina gruppo"><Pencil size={14} /></button>
             </div>
           )}
           <p className="text-[12px] text-[#9aa0aa] mt-0.5">
@@ -324,7 +340,6 @@ export function AccountDetailPanel({
     };
   }, [account.id]);
 
-  const grad = PLATFORM_GRADIENT[account.platform] ?? "from-zinc-500 to-zinc-700";
   const StatusIcon =
     account.status === "active" ? CheckCircle2 :
     PauseCircle;
@@ -347,19 +362,16 @@ export function AccountDetailPanel({
   return (
     <div>
       <div className="flex items-start gap-4 mb-6">
-        <div
-          className={cn(
-            "w-16 h-16 rounded-xl bg-gradient-to-br flex items-center justify-center text-white text-[18px] font-extrabold shrink-0",
-            grad,
-          )}
-        >
-          {(account.platform[0] ?? "?").toUpperCase()}
-        </div>
+        <ProviderBadge
+          platform={account.platform}
+          className="h-16 w-16 shrink-0 justify-center rounded-xl p-0"
+          logoClassName="h-9 w-9"
+        />
         <div className="flex-1 min-w-0">
           <h2 className="text-[20px] font-extrabold tracking-[-0.01em] text-white flex items-center gap-2 flex-wrap">
             {account.username || account.platform_user_id}
             <span className="text-[11px] font-medium uppercase tracking-wider text-[#9aa0aa]">
-              {account.platform}
+              {account.platform === "youtube" ? "YouTube" : account.platform}
             </span>
           </h2>
           <p className="text-[12px] text-[#9aa0aa] mt-1 flex items-center gap-2">

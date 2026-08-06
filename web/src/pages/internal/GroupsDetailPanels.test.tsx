@@ -96,7 +96,7 @@ describe("GroupDetailPanel batch settings", () => {
     expect(screen.queryByRole("button", { name: /Rimuovi channel-two dalla cartella/i })).not.toBeInTheDocument();
   });
 
-  it("renames the group inline", async () => {
+  it("renames the group inline and supports cancel", async () => {
     const onRename = vi.fn().mockResolvedValue(undefined);
 
     render(
@@ -115,9 +115,96 @@ describe("GroupDetailPanel batch settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
     const input = screen.getByRole("textbox", { name: "Nome del gruppo" });
     fireEvent.change(input, { target: { value: "YouTube WWE" } });
+    fireEvent.click(screen.getByRole("button", { name: "Annulla rinomina" }));
+    expect(screen.queryByRole("textbox", { name: "Nome del gruppo" })).not.toBeInTheDocument();
+    expect(onRename).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Nome del gruppo" }), { target: { value: "YouTube WWE" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salva" }));
+    await waitFor(() => expect(onRename).toHaveBeenCalledWith("YouTube WWE"));
+  });
+
+  it("validates rename input and keeps the editor open", async () => {
+    const onRename = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={group}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={() => {}}
+          onRename={onRename}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    const input = screen.getByRole("textbox", { name: "Nome del gruppo" });
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "Salva" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("obbligatorio");
+    expect(onRename).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "x".repeat(81) } });
+    fireEvent.click(screen.getByRole("button", { name: "Salva" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("80 caratteri");
+    expect(onRename).not.toHaveBeenCalled();
+  });
+
+  it("prevents duplicate rename submits while saving", async () => {
+    let resolveRename: (() => void) | undefined;
+    const onRename = vi.fn(() => new Promise<void>((resolve) => { resolveRename = resolve; }));
+
+    render(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={group}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={() => {}}
+          onRename={onRename}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Nome del gruppo" }), { target: { value: "YouTube WWE" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salva" }));
+    await waitFor(() => expect(onRename).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Salvo…" })).toBeDisabled();
+    fireEvent.submit(screen.getByRole("textbox", { name: "Nome del gruppo" }).closest("form")!);
+    expect(onRename).toHaveBeenCalledTimes(1);
+
+    resolveRename?.();
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Nome del gruppo" })).not.toBeInTheDocument());
+  });
+
+  it("shows a backend rename error without closing the editor", async () => {
+    const onRename = vi.fn().mockRejectedValue(new Error("Nome già utilizzato"));
+
+    render(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={group}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={() => {}}
+          onRename={onRename}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Nome del gruppo" }), { target: { value: "YouTube WWE" } });
     fireEvent.click(screen.getByRole("button", { name: "Salva" }));
 
-    await waitFor(() => expect(onRename).toHaveBeenCalledWith("YouTube WWE"));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Nome già utilizzato"));
+    expect(screen.getByRole("textbox", { name: "Nome del gruppo" })).toBeInTheDocument();
   });
 
   it("saves language and remaining membership settings", async () => {

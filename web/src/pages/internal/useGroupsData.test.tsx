@@ -53,6 +53,52 @@ describe("useGroupsData assignment persistence", () => {
     listAllAccountsMock.mockResolvedValue([account]);
   });
 
+  it("persists an inline group rename and reloads the server name", async () => {
+    let groupName = "YouTube";
+    authedFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/v1/auth/me") return jsonResponse({ workspace_id: 9 });
+      if (path === "/api/v1/groups/aggregate") {
+        return jsonResponse({ groups: [{ id: 7, workspace_id: 9, name: groupName, account_ids: [] }] });
+      }
+      if (path === "/api/v1/groups/7" && init?.method === "PATCH") {
+        groupName = (JSON.parse(String(init.body)) as { name: string }).name;
+        return jsonResponse({ id: 7, name: groupName });
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    const { result } = renderHook(() => useGroupsData(), { wrapper });
+    await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+
+    await act(async () => {
+      await result.current.renameGroup(7, "  YouTube WWE  ");
+    });
+
+    expect(authedFetchMock).toHaveBeenCalledWith(
+      "/api/v1/groups/7",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ name: "YouTube WWE" }),
+      }),
+    );
+    await waitFor(() => expect(result.current.state.kind === "ready" && result.current.state.groups[0]?.name).toBe("YouTube WWE"));
+  });
+
+  it("rejects invalid rename names before making a request", async () => {
+    authedFetchMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/auth/me") return jsonResponse({ workspace_id: 9 });
+      if (path === "/api/v1/groups/aggregate") return jsonResponse({ groups: [{ id: 7, workspace_id: 9, name: "YouTube", account_ids: [] }] });
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    const { result } = renderHook(() => useGroupsData(), { wrapper });
+    await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+
+    await expect(result.current.renameGroup(7, "   ")).rejects.toThrow("obbligatorio");
+    await expect(result.current.renameGroup(7, "x".repeat(81))).rejects.toThrow("80 caratteri");
+    expect(authedFetchMock).not.toHaveBeenCalledWith("/api/v1/groups/7", expect.anything());
+  });
+
   it("sends the PUT membership payload and keeps the channel after reconcile", async () => {
     let aggregateAccountIDs: number[] = [];
     authedFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
