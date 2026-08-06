@@ -89,12 +89,16 @@ export function DashboardChannelsPage() {
   const highlightVideoId = searchParams.get("video") ?? undefined;
 
   const [refreshing, setRefreshing] = useState(false);
+  const [contentEnabled, setContentEnabled] = useState(false);
   const inflightEditRef = useRef(false);
 
   const accountState = useChannelAccount({ accountId });
   const contentState = useChannelContent({
     accountId,
     privacy,
+    // Provider-backed content is an explicit Videos action. The channel
+    // shell itself must remain snapshot-only on page load.
+    enabled: contentEnabled,
     limit: DEFAULT_LIMIT,
     // Refresh on window focus events so closing the Velox popup
     // + refocusing the channel tab auto-invalidates whatever
@@ -126,12 +130,14 @@ export function DashboardChannelsPage() {
   const accountRefetch = accountState.refetch;
   const contentRefetch = contentState.refetch;
   const handlePublishChanged = useCallback(() => {
+    if (!contentEnabled) return;
     void Promise.all([accountRefetch(), contentRefetch()]);
-  }, [accountRefetch, contentRefetch]);
+  }, [accountRefetch, contentEnabled, contentRefetch]);
   useChannelContentLiveUpdate(accountId, handlePublishChanged);
 
   const handleRefreshBoth = useCallback(async (): Promise<void> => {
     setRefreshing(true);
+    setContentEnabled(true);
     try {
       await Promise.all([
         accountState.refetch(),
@@ -245,7 +251,8 @@ export function DashboardChannelsPage() {
           onChange={handlePrivacyChange}
           disabled={
             contentState.state.kind === "loading" ||
-            contentState.state.kind === "error"
+            contentState.state.kind === "error" ||
+            contentState.state.kind === "idle"
           }
         />
 
@@ -255,7 +262,10 @@ export function DashboardChannelsPage() {
           highlightVideoId={highlightVideoId}
           onEditThumbnail={handleEditThumbnail}
           onLoadMore={() => contentState.loadMore()}
-          onRetry={() => contentState.refetch()}
+          onRetry={async () => {
+            setContentEnabled(true);
+            await contentState.refetch();
+          }}
         />
       </div>
     </div>
@@ -285,6 +295,23 @@ function ContentGrid({
   onLoadMore,
   onRetry,
 }: ContentGridProps) {
+  if (state.kind === "idle") {
+    return (
+      <div className="rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.02] p-8 text-center">
+        <p className="text-[14px] font-semibold text-white">Video non caricati</p>
+        <p className="mt-1 text-[13px] text-[#9aa0aa]">Carica i video solo quando vuoi consultare il contenuto del canale.</p>
+        <button
+          type="button"
+          onClick={() => void onRetry()}
+          className="mt-4 rounded-xl bg-white px-4 py-2 text-[13px] font-semibold text-black hover:bg-white/90 transition-colors"
+          data-testid="load-channel-content"
+        >
+          Carica video
+        </button>
+      </div>
+    );
+  }
+
   if (state.kind === "loading") {
     return (
       <div className="space-y-3" data-testid="content-grid-loading">

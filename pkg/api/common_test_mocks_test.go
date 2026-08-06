@@ -714,6 +714,9 @@ func (m *mockSnapshotStore) MarkSnapshotRefreshPending(platformAccountID int64, 
 	}
 	return nil
 }
+func (m *mockSnapshotStore) MarkSnapshotRefreshTerminal(_ context.Context, _ int64, _, _ string) error {
+	return nil
+}
 func (m *mockSnapshotStore) MarkAllSnapshotRefreshesPending(userID int64, now time.Time) (int64, error) {
 	if m.markAllPendingFn != nil {
 		return m.markAllPendingFn(userID, now)

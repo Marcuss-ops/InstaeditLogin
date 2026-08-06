@@ -8,19 +8,11 @@ import {
   Folder,
 } from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
-import { type ProviderId } from "../../lib/providers";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import type { Group } from "./groupsTypes";
 import { isPublishableAccount } from "../../types/uploads";
+import { listAllAccounts, type PlatformAccount } from "../../features/channels/api/channelsApi";
 
-type PlatformAccount = {
-  id: number;
-  platform: ProviderId;
-  username: string;
-  created_at: string;
-  status: string;
-  metadata?: Record<string, unknown>;
-};
 
 type GroupSummary = {
   group: Group;
@@ -45,16 +37,15 @@ type DashboardData = {
   posts: Post[];
   // totalUploads is the DISTINCT count of pending upload_jobs from
   // /uploads/counts — multi-target rows count ONCE (instead of once
-  // per target). This is the source for the "Pending uploads" stat.
-  privateVideos: number;
+  // per target). This keeps the dashboard page-load path local and
+  // avoids one provider request per YouTube account.
+  pendingUploads: number;
   // Per-account pending count + earliest scheduled_at, derived from
   // GET /api/v1/uploads/counts. The dashboard widget renders from
   // this map; the calendar page hits /uploads/by-account separately.
   countMap: Map<number, AccountProgrammatoCount>;
   groupSummaries: GroupSummary[];
 };
-
-const PRIVATE_VIDEO_PERIODS = [1, 7, 14, 28, 90] as const;
 
 type FetchState =
   | { kind: "loading" }
@@ -99,7 +90,6 @@ export function InternalDashboard() {
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [draggedAccountId, setDraggedAccountId] = useState<number | null>(null);
   const [savingDrop, setSavingDrop] = useState<number | null>(null);
-  const [privateVideoDays, setPrivateVideoDays] = useState<number>(90);
 
   const load = useCallback(async () => {
     abortRef.current?.abort();
@@ -108,8 +98,8 @@ export function InternalDashboard() {
     setState({ kind: "loading" });
 
     try {
-      const [accountsResp, postsResp, countsResp] = await Promise.all([
-        authedFetch("/api/v1/accounts", { signal: controller.signal }),
+      const [accounts, postsResp, countsResp] = await Promise.all([
+        listAllAccounts({ signal: controller.signal }),
         authedFetch("/api/v1/posts", { signal: controller.signal }),
         // /uploads/counts is the cheap GROUP BY per-target aggregate
         // (single query, no row cap). The widget only needs the per-account
@@ -122,7 +112,7 @@ export function InternalDashboard() {
         }),
       ]);
       if (controller.signal.aborted) return;
-      const accountsData = (await accountsResp.json()) as { accounts: PlatformAccount[] };
+      const accountsData = { accounts };
       const postsData = (await postsResp.json()) as { posts: Post[] };
       const countsData = (await countsResp.json()) as {
         counts: Array<{
@@ -132,27 +122,11 @@ export function InternalDashboard() {
         }>;
         total_uploads: number;
       };
-      const youtubeAccounts = (accountsData.accounts ?? []).filter((account) => account.platform === "youtube");
-      const privateVideoCounts = await Promise.all(
-        youtubeAccounts.map(async (account) => {
-          try {
-            const response = await authedFetch(`/api/v1/accounts/${account.id}/content?limit=50&privacy=private`, { signal: controller.signal });
-            const data = (await response.json()) as {
-              items?: Array<{ privacy?: string; published_at?: string }>;
-            };
-            const cutoff = Date.now() - privateVideoDays * 24 * 60 * 60 * 1000;
-            return (data.items ?? []).filter((item) => {
-              if (item.privacy !== "private") return false;
-              const publishedAt = Date.parse(item.published_at ?? "");
-              // Older API responses without a timestamp remain visible in
-              // the default 90-day view; dated items are filtered exactly.
-              return Number.isNaN(publishedAt) || publishedAt >= cutoff;
-            }).length;
-          } catch {
-            return 0;
-          }
-        }),
-      );
+      // Do not fan out to /accounts/{id}/content here. That endpoint
+      // reaches YouTube and belongs to an explicit video-management
+      // action, not the dashboard shell. The local upload aggregate is
+      // the page-load metric and is constant in query count.
+      const pendingUploads = countsData.total_uploads ?? 0;
       let groupSummaries: GroupSummary[] = [];
       try {
         // The aggregate endpoint resolves the active workspace from the
@@ -213,7 +187,7 @@ export function InternalDashboard() {
           accounts: accountsData.accounts ?? [],
           posts: postsData.posts ?? [],
           countMap,
-          privateVideos: privateVideoCounts.reduce((sum, count) => sum + count, 0),
+          pendingUploads,
           groupSummaries,
         },
       });
@@ -226,7 +200,7 @@ export function InternalDashboard() {
       const message = err instanceof Error ? err.message : "Unable to load dashboard.";
       setState({ kind: "error", message });
     }
-  }, [navigate, privateVideoDays]);
+  }, [navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -252,7 +226,7 @@ export function InternalDashboard() {
           posts: state.data.posts.length,
           published: state.data.posts.filter((p) => p.status === "published").length,
           scheduled: state.data.posts.filter((p) => p.status === "queued").length,
-          queuedUploads: state.data.privateVideos,
+          queuedUploads: state.data.pendingUploads,
         }
       : null;
 
@@ -337,26 +311,15 @@ export function InternalDashboard() {
                 >
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="text-[13px] font-medium text-[#9aa0aa] mb-1">Video privati da pubblicare</p>
-                      <p className="text-[28px] font-extrabold tracking-tight text-white">{state.data.privateVideos}</p>
+                      <p className="text-[13px] font-medium text-[#9aa0aa] mb-1">Upload in coda</p>
+                      <p className="text-[28px] font-extrabold tracking-tight text-white">{state.data.pendingUploads}</p>
                     </div>
                     <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-[#9aa0aa] group-hover:bg-white group-hover:text-[#030308] transition-colors">
                       <Clock size={20} />
                     </div>
                   </div>
                 </Link>
-                <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/[0.08] pt-3">
-                  <label htmlFor="dashboard-private-video-period" className="text-[11px] text-[#9aa0aa]">Periodo video</label>
-                  <select
-                    id="dashboard-private-video-period"
-                    data-testid="dashboard-private-video-period"
-                    value={privateVideoDays}
-                    onChange={(event) => setPrivateVideoDays(Number(event.target.value))}
-                    className="rounded-lg border border-white/[0.10] bg-black/20 px-2.5 py-1.5 text-[12px] font-semibold text-white outline-none"
-                  >
-                    {PRIVATE_VIDEO_PERIODS.map((days) => <option key={days} value={days}>{days} giorni</option>)}
-                  </select>
-                </div>
+
               </div>
             </div>
 

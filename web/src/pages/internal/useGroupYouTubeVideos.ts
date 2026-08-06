@@ -26,7 +26,7 @@ async function resolveGroupWorkspace(groupId: number): Promise<number> {
   return workspaceID;
 }
 
-export function useGroupYouTubeVideos(groupId: number) {
+export function useGroupYouTubeVideos(groupId: number, enabled = false) {
   const navigate = useNavigate();
   const abortRef = useRef<AbortController | null>(null);
   const pollingAttemptsRef = useRef(0);
@@ -204,9 +204,14 @@ export function useGroupYouTubeVideos(groupId: number) {
   }, [loadVideos, state]);
 
   useEffect(() => {
+    if (!enabled) {
+      abortRef.current?.abort();
+      setState({ kind: "loading" });
+      return () => abortRef.current?.abort();
+    }
     refreshVideos(false);
     return () => abortRef.current?.abort();
-  }, [refreshVideos]);
+  }, [enabled, refreshVideos]);
 
   const hasPendingVideos =
     state.kind === "ready" &&

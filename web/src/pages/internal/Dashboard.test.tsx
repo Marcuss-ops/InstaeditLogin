@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 import { InternalDashboard } from "./Dashboard";
 
 function mockJsonResponse(data: unknown, ok = true, status = 200) {
@@ -24,6 +25,7 @@ function renderDashboard() {
 describe("InternalDashboard", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    clearAccountsCache();
   });
 
   it("renders the dashboard heading and stats", async () => {
@@ -34,7 +36,7 @@ describe("InternalDashboard", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url, "http://localhost").pathname === "/api/v1/accounts") {
           return mockJsonResponse({
             accounts: [
               { id: 1, platform: "instagram", username: "demo", created_at: new Date().toISOString() },
@@ -67,8 +69,8 @@ describe("InternalDashboard", () => {
     });
 
     expect(screen.getByText("Connected accounts")).toBeInTheDocument();
-    expect(screen.getByText("Video privati da pubblicare")).toBeInTheDocument();
-    expect(screen.getByTestId("dashboard-private-video-period")).toHaveValue("90");
+    expect(screen.getByText("Upload in coda")).toBeInTheDocument();
+    expect(screen.getByText("Upload in coda")).toBeInTheDocument();
   });
 
   it("shows an error state when data cannot be loaded", async () => {
@@ -100,7 +102,7 @@ describe("InternalDashboard", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1, workspace_id: 7 });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url, "http://localhost").pathname === "/api/v1/accounts") {
           return mockJsonResponse({
             accounts: [
               { id: 101, platform: "youtube", username: "channel-1", status: "active", created_at: new Date().toISOString() },
@@ -145,7 +147,7 @@ describe("InternalDashboard", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url, "http://localhost").pathname === "/api/v1/accounts") {
           return mockJsonResponse({ accounts: [] });
         }
         if (url.endsWith("/api/v1/posts")) {

@@ -33,20 +33,82 @@ export type { PlatformAccount, Workspace };
 const ACCOUNTS_PATH = "/api/v1/accounts";
 const WORKSPACES_PATH = "/api/v1/workspaces";
 
-/** Follow account cursors so callers keep seeing the complete manifest. */
-export async function listAllAccounts(signal?: AbortSignal): Promise<PlatformAccount[]> {
+// Shared accounts-manifest cache (N+1 DoD — "no duplicate refetch between
+// header and page"). The header switcher (AccountSwitcher) and the Linking
+// page both load the account manifest on mount; without sharing they fire
+// TWO identical GET /accounts requests. This module-level cache collapses
+// them into ONE network request: within a 60s stale window callers reuse
+// the last value, and concurrent callers share the in-flight promise
+// instead of double-fetching. force:true bypasses the cache for
+// user-initiated refreshes. clearAccountsCache resets it (logout, tests).
+const ACCOUNTS_STALE_MS = 60_000;
+
+let accountsCache: { value: PlatformAccount[]; at: number } | null = null;
+let accountsInFlight: Promise<PlatformAccount[]> | null = null;
+
+export function clearAccountsCache(): void {
+  accountsCache = null;
+  accountsInFlight = null;
+}
+
+async function fetchAllAccountPages(): Promise<PlatformAccount[]> {
   const accounts: PlatformAccount[] = [];
+  const seenCursors = new Set<string>();
   let cursor: string | undefined;
-  do {
+  for (let pageNumber = 0; ; pageNumber += 1) {
+    if (pageNumber >= 10_000) {
+      throw new Error("account pagination exceeded the maximum page count");
+    }
     const params = new URLSearchParams({ limit: "100" });
     if (cursor) params.set("cursor", cursor);
-    const path = cursor ? `${ACCOUNTS_PATH}?${params.toString()}` : ACCOUNTS_PATH;
-    const response = await authedFetch(path, { signal });
+    const response = await authedFetch(`${ACCOUNTS_PATH}?${params.toString()}`);
     const page = (await response.json()) as AccountsResponse;
     accounts.push(...(page.accounts ?? []));
-    cursor = page.has_more ? page.next_cursor : undefined;
-  } while (cursor);
-  return accounts;
+    if (!page.has_more) return accounts;
+    if (!page.next_cursor || seenCursors.has(page.next_cursor)) {
+      throw new Error("account pagination returned an invalid continuation cursor");
+    }
+    seenCursors.add(page.next_cursor);
+    cursor = page.next_cursor;
+  }
+}
+
+export interface ListAccountsOptions {
+  /**
+   * Caller unmount abort. The shared request itself is never aborted by a
+   * single caller (it serves every concurrent caller); callers must keep
+   * their own post-await aborted guard for unmount safety.
+   */
+  signal?: AbortSignal;
+  /** Bypass the 60s cache — used by explicit user-initiated refreshes. */
+  force?: boolean;
+}
+
+/** Follow account cursors so callers keep seeing the complete manifest. */
+export async function listAllAccounts(
+  options: ListAccountsOptions | AbortSignal = {},
+): Promise<PlatformAccount[]> {
+  // Keep the historical `listAllAccounts(signal)` call shape source-compatible
+  // while callers migrate to the shared-cache options object.
+  const normalized: ListAccountsOptions =
+    typeof AbortSignal !== "undefined" && options instanceof AbortSignal
+      ? { signal: options }
+      : options as ListAccountsOptions;
+  const now = Date.now();
+  if (!normalized.force && accountsCache && now - accountsCache.at < ACCOUNTS_STALE_MS) {
+    return accountsCache.value;
+  }
+  if (!accountsInFlight) {
+    accountsInFlight = fetchAllAccountPages()
+      .then((value) => {
+        accountsCache = { value, at: Date.now() };
+        return value;
+      })
+      .finally(() => {
+        accountsInFlight = null;
+      });
+  }
+  return accountsInFlight;
 }
 
 export function filterYouTube(accounts: PlatformAccount[]): PlatformAccount[] {
@@ -59,7 +121,7 @@ export async function listYouTubeChannelsAndWorkspaces(
   signal?: AbortSignal,
 ): Promise<YouTubeChannelsAndWorkspaces> {
   const [accounts, workspacesResp] = await Promise.all([
-    listAllAccounts(signal),
+    listAllAccounts({ signal }),
     authedFetch(WORKSPACES_PATH, { signal }),
   ]);
   const workspaces =

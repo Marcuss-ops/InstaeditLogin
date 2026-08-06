@@ -52,6 +52,8 @@ describe("GroupYouTubeVideos", () => {
     );
 
     renderPanel();
+    expect(authedFetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("group-youtube-videos-load"));
 
     await waitFor(() => {
       expect(screen.getByTestId("group-youtube-videos-recency")).toBeInTheDocument();
@@ -96,6 +98,7 @@ describe("GroupYouTubeVideos", () => {
       );
 
     renderPanel();
+    fireEvent.click(screen.getByTestId("group-youtube-videos-load"));
 
     await waitFor(() => {
       expect(screen.getByText("First video")).toBeInTheDocument();
@@ -120,6 +123,7 @@ describe("GroupYouTubeVideos", () => {
     authedFetchMock.mockResolvedValue(jsonResponse({ videos: [] }));
 
     renderPanel();
+    fireEvent.click(screen.getByTestId("group-youtube-videos-load"));
 
     await waitFor(() => {
       expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
@@ -148,6 +152,7 @@ describe("GroupYouTubeVideos", () => {
     );
 
     renderPanel();
+    fireEvent.click(screen.getByTestId("group-youtube-videos-load"));
 
     await waitFor(() => {
       expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
@@ -159,6 +164,7 @@ describe("GroupYouTubeVideos", () => {
     authedFetchMock.mockRejectedValue(new ApiError(502, "youtube list failed for every account"));
 
     renderPanel();
+    fireEvent.click(screen.getByTestId("group-youtube-videos-load"));
 
     await waitFor(() => {
       expect(screen.getByTestId("group-youtube-upstream-error")).toBeInTheDocument();
@@ -203,6 +209,7 @@ describe("GroupYouTubeVideos", () => {
     );
 
     renderPanel();
+    fireEvent.click(screen.getByTestId("group-youtube-videos-load"));
 
     await waitFor(() => {
       expect(screen.getByText(/verifica in corso/i)).toBeInTheDocument();

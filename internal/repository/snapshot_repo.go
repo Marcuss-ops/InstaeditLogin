@@ -238,7 +238,11 @@ type PendingSnapshotRefresh struct {
 }
 
 const SnapshotRefreshBatchLimit = 25
-const SnapshotRefreshClaimLease = 2 * time.Minute
+
+// The lease covers the worst case of a bounded batch waiting behind the
+// four-provider semaphore (25 accounts × 90s provider deadline / 4), with
+// headroom for database latency and retries.
+const SnapshotRefreshClaimLease = 30 * time.Minute
 
 // ClaimPendingSnapshotRefreshes atomically claims due rows with
 // FOR UPDATE SKIP LOCKED. Multiple API/worker replicas therefore cannot
@@ -257,7 +261,7 @@ func (r *SnapshotRepository) ClaimPendingSnapshotRefreshes(ctx context.Context, 
 		SELECT ars.platform_account_id
 		  FROM account_resource_snapshots ars
 		  JOIN platform_accounts pa ON pa.id = ars.platform_account_id
-		 WHERE pa.status NOT IN ('deleted', 'disconnected')
+		 WHERE pa.status NOT IN ('deleted', 'disconnected', 'revoked', 'reauth_required', 'suspended')
 		   AND ars.refresh_pending_at IS NOT NULL
 		   AND ars.refresh_pending_at <= NOW()
 		   AND (ars.refresh_claimed_until IS NULL OR ars.refresh_claimed_until <= NOW())
@@ -304,7 +308,7 @@ func (r *SnapshotRepository) ListPendingSnapshotRefreshes(ctx context.Context, l
 		`SELECT pa.id, pa.platform, pa.platform_user_id, pa.username, ars.refresh_attempts
 		 FROM platform_accounts pa
 		 JOIN account_resource_snapshots ars ON ars.platform_account_id = pa.id
-		 WHERE pa.status NOT IN ('deleted', 'disconnected')
+		 WHERE pa.status NOT IN ('deleted', 'disconnected', 'revoked', 'reauth_required', 'suspended')
 		   AND ars.refresh_pending_at IS NOT NULL
 		   AND ars.refresh_pending_at <= NOW()
 		   AND (ars.refresh_claimed_until IS NULL OR ars.refresh_claimed_until <= NOW())
@@ -346,5 +350,82 @@ func (r *SnapshotRepository) RescheduleSnapshotRefresh(ctx context.Context, acco
 	if err != nil {
 		return fmt.Errorf("reschedule snapshot refresh: %w", err)
 	}
+	return nil
+}
+
+// MarkSnapshotRefreshTerminal records a credential failure that cannot be
+// repaired by retrying. The account is moved to reauth_required and the
+// durable snapshot queue is cleared in one transaction, so stale reads do
+// not immediately enqueue the revoked grant again.
+func (r *SnapshotRepository) MarkSnapshotRefreshTerminal(ctx context.Context, accountID int64, code, message string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("mark snapshot refresh terminal: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE oauth_connections
+		    SET status = 'reauth_required',
+		        last_refresh_error = 'invalid_grant',
+		        updated_at = NOW()
+		  WHERE id = (
+		      SELECT oauth_connection_id
+		        FROM platform_accounts
+		       WHERE id = $1
+		         AND oauth_connection_id IS NOT NULL
+		  )`, accountID); err != nil {
+		return fmt.Errorf("mark snapshot refresh terminal: grant: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE platform_accounts
+		    SET status = 'reauth_required',
+		        reauth_required_at = NOW(),
+		        last_error_code = $2,
+		        last_error_message = $3,
+		        updated_at = NOW()
+		  WHERE status NOT IN ('deleted', 'disconnected', 'revoked')
+		    AND (
+		        id = $1
+		        OR (
+		            oauth_connection_id IS NOT NULL
+		            AND oauth_connection_id = (
+		                SELECT oauth_connection_id
+		                  FROM platform_accounts
+		                 WHERE id = $1
+		            )
+		        )
+		    )`,
+		accountID, code, message); err != nil {
+		return fmt.Errorf("mark snapshot refresh terminal: accounts: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE account_resource_snapshots ars
+		    SET refresh_pending_at = NULL,
+		        refresh_claimed_until = NULL,
+		        refresh_attempts = LEAST(refresh_attempts + 1, 20),
+		        refresh_last_error = $2,
+		        updated_at = NOW()
+		  WHERE ars.platform_account_id = $1
+		     OR ars.platform_account_id IN (
+		        SELECT pa.id
+		          FROM platform_accounts pa
+		         WHERE pa.oauth_connection_id = (
+		             SELECT oauth_connection_id
+		               FROM platform_accounts
+		              WHERE id = $1
+		         )
+		     )`,
+		accountID, message); err != nil {
+		return fmt.Errorf("mark snapshot refresh terminal: snapshots: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("mark snapshot refresh terminal: commit: %w", err)
+	}
+	committed = true
 	return nil
 }

@@ -150,17 +150,77 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 	}
 	_ = id.WorkspaceID() // tenancy captured for audit; not used as SQL filter (see godoc)
 
-	accountRows, err := r.userRepo.ListPlatformAccountsWithSnapshotsByUser(id.UserID(), "")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list accounts: "+err.Error())
-		return
-	}
 	includeDeleted := false
 	switch strings.ToLower(req.URL.Query().Get("include_deleted")) {
 	case "true", "1", "yes":
 		includeDeleted = true
 	}
+	limit, rawCursor, err := parseListPageWithBounds(req.URL.Query(), 100, 100)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cursorContext := "active"
+	if includeDeleted {
+		cursorContext = "all"
+	}
+	cursorTime, cursorID, cursorNull, err := decodeListCursorDetails(rawCursor, "accounts", cursorContext)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if cursorNull {
+		writeError(w, http.StatusBadRequest, "invalid list cursor: account cursor timestamp is required")
+		return
+	}
+	var accountRows []*repository.AccountWithSnapshot
+	hasMore := false
+	if paged, ok := r.userRepo.(interface {
+		ListPlatformAccountsWithSnapshotsByUserPage(context.Context, int64, string, bool, *time.Time, int64, int) ([]*repository.AccountWithSnapshot, bool, error)
+	}); ok {
+		var afterTime *time.Time
+		var afterID int64
+		if rawCursor != "" {
+			afterTime = &cursorTime
+			var scanErr error
+			afterID, scanErr = strconv.ParseInt(cursorID, 10, 64)
+			if scanErr != nil || afterID <= 0 {
+				writeError(w, http.StatusBadRequest, "invalid list cursor")
+				return
+			}
+		}
+		accountRows, hasMore, err = paged.ListPlatformAccountsWithSnapshotsByUserPage(req.Context(), id.UserID(), "", includeDeleted, afterTime, afterID, limit)
+	} else {
+		// Compatibility for lightweight test stores and older injected implementations.
+		// They cannot seek in SQL; reject a continuation rather than silently
+		// returning page one again.
+		if rawCursor != "" {
+			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this account store")
+			return
+		}
+		var all []*repository.AccountWithSnapshot
+		all, err = r.userRepo.ListPlatformAccountsWithSnapshotsByUser(id.UserID(), "")
+		if err == nil && !includeDeleted {
+			visible := all[:0]
+			for _, row := range all {
+				if state, _ := classifyAccountStatus(row.Account.Status); state != AccountStateDeleted {
+					visible = append(visible, row)
+				}
+			}
+			all = visible
+		}
+		if len(all) > limit {
+			hasMore = true
+			all = all[:limit]
+		}
+		accountRows = all
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list accounts: "+err.Error())
+		return
+	}
 	items := make([]accountListItem, 0, len(accountRows))
+	staleAccountIDs := make([]int64, 0, len(accountRows))
 	for _, row := range accountRows {
 		item := accountListItemFromAccount(row.Account)
 		if item.AccountState == AccountStateDeleted && !includeDeleted {
@@ -182,10 +242,27 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 		} else {
 			item.SnapshotStale = true
 		}
+		if item.SnapshotStale && item.AccountState != AccountStateReconnectRequired {
+			staleAccountIDs = append(staleAccountIDs, item.ID)
+		}
 		items = append(items, item)
 	}
+	if len(staleAccountIDs) > 0 {
+		if batcher, ok := r.snapshotStore.(interface {
+			MarkSnapshotsRefreshPending([]int64, time.Time) error
+		}); ok {
+			// One batched local write makes missing/stale rows visible to
+			// the worker without introducing a per-account SQL fan-out.
+			_ = batcher.MarkSnapshotsRefreshPending(staleAccountIDs, time.Now())
+		}
+	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": items})
+	response := map[string]interface{}{"accounts": items, "has_more": hasMore}
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		response["next_cursor"] = encodeListCursorForContext("accounts", cursorContext, last.CreatedAt, strconv.FormatInt(last.ID, 10))
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // loadOwnAccountByID centralises the auth + load + ownership check
@@ -277,7 +354,7 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	}
 	resp.SnapshotStale = stale
 
-	if stale {
+	if stale && resp.AccountState != AccountStateReconnectRequired {
 		// STRICT RULE: opening a channel page must never call the provider
 		// (YouTube). Serve the cached value immediately and record
 		// refresh_pending so the background worker refreshes the snapshot

@@ -63,6 +63,10 @@ const DefaultSnapshotRefreshSweepInterval = 60 * time.Second
 // at 3-5 — 4 is the middle of the range.
 const accountSnapshotRefreshConcurrency = 4
 
+// Keep provider work below the two-minute database claim lease so a slow
+// request cannot outlive its claim and be processed by another worker.
+const snapshotRefreshProviderTimeout = 90 * time.Second
+
 // SnapshotRefreshStore selects the accounts due for a background snapshot
 // refresh and persists the refreshed snapshot. Defined inline (not in
 // repository) so the worker is unit-testable with a fake without touching
@@ -71,6 +75,7 @@ type SnapshotRefreshStore interface {
 	ClaimPendingSnapshotRefreshes(ctx context.Context, limit int, lease time.Duration) ([]repository.PendingSnapshotRefresh, error)
 	UpsertSnapshot(snap *repository.AccountResourceSnapshot) error
 	RescheduleSnapshotRefresh(ctx context.Context, accountID int64, next time.Time, errText string) error
+	MarkSnapshotRefreshTerminal(ctx context.Context, accountID int64, code, message string) error
 }
 
 // AccountDetailsFetcher is the narrow provider surface the worker needs:
@@ -162,7 +167,7 @@ func (w *SnapshotRefreshSweepWorker) Run(ctx context.Context) error {
 // isolated (logged, sweep continues); a selection error aborts the pass
 // with a WARN (retried at the next interval).
 func (w *SnapshotRefreshSweepWorker) tick(ctx context.Context) {
-	pending, err := w.store.ClaimPendingSnapshotRefreshes(ctx, repository.SnapshotRefreshBatchLimit, repository.SnapshotRefreshClaimLease)
+	pending, err := w.store.ClaimPendingSnapshotRefreshes(ctx, accountSnapshotRefreshConcurrency, repository.SnapshotRefreshClaimLease)
 	if err != nil {
 		w.logger.Warn("snapshot refresh sweep tick failed (will retry at next interval)",
 			"error", err)
@@ -189,7 +194,17 @@ func (w *SnapshotRefreshSweepWorker) tick(ctx context.Context) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			if err := w.refreshOne(ctx, p); err != nil {
-				if scheduleErr := w.store.RescheduleSnapshotRefresh(ctx, p.PlatformAccountID, nextSnapshotRefreshAttempt(p.Attempts), err.Error()); scheduleErr != nil {
+				nextAttempt := nextSnapshotRefreshAttempt(p.Attempts)
+				if errors.Is(err, credentials.ErrInvalidGrant) {
+					// A revoked grant cannot be repaired by retrying. Clear
+					// the durable queue marker; a successful reauthorization
+					// will enqueue the account again through the read path.
+				}
+				if errors.Is(err, credentials.ErrInvalidGrant) {
+					if terminalErr := w.store.MarkSnapshotRefreshTerminal(ctx, p.PlatformAccountID, "OAUTH_INVALID_GRANT", "OAuth grant requires reauthorization"); terminalErr != nil {
+						w.logger.Warn("snapshot refresh sweep: failed to persist terminal OAuth state", "platform_account_id", p.PlatformAccountID, "error", terminalErr)
+					}
+				} else if scheduleErr := w.store.RescheduleSnapshotRefresh(ctx, p.PlatformAccountID, nextAttempt, snapshotRefreshErrorSummary(err)); scheduleErr != nil {
 					w.logger.Warn("snapshot refresh sweep: failed to persist retry schedule", "platform_account_id", p.PlatformAccountID, "error", scheduleErr)
 				}
 			}
@@ -201,6 +216,19 @@ func (w *SnapshotRefreshSweepWorker) tick(ctx context.Context) {
 // nextSnapshotRefreshAttempt applies bounded exponential backoff after a
 // failed refresh. The claim is released by RescheduleSnapshotRefresh, so a
 // provider outage cannot hot-loop on every worker tick.
+func snapshotRefreshErrorSummary(err error) string {
+	if errors.Is(err, credentials.ErrInvalidGrant) {
+		return "oauth grant requires reauthorization"
+	}
+	if errors.Is(err, credentials.ErrModernGrantMissing) {
+		return "oauth grant token is missing"
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "provider request timed out"
+	}
+	return "snapshot refresh failed"
+}
+
 func nextSnapshotRefreshAttempt(attempts int) time.Time {
 	if attempts < 0 {
 		attempts = 0
@@ -228,7 +256,10 @@ func (w *SnapshotRefreshSweepWorker) refreshOne(ctx context.Context, p repositor
 		return errors.New("no account details fetcher wired for platform " + p.Platform)
 	}
 
-	token, err := resolveAccountToken(ctx, w.vault, w.refreshers, p.Platform, p.PlatformAccountID)
+	providerCtx, cancel := context.WithTimeout(ctx, snapshotRefreshProviderTimeout)
+	defer cancel()
+
+	token, err := resolveAccountToken(providerCtx, w.vault, w.refreshers, p.Platform, p.PlatformAccountID)
 	if err != nil {
 		// Token material is never logged: resolveAccountToken returns
 		// only the classified error, and we log the account id +
@@ -236,16 +267,16 @@ func (w *SnapshotRefreshSweepWorker) refreshOne(ctx context.Context, p repositor
 		w.logger.Warn("snapshot refresh sweep: no valid token for account (will retry at next interval)",
 			"platform_account_id", p.PlatformAccountID,
 			"platform", p.Platform,
-			"error", err)
+			"error", snapshotRefreshErrorSummary(err))
 		return err
 	}
 
-	details, err := fetcher.GetAccountDetails(ctx, token.AccessToken, p.PlatformUserID)
+	details, err := fetcher.GetAccountDetails(providerCtx, token.AccessToken, p.PlatformUserID)
 	if err != nil {
 		w.logger.Warn("snapshot refresh sweep: provider fetch failed (will retry at next interval)",
 			"platform_account_id", p.PlatformAccountID,
 			"platform", p.Platform,
-			"error", err)
+			"error", snapshotRefreshErrorSummary(err))
 		return err
 	}
 
@@ -254,7 +285,7 @@ func (w *SnapshotRefreshSweepWorker) refreshOne(ctx context.Context, p repositor
 		w.logger.Warn("snapshot refresh sweep: failed to persist snapshot (will retry at next interval)",
 			"platform_account_id", p.PlatformAccountID,
 			"platform", p.Platform,
-			"error", err)
+			"error", "snapshot persistence failed")
 		return err
 	}
 	w.logger.Debug("snapshot refresh sweep: snapshot refreshed",
@@ -280,6 +311,9 @@ func resolveAccountToken(
 	var err error
 	if refresher, ok := refreshers[platform]; ok {
 		token, err = vault.Renew(ctx, accountID, models.TokenTypeBearer, refresher)
+		if err != nil && !errors.Is(err, credentials.ErrModernGrantMissing) {
+			return nil, err
+		}
 	} else {
 		err = errors.New("no OAuth refresher wired for platform " + platform)
 	}

@@ -27,6 +27,7 @@ type refreshSweepStoreStub struct {
 	upsertCalls     int
 	claimCalls      int
 	rescheduleCalls int
+	terminalCalls   int
 	lastBatchSize   int
 }
 
@@ -48,6 +49,13 @@ func (s *refreshSweepStoreStub) RescheduleSnapshotRefresh(_ context.Context, _ i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rescheduleCalls++
+	return nil
+}
+
+func (s *refreshSweepStoreStub) MarkSnapshotRefreshTerminal(_ context.Context, _ int64, _, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.terminalCalls++
 	return nil
 }
 
@@ -164,8 +172,8 @@ func TestSnapshotRefreshSweep_Tick_RefreshesPendingAccounts(t *testing.T) {
 	if !gotIDs[21] || !gotIDs[22] {
 		t.Errorf("upserted account ids: want {21,22}, got %v", gotIDs)
 	}
-	if store.lastBatchSize != repository.SnapshotRefreshBatchLimit {
-		t.Errorf("batch limit forwarded to store: want %d, got %d", repository.SnapshotRefreshBatchLimit, store.lastBatchSize)
+	if store.lastBatchSize != accountSnapshotRefreshConcurrency {
+		t.Errorf("batch limit forwarded to store: want %d, got %d", accountSnapshotRefreshConcurrency, store.lastBatchSize)
 	}
 }
 

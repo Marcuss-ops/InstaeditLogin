@@ -12,15 +12,15 @@ import (
 // markAllPendingQuery pins the critical clauses of the bulk enqueue SQL.
 // A regression that drops the pa.user_id scoping (cross-tenant enqueue
 // guard) or the deleted/disconnected exclusion must fail the match.
-const markAllPendingQuery = `INSERT INTO account_resource_snapshots[\s\S]*` +
-	`SELECT pa\.id[\s\S]*` +
-	`WHERE pa\.user_id = \$1[\s\S]*` +
-	`status NOT IN \('deleted', 'disconnected'\)[\s\S]*` +
-	`refresh_pending_at = EXCLUDED\.refresh_pending_at[\s\S]*` +
-	`refresh_claimed_until = CASE[\s\S]*` +
-	`account_resource_snapshots\.refresh_claimed_until > NOW\(\)[\s\S]*` +
-	`THEN account_resource_snapshots\.refresh_claimed_until[\s\S]*` +
-	`ELSE NULL[\s\S]*` +
+const markAllPendingQuery = `(?s)INSERT INTO account_resource_snapshots.*` +
+	`SELECT pa[.]id.*` +
+	`WHERE pa[.]user_id = [$]1.*` +
+	`status NOT IN [(]'deleted', 'disconnected'[)].*` +
+	`refresh_pending_at = EXCLUDED[.]refresh_pending_at.*` +
+	`refresh_claimed_until = CASE.*` +
+	`account_resource_snapshots[.]refresh_claimed_until > NOW[(][)].*` +
+	`THEN account_resource_snapshots[.]refresh_claimed_until.*` +
+	`ELSE NULL.*` +
 	`END`
 
 // TestSnapshotRepository_MarkAllSnapshotRefreshesPending pins the bulk

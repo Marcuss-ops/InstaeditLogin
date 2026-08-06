@@ -191,7 +191,8 @@ describe("DashboardChannelsPage", () => {
   it("?video=URL param highlights the matching card", async () => {
     setAccountEndpoint();
     renderAt("/app/dashboard-channels/123?video=yt_BBB");
-    // Wait for the grid to render.
+    // Provider-backed content is loaded only after an explicit action.
+    fireEvent.click(await screen.findByTestId("load-channel-content"));
     await waitFor(() => {
       expect(screen.getAllByTestId("channel-video-card")).toHaveLength(2);
     });
@@ -214,6 +215,8 @@ describe("DashboardChannelsPage", () => {
     setAccountEndpoint();
     renderAt("/app/dashboard-channels/123");
     await screen.findByTestId("channel-video-filter-all");
+    fireEvent.click(await screen.findByTestId("load-channel-content"));
+    await waitFor(() => expect(screen.getAllByTestId("channel-video-card")).toHaveLength(2));
     await userEvent.click(screen.getByTestId("channel-video-filter-private"));
     // After the chip click the URI must contain ?privacy=private.
     // The MemoryRouter + setSearchParams push is observable through
@@ -230,6 +233,8 @@ describe("DashboardChannelsPage", () => {
     setAccountEndpoint();
     renderAt("/app/dashboard-channels/123");
     await screen.findByTestId("channel-header-name");
+    fireEvent.click(await screen.findByTestId("load-channel-content"));
+    await waitFor(() => expect(screen.getAllByTestId("channel-video-card")).toHaveLength(2));
     // Reset only the call count for the two calls we care about.
     const accountCalls = () =>
       authedFetchMock.mock.calls.filter(([u]) =>
@@ -251,6 +256,7 @@ describe("DashboardChannelsPage", () => {
   it("Modifica copertina fires createEditorSessionAndOpen with the correct payload", async () => {
     setAccountEndpoint();
     renderAt("/app/dashboard-channels/123");
+    fireEvent.click(await screen.findByTestId("load-channel-content"));
     await waitFor(() => {
       expect(screen.getAllByTestId("channel-video-card-edit").length).toBe(2);
     });
@@ -318,6 +324,7 @@ describe("DashboardChannelsPage", () => {
       throw new Error("unexpected");
     });
     renderAt("/app/dashboard-channels/123?force=2");
+    fireEvent.click(await screen.findByTestId("load-channel-content"));
     await waitFor(() => {
       expect(screen.getAllByTestId("channel-video-card-edit").length).toBe(1);
     });
@@ -364,6 +371,7 @@ describe("DashboardChannelsPage", () => {
       throw new Error("unexpected");
     });
     renderAt("/app/dashboard-channels/123");
+    fireEvent.click(await screen.findByTestId("load-channel-content"));
     await waitFor(() => {
       expect(
         screen.getByTestId("load-more"),
@@ -400,6 +408,7 @@ describe("DashboardChannelsPage", () => {
       throw new Error("unexpected");
     });
     renderAt("/app/dashboard-channels/123");
+    fireEvent.click(await screen.findByTestId("load-channel-content"));
     await waitFor(() => {
       expect(
         screen.getByText(/impossibile caricare i video/i),
@@ -434,6 +443,7 @@ describe("DashboardChannelsPage", () => {
       throw new Error("unexpected");
     });
     renderAt("/app/dashboard-channels/123");
+    fireEvent.click(await screen.findByTestId("load-channel-content"));
     await waitFor(() => {
       expect(screen.getByText(/nessun video trovato/i)).toBeInTheDocument();
     });

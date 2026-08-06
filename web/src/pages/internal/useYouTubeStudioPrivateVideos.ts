@@ -8,7 +8,7 @@ import type { ContentItem } from "./youtubeStudioTypes";
  * whenever the channel changes and clears the list on switch, so the
  * grid never shows videos from a stale channel.
  */
-export function useYouTubeStudioPrivateVideos(selectedChannelId: number | "") {
+export function useYouTubeStudioPrivateVideos(selectedChannelId: number | "", enabled = false) {
   const [privateVideos, setPrivateVideos] = useState<ContentItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
   const privateVideosAbortRef = useRef<AbortController | null>(null);
@@ -35,12 +35,12 @@ export function useYouTubeStudioPrivateVideos(selectedChannelId: number | "") {
   useEffect(() => {
     privateVideosAbortRef.current?.abort();
     setPrivateVideos([]);
-    if (selectedChannelId === "") return;
+    if (!enabled || selectedChannelId === "") return;
     const ctrl = new AbortController();
     privateVideosAbortRef.current = ctrl;
     void fetchPrivateVideos(selectedChannelId, ctrl.signal);
     return () => ctrl.abort();
-  }, [fetchPrivateVideos, selectedChannelId]);
+  }, [enabled, fetchPrivateVideos, selectedChannelId]);
 
   return { privateVideos, loadingVideos };
 }

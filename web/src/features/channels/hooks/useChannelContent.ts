@@ -103,6 +103,12 @@ export interface UseChannelContentOptions {
    */
   limit?: number;
   /**
+   * Whether the hook may fetch immediately. Page shells can keep this
+   * false so provider-backed content is loaded only after an explicit
+   * user action. Default `true` preserves the hook's standalone contract.
+   */
+  enabled?: boolean;
+  /**
    * When true, the hook listens to window `focus` events and
    * fires the same refetch code path the `refetch` callback
    * exposes. Default `false` (opt-in — see comment above).
@@ -125,6 +131,7 @@ export interface UseChannelContentOptions {
 }
 
 export type ChannelContentLoadState =
+  | { kind: "idle" }
   | { kind: "loading" }
   | {
       kind: "ready";
@@ -182,11 +189,12 @@ export function useChannelContent({
   accountId,
   privacy,
   limit,
+  enabled = true,
   refetchOnWindowFocus = false,
   refetchInterval = null,
 }: UseChannelContentOptions): UseChannelContentResult {
   const [state, setState] = useState<ChannelContentLoadState>({
-    kind: "loading",
+    kind: enabled ? "loading" : "idle",
   });
   const abortRef = useRef<AbortController | null>(null);
   const loadMoreInFlightRef = useRef(false);
@@ -347,6 +355,11 @@ export function useChannelContent({
   // AND privacy as deps so flips between equivalent values (e.g.
   // "all" rerenders) still trigger a fetch.
   useEffect(() => {
+    if (!enabled) {
+      abortRef.current?.abort();
+      setState({ kind: accountId == null ? "loading" : "idle" });
+      return;
+    }
     if (accountId == null) {
       // Undefined accountId → keep "loading" so the page doesn't
       // pretend content exists for a missing route param.
@@ -358,7 +371,7 @@ export function useChannelContent({
     abortRef.current = ctrl;
     setState({ kind: "loading" });
     void runFetch(ctrl.signal, "refresh").catch(() => {});
-  }, [accountId, privacy, runFetch]);
+  }, [accountId, privacy, enabled, runFetch]);
 
   // ─── refetchOnWindowFocus ──────────────────────────────────────────
   // Skip registration when accountId is null — the handler is a
@@ -366,7 +379,7 @@ export function useChannelContent({
   // is dead weight. accountId goes into the dep array so flipping
   // back to a real id re-installs the listener automatically.
   useEffect(() => {
-    if (!refetchOnWindowFocus) return;
+    if (!enabled || !refetchOnWindowFocus) return;
     if (accountId == null) return;
     if (typeof window === "undefined") return;
     const handler = (): void => {
@@ -382,7 +395,7 @@ export function useChannelContent({
     return () => {
       window.removeEventListener("focus", handler);
     };
-  }, [refetchOnWindowFocus, accountId]);
+  }, [enabled, refetchOnWindowFocus, accountId]);
 
   // ─── refetchInterval ───────────────────────────────────────────────
   // Resolve the predicate to a concrete ms value whenever the
@@ -394,7 +407,7 @@ export function useChannelContent({
     return refetchInterval(state);
   })();
   useEffect(() => {
-    if (intervalMs == null) return;
+    if (!enabled || intervalMs == null) return;
     if (typeof window === "undefined") return;
     const id = window.setInterval(() => {
       void cfetchFnRef.current().catch((err: unknown) => {
@@ -405,7 +418,7 @@ export function useChannelContent({
     return () => {
       window.clearInterval(id);
     };
-  }, [intervalMs]);
+  }, [intervalMs, enabled]);
 
   // Unmount cleanup.
   useEffect(() => {

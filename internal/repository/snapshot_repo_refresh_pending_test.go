@@ -19,7 +19,11 @@ const refreshPendingUpsert = `INSERT INTO account_resource_snapshots
 		        COALESCE(account_resource_snapshots.refresh_pending_at, EXCLUDED.refresh_pending_at),
 		        EXCLUDED.refresh_pending_at
 		    ),
-		    refresh_claimed_until = NULL`
+		    refresh_claimed_until = CASE
+		        WHEN account_resource_snapshots.refresh_claimed_until > NOW()
+		        THEN account_resource_snapshots.refresh_claimed_until
+		        ELSE NULL
+		    END`
 
 func TestSnapshotRepository_MarkSnapshotRefreshPending(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))

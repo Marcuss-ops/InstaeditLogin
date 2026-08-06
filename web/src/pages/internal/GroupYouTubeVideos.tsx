@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { AlertTriangle, Loader2, RefreshCw, Video } from "lucide-react";
 import { EmptyState } from "../../components/feedback/EmptyState";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
@@ -6,6 +7,7 @@ import { GroupYouTubeVideoPreviewModal } from "./GroupYouTubeVideoPreviewModal";
 import { DEFAULT_PAGE_SIZE, RECENCY_OPTIONS } from "./groupYouTubeVideosTypes";
 
 export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
+  const [enabled, setEnabled] = useState(false);
   const {
     state,
     recencyDays,
@@ -23,7 +25,7 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
     saveVideoMetadata,
     refreshVideos,
     loadMoreVideos,
-  } = useGroupYouTubeVideos(groupId);
+  } = useGroupYouTubeVideos(groupId, enabled);
 
   return (
     <section className="mb-6" data-testid="group-youtube-videos">
@@ -51,7 +53,10 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
           </select>
           <button
             type="button"
-            onClick={() => refreshVideos(true, true)}
+            onClick={() => {
+              setEnabled(true);
+              refreshVideos(true, true);
+            }}
             className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-semibold text-[#cdd2da] hover:bg-white/[0.08] hover:text-white transition-colors"
             data-testid="group-youtube-videos-refresh"
           >
@@ -61,14 +66,21 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
         </div>
       </div>
 
-      {state.kind === "loading" && (
+      {!enabled && (
+        <div className="rounded-xl border border-dashed border-white/[0.10] bg-white/[0.02] px-4 py-5 text-[12px] text-[#9aa0aa]">
+          <p>Carica i video YouTube solo quando vuoi consultare il gruppo.</p>
+          <button type="button" onClick={() => setEnabled(true)} className="mt-3 rounded-lg bg-white px-3 py-1.5 text-[11px] font-semibold text-black hover:bg-white/90" data-testid="group-youtube-videos-load">Carica video</button>
+        </div>
+      )}
+
+      {enabled && state.kind === "loading" && (
         <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-5 text-[12px] text-[#9aa0aa]">
           <Loader2 size={15} className="animate-spin" aria-hidden="true" />
           Caricamento stato video…
         </div>
       )}
 
-      {state.kind === "error" && (
+      {enabled && state.kind === "error" && (
         <div
           className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-4 text-[12px] text-amber-200"
           role="alert"
@@ -78,14 +90,14 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
         </div>
       )}
 
-      {state.kind === "ready" && state.warnings.length > 0 && (
+      {enabled && state.kind === "ready" && state.warnings.length > 0 && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.05] px-3 py-2 text-[11px] text-amber-200" role="status">
           <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
           <span>Alcuni canali non sono stati verificati: {state.warnings.join(" · ")}</span>
         </div>
       )}
 
-      {state.kind === "ready" && state.videos.length === 0 && (
+      {enabled && state.kind === "ready" && state.videos.length === 0 && (
         <EmptyState
           title="Nessun video privato recente"
           description="Non ci sono video privati nei giorni selezionati. Prova ad ampliare il periodo a 90 giorni; i video pubblici e non in elenco non vengono mostrati."
@@ -94,7 +106,7 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
         />
       )}
 
-      {state.kind === "ready" && state.videos.length > 0 && (
+      {enabled && state.kind === "ready" && state.videos.length > 0 && (
         <div className="space-y-3">
           {(() => {
             const midpoint = Math.ceil(state.videos.length / 2);

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { ErrorState, Skeleton } from "../../components/feedback";
 import { YouTubePublishCard } from "./YouTubePublishCard";
 import { StudioShell } from "./YouTubeStudioShell";
@@ -22,8 +22,10 @@ export function InternalYouTubeStudio() {
     patchSession,
   } = useYouTubeStudioData();
 
+  const [privateVideosEnabled, setPrivateVideosEnabled] = useState(false);
   const { privateVideos, loadingVideos } = useYouTubeStudioPrivateVideos(
     selectedChannelId,
+    privateVideosEnabled,
   );
 
   const {
@@ -114,6 +116,8 @@ export function InternalYouTubeStudio() {
         loadingVideos={loadingVideos}
         manualVideoId={manualVideoId}
         onSelectVideo={handleSelectVideo}
+        privateVideosEnabled={privateVideosEnabled}
+        onLoad={() => setPrivateVideosEnabled(true)}
       />
 
       {publishResult && (

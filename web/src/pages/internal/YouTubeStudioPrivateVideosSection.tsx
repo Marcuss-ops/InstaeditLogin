@@ -16,12 +16,16 @@ export function YouTubeStudioPrivateVideosSection({
   loadingVideos,
   manualVideoId,
   onSelectVideo,
+  privateVideosEnabled,
+  onLoad,
 }: {
   selectedChannelId: number | "";
   privateVideos: ContentItem[];
   loadingVideos: boolean;
   manualVideoId: string;
   onSelectVideo: (videoId: string) => void;
+  privateVideosEnabled: boolean;
+  onLoad: () => void;
 }) {
   if (selectedChannelId === "") return null;
 
@@ -37,13 +41,19 @@ export function YouTubeStudioPrivateVideosSection({
         </p>
       </header>
 
-      {loadingVideos && (
+      {!privateVideosEnabled && (
+        <button type="button" onClick={onLoad} className="rounded-xl bg-white px-4 py-2 text-[13px] font-semibold text-black hover:bg-white/90" data-testid="youtube-studio-load-private-videos">
+          Carica video privati
+        </button>
+      )}
+
+      {privateVideosEnabled && loadingVideos && (
         <div className="flex items-center gap-2 text-[13px] text-[#9aa0aa]">
           <Loader2 size={14} className="animate-spin" /> Caricamento video…
         </div>
       )}
 
-      {!loadingVideos && privateVideos.length === 0 && (
+      {privateVideosEnabled && !loadingVideos && privateVideos.length === 0 && (
         <EmptyState
           title="Nessun video privato trovato"
           description="Carica un video privato su YouTube e ricarica la pagina."
@@ -52,7 +62,7 @@ export function YouTubeStudioPrivateVideosSection({
         />
       )}
 
-      {!loadingVideos && privateVideos.length > 0 && (
+      {privateVideosEnabled && !loadingVideos && privateVideos.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {privateVideos.map((v) => (
             <button

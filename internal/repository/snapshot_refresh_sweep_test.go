@@ -16,7 +16,7 @@ func TestSnapshotRepository_ClaimPendingSnapshotRefreshes(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery("WITH candidates").
-		WithArgs(25, "120.000000 seconds").
+		WithArgs(25, "1800.000000 seconds").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"platform_account_id", "refresh_attempts", "platform", "platform_user_id", "username",
 		}).AddRow(int64(21), 2, "youtube", "UC-pending", "Pending Chan"))
