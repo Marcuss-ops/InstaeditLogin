@@ -157,6 +157,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		),
 		api.WithRouterAnalyticsClock(analyticsClock),
 		api.WithYouTubeVideoEditStore(s.youtubeVideoEditRepo),
+		api.WithYouTubeCredentialResolver(s.youtubeCredentialResolver),
 		api.WithYouTubeThumbnailBatchStore(s.youtubeThumbnailBatchRepo),
 		api.WithLivestreamStore(s.livestreamRepo),
 		api.WithThumbnailProjectStore(s.thumbnailProjectService),

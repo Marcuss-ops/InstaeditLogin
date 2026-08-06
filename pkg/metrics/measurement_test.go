@@ -48,3 +48,19 @@ func TestMediaProcessGauge_IsBalanced(t *testing.T) {
 		t.Fatalf("active media processes after end: want %v, got %v", before, got)
 	}
 }
+
+func TestDatabasePoolConfigured_RecordsProfileLimits(t *testing.T) {
+	profile := "measurement_test_profile"
+	maxOpen := databasePoolConfigured.WithLabelValues(profile, "max_open")
+	maxIdle := databasePoolConfigured.WithLabelValues(profile, "max_idle")
+	beforeOpen := testutil.ToFloat64(maxOpen)
+	beforeIdle := testutil.ToFloat64(maxIdle)
+
+	SetDatabasePoolConfigured(profile, 12, 4)
+	if got := testutil.ToFloat64(maxOpen); got != 12 {
+		t.Fatalf("configured max_open: want 12, got %v (before %v)", got, beforeOpen)
+	}
+	if got := testutil.ToFloat64(maxIdle); got != 4 {
+		t.Fatalf("configured max_idle: want 4, got %v (before %v)", got, beforeIdle)
+	}
+}

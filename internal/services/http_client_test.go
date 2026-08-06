@@ -507,8 +507,47 @@ func TestNewHTTPClient_Wiring(t *testing.T) {
 	if c.Timeout != 30*time.Second {
 		t.Errorf("timeout: want 30s, got %v", c.Timeout)
 	}
-	if _, ok := c.Transport.(*retryRoundTripper); !ok {
-		t.Errorf("Transport should be *retryRoundTripper, got %T", c.Transport)
+	rrt, ok := c.Transport.(*retryRoundTripper)
+	if !ok {
+		t.Fatalf("Transport should be *retryRoundTripper, got %T", c.Transport)
+	}
+	logging, ok := rrt.next.(*loggingRoundTripper)
+	if !ok {
+		t.Fatalf("retry transport should wrap logging transport, got %T", rrt.next)
+	}
+	transport, ok := logging.next.(*http.Transport)
+	if !ok {
+		t.Fatalf("logging transport should wrap *http.Transport, got %T", logging.next)
+	}
+	if transport.MaxIdleConns != 100 || transport.MaxIdleConnsPerHost != 20 || transport.MaxConnsPerHost != 100 {
+		t.Errorf("transport pool limits: got idle=%d idle_per_host=%d max_per_host=%d", transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.MaxConnsPerHost)
+	}
+	if transport.IdleConnTimeout != 90*time.Second {
+		t.Errorf("idle connection timeout: want 90s, got %v", transport.IdleConnTimeout)
+	}
+	if transport.ResponseHeaderTimeout != 0 {
+		t.Errorf("shared response-header timeout: want 0 for streaming compatibility, got %v", transport.ResponseHeaderTimeout)
+	}
+}
+
+func TestNewHTTPClient_StreamingTimeoutIsNotClippedBySharedTransport(t *testing.T) {
+	client := NewHTTPClientWithTimeout(30 * time.Minute)
+	if client.Timeout != 30*time.Minute {
+		t.Fatalf("streaming timeout: want 30m, got %v", client.Timeout)
+	}
+	rrt := client.Transport.(*retryRoundTripper)
+	logging := rrt.next.(*loggingRoundTripper)
+	transport := logging.next.(*http.Transport)
+	if transport.ResponseHeaderTimeout != 0 {
+		t.Fatalf("streaming client must not inherit a shorter response-header timeout: got %v", transport.ResponseHeaderTimeout)
+	}
+}
+
+func TestNewHTTPClient_ReusesConfiguredClientForSameTimeout(t *testing.T) {
+	first := NewHTTPClientWithTimeout(17 * time.Second)
+	second := NewHTTPClientWithTimeout(17 * time.Second)
+	if first != second {
+		t.Fatal("clients with the same timeout and retry policy must be shared")
 	}
 }
 

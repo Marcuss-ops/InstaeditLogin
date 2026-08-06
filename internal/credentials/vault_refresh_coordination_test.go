@@ -91,28 +91,33 @@ func TestVault_Renew_ConcurrentSharedOAuthConnection_ApplicationSingleflight(t *
 	accounts := []int64{accountA, accountB}
 	var wg sync.WaitGroup
 	wg.Add(len(accounts))
-	for i, accountID := range accounts {
-		i, accountID := i, accountID
-		go func() {
-			defer wg.Done()
-			results[i], errs[i] = v.Renew(ctx, accountID, models.TokenTypeBearer, refresher)
-		}()
-	}
+	enteredFlight := make(chan string, 2)
+	// Start the leader first so the provider block is established before
+	// launching the waiter. This makes the singleflight join deterministic
+	// without adding a production-only synchronization hook.
+	go func() {
+		defer wg.Done()
+		results[0], errs[0] = v.renew(ctx, accounts[0], models.TokenTypeBearer, refresher, func(key string) { enteredFlight <- key })
+	}()
 	select {
 	case <-started:
 	case <-ctx.Done():
 		t.Fatal("shared-grant refresh leader did not reach provider")
 	}
-	// Wait until both callers have completed their initial reads. The
-	// second caller has then reached the grant-keyed singleflight path
-	// while the leader is still blocked in the refresher.
-	deadline := time.NewTimer(2 * time.Second)
-	defer deadline.Stop()
-	for store.findCalls.Load() < 2 {
+	// Launch the waiter only after the leader is blocked inside the
+	// refresher. It must join the active grant-keyed flight.
+	go func() {
+		defer wg.Done()
+		results[1], errs[1] = v.renew(ctx, accounts[1], models.TokenTypeBearer, refresher, func(key string) { enteredFlight <- key })
+	}()
+	for i := 0; i < 2; i++ {
 		select {
-		case <-deadline.C:
-			t.Fatalf("second shared-account caller did not complete its initial grant probe")
-		case <-time.After(time.Millisecond):
+		case key := <-enteredFlight:
+			if key != "renew:700:bearer" {
+				t.Fatalf("unexpected shared-grant flight key %q", key)
+			}
+		case <-ctx.Done():
+			t.Fatal("shared-grant caller did not reach the shared flight")
 		}
 	}
 	if got := calls.Load(); got != 1 {
@@ -184,17 +189,33 @@ func TestVault_Renew_ConcurrentSameGrant_ApplicationSingleflight(t *testing.T) {
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for i := range results {
-		i := i
-		go func() {
-			defer wg.Done()
-			results[i], errs[i] = v.Renew(ctx, accountID, models.TokenTypeBearer, refresher)
-		}()
-	}
+	enteredFlight := make(chan string, 2)
+	// Start the leader first so the waiter cannot legitimately observe a
+	// freshly persisted token and skip the shared flight.
+	go func() {
+		defer wg.Done()
+		results[0], errs[0] = v.renew(ctx, accountID, models.TokenTypeBearer, refresher, func(key string) { enteredFlight <- key })
+	}()
 	select {
 	case <-started:
 	case <-ctx.Done():
 		t.Fatal("refresh leader did not reach provider")
+	}
+	// Launch the waiter only while the leader is blocked in the provider;
+	// it must join the active singleflight rather than start a new refresh.
+	go func() {
+		defer wg.Done()
+		results[1], errs[1] = v.renew(ctx, accountID, models.TokenTypeBearer, refresher, func(key string) { enteredFlight <- key })
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case key := <-enteredFlight:
+			if key != "renew:44:bearer" {
+				t.Fatalf("unexpected same-grant flight key %q", key)
+			}
+		case <-ctx.Done():
+			t.Fatal("same-grant waiter did not reach the shared flight")
+		}
 	}
 	// If a second caller reached the provider, the count would already
 	// be greater than one while the leader is blocked.

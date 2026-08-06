@@ -93,6 +93,23 @@ func Load() (*Config, error) {
 			DBMaxIdleConns:           getEnvInt("DB_MAX_IDLE_CONNS", 5),
 			DBConnMaxLifetimeSeconds: getEnvInt("DB_CONN_MAX_LIFETIME_SECONDS", 1800),
 			DBConnMaxIdleTimeSeconds: getEnvInt("DB_CONN_MAX_IDLE_TIME_SECONDS", 300),
+			DBPoolRole:               getEnv("DB_POOL_ROLE", ""),
+			DBAPI: DBPoolProfile{
+				MaxOpenConns: getEnvInt("DB_API_MAX_OPEN_CONNS", 15), MaxIdleConns: getEnvInt("DB_API_MAX_IDLE_CONNS", 7),
+				ConnMaxLifetimeSeconds: getEnvInt("DB_API_CONN_MAX_LIFETIME_SECONDS", 1800), ConnMaxIdleTimeSeconds: getEnvInt("DB_API_CONN_MAX_IDLE_TIME_SECONDS", 300),
+			},
+			DBWorker: DBPoolProfile{
+				MaxOpenConns: getEnvInt("DB_WORKER_MAX_OPEN_CONNS", 10), MaxIdleConns: getEnvInt("DB_WORKER_MAX_IDLE_CONNS", 5),
+				ConnMaxLifetimeSeconds: getEnvInt("DB_WORKER_CONN_MAX_LIFETIME_SECONDS", 1800), ConnMaxIdleTimeSeconds: getEnvInt("DB_WORKER_CONN_MAX_IDLE_TIME_SECONDS", 300),
+			},
+			DBServer: DBPoolProfile{
+				MaxOpenConns: getEnvInt("DB_SERVER_MAX_OPEN_CONNS", 25), MaxIdleConns: getEnvInt("DB_SERVER_MAX_IDLE_CONNS", 10),
+				ConnMaxLifetimeSeconds: getEnvInt("DB_SERVER_CONN_MAX_LIFETIME_SECONDS", 1800), ConnMaxIdleTimeSeconds: getEnvInt("DB_SERVER_CONN_MAX_IDLE_TIME_SECONDS", 300),
+			},
+			DBMaintenance: DBPoolProfile{
+				MaxOpenConns: getEnvInt("DB_MAINTENANCE_MAX_OPEN_CONNS", 3), MaxIdleConns: getEnvInt("DB_MAINTENANCE_MAX_IDLE_CONNS", 1),
+				ConnMaxLifetimeSeconds: getEnvInt("DB_MAINTENANCE_CONN_MAX_LIFETIME_SECONDS", 1800), ConnMaxIdleTimeSeconds: getEnvInt("DB_MAINTENANCE_CONN_MAX_IDLE_TIME_SECONDS", 300),
+			},
 			DBHost:                   getEnv("DB_HOST", "localhost"),
 			DBPort:                   getEnv("DB_PORT", "5432"),
 			DBUser:                   getEnv("DB_USER", "instaedit"),

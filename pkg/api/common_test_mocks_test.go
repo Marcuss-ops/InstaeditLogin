@@ -577,9 +577,9 @@ func (m *mockWorkspaceStore) FindChannel(ctx context.Context, workspaceID, platf
 
 // mockPostStore implements PostStore with configurable function fields.
 type mockPostStore struct {
-	createFn          func(*models.Post, []*models.PostTarget) error
-	findByIDFn        func(id int64) (*models.Post, error)
-	updateFn          func(*models.Post) error
+	createFn               func(*models.Post, []*models.PostTarget) error
+	findByIDFn             func(id int64) (*models.Post, error)
+	updateFn               func(*models.Post) error
 	listByWorkspaceFn      func(workspaceID int64) ([]models.Post, error)
 	listByWorkspacePageFn  func(workspaceID int64, afterTime *time.Time, afterID int64, limit int) ([]models.Post, bool, error)
 	listByWorkspacesPageFn func(workspaceIDs []int64, afterTime *time.Time, afterID int64, limit int) ([]models.Post, bool, error)

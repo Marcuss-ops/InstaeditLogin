@@ -31,12 +31,62 @@ type DatabaseConfig struct {
 	// it empty while the migration bootstrap creates the identity row.
 	ExpectedInstallationUUID string
 
-	// Explicit database/sql pool sizing. The total across API and worker
-	// processes must remain below PostgreSQL max_connections.
+	// Legacy/default database/sql pool sizing. Kept for direct callers and
+	// backwards-compatible configurations; process profiles below take
+	// precedence when DBPoolRole is set.
 	DBMaxOpenConns           int
 	DBMaxIdleConns           int
 	DBConnMaxLifetimeSeconds int
 	DBConnMaxIdleTimeSeconds int
+
+	// DBPoolRole selects the process profile: api, worker, server, or
+	// maintenance. The profiles keep API capacity isolated from background
+	// workers while making the total connection budget explicit.
+	DBPoolRole    string
+	DBAPI         DBPoolProfile
+	DBWorker      DBPoolProfile
+	DBServer      DBPoolProfile
+	DBMaintenance DBPoolProfile
+}
+
+// DBPoolProfile is one explicit database/sql pool budget for a process role.
+type DBPoolProfile struct {
+	MaxOpenConns           int
+	MaxIdleConns           int
+	ConnMaxLifetimeSeconds int
+	ConnMaxIdleTimeSeconds int
+}
+
+const (
+	DBPoolRoleAPI         = "api"
+	DBPoolRoleWorker      = "worker"
+	DBPoolRoleServer      = "server"
+	DBPoolRoleMaintenance = "maintenance"
+)
+
+func (p DBPoolProfile) isZero() bool {
+	return p.MaxOpenConns == 0 && p.MaxIdleConns == 0 &&
+		p.ConnMaxLifetimeSeconds == 0 && p.ConnMaxIdleTimeSeconds == 0
+}
+
+// Profile resolves the selected role's pool profile. An unset role keeps
+// the legacy DB_* settings, preserving compatibility for tools and tests.
+func (c *DatabaseConfig) Profile() (DBPoolProfile, bool) {
+	if c == nil {
+		return DBPoolProfile{}, false
+	}
+	switch c.DBPoolRole {
+	case DBPoolRoleAPI:
+		return c.DBAPI, true
+	case DBPoolRoleWorker:
+		return c.DBWorker, true
+	case DBPoolRoleServer:
+		return c.DBServer, true
+	case DBPoolRoleMaintenance:
+		return c.DBMaintenance, true
+	default:
+		return DBPoolProfile{}, false
+	}
 }
 
 // DSN returns the PostgreSQL connection string.

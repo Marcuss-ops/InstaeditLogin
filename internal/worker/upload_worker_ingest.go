@@ -169,7 +169,10 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	uploadReq.Header.Set("Content-Type", contentType)
 	uploadReq.ContentLength = sizeBytes
 
-	s3Client := services.NewHTTPClientWithTimeout(w.uploadTimeout)
+	s3Client := w.s3HTTPClient
+	if s3Client == nil {
+		s3Client = services.NewHTTPClientWithTimeout(w.uploadTimeout)
+	}
 	uploadResp, err := s3Client.Do(uploadReq)
 	if err != nil {
 		w.markAssetFailed(job.ID, asset.ID, err.Error(), err)

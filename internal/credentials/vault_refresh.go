@@ -25,6 +25,13 @@ const refreshGrantExpiryWarningWindow = 7 * 24 * time.Hour
 // lock. Application-level singleflight runs before the lock so concurrent
 // requests for one oauth_connection_id do not queue duplicate transactions.
 func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, tokenType string, refresher TokenRefresher) (*models.OAuthToken, error) {
+	return v.renew(ctx, platformAccountID, tokenType, refresher, nil)
+}
+
+// renew carries the optional synchronization observer used by package tests
+// to prove concurrent callers joined the grant-keyed flight. Production calls
+// Renew, which passes nil and has no observer side effects.
+func (v *CredentialVault) renew(ctx context.Context, platformAccountID int64, tokenType string, refresher TokenRefresher, observer func(string)) (*models.OAuthToken, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -55,6 +62,9 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 		defer cancel()
 		return nil, v.renewUnderGrantLock(workCtx, platformAccountID, tokenType, refresher, oauthConnectionID, window)
 	})
+	if observer != nil {
+		observer(key)
+	}
 	select {
 	case result := <-resultCh:
 		if result.Err != nil {

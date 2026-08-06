@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 
 	_ "github.com/lib/pq"
 )
@@ -36,21 +37,30 @@ type poolSettings struct {
 
 func normalizePoolSettings(cfg *config.DatabaseConfig) poolSettings {
 	maxOpen := cfg.DBMaxOpenConns
+	maxIdle := cfg.DBMaxIdleConns
+	lifetimeSeconds := cfg.DBConnMaxLifetimeSeconds
+	idleTimeSeconds := cfg.DBConnMaxIdleTimeSeconds
+
+	if profile, ok := cfg.Profile(); ok {
+		maxOpen = profile.MaxOpenConns
+		maxIdle = profile.MaxIdleConns
+		lifetimeSeconds = profile.ConnMaxLifetimeSeconds
+		idleTimeSeconds = profile.ConnMaxIdleTimeSeconds
+	}
 	if maxOpen <= 0 {
 		maxOpen = 25
 	}
-	maxIdle := cfg.DBMaxIdleConns
 	if maxIdle < 0 {
 		maxIdle = 0
 	}
 	if maxIdle > maxOpen {
 		maxIdle = maxOpen
 	}
-	lifetime := time.Duration(cfg.DBConnMaxLifetimeSeconds) * time.Second
+	lifetime := time.Duration(lifetimeSeconds) * time.Second
 	if lifetime <= 0 {
 		lifetime = 30 * time.Minute
 	}
-	idleTime := time.Duration(cfg.DBConnMaxIdleTimeSeconds) * time.Second
+	idleTime := time.Duration(idleTimeSeconds) * time.Second
 	if idleTime <= 0 {
 		idleTime = 5 * time.Minute
 	}
@@ -62,6 +72,8 @@ func normalizePoolSettings(cfg *config.DatabaseConfig) poolSettings {
 	}
 }
 
+// Profile returns the selected role's pool profile. An unset role keeps
+// the legacy DB_* settings, preserving compatibility for tools and tests.
 // configurePool applies explicit database/sql pool limits and connection
 // recycling settings. Keeping this separate from Ping makes the sizing
 // policy unit-testable without requiring a live PostgreSQL server.
@@ -71,6 +83,11 @@ func configurePool(db *sql.DB, cfg *config.DatabaseConfig) {
 	db.SetMaxIdleConns(settings.maxIdle)
 	db.SetConnMaxLifetime(settings.maxLifetime)
 	db.SetConnMaxIdleTime(settings.maxIdleTime)
+	profile := "legacy"
+	if cfg != nil && cfg.DBPoolRole != "" {
+		profile = cfg.DBPoolRole
+	}
+	metrics.SetDatabasePoolConfigured(profile, settings.maxOpen, settings.maxIdle)
 }
 
 // Migrate runs database migrations from embedded SQL files. Each file in

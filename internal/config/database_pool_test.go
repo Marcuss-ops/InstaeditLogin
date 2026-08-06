@@ -49,6 +49,42 @@ func TestLoad_DatabasePoolSettingsDefaults(t *testing.T) {
 	}
 }
 
+func TestLoad_DatabasePoolProfilesRoundTrip(t *testing.T) {
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("DB_POOL_ROLE", "worker")
+	t.Setenv("DB_API_MAX_OPEN_CONNS", "15")
+	t.Setenv("DB_WORKER_MAX_OPEN_CONNS", "9")
+	t.Setenv("DB_WORKER_MAX_IDLE_CONNS", "4")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	profile, ok := cfg.Database.Profile()
+	if !ok || profile.MaxOpenConns != 9 || profile.MaxIdleConns != 4 {
+		t.Fatalf("worker profile: got (%+v, %v)", profile, ok)
+	}
+	if cfg.Database.DBAPI.MaxOpenConns != 15 {
+		t.Fatalf("API profile: want 15, got %d", cfg.Database.DBAPI.MaxOpenConns)
+	}
+}
+
+func TestValidate_DatabasePoolRoleRejectsUnknown(t *testing.T) {
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.Database.DBPoolRole = "unknown"
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "DB_POOL_ROLE") {
+		t.Fatalf("validate(): want DB_POOL_ROLE error, got %v", err)
+	}
+}
+
+func TestValidate_DatabasePoolProfileRejectsOversizedIdle(t *testing.T) {
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.Database.DBAPI = DBPoolProfile{MaxOpenConns: 2, MaxIdleConns: 3, ConnMaxLifetimeSeconds: 60, ConnMaxIdleTimeSeconds: 60}
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "DB_API_MAX_IDLE_CONNS") {
+		t.Fatalf("validate(): want DB_API_MAX_IDLE_CONNS error, got %v", err)
+	}
+}
+
 func TestValidate_DatabasePoolSettingsRejectInvalidValues(t *testing.T) {
 	cases := []struct {
 		name   string

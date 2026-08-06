@@ -117,61 +117,68 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 
 	ctx := req.Context()
 
-	// === STEP 1: refresh-grant ===
-	refreshed, err := r.vault.Renew(ctx, account.ID, models.TokenTypeBearer,
-		r.youTubeSvc.RefreshOAuthToken) // method value = credentials.TokenRefresher
+	var accessToken string
+	var info *services.YouTubeTokenInfo
+	var err error
+	if r.youtubeCredentialResolver != nil {
+		// Shared grant path: refresh + tokeninfo are singleflighted by
+		// oauth_connection_id; account-specific binding stays below.
+		var validation *services.YouTubeGrantValidation
+		validation, err = r.youtubeCredentialResolver.ValidateAccount(ctx, account)
+		if err == nil {
+			accessToken = validation.Token.AccessToken
+			info = validation.Info
+		}
+	} else {
+		// Legacy compatibility for test/deployment wiring that has not
+		// supplied the shared resolver.
+		var refreshed *models.OAuthToken
+		refreshed, err = r.vault.Renew(ctx, account.ID, models.TokenTypeBearer, r.youTubeSvc.RefreshOAuthToken)
+		if err == nil {
+			accessToken = refreshed.AccessToken
+			info, err = r.youTubeSvc.GetTokenInfo(ctx, accessToken)
+		}
+	}
 	if err != nil {
-		if isInvalidGrantError(err) {
+		switch {
+		case isInvalidGrantError(err) || errors.Is(err, credentials.ErrYouTubeInvalidGrant):
 			r.flagReauthAndRespond(w, ctx, account, identity, "refresh_grant_invalid", err.Error())
+		case errors.Is(err, services.ErrYouTubeCredentialAudience):
+			r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_aud_mismatch", err.Error())
+		case errors.Is(err, services.ErrYouTubeCredentialScope):
+			r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_scope_missing", err.Error())
+		case errors.Is(err, services.ErrYouTubeCredentialTokenInfo) || isGoogleTokenInfoRejection(err):
+			r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_rejected", err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "youtube credential validation failed: "+err.Error())
+		}
+		return
+	}
+	if info == nil {
+		writeError(w, http.StatusInternalServerError, "youtube tokeninfo unavailable")
+		return
+	}
+	if r.youtubeCredentialResolver != nil {
+		if err := r.youtubeCredentialResolver.ValidateChannelBinding(ctx, account, accessToken); err != nil {
+			if errors.Is(err, services.ErrYouTubeChannelMismatch) {
+				r.flagReauthAndRespond(w, ctx, account, identity, "channel_binding_mismatch", err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "youtube channel binding failed: "+err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "vault renew failed: "+err.Error())
-		return
-	}
-	accessToken := refreshed.AccessToken
-
-	// === STEP 2: tokeninfo scope + aud check ===
-	info, tiErr := r.youTubeSvc.GetTokenInfo(ctx, accessToken)
-	if tiErr != nil {
-		if isGoogleTokenInfoRejection(tiErr) {
-			r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_rejected", tiErr.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "youtube tokeninfo failed: "+tiErr.Error())
-		return
-	}
-	if info.Aud != r.youTubeSvc.ClientID() {
-		r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_aud_mismatch",
-			fmt.Sprintf("tokeninfo.aud=%q cfg.Auth.YouTubeClientID=%q", info.Aud, r.youTubeSvc.ClientID()))
-		return
-	}
-	// Full scope check: every YouTube operation that touches a remote
-	// resource requires exactly one of the three canonical scopes.
-	//   read_channel       → youtube.readonly
-	//   upload_video       → youtube.upload
-	//   update_thumbnail   → youtube.force-ssl
-	//   update_metadata    → youtube.force-ssl
-	//   manage_livestream  → youtube.force-ssl
-	// A grant that passes upload+readonly but lacks force-ssl would
-	// validate successfully but then fail on thumbnails.set,
-	// videos.update, metadata/privacy writes and Live Streaming API
-	// calls — the operator would see a cryptic 4xx instead of a clear
-	// reauth signal. Require all three to match the canonical grant.
-	if !info.HasUpload || !info.HasReadonly || !info.HasForceSSL {
-		r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_scope_missing",
-			fmt.Sprintf("HasUpload=%v HasReadonly=%v HasForceSSL=%v scope=%q",
-				info.HasUpload, info.HasReadonly, info.HasForceSSL, info.Scope))
-		return
 	}
 
 	// === STEP 3: paginated channel binding ===
-	if cbErr := r.youTubeSvc.ValidateChannelBinding(ctx, accessToken, account.PlatformUserID); cbErr != nil {
+	if r.youtubeCredentialResolver == nil {
+		if cbErr := r.youTubeSvc.ValidateChannelBinding(ctx, accessToken, account.PlatformUserID); cbErr != nil {
 		if errors.Is(cbErr, services.ErrYouTubeChannelMismatch) {
 			r.flagReauthAndRespond(w, ctx, account, identity, "channel_binding_mismatch", cbErr.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "youtube channel binding failed: "+cbErr.Error())
 		return
+		}
 	}
 
 	// === STEP 4: optional canary upload ===

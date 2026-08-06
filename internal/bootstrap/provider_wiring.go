@@ -51,6 +51,7 @@ func buildProviderWiring(s *wireState) error {
 				Grants:      s.userRepo,
 				Vault:       s.vault,
 				OAuth:       ytOAuth,
+				TokenInfo:   ytOAuth,
 				Binder:      ytBinder,
 				Logger:      s.logger,
 			})

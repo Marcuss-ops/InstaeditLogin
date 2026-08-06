@@ -34,6 +34,10 @@ import (
 )
 
 func main() {
+	// The bundled development wrapper shares one process, so use its
+	// dedicated combined pool budget rather than API or worker alone.
+	// This bundled process owns the combined API+worker pool budget.
+	_ = os.Setenv("DB_POOL_ROLE", "server")
 	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin dev wrapper (api + workers + migrate)")
 	slog.Warn("cmd/server is deprecated; use cmd/migrate + cmd/api + cmd/worker (or make dev)", "scope", "development/recovery")
 

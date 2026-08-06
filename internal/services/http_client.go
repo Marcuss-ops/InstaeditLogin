@@ -32,7 +32,14 @@ import (
 var (
 	sharedHTTPTransportOnce sync.Once
 	sharedHTTPTransport     http.RoundTripper
+	sharedHTTPClientsMu     sync.Mutex
+	sharedHTTPClients       = make(map[httpClientKey]*http.Client)
 )
+
+type httpClientKey struct {
+	timeout time.Duration
+	retry   bool
+}
 
 // sharedTransport returns the one process-wide connection pool used by
 // production HTTP clients. http.Transport is safe for concurrent use and
@@ -41,13 +48,17 @@ var (
 func sharedTransport() http.RoundTripper {
 	sharedHTTPTransportOnce.Do(func() {
 		sharedHTTPTransport = &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   20,
-			MaxConnsPerHost:       100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
+			Proxy:               http.ProxyFromEnvironment,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 20,
+			MaxConnsPerHost:     100,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			// The per-client http.Client.Timeout below bounds metadata requests,
+			// while streaming clients use a longer deadline. Do not impose a
+			// shared 30s header deadline: it would abort slow large uploads
+			// despite their configured 30-minute client timeout.
+			ResponseHeaderTimeout: 0,
 			ExpectContinueTimeout: 1 * time.Second,
 		}
 	})
@@ -64,15 +75,26 @@ func NewHTTPClient() *http.Client {
 // while preserving the shared transport and connection pool. Use longer
 // deadlines for streaming uploads/downloads and the default for metadata.
 func NewHTTPClientWithTimeout(timeout time.Duration) *http.Client {
+	return sharedHTTPClient(timeout, true)
+}
+
+func sharedHTTPClient(timeout time.Duration, retry bool) *http.Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &retryRoundTripper{
-			next: &loggingRoundTripper{next: sharedTransport()},
-		},
+	key := httpClientKey{timeout: timeout, retry: retry}
+	sharedHTTPClientsMu.Lock()
+	defer sharedHTTPClientsMu.Unlock()
+	if client := sharedHTTPClients[key]; client != nil {
+		return client
 	}
+	transport := http.RoundTripper(&loggingRoundTripper{next: sharedTransport()})
+	if retry {
+		transport = &retryRoundTripper{next: transport}
+	}
+	client := &http.Client{Timeout: timeout, Transport: transport}
+	sharedHTTPClients[key] = client
+	return client
 }
 
 // NewHTTPClientWithTimeoutNoRetry returns a client that shares the same
@@ -80,13 +102,7 @@ func NewHTTPClientWithTimeout(timeout time.Duration) *http.Client {
 // requests. Use it for callers that must inspect the original HTTP status
 // (for example, a 404 must remain a typed not-found result).
 func NewHTTPClientWithTimeoutNoRetry(timeout time.Duration) *http.Client {
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: &loggingRoundTripper{next: sharedTransport()},
-	}
+	return sharedHTTPClient(timeout, false)
 }
 
 // SharedHTTPTransportForTest reports the underlying process-wide transport

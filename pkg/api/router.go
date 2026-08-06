@@ -346,6 +346,14 @@ type Router struct {
 	// storage backends. Wired via WithThumbnailDownloadClient; when
 	// nil, NewRouter installs a default client with a 30s timeout.
 	thumbnailDownloadClient *http.Client
+	// driveImportUploadClient is the long-lived client for Drive→S3
+	// streaming. It shares the process transport while retaining the
+	// larger upload timeout, avoiding construction on each request.
+	driveImportUploadClient *http.Client
+	// thumbnailUploadClient is the long-lived client for rendered
+	// thumbnail PUTs. It uses a separate timeout from thumbnail reads
+	// while still sharing the process-wide transport pool.
+	thumbnailUploadClient *http.Client
 
 	// trustedProxies contains the parsed TRUSTED_PROXIES networks.
 	// When non-empty, clientIP() trusts X-Forwarded-For / X-Real-IP
@@ -405,6 +413,8 @@ func NewRouter(
 		rateLimiter:               newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)
 		publishingInFlightTimeout: DefaultPublishingInFlightTimeout,
 		thumbnailDownloadClient:   services.NewHTTPClientWithTimeout(30 * time.Second),
+		driveImportUploadClient:   services.NewHTTPClientWithTimeout(30 * time.Minute),
+		thumbnailUploadClient:     services.NewHTTPClientWithTimeout(2 * time.Minute),
 	}
 	for _, opt := range opts {
 		opt(r)

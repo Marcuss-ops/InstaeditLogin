@@ -30,6 +30,9 @@ import (
 )
 
 func main() {
+	// This binary owns the API pool budget. Enforce the role even when a
+	// shared environment file contains another process's setting.
+	_ = os.Setenv("DB_POOL_ROLE", "api")
 	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin API (Blocco #2.1: split from cmd/server)")
 
 	app, err := bootstrap.Wire(context.Background())

@@ -30,6 +30,9 @@ import (
 )
 
 func main() {
+	// Migrations are short-lived and use a small isolated pool budget.
+	// This one-shot process owns the small maintenance pool budget.
+	_ = os.Setenv("DB_POOL_ROLE", "maintenance")
 	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin migration (Blocco #2.1: split from cmd/server)")
 
 	app, err := bootstrap.Wire(nil)

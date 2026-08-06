@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
@@ -211,6 +212,7 @@ type UploadWorker struct {
 	interval         time.Duration
 	logger           *slog.Logger
 	uploadTimeout    time.Duration
+	s3HTTPClient     *http.Client
 	opts             UploadWorkerOptions
 }
 
@@ -250,6 +252,7 @@ func NewUploadWorker(
 		interval:         interval,
 		logger:           logger,
 		uploadTimeout:    30 * time.Minute,
+		s3HTTPClient:     services.NewHTTPClientWithTimeout(30 * time.Minute),
 		opts:             opts,
 	}
 }

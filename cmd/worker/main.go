@@ -40,6 +40,9 @@ import (
 // convention so cmd/worker/main.go stays a thin entrypoint.
 
 func main() {
+	// This binary owns the worker pool budget. Enforce the role even when
+	// a shared environment file contains another process's setting.
+	_ = os.Setenv("DB_POOL_ROLE", "worker")
 	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin workers (Blocco #2.1: split from cmd/server)")
 
 	app, err := bootstrap.Wire(context.Background())

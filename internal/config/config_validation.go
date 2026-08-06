@@ -15,6 +15,22 @@ func (c *Config) metricsConfigured() bool {
 	return c.Monitoring.MetricsBasicAuthUser != "" && c.Monitoring.MetricsBasicAuthPass != ""
 }
 
+func validateDBPoolProfile(name string, p DBPoolProfile) error {
+	if p.MaxOpenConns < 1 {
+		return fmt.Errorf("%s_MAX_OPEN_CONNS must be positive (got %d)", name, p.MaxOpenConns)
+	}
+	if p.MaxIdleConns < 0 || p.MaxIdleConns > p.MaxOpenConns {
+		return fmt.Errorf("%s_MAX_IDLE_CONNS must be between 0 and %s_MAX_OPEN_CONNS (%d) (got %d)", name, name, p.MaxOpenConns, p.MaxIdleConns)
+	}
+	if p.ConnMaxLifetimeSeconds < 1 {
+		return fmt.Errorf("%s_CONN_MAX_LIFETIME_SECONDS must be positive (got %d)", name, p.ConnMaxLifetimeSeconds)
+	}
+	if p.ConnMaxIdleTimeSeconds < 1 {
+		return fmt.Errorf("%s_CONN_MAX_IDLE_TIME_SECONDS must be positive (got %d)", name, p.ConnMaxIdleTimeSeconds)
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
 	// Metrics are fail-closed in production: missing or incomplete
 	// basic-auth credentials prevent the process from booting. This
@@ -73,6 +89,24 @@ func (c *Config) validate() error {
 	}
 	if c.Database.DBConnMaxIdleTimeSeconds < 1 {
 		return fmt.Errorf("DB_CONN_MAX_IDLE_TIME_SECONDS must be positive (got %d)", c.Database.DBConnMaxIdleTimeSeconds)
+	}
+	if c.Database.DBPoolRole != "" {
+		switch c.Database.DBPoolRole {
+		case DBPoolRoleAPI, DBPoolRoleWorker, DBPoolRoleServer, DBPoolRoleMaintenance:
+		default:
+			return fmt.Errorf("DB_POOL_ROLE must be one of api|worker|server|maintenance (got %q)", c.Database.DBPoolRole)
+		}
+	}
+	for name, profile := range map[string]DBPoolProfile{
+		"DB_API": c.Database.DBAPI, "DB_WORKER": c.Database.DBWorker,
+		"DB_SERVER": c.Database.DBServer, "DB_MAINTENANCE": c.Database.DBMaintenance,
+	} {
+		if profile.isZero() {
+			continue
+		}
+		if err := validateDBPoolProfile(name, profile); err != nil {
+			return err
+		}
 	}
 	if c.Database.DatabaseURL == "" {
 		if c.Database.DBPassword == "" {

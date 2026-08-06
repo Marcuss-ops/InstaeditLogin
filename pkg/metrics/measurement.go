@@ -115,6 +115,13 @@ var (
 		},
 		[]string{"process"},
 	)
+	databasePoolConfigured = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "database_pool_configured_connections",
+			Help: "Configured database/sql pool limits by process profile.",
+		},
+		[]string{"profile", "limit"},
+	)
 )
 
 func init() {
@@ -126,6 +133,7 @@ func init() {
 		httpRequestSQLDurationSeconds,
 		googleAPICallsTotal,
 		mediaProcessesActive,
+		databasePoolConfigured,
 	)
 }
 
@@ -196,4 +204,21 @@ func EndMediaProcess(process string) {
 		return
 	}
 	mediaProcessesActive.WithLabelValues(process).Dec()
+}
+
+// SetDatabasePoolConfigured publishes the explicit role budget used by this
+// process. It complements DBStats gauges: operators can distinguish a full
+// pool from a correctly idle pool without consulting deployment env files.
+func SetDatabasePoolConfigured(profile string, maxOpen, maxIdle int) {
+	if profile == "" {
+		profile = "legacy"
+	}
+	if maxOpen < 0 {
+		maxOpen = 0
+	}
+	if maxIdle < 0 {
+		maxIdle = 0
+	}
+	databasePoolConfigured.WithLabelValues(profile, "max_open").Set(float64(maxOpen))
+	databasePoolConfigured.WithLabelValues(profile, "max_idle").Set(float64(maxIdle))
 }

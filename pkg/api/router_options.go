@@ -97,6 +97,12 @@ func WithApiKeyStore(s ApiKeyStore) RouterOption {
 // scaffolding for tests / environments that haven't wired the
 // option. Required for the 4-step pipeline on YouTube; optional for
 // any other platform (no change in behaviour).
+// WithYouTubeCredentialResolver wires the shared OAuth grant resolver used
+// by account validation and pre-action YouTube credential resolution.
+func WithYouTubeCredentialResolver(resolver *services.YouTubeCredentialResolver) RouterOption {
+	return func(r *Router) { r.youtubeCredentialResolver = resolver }
+}
+
 func WithYouTubeService(svc YouTubeOAuthService) RouterOption {
 	return func(r *Router) {
 		r.youTubeSvc = svc
@@ -432,10 +438,27 @@ func WithPublishingInFlightTimeout(d time.Duration) RouterOption {
 
 // WithThumbnailDownloadClient wires the HTTP client used to download
 // thumbnail bytes from storage before publishing to YouTube. When
-// nil, NewRouter installs a default client with a 30s timeout.
+// nil, NewRouter keeps its default 30s client.
 func WithThumbnailDownloadClient(client *http.Client) RouterOption {
 	return func(r *Router) {
-		r.thumbnailDownloadClient = client
+		if client != nil {
+			r.thumbnailDownloadClient = client
+			// Test and integration callers commonly inject one transport
+			// that handles both storage reads and writes. Keep that
+			// compatibility while allowing production wiring (or a later
+			// WithThumbnailUploadClient option) to use a separate timeout.
+			r.thumbnailUploadClient = client
+		}
+	}
+}
+
+// WithThumbnailUploadClient wires the HTTP client used for rendered
+// thumbnail PUTs. When nil, NewRouter keeps its default 2-minute client.
+func WithThumbnailUploadClient(client *http.Client) RouterOption {
+	return func(r *Router) {
+		if client != nil {
+			r.thumbnailUploadClient = client
+		}
 	}
 }
 
