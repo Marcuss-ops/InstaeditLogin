@@ -209,6 +209,47 @@ describe("GroupsPage", () => {
     expect(within(tray).queryByText("channel-grouped")).not.toBeInTheDocument();
   });
 
+  it("toggles an individual channel selection", () => {
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+    const channel = within(tray).getByRole("button", { name: "Seleziona channel-available" });
+
+    fireEvent.click(channel);
+    expect(within(tray).getByText("1 canali selezionati")).toBeInTheDocument();
+    expect(within(tray).getByRole("button", { name: "Deseleziona channel-available" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(within(tray).getByRole("button", { name: "Deseleziona channel-available" }));
+    expect(within(tray).queryByText(/canali selezionati/)).not.toBeInTheDocument();
+  });
+
+  it("selects and deselects all visible channels", () => {
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+    const selectAll = within(tray).getByRole("button", { name: "Seleziona tutti" });
+
+    fireEvent.click(selectAll);
+    expect(within(tray).getByText("2 canali selezionati")).toBeInTheDocument();
+    expect(within(tray).getByRole("button", { name: "Deseleziona channel-grouped" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(tray).getByRole("button", { name: "Deseleziona channel-available" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(within(tray).getByRole("button", { name: "Deseleziona tutti" }));
+    expect(within(tray).queryByText("2 canali selezionati")).not.toBeInTheDocument();
+    expect(within(tray).getByRole("button", { name: "Seleziona channel-grouped" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("clears selections that become hidden after changing the search", () => {
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+
+    fireEvent.click(within(tray).getByRole("button", { name: "Seleziona tutti" }));
+    fireEvent.change(within(tray).getByRole("textbox", { name: "Cerca canali" }), { target: { value: "grouped" } });
+    expect(within(tray).getByText("1 canali selezionati")).toBeInTheDocument();
+
+    fireEvent.change(within(tray).getByRole("textbox", { name: "Cerca canali" }), { target: { value: "available" } });
+    expect(within(tray).queryByText(/canali selezionati/)).not.toBeInTheDocument();
+    expect(within(tray).getByRole("button", { name: "Seleziona channel-available" })).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("shows the unassigned empty state when every channel is already organized", () => {
     makeMock({
       state: {

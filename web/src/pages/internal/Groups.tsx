@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import {
   Check,
   Folder,
@@ -58,18 +58,22 @@ export function GroupsPage() {
   const assignedToAnyGroup = state.kind === "ready"
     ? new Set(Array.from(state.groupAccountIDs.values()).flat())
     : new Set<number>();
-  const normalizedSearch = channelSearch.trim().toLocaleLowerCase();
-  const filteredYouTubeAccounts = availableYouTubeAccounts.filter((account) => {
-    const matchesSearch = !normalizedSearch || [account.username, account.platform_user_id]
-      .some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
-    const assigned = assignedToAnyGroup.has(account.id);
-    const matchesFilter = channelFilter === "all" || (channelFilter === "assigned" ? assigned : !assigned);
-    return matchesSearch && matchesFilter;
-  });
+  const filteredYouTubeAccounts = availableYouTubeAccounts.filter((account) => (
+    matchesChannelView(account, channelSearch, channelFilter, assignedToAnyGroup)
+  ));
   const visibleSelectedIDs = filteredYouTubeAccounts
     .filter((account) => selectedChannelIds.has(account.id))
     .map((account) => account.id);
   const visibleSelectedCount = visibleSelectedIDs.length;
+
+  useEffect(() => {
+    const availableIDs = new Set(availableYouTubeAccounts.map((account) => account.id));
+    setSelectedChannelIds((current) => {
+      const next = new Set(Array.from(current).filter((id) => availableIDs.has(id)));
+      if (next.size === current.size) return current;
+      return next;
+    });
+  }, [availableYouTubeAccounts]);
 
   const toggleChannelSelection = (accountId: number) => {
     setSelectedChannelIds((current) => {
@@ -80,8 +84,36 @@ export function GroupsPage() {
     });
   };
 
-  const selectVisibleChannels = () => {
-    setSelectedChannelIds(new Set(filteredYouTubeAccounts.map((account) => account.id)));
+  const retainVisibleSelection = (nextVisibleAccounts: PlatformAccount[]) => {
+    const visibleIDs = new Set(nextVisibleAccounts.map((account) => account.id));
+    setSelectedChannelIds((current) => new Set(Array.from(current).filter((id) => visibleIDs.has(id))));
+  };
+
+  const handleSearchChange = (value: string) => {
+    setChannelSearch(value);
+    retainVisibleSelection(availableYouTubeAccounts.filter((account) => (
+      matchesChannelView(account, value, channelFilter, assignedToAnyGroup)
+    )));
+  };
+
+  const handleFilterChange = (value: "all" | "assigned" | "unassigned") => {
+    setChannelFilter(value);
+    retainVisibleSelection(availableYouTubeAccounts.filter((account) => (
+      matchesChannelView(account, channelSearch, value, assignedToAnyGroup)
+    )));
+  };
+
+  const allVisibleSelected = filteredYouTubeAccounts.length > 0
+    && visibleSelectedCount === filteredYouTubeAccounts.length;
+
+  const toggleSelectAllVisibleChannels = () => {
+    const visibleIDs = new Set(filteredYouTubeAccounts.map((account) => account.id));
+    setSelectedChannelIds((current) => {
+      if (allVisibleSelected) {
+        return new Set(Array.from(current).filter((id) => !visibleIDs.has(id)));
+      }
+      return new Set(visibleIDs);
+    });
   };
 
   const clearChannelSelection = () => setSelectedChannelIds(new Set());
@@ -312,10 +344,11 @@ export function GroupsPage() {
             batchBusy={batchBusy}
             busyAccountId={busyAccountId}
             draggedAccountId={draggedAccountId}
-            onSearchChange={setChannelSearch}
-            onFilterChange={setChannelFilter}
+            allVisibleSelected={allVisibleSelected}
+            onSearchChange={handleSearchChange}
+            onFilterChange={handleFilterChange}
             onToggleSelection={toggleChannelSelection}
-            onSelectAll={selectVisibleChannels}
+            onSelectAll={toggleSelectAllVisibleChannels}
             onClearSelection={clearChannelSelection}
             onBatchAdd={() => void runBatchMembership("add")}
             onBatchRemove={() => void runBatchMembership("remove")}
@@ -340,6 +373,7 @@ function YouTubeChannelsTray({
   selectedGroupName,
   selectedGroupId,
   visibleSelectedCount,
+  allVisibleSelected,
   batchBusy,
   busyAccountId,
   draggedAccountId,
@@ -361,6 +395,7 @@ function YouTubeChannelsTray({
   selectedGroupName: string | null;
   selectedGroupId: number | null;
   visibleSelectedCount: number;
+  allVisibleSelected: boolean;
   batchBusy: boolean;
   busyAccountId: number | null;
   draggedAccountId: number | null;
@@ -436,11 +471,11 @@ function YouTubeChannelsTray({
             <option value="assigned">Nei gruppi</option>
             <option value="unassigned">Non assegnati</option>
           </select>
-          <button type="button" onClick={onSelectAll} disabled={accounts.length === 0} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/[0.10] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-white hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40">
-            <Check size={14} /> Seleziona tutti
+          <button type="button" onClick={onSelectAll} disabled={accounts.length === 0} aria-label={allVisibleSelected ? "Deseleziona tutti" : "Seleziona tutti"} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/[0.10] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-white hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40">
+            {allVisibleSelected ? <X size={14} /> : <Check size={14} />} {allVisibleSelected ? "Deseleziona tutti" : "Seleziona tutti"}
           </button>
         </div>
-        {selectedIds.size > 0 ? (
+        {visibleSelectedCount > 0 ? (
           <div className="flex flex-col gap-2 rounded-xl border border-violet-400/30 bg-violet-500/[0.10] p-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-[12px] font-semibold text-violet-100">{visibleSelectedCount} canali selezionati{selectedGroupName ? <> · gruppo: {selectedGroupName}</> : null}</p>
             <div className="flex flex-wrap items-center gap-2">
@@ -560,6 +595,20 @@ function YouTubeChannelCard({
       )}
     </div>
   );
+}
+
+function matchesChannelView(
+  account: PlatformAccount,
+  search: string,
+  filter: "all" | "assigned" | "unassigned",
+  assignedToAnyGroup: Set<number>,
+): boolean {
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const matchesSearch = !normalizedSearch || [account.username, account.platform_user_id]
+    .some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
+  const assigned = assignedToAnyGroup.has(account.id);
+  const matchesFilter = filter === "all" || (filter === "assigned" ? assigned : !assigned);
+  return matchesSearch && matchesFilter;
 }
 
 function flattenTree(nodes: import("./groupsTypes").TreeNode[]): import("./groupsTypes").TreeNode[] {
