@@ -1,0 +1,196 @@
+# Final Acceptance Verification
+
+**Date:** 2026-08-06
+**Branch:** `main`
+**HEAD verified:** `3ca8405` (`fix(logging): redact secrets and sample noisy events`)
+**Remote:** `main` was aligned with `origin/main` before this report was created.
+
+This document records the final verification of the scalability acceptance criteria. It separates deterministic offline evidence from tests that require PostgreSQL, Docker, OAuth credentials, or a live provider. A passing handler benchmark is **not** presented as a live HTTP + PostgreSQL p95.
+
+## Executive verdict
+
+| Criterion | Result | Evidence |
+|---|---|---|
+| 100 channels/accounts | **PASS for tested paths** | Frontend performance test covers 10/50/100/200 accounts; 100 accounts use one accounts request and zero per-account fan-out. Backend handler benchmark covers 100 joined account/snapshot rows. This is not a live 100-channel deployment test. |
+| Zero Google calls during page load | **PASS for tested read paths** | Linking performance test counts zero provider/detail calls; the stale-snapshot account handler test asserts that the provider is not called and cached data is returned. This does not prove zero calls for every internal page or live Google traffic. |
+| OAuth refresh deduplicated | **PASS offline** | `go test -race` concurrent shared-grant and same-grant singleflight tests pass; one provider refresh is observed while callers are concurrent. |
+| Upload streaming and bounds | **PASS for covered multipart/body paths** | Admin CSV multipart spooling/cleanup tests, explicit body-limit tests, and request-body bound/close tests pass with the race detector. This is not a constant-RSS proof for every video upload handler or a 2 GB live upload. |
+| Cursor pagination | **PASS for covered endpoints** | Cursor primitives, accounts, groups, posts/jobs and related list-handler tests pass with the race detector. Coverage is endpoint-specific; this row does not claim that every list endpoint has been exhaustively exercised. |
+| Safe job claim | **PASS for SQL contract/backoff; DB concurrency pending** | SQL contract tests verify `FOR UPDATE SKIP LOCKED`; empty-queue backoff test passes. The PostgreSQL multi-worker integration test is build-tagged `integration` and was not run in this environment. |
+| Accounts p95 below 300–500 ms | **PARTIAL** | Repeated fake-store handler benchmark runs had an approximate 95th percentile of **165,055 ns/op (0.165 ms)**. This is a percentile across benchmark-run samples, not an HTTP request p95. Real HTTP + PostgreSQL + network p95 was not measured in this environment. |
+| Full live E2E | **NOT FULLY GREEN** | 9 pass, 1 intentional skip, 2 failures. Details are documented below. |
+
+The implementation satisfies the acceptance criteria that can be proven for the tested paths in this repository. The remaining acceptance gaps are operational and coverage-related: measure `GET /api/v1/accounts` against a running PostgreSQL/API deployment, run the PostgreSQL claim-concurrency test, broaden upload/provider coverage if required, and repair the two E2E environment/test-harness failures before calling the live suite fully green.
+
+## Commands and results
+
+The commands marked as executed below were run from the repository root on `main`; commands explicitly described as available for reproduction were not necessarily run in this environment.
+
+### 1. Accounts, stale snapshots, and pagination
+
+```bash
+go test -race ./pkg/api -run 'Test(HandleListAccounts|HandleGetAccount|.*Cursor.*|.*Pagination.*|.*Accounts.*)' -count=1
+```
+
+**Result:** PASS (`github.com/Marcuss-ops/InstaeditLogin/pkg/api`).
+
+Focused provider-isolation checks:
+
+```bash
+go test -race ./pkg/api -run \
+  'TestHandleGetAccount_(StaleSnapshot_ServesCachedWithoutProviderCall|FreshSnapshot_NoPendingMark)' \
+  -count=1
+```
+
+**Result:** PASS.
+
+These tests establish that a stale account snapshot is served immediately from local storage, is marked for background refresh, and does not call YouTube during the page-load read path.
+
+### 2. Frontend page-load request/fan-out test
+
+```bash
+cd web
+npx vitest run src/pages/internal/Linking.perf.test.tsx --reporter=verbose
+```
+
+**Result:** 4/4 tests passed.
+
+Observed measurements:
+
+| Accounts | API requests | Total requests | Per-account fan-out | Time to interactive |
+|---:|---:|---:|---:|---:|
+| 10 | 1 | 2 | 0 | 176 ms |
+| 50 | 1 | 1 | 0 | 40 ms |
+| 100 | 1 | 1 | 0 | 31 ms |
+| 200 | 1 | 1 | 0 | 21 ms |
+
+The test uses mocked HTTP/provider boundaries, so these values validate frontend request topology and rendering behavior, not production network latency.
+
+### 3. OAuth refresh window and concurrency
+
+```bash
+go test -race ./internal/credentials \
+  -run 'Test(RefreshWindow|Vault_Renew_Concurrent)' -count=1
+```
+
+**Result:** PASS.
+
+The tests cover deterministic bounded refresh jitter and concurrent callers sharing an `oauth_connection_id` or grant. The provider refresh counter remains one while the leader is blocked, proving application-level singleflight occurs before duplicate advisory-lock work.
+
+### 4. Upload streaming, limits, and temporary-file cleanup
+
+```bash
+go test -race ./pkg/api -run \
+  'Test(AdminImportChannelsCSV_(RejectsBodyOverExplicitLimit|SpoolsLargePartAndCleansTemporaryFiles|CleansTemporaryFilesOnValidationError|CleansTemporaryFilesOnMalformedMultipart)|IdempotencyReadBodyBoundsAndClosesOversizedBody|WriteRequestBodyErrorMapsMaxBytesTo413)' \
+  -count=1
+```
+
+**Result:** PASS.
+
+The checks cover the exercised admin CSV multipart path: explicit request limits, multipart spooling rather than unbounded buffering, cleanup on success and validation/multipart errors, and correct 413 mapping for oversized bodies. They do not by themselves prove that every upload endpoint streams a multi-gigabyte video with constant process RSS; that broader claim requires endpoint-by-endpoint tests and a live memory measurement.
+
+### 5. Cursor pagination
+
+```bash
+go test -race ./pkg/api -run 'Test.*(Cursor|Pagination|ListAccounts|Groups)' -count=1
+```
+
+**Result:** PASS.
+
+The tested acceptance code paths use bounded list responses and cursor-aware handlers rather than an unbounded page-load response. The concrete tests include `TestListCursorRoundTripAndScope`, `TestParseListPageBounds`, `TestHandleListAccounts_JoinedSnapshotEnrichment`, `TestPostsWorkspaceListCursorHandler`, `TestGroupsAggregateCursorHandler`, `TestGroupsListRejectsCursorFromAnotherScope`, and `TestListJobs_CursorUsesOptionalPagerAndReturnsEnvelope`; these do not substitute for an exhaustive audit of every list resource.
+
+### 6. Atomic claim and empty-queue backoff
+
+```bash
+go test -race ./internal/repository -run 'TestClaimBatch.*' -count=1
+go test -race ./internal/worker \
+  -run 'TestRunPoolLoop_EmptyQueueUsesBoundedBackoff' -count=1
+```
+
+**Result:** PASS.
+
+`TestClaimBatch_SQLContract` verifies the production claim SQL contract, including `FOR UPDATE SKIP LOCKED`. Repository empty-claim behavior and worker bounded backoff are covered separately.
+
+The stronger PostgreSQL concurrency test is available as:
+
+```bash
+go test -tags=integration -race ./internal/repository \
+  -run TestClaimBatch_MultipleWorkersDoNotDoubleClaim -count=1
+```
+
+It was not treated as an offline pass because it requires a running PostgreSQL test instance and migrations. When available, it starts multiple workers, claims all seeded jobs, and asserts no duplicate IDs and the expected leased-row count.
+
+### 7. Accounts latency benchmark
+
+```bash
+cd pkg/api
+go test -run '^$' -bench '^BenchmarkHandleListAccounts_100$' \
+  -benchmem -benchtime=100x -count=20
+```
+
+**Result:** PASS for the handler-only benchmark.
+
+Across 20 runs, the measured `ns/op` values ranged from 117,250 to 167,503. The estimated local p95 was approximately **165,055 ns/op (0.165 ms)**, with 122 allocations/op.
+
+This benchmark uses a fake repository returning 100 account/snapshot rows and directly invokes the handler. It excludes PostgreSQL query execution, connection-pool wait, HTTP middleware, serialization/network transfer outside the recorder, and production contention. Therefore it is supporting evidence, not proof of the production p95 target.
+
+## Tagged E2E result
+
+Command:
+
+```bash
+go test -tags=e2e -race -timeout 15m -v ./tests/e2e/...
+```
+
+Observed result from the JSON runner output:
+
+- The pipeline parent and its 12 scenario subtests passed, along with the OAuth callback, fake resumable-session, and account-validation scenarios reported by the runner.
+- **1 test skipped intentionally:** `Test_Z_YouTubeOAuth_EndToEnd_RealBrowser_Smoke` is disabled without live OAuth/browser credentials.
+- **2 tests failed:** `TestDisconnectSharedGrant_DisconnectA_KeepsBSiblingPublishing_E2E` and `TestAccountLifecycle_ConcurrentLastDisconnectAndRestartPersistence`.
+
+Because `go test -json` emits both parent and subtest events, this report intentionally avoids presenting an ambiguous single “passed test count”; the named pass/skip/failure events above are the reproducible source of truth.
+
+Failures:
+
+1. `TestDisconnectSharedGrant_DisconnectA_KeepsBSiblingPublishing_E2E`
+   - The test reached `GET /accounts`, but the configured database reported that relation `account_resource_snapshots` did not exist.
+   - This is an E2E database schema/migration setup failure, not evidence that the zero-provider page-load rule failed.
+
+2. `TestAccountLifecycle_ConcurrentLastDisconnectAndRestartPersistence`
+   - The race-enabled run reported concurrent writes from `Router.Setup()` in the E2E harness (`pkg/api/routes.go`) while the test launched concurrent setup calls.
+   - This is a test-harness/router-initialization race that must be fixed before the complete race-enabled E2E suite can be called green.
+
+Because of these two failures, the full E2E verdict is **not green**. They remain explicitly visible rather than being classified as unrelated without a follow-up fix.
+
+## Reproduction map
+
+| Goal | Command |
+|---|---|
+| Page-load request topology | `cd web && npx vitest run src/pages/internal/Linking.perf.test.tsx --reporter=verbose` |
+| No provider call on stale snapshot | `go test -race ./pkg/api -run 'TestHandleGetAccount_StaleSnapshot_ServesCachedWithoutProviderCall' -count=1` |
+| OAuth singleflight | `go test -race ./internal/credentials -run 'TestVault_Renew_Concurrent' -count=1` |
+| Upload limits/cleanup | `go test -race ./pkg/api -run 'TestAdminImportChannelsCSV_' -count=1` |
+| Cursor/pagination | `go test -race ./pkg/api -run 'Test.*(Cursor|Pagination)' -count=1` |
+| Claim SQL/backoff | `go test -race ./internal/repository -run 'TestClaimBatch.*' -count=1 && go test -race ./internal/worker -run 'TestRunPoolLoop_EmptyQueueUsesBoundedBackoff' -count=1` |
+| 100-account handler benchmark | `cd pkg/api && go test -run '^$' -bench '^BenchmarkHandleListAccounts_100$' -benchmem -benchtime=100x -count=20` |
+| Full tagged E2E | `go test -tags=e2e -race -timeout 15m -v ./tests/e2e/...` |
+
+## Required follow-ups to close the remaining gaps
+
+1. Run the accounts p95 benchmark against a staging deployment with a real PostgreSQL database, connection pool, HTTP server, and representative 100-channel data. Record p50/p95/p99 and SQL/pool metrics.
+2. Ensure the E2E database setup applies the migration that creates `account_resource_snapshots` before the shared-grant scenario.
+3. Make router setup safe for concurrent E2E use, or serialize setup in the lifecycle harness, then rerun the tagged suite with `-race`.
+4. Run the `integration`-tagged multi-worker claim test against PostgreSQL to validate no double claims at the database boundary.
+
+## Worktree safety
+
+This report was created while unrelated local changes were present in:
+
+- `web/src/lib/demo.ts`
+- `web/src/pages/internal/Groups.test.tsx`
+- `web/src/pages/internal/Groups.tsx`
+- `web/src/pages/internal/groupsTypes.ts`
+- `web/src/pages/internal/useGroupsData.ts`
+- pre-existing deleted Vite result artifact under `node_modules/.vite/`
+
+Those files are intentionally excluded from the acceptance report commit.
