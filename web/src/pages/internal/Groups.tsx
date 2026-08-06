@@ -160,7 +160,7 @@ export function GroupsPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void load()}
+              onClick={() => void load(false, true)}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
             >
               <RefreshCw size={14} /> Refresh
@@ -316,7 +316,7 @@ export function GroupsPage() {
                     /* toasted by authedFetch */
                   }
                 }}
-                onSaved={() => load()}
+                onSaved={() => load(false, true)}
                 onRename={(name) => renameGroup(selectedGroup.id, name)}
               />
             ) : (

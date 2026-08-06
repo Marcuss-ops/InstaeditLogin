@@ -32,7 +32,7 @@ export function useGroupsData() {
   
     // `silent` skips the intermediate loading state so assignment drops
     // reconcile smoothly without flashing the whole page to a skeleton.
-    const load = useCallback(async (silent = false) => {
+    const load = useCallback(async (silent = false, forceAccounts = false) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -51,7 +51,7 @@ export function useGroupsData() {
         const workspaceId = meData.workspace_id;
         const [groupsResp, accounts] = await Promise.all([
           authedFetch("/api/v1/groups/aggregate", { signal: controller.signal }),
-          listAllAccounts({ signal: controller.signal }),
+          listAllAccounts({ signal: controller.signal, force: forceAccounts }),
         ]);
         if (controller.signal.aborted) return;
         const groupsData = (await groupsResp.json()) as {

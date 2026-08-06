@@ -205,9 +205,50 @@ describe("GroupDetailPanel batch settings", () => {
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Nome già utilizzato"));
     expect(screen.getByRole("textbox", { name: "Nome del gruppo" })).toBeInTheDocument();
-  });  it("auto-saves uniquely detected title languages and flags generic titles for manual review", async () => {
+  });  it("syncs a server language into an initially empty panel after refresh", async () => {
+    const staleGroup: TreeNode = {
+      ...group,
+      accounts: [{ ...group.accounts[0], username: "BoxeClubITA", language: "" }],
+    };
+    const refreshedGroup: TreeNode = {
+      ...staleGroup,
+      accounts: [{ ...staleGroup.accounts[0], language: "it" }],
+    };
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={staleGroup}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={() => {}}
+          onRename={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveValue("");
+    rerender(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={refreshedGroup}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={() => {}}
+          onRename={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveValue("it"));
+  });
+
+  it("auto-saves uniquely detected title languages and flags generic titles for manual review", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
+    const onSaved = vi.fn();
     const sampleGroup: TreeNode = {
       ...group,
       accounts: [
@@ -230,7 +271,7 @@ describe("GroupDetailPanel batch settings", () => {
           onPickAccount={() => {}}
           onCreateSubgroup={() => {}}
           onDeleteGroup={() => {}}
-          onSaved={() => {}}
+          onSaved={onSaved}
           onRename={() => {}}
         />
       </MemoryRouter>,
@@ -240,6 +281,7 @@ describe("GroupDetailPanel batch settings", () => {
     // The seven uniquely-detectable channels are persisted immediately with
     // a single click — no second confirmation step is needed.
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(7));
+    expect(onSaved).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/accounts/101"),
       expect.objectContaining({ method: "PATCH", body: JSON.stringify({ metadata: { language: "it" } }) }),
@@ -515,6 +557,6 @@ describe("GroupDetailPanel batch settings", () => {
         }),
       }),
     );
-    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onSaved).toHaveBeenCalledTimes(2);
   });
 });

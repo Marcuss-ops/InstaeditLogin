@@ -76,7 +76,12 @@ export function GroupDetailPanel({
     setLanguages((current) => {
       const next = { ...current };
       for (const account of group.accounts) {
-        if (!(account.id in next)) next[account.id] = account.language ?? "";
+        // A successful language PATCH can be followed by a fresh account
+        // manifest. Sync a non-empty server value over an empty local value,
+        // but preserve an in-progress/manual local choice until it is saved.
+        if (!(account.id in next) || (!next[account.id]?.trim() && account.language?.trim())) {
+          next[account.id] = account.language ?? "";
+        }
       }
       return next;
     });
@@ -185,11 +190,13 @@ export function GroupDetailPanel({
     // pending suggestion so the operator can retry or adjust manually).
     if (autoSaveIds.length > 0) {
       setLanguageApplyBusy(true);
+      let savedAny = false;
       for (const accountId of autoSaveIds) {
         const language = suggestions.get(accountId) ?? "";
         if (!language) continue;
         const saved = await saveLanguage(accountId, language, true);
         if (saved) {
+          savedAny = true;
           setLanguageSuggestionIds((current) => {
             const next = new Set(current);
             next.delete(accountId);
@@ -208,6 +215,7 @@ export function GroupDetailPanel({
         }
       }
       setLanguageApplyBusy(false);
+      if (savedAny) await onSaved();
     }
     setLanguageDetectionBusy(false);
   };
@@ -234,6 +242,7 @@ export function GroupDetailPanel({
         next.delete(accountId);
         return next;
       });
+      await onSaved();
     }
   };
 
@@ -241,10 +250,12 @@ export function GroupDetailPanel({
     const suggestedAccounts = visibleAccounts.filter((account) => languageSuggestionIds.has(account.id));
     if (suggestedAccounts.length === 0 || !confirmLanguageOverwrite() || languageApplyBusy) return;
     setLanguageApplyBusy(true);
+    let savedAny = false;
     for (const account of suggestedAccounts) {
       const language = languages[account.id] ?? "";
       const saved = await saveLanguage(account.id, language);
       if (saved) {
+        savedAny = true;
         setLanguageWarning((current) => {
           const next = { ...current };
           delete next[account.id];
@@ -263,6 +274,7 @@ export function GroupDetailPanel({
       }
     }
     setLanguageApplyBusy(false);
+    if (savedAny) await onSaved();
   };
   // "Rimuovi dalla cartella": dedicated endpoint that only deletes the
   // group_accounts membership and resyncs workspace_channels — it never
