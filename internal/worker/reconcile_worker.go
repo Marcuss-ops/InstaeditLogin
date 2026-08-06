@@ -70,22 +70,23 @@ const DefaultReconcileInterval = 5 * time.Second
 // the reconciler claims the row so two reconciler replicas racing
 // the same publishing target don't both spend an API call.
 type ReconcilePostStore interface {
-	// ListPublishing returns post_targets whose status='publishing'
-	// AND platform_post_id IS NOT NULL. Ordered by id ASC for
-	// stable iteration (reconciler picks the same rows every tick
-	// until they transition out of 'publishing').
-	ListPublishing() ([]models.PostTarget, error)
-	// ClaimPublishingTarget (FASE 1.1) atomically claims a
-	// publishing target via SELECT FOR UPDATE SKIP LOCKED.
-	// Returns true if the claim was acquired (row existed + was
-	// lockable), false if another reconciler already claimed the
-	// row or the id is invalid. Does NOT transition status — the
-	// row stays in 'publishing'. Status transitions are still
-	// done by UpdateStatus after Reconcile returns.
-	ClaimPublishingTarget(id int64) (bool, error)
-	// UpdateStatus persists a target transition and recomputes its parent
-	// aggregate status in the same transaction.
-	UpdateStatus(target *models.PostTarget) error
+	// ListPublishing returns at most limit ready publishing targets whose
+	// next_reconcile_at is due and whose provider publish ID is non-empty.
+	ListPublishing(limit int) ([]models.PostTarget, error)
+	// ClaimPublishingTarget atomically stamps a durable reconciler lease
+	// using FOR UPDATE SKIP LOCKED. The lease owner is held across the
+	// external provider call and must be supplied to every write below.
+	ClaimPublishingTarget(id int64, ownerID string, leaseTTL time.Duration) (bool, error)
+	// HeartbeatReconcileTarget extends the active owner lease via CAS.
+	HeartbeatReconcileTarget(id int64, ownerID string, leaseTTL time.Duration) error
+	// ReleaseReconcileTarget clears the active owner lease via CAS.
+	ReleaseReconcileTarget(id int64, ownerID string) error
+	// UpdateReconcileStatusWithLease persists a terminal transition only
+	// while ownerID still owns a non-expired lease, then releases it.
+	UpdateReconcileStatusWithLease(target *models.PostTarget, ownerID string) error
+	// ScheduleNextReconcileWithLease advances adaptive polling using owner +
+	// attempt CAS, then releases the lease.
+	ScheduleNextReconcileWithLease(id int64, ownerID string, expectedAttempt int, next time.Time) error
 	// ListDirtyAggregatePostIDs returns a bounded snapshot of parent posts
 	// marked dirty by post-target transitions. It must never scan all posts.
 	ListDirtyAggregatePostIDs(limit int) ([]int64, error)
@@ -208,7 +209,20 @@ func (w *ReconcileWorker) Run(ctx context.Context) error {
 	}
 }
 
-const dirtyAggregateRepairBatchSize = 100
+const (
+	dirtyAggregateRepairBatchSize = 100
+	reconcilePollingBatchSize     = 100
+	reconcileBackoffCap           = 120 * time.Second
+	reconcileLeaseTTL             = 60 * time.Second
+)
+
+var reconcileBackoffSchedule = [...]time.Duration{
+	5 * time.Second,
+	15 * time.Second,
+	30 * time.Second,
+	60 * time.Second,
+	120 * time.Second,
+}
 
 // runOnce executes one bounded dirty-post repair pass and one reconcile pass.
 // Per-tick errors are logged at WARN and the worker keeps ticking on the next
@@ -261,7 +275,7 @@ func (w *ReconcileWorker) repairDirtyAggregates() (int, error) {
 // (degenerate race), the second UPDATE simply overwrites the first
 // with the same terminal state.
 func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed int, err error) {
-	publishing, err := w.postRepo.ListPublishing()
+	publishing, err := w.postRepo.ListPublishing(reconcilePollingBatchSize)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list publishing: %w", err)
 	}
@@ -331,7 +345,7 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	// this row, we skip it — the winner will drive the state
 	// machine to completion. This prevents two replicas from
 	// spending duplicate API calls on the same publish_id.
-	claimed, claimErr := w.postRepo.ClaimPublishingTarget(target.ID)
+	claimed, claimErr := w.postRepo.ClaimPublishingTarget(target.ID, w.workerID, w.reconcileLeaseTTL())
 	if claimErr != nil {
 		return false, false, fmt.Errorf("claim publishing target %d: %w", target.ID, claimErr)
 	}
@@ -341,21 +355,28 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 		return false, false, nil
 	}
 
+	// Keep ownership alive while account/token/provider work is in flight.
+	// The terminal and scheduling writes below remain owner-CAS guarded.
+	leaseCtx, stopLease := startReconcileLeaseHeartbeat(ctx, w.postRepo, target.ID, w.workerID, reconcileLeaseTTL)
+	defer stopLease()
+	defer func() { _ = w.postRepo.ReleaseReconcileTarget(target.ID, w.workerID) }()
+
 	// 1. Load platform account.
 	account, err := w.userRepo.FindPlatformAccountByID(target.PlatformAccountID)
 	if err != nil {
 		return false, false, fmt.Errorf("load account %d: %w", target.PlatformAccountID, err)
 	}
+
 	if account == nil {
 		// Orphan target — mark failed so it doesn't loop forever.
-		return w.markFailedAndReturn(target, fmt.Sprintf("platform_account %d not found", target.PlatformAccountID))
+		return w.markFailedAndReturn(target, w.workerID, fmt.Sprintf("platform_account %d not found", target.PlatformAccountID))
 	}
 	// A grant-wide invalid_grant transition can affect publishing rows that
 	// were already in flight. Stop them before OAuth refresh or provider I/O;
 	// reconnecting the shared grant is the only recovery path.
 	if account.Platform == models.PlatformYouTube &&
 		(account.Status == models.AccountStatusReauthRequired || account.ReauthRequiredAt != nil) {
-		return w.markBlockedAuthAndReturn(target, youtubeReauthReason())
+		return w.markBlockedAuthAndReturn(target, w.workerID, youtubeReauthReason())
 	}
 
 	// 2. Look up AsyncPublisher capability.
@@ -363,7 +384,7 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	if !ok {
 		// Platform doesn't support async publishing — leave the target
 		// alone. Sync platforms complete their publish in the publish
-		// driver's tick, no polling needed.
+		// driver's tick, no polling or schedule advancement is needed.
 		return false, false, nil
 	}
 
@@ -382,30 +403,30 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	// property.
 	oauth, oauthOK := w.router.OAuth(account.Platform)
 	if !oauthOK {
-		return w.markFailedAndReturn(target, fmt.Sprintf("platform %q missing OAuth capability", account.Platform))
+		return w.markFailedAndReturn(target, w.workerID, fmt.Sprintf("platform %q missing OAuth capability", account.Platform))
 	}
 	refresher := credentials.TokenRefresher(func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
 		return oauth.RefreshOAuthToken(ctx, refreshToken)
 	})
 	var oauthToken *models.OAuthToken
 	if account.Platform == models.PlatformYouTube {
-		oauthToken, err = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+		oauthToken, err = credentials.RenewYouTubeToken(leaseCtx, w.vault, account.ID, refresher, w.logger)
 	} else {
-		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+		oauthToken, err = w.vault.Renew(leaseCtx, account.ID, models.TokenTypeBearer, refresher)
 		if errors.Is(err, credentials.ErrModernGrantMissing) {
-			oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
+			oauthToken, err = w.vault.Renew(leaseCtx, account.ID, models.TokenTypeLongLived, refresher)
 		}
 	}
 	if err != nil {
 		if account.Platform == models.PlatformYouTube && errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
 			w.markYouTubeGrantReauth(ctx, account)
-			return w.markBlockedAuthAndReturn(target, youtubeReauthReason())
+			return w.markBlockedAuthAndReturn(target, w.workerID, youtubeReauthReason())
 		}
-		return w.markFailedAndReturn(target, "token refresh failed")
+		return w.markFailedAndReturn(target, w.workerID, "token refresh failed")
 	}
 
 	// 4. Delegate to platform's Reconcile (single GET + transition decision).
-	res, err := ap.Reconcile(ctx, oauthToken.AccessToken, target.PlatformPostID)
+	res, err := ap.Reconcile(leaseCtx, oauthToken.AccessToken, target.PlatformPostID)
 	if err != nil {
 		// Terminal failure — includes FAILED-state and transient 5xx
 		// (the platform impl collapses both into a non-nil error per
@@ -413,12 +434,13 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 		// or the post_targets retry state machine).
 		w.logger.Warn("publish reconcile terminal error",
 			"target_id", target.ID, "publish_id", target.PlatformPostID, "error", err)
-		return w.markFailedAndReturn(target, fmt.Sprintf("publish failed: %v", err))
+		return w.markFailedAndReturn(target, w.workerID, fmt.Sprintf("publish failed: %v", err))
 	}
 	if res == nil {
 		// In-flight — no state string available (Reconcile hides it).
-		// Leave the target alone; the next tick will check again.
-		return false, false, nil
+		// Leave the target alone and schedule the next check with adaptive
+		// backoff instead of revisiting it on every worker tick.
+		return w.scheduleInFlight(target)
 	}
 	// Defensive guard: a successful Reconcile result with an empty
 	// PlatformMediaID is a misbehaving platform impl (the canonical
@@ -432,7 +454,7 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	if res.PlatformMediaID == "" {
 		w.logger.Warn("publish reconcile empty PlatformMediaID (treated as transient)",
 			"target_id", target.ID, "publish_id", target.PlatformPostID)
-		return false, false, nil
+		return w.scheduleInFlight(target)
 	}
 
 	// 5. Success transition: persist terminal publisher_state + flip
@@ -446,7 +468,7 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	target.PlatformPostID = res.PlatformMediaID
 	now := time.Now()
 	target.PublishedAt = &now
-	if err := w.postRepo.UpdateStatus(target); err != nil {
+	if err := w.postRepo.UpdateReconcileStatusWithLease(target, w.workerID); err != nil {
 		return false, false, fmt.Errorf("transition to published: %w", err)
 	}
 	return true, false, nil
@@ -456,20 +478,45 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 // returns the bookkeeping so the reconciler can increment its
 // counters. The (true, true, nil) return values signal "yes, this
 // target was reconciled (to failed), yes it failed, no error".
-func (w *ReconcileWorker) markBlockedAuthAndReturn(target *models.PostTarget, reason string) (reconciled bool, wasFailed bool, err error) {
+func (w *ReconcileWorker) reconcileLeaseTTL() time.Duration {
+	return 60 * time.Second
+}
+
+func (w *ReconcileWorker) scheduleInFlight(target *models.PostTarget) (reconciled bool, wasFailed bool, err error) {
+	attempt := target.ReconcileAttempt
+	if attempt < 0 {
+		attempt = 0
+	}
+	backoff := reconcileBackoffSchedule[len(reconcileBackoffSchedule)-1]
+	if attempt < len(reconcileBackoffSchedule) {
+		backoff = reconcileBackoffSchedule[attempt]
+	}
+	if backoff > reconcileBackoffCap {
+		backoff = reconcileBackoffCap
+	}
+	next := time.Now().Add(backoff)
+	if err := w.postRepo.ScheduleNextReconcileWithLease(target.ID, w.workerID, attempt, next); err != nil {
+		return false, false, fmt.Errorf("schedule next reconcile for target %d: %w", target.ID, err)
+	}
+	target.ReconcileAttempt = attempt + 1
+	target.NextReconcileAt = &next
+	return false, false, nil
+}
+
+func (w *ReconcileWorker) markBlockedAuthAndReturn(target *models.PostTarget, ownerID, reason string) (reconciled bool, wasFailed bool, err error) {
 	blockedTarget := *target
 	blockedTarget.Status = models.PostStatusBlockedAuth
 	blockedTarget.ProviderState = "REAUTH_REQUIRED"
 	blockedTarget.LastErrorCode = "blocked_auth"
 	blockedTarget.ErrorMessage = reason
-	if updateErr := w.postRepo.UpdateStatus(&blockedTarget); updateErr != nil {
+	if updateErr := w.postRepo.UpdateReconcileStatusWithLease(&blockedTarget, ownerID); updateErr != nil {
 		return false, false, fmt.Errorf("transition to blocked_auth: %w", updateErr)
 	}
 	*target = blockedTarget
 	return true, true, nil
 }
 
-func (w *ReconcileWorker) markFailedAndReturn(target *models.PostTarget, reason string) (reconciled bool, wasFailed bool, err error) {
+func (w *ReconcileWorker) markFailedAndReturn(target *models.PostTarget, ownerID, reason string) (reconciled bool, wasFailed bool, err error) {
 	w.logger.Warn("reconcile target marked failed",
 		"target_id", target.ID,
 		"post_id", target.PostID,
@@ -481,7 +528,7 @@ func (w *ReconcileWorker) markFailedAndReturn(target *models.PostTarget, reason 
 	failedTarget.Status = models.PostStatusFailed
 	failedTarget.ProviderState = "FAILED"
 	failedTarget.ErrorMessage = reason
-	if updateErr := w.postRepo.UpdateStatus(&failedTarget); updateErr != nil {
+	if updateErr := w.postRepo.UpdateReconcileStatusWithLease(&failedTarget, ownerID); updateErr != nil {
 		return false, false, fmt.Errorf("transition to failed: %w", updateErr)
 	}
 	*target = failedTarget

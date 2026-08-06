@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 
@@ -155,18 +156,28 @@ func TestPostClaimPublishingTarget_Success(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(
-		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
-		 FOR UPDATE SKIP LOCKED`,
-	).WithArgs(int64(300)).
+	mock.ExpectQuery(`WITH candidate AS (
+ SELECT id
+ FROM post_targets
+ WHERE id = $1
+   AND status = 'publishing'
+   AND platform_post_id IS NOT NULL
+   AND platform_post_id <> ''
+   AND next_reconcile_at <= NOW()
+   AND (reconcile_owner_id IS NULL OR reconcile_until IS NULL OR reconcile_until <= NOW())
+ FOR UPDATE SKIP LOCKED
+)
+UPDATE post_targets pt
+ SET reconcile_owner_id = $2,
+     reconcile_until = NOW() + ($3 || ' seconds')::INTERVAL,
+     reconcile_heartbeat_at = NOW()
+ FROM candidate
+ WHERE pt.id = candidate.id
+ RETURNING pt.id`).
+		WithArgs(int64(300), "worker-1", "60").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(300))
-	// ClaimPublishingTarget does NOT UPDATE status — it only locks +
-	// commits. The status stays 'publishing'.
-	mock.ExpectCommit()
 
-	claimed, err := repo.ClaimPublishingTarget(300)
+	claimed, err := repo.ClaimPublishingTarget(300, "worker-1", time.Minute)
 	if err != nil {
 		t.Fatalf("ClaimPublishingTarget: %v", err)
 	}
@@ -185,16 +196,28 @@ func TestPostClaimPublishingTarget_AlreadyClaimed(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(
-		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
-		 FOR UPDATE SKIP LOCKED`,
-	).WithArgs(int64(300)).
+	mock.ExpectQuery(`WITH candidate AS (
+ SELECT id
+ FROM post_targets
+ WHERE id = $1
+   AND status = 'publishing'
+   AND platform_post_id IS NOT NULL
+   AND platform_post_id <> ''
+   AND next_reconcile_at <= NOW()
+   AND (reconcile_owner_id IS NULL OR reconcile_until IS NULL OR reconcile_until <= NOW())
+ FOR UPDATE SKIP LOCKED
+)
+UPDATE post_targets pt
+ SET reconcile_owner_id = $2,
+     reconcile_until = NOW() + ($3 || ' seconds')::INTERVAL,
+     reconcile_heartbeat_at = NOW()
+ FROM candidate
+ WHERE pt.id = candidate.id
+ RETURNING pt.id`).
+		WithArgs(int64(300), "worker-1", "60").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectRollback()
 
-	claimed, err := repo.ClaimPublishingTarget(300)
+	claimed, err := repo.ClaimPublishingTarget(300, "worker-1", time.Minute)
 	if err != nil {
 		t.Fatalf("ClaimPublishingTarget: %v", err)
 	}

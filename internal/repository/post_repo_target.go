@@ -182,10 +182,11 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 // held a stale read (defensive — ListPublishing filters on
 // status='publishing' so DLQ'd rows are naturally excluded, but the
 // field is included for consistency with ListByPost).
-func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
-	rows, err := r.db.Query(
-		qSelectPublishingTargets,
-	)
+func (r *PostRepository) ListPublishing(limit int) ([]models.PostTarget, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("failed to list publishing post_targets: limit must be positive (got %d)", limit)
+	}
+	rows, err := r.db.Query(qSelectPublishingTargets, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list publishing post_targets: %w", err)
 	}
@@ -194,12 +195,18 @@ func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
 	var targets []models.PostTarget
 	for rows.Next() {
 		t := models.PostTarget{}
-		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+		if err := rows.Scan(
+			&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
 			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
+			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey,
+			&t.CompletedAt, &t.ReconcileAttempt, &t.NextReconcileAt,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
 		}
 		targets = append(targets, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read publishing post_targets: %w", err)
 	}
 	return targets, nil
 }

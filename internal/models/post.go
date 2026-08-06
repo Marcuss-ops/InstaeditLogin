@@ -273,6 +273,13 @@ type PostTarget struct {
 	// provider_state on every tick.
 	AttemptCount  int        `json:"attempt_count"`
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	// Reconciler polling schedule (migration 107): publishing targets are
+	// eligible only when NextReconcileAt <= NOW().
+	ReconcileAttempt     int        `json:"reconcile_attempt"`
+	NextReconcileAt      *time.Time `json:"next_reconcile_at,omitempty"`
+	ReconcileOwnerID     string     `json:"reconcile_owner_id,omitempty"`
+	ReconcileUntil       *time.Time `json:"reconcile_until,omitempty"`
+	ReconcileHeartbeatAt *time.Time `json:"reconcile_heartbeat_at,omitempty"`
 
 	// Provider-facing ids (see migration 011_target_provider_state.sql
 	// for the platform_post_id / provider_state / container_id trio).

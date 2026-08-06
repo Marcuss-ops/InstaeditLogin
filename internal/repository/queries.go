@@ -108,10 +108,14 @@ const qSelectTargetsByPost = `SELECT id, post_id, platform_account_id, status,
 const qSelectPublishingTargets = `SELECT id, post_id, platform_account_id, status,
 	        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
 	        COALESCE(provider_state, ''), COALESCE(container_id, ''),
-	provider_idempotency_key, completed_at
+	provider_idempotency_key, completed_at, reconcile_attempt, next_reconcile_at
 	 FROM post_targets
-	 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
-	 ORDER BY id ASC`
+	 WHERE status = 'publishing'
+	   AND platform_post_id IS NOT NULL
+	   AND platform_post_id <> ''
+	   AND next_reconcile_at <= NOW()
+	 ORDER BY next_reconcile_at ASC, id ASC
+	 LIMIT $1`
 
 const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
 	        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
@@ -216,6 +220,46 @@ const qUpdateTargetStatus = `UPDATE post_targets
      provider_state = $6, container_id = $7
  WHERE id = $5
    AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq'))`
+
+const qUpdateTargetStatusWithReconcileLease = `UPDATE post_targets
+ SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+     provider_state = $6, container_id = $7,
+     reconcile_owner_id = NULL, reconcile_until = NULL, reconcile_heartbeat_at = NULL
+ WHERE id = $5
+   AND status = 'publishing'
+   AND reconcile_owner_id = $8
+   AND reconcile_until > NOW()`
+
+const qHeartbeatReconcileTarget = `UPDATE post_targets
+ SET reconcile_until = NOW() + ($3 || ' seconds')::INTERVAL,
+     reconcile_heartbeat_at = NOW()
+ WHERE id = $1
+   AND reconcile_owner_id = $2
+   AND reconcile_until > NOW()
+   AND status = 'publishing'`
+
+const qReleaseReconcileTarget = `UPDATE post_targets
+ SET reconcile_owner_id = NULL,
+     reconcile_until = NULL,
+     reconcile_heartbeat_at = NULL
+ WHERE id = $1
+   AND reconcile_owner_id = $2
+   AND reconcile_until > NOW()
+   AND status = 'publishing'`
+
+const qScheduleNextReconcile = `UPDATE post_targets
+ SET reconcile_attempt = reconcile_attempt + 1,
+     next_reconcile_at = $2,
+     reconcile_owner_id = NULL,
+     reconcile_until = NULL,
+     reconcile_heartbeat_at = NULL
+ WHERE id = $1
+   AND reconcile_attempt = $3
+   AND status = 'publishing'
+   AND platform_post_id IS NOT NULL
+   AND platform_post_id <> ''
+   AND reconcile_owner_id = $4
+   AND reconcile_until > NOW()`
 
 const qDeletePost = `DELETE FROM posts WHERE id = $1`
 
@@ -346,6 +390,21 @@ const qReclaimExpiredLeases = `UPDATE post_targets
    AND status IN ('publishing', 'queued')
  RETURNING post_id`
 
-const qClaimPublishingTargetSelect = `SELECT id FROM post_targets
- WHERE id = $1 AND status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
- FOR UPDATE SKIP LOCKED`
+const qClaimPublishingTargetSelect = `WITH candidate AS (
+ SELECT id
+ FROM post_targets
+ WHERE id = $1
+   AND status = 'publishing'
+   AND platform_post_id IS NOT NULL
+   AND platform_post_id <> ''
+   AND next_reconcile_at <= NOW()
+   AND (reconcile_owner_id IS NULL OR reconcile_until IS NULL OR reconcile_until <= NOW())
+ FOR UPDATE SKIP LOCKED
+)
+UPDATE post_targets pt
+ SET reconcile_owner_id = $2,
+     reconcile_until = NOW() + ($3 || ' seconds')::INTERVAL,
+     reconcile_heartbeat_at = NOW()
+ FROM candidate
+ WHERE pt.id = candidate.id
+ RETURNING pt.id`

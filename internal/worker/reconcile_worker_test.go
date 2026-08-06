@@ -46,6 +46,13 @@ type mockReconcilePostStore struct {
 
 	// Function fields — each test overrides only what it exercises.
 	listPublishingFn     func() ([]models.PostTarget, error)
+	listPublishingLimit  int
+	listPublishingLimits []int
+	scheduleCalls        int
+	scheduleIDs          []int64
+	scheduleTimes        []time.Time
+	scheduleAttempts     []int
+	scheduleFn           func(id int64, expectedAttempt int, next time.Time) error
 	claimPublishingFn    func(id int64) (bool, error)
 	updateStatusFn       func(*models.PostTarget) error
 	dirtyPostIDsFn       func(limit int) ([]int64, error)
@@ -63,9 +70,11 @@ type mockReconcilePostStore struct {
 	updateTargets []models.PostTarget
 }
 
-func (m *mockReconcilePostStore) ListPublishing() ([]models.PostTarget, error) {
+func (m *mockReconcilePostStore) ListPublishing(limit int) ([]models.PostTarget, error) {
 	m.mu.Lock()
 	m.listPublishingCalls++
+	m.listPublishingLimit = limit
+	m.listPublishingLimits = append(m.listPublishingLimits, limit)
 	m.mu.Unlock()
 	if m.listPublishingFn == nil {
 		return nil, nil
@@ -73,7 +82,7 @@ func (m *mockReconcilePostStore) ListPublishing() ([]models.PostTarget, error) {
 	return m.listPublishingFn()
 }
 
-func (m *mockReconcilePostStore) ClaimPublishingTarget(id int64) (bool, error) {
+func (m *mockReconcilePostStore) ClaimPublishingTarget(id int64, ownerID string, leaseTTL time.Duration) (bool, error) {
 	m.mu.Lock()
 	m.claimPublishingCalls++
 	m.mu.Unlock()
@@ -83,7 +92,28 @@ func (m *mockReconcilePostStore) ClaimPublishingTarget(id int64) (bool, error) {
 	return m.claimPublishingFn(id)
 }
 
-func (m *mockReconcilePostStore) UpdateStatus(target *models.PostTarget) error {
+func (m *mockReconcilePostStore) HeartbeatReconcileTarget(id int64, ownerID string, leaseTTL time.Duration) error {
+	return nil
+}
+
+func (m *mockReconcilePostStore) ReleaseReconcileTarget(id int64, ownerID string) error {
+	return nil
+}
+
+func (m *mockReconcilePostStore) ScheduleNextReconcileWithLease(id int64, ownerID string, expectedAttempt int, next time.Time) error {
+	m.mu.Lock()
+	m.scheduleCalls++
+	m.scheduleIDs = append(m.scheduleIDs, id)
+	m.scheduleTimes = append(m.scheduleTimes, next)
+	m.scheduleAttempts = append(m.scheduleAttempts, expectedAttempt)
+	m.mu.Unlock()
+	if m.scheduleFn == nil {
+		return nil
+	}
+	return m.scheduleFn(id, expectedAttempt, next)
+}
+
+func (m *mockReconcilePostStore) UpdateReconcileStatusWithLease(target *models.PostTarget, ownerID string) error {
 	m.mu.Lock()
 	m.updateCalls++
 	m.updateTargets = append(m.updateTargets, *target)
@@ -484,15 +514,71 @@ func TestReconcileTarget_TransientError_TerminalFailure(t *testing.T) {
 // every returned target through reconcileTarget (which delegates to
 // Reconcile). Reconcile returning (nil, nil) on every target = all
 // in-flight.
-func TestTickReconcile_IteratesAllPublishingTargets(t *testing.T) {
-	posts := &mockReconcilePostStore{
-		listPublishingFn: func() ([]models.PostTarget, error) {
-			return []models.PostTarget{
-				{ID: 1, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-1"},
-				{ID: 2, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-2"},
-				{ID: 3, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-3"},
-			}, nil
+func TestTickReconcile_UsesBoundedPollingLimit(t *testing.T) {
+	posts := &mockReconcilePostStore{}
+	users := &mockUserStore{}
+	w := newTestReconcileWorker(posts, users, "tiktok", &mockAsyncProvider{baseMockProvider: baseMockProvider{platform: "tiktok"}}, &mockCredentialVault{})
+
+	_, _, err := w.tickReconcile(context.Background())
+	if err != nil {
+		t.Fatalf("tickReconcile: %v", err)
+	}
+	if posts.listPublishingLimit != reconcilePollingBatchSize {
+		t.Fatalf("ListPublishing limit = %d, want %d", posts.listPublishingLimit, reconcilePollingBatchSize)
+	}
+}
+
+func TestReconcileWorker_SchedulesAdaptiveBackoff(t *testing.T) {
+	posts := &mockReconcilePostStore{}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
 		},
+	}
+	provider := &mockAsyncProvider{
+		baseMockProvider: baseMockProvider{platform: "tiktok"},
+		reconcileFn:      func(context.Context, string, string) (*models.PublishResult, error) { return nil, nil },
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(context.Context, int64, string, credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "token"}, nil
+		},
+	}
+	w := newTestReconcileWorker(posts, users, "tiktok", provider, vault)
+	target := publishingTarget()
+
+	for i, want := range reconcileBackoffSchedule {
+		target.ReconcileAttempt = i
+		before := time.Now().Add(want - 500*time.Millisecond)
+		_, _, err := w.reconcileTarget(context.Background(), target)
+		if err != nil {
+			t.Fatalf("reconcile attempt %d: %v", i, err)
+		}
+		if posts.scheduleCalls != i+1 {
+			t.Fatalf("schedule calls after attempt %d = %d, want %d", i, posts.scheduleCalls, i+1)
+		}
+		got := posts.scheduleTimes[i]
+		if got.Before(before) {
+			t.Fatalf("backoff %d scheduled too early: got %v, lower bound %v", i, got, before)
+		}
+		if posts.scheduleAttempts[i] != i {
+			t.Fatalf("CAS expected attempt at step %d = %d, want %d", i, posts.scheduleAttempts[i], i)
+		}
+	}
+	if posts.scheduleTimes[len(posts.scheduleTimes)-1].Sub(time.Now()) > reconcileBackoffCap+time.Second {
+		t.Fatalf("backoff exceeded cap: %v", posts.scheduleTimes[len(posts.scheduleTimes)-1])
+	}
+}
+
+func TestTickReconcile_IteratesAllPublishingTargets(t *testing.T) {
+	posts := &mockReconcilePostStore{listPublishingFn: func() ([]models.PostTarget, error) {
+
+		return []models.PostTarget{
+			{ID: 1, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-1"},
+			{ID: 2, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-2"},
+			{ID: 3, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-3"},
+		}, nil
+	},
 	}
 	users := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
@@ -536,10 +622,10 @@ func TestTickReconcile_IteratesAllPublishingTargets(t *testing.T) {
 
 // TestTickReconcile_EmptyList_NoOp covers the "nothing to do" path.
 func TestTickReconcile_EmptyList_NoOp(t *testing.T) {
-	posts := &mockReconcilePostStore{
-		listPublishingFn: func() ([]models.PostTarget, error) {
-			return nil, nil
-		},
+	posts := &mockReconcilePostStore{listPublishingFn: func() ([]models.PostTarget, error) {
+
+		return nil, nil
+	},
 	}
 	users := &mockUserStore{}
 	svc := &mockAsyncProvider{baseMockProvider: baseMockProvider{platform: "tiktok"}}
@@ -561,10 +647,10 @@ func TestTickReconcile_EmptyList_NoOp(t *testing.T) {
 // TestTickReconcile_ListError_Propagates covers the "DB unreachable"
 // path. tickReconcile must surface the error so the caller can log it.
 func TestTickReconcile_ListError_Propagates(t *testing.T) {
-	posts := &mockReconcilePostStore{
-		listPublishingFn: func() ([]models.PostTarget, error) {
-			return nil, errors.New("db down")
-		},
+	posts := &mockReconcilePostStore{listPublishingFn: func() ([]models.PostTarget, error) {
+
+		return nil, errors.New("db down")
+	},
 	}
 	users := &mockUserStore{}
 	svc := &mockAsyncProvider{baseMockProvider: baseMockProvider{platform: "tiktok"}}
@@ -587,12 +673,12 @@ func TestTickReconcile_ListError_Propagates(t *testing.T) {
 // cleanly. Drives the Run loop on a goroutine and asserts counters
 // before cancelling.
 func TestReconcileWorker_Run_TicksAndExitsOnCtxCancel(t *testing.T) {
-	posts := &mockReconcilePostStore{
-		listPublishingFn: func() ([]models.PostTarget, error) {
-			return []models.PostTarget{
-				{ID: 1, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-1"},
-			}, nil
-		},
+	posts := &mockReconcilePostStore{listPublishingFn: func() ([]models.PostTarget, error) {
+
+		return []models.PostTarget{
+			{ID: 1, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-1"},
+		}, nil
+	},
 	}
 	users := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
@@ -659,12 +745,12 @@ func TestReconcileWorker_Run_TicksAndExitsOnCtxCancel(t *testing.T) {
 // TestDispatcher_GracefulShutdown_DrainsInFlight (processFunc
 // ignores ctx so ctx-cancel doesn't short-circuit).
 func TestReconcileWorker_Run_GracefulShutdown_DrainsInFlight(t *testing.T) {
-	posts := &mockReconcilePostStore{
-		listPublishingFn: func() ([]models.PostTarget, error) {
-			return []models.PostTarget{
-				{ID: 11, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-11"},
-			}, nil
-		},
+	posts := &mockReconcilePostStore{listPublishingFn: func() ([]models.PostTarget, error) {
+
+		return []models.PostTarget{
+			{ID: 11, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-11"},
+		}, nil
+	},
 	}
 	users := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
