@@ -13,6 +13,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
@@ -58,6 +59,7 @@ type wireState struct {
 	channelAuthorizer         services.ChannelAuthorizer
 	youtubeCredentialResolver *services.YouTubeCredentialResolver
 	youtubeLiveGateway        services.YouTubeLiveGateway
+	renderRegistry            *worker.RenderConcurrencyRegistry
 }
 
 func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
@@ -92,6 +94,14 @@ func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
 	// Constructed once, shared between RateLimitService and the
 	// workers — single instance, no sync.Once-protected lazy global.
 	s.memoryLimiter = services.NewMemoryLimiter()
+
+	// One process-wide admission controller for every CPU-heavy media
+	// subprocess. Workers receive this same instance through App so
+	// separate ingest/publish paths cannot oversubscribe the host.
+	s.renderRegistry = worker.NewRenderConcurrencyRegistry(
+		cfg.Worker.RenderMaxConcurrency,
+		cfg.Worker.FFmpegThreads,
+	)
 
 	// Blocco #2.2 — multi-key support. Wire() consumes the
 	// post-validated EncryptionKeys map + ActiveEncryptionKeyID

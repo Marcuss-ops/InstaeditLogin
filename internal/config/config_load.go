@@ -123,6 +123,8 @@ func Load() (*Config, error) {
 			SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
 			AssetCleanupIntervalSeconds:    getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
 			UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+			RenderMaxConcurrency:           getEnvInt("RENDER_MAX_CONCURRENCY", 1),
+			FFmpegThreads:                  getEnvInt("FFMPEG_THREADS", 1),
 			// Token refresh sweep — daily cadence + 4-month inactivity
 			// horizon (2 months of margin under Google's ~6-month
 			// refresh-token inactivity GC).

@@ -288,6 +288,14 @@ type WorkerConfig struct {
 	AssetCleanupIntervalSeconds int
 	// UploadWorkerIntervalSeconds is the cadence of the upload worker.
 	UploadWorkerIntervalSeconds int
+	// RenderMaxConcurrency is the global process limit for ffmpeg/ffprobe
+	// and future CPU-heavy media renders. It is intentionally independent
+	// from upload goroutine counts.
+	RenderMaxConcurrency int
+	// FFmpegThreads is the explicit per-process thread budget reserved for
+	// future ffmpeg commands admitted by the render registry. ffprobe uses
+	// the same process budget but does not support ffmpeg's -threads flag.
+	FFmpegThreads int
 	// UploadIngestConcurrency is the number of ingest goroutines.
 	UploadIngestConcurrency int
 	// YouTubeUploadConcurrency is the number of YouTube upload goroutines.

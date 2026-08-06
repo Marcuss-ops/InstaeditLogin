@@ -88,6 +88,10 @@ type App struct {
 	// exposed for future graceful-drain work.
 	MemoryLimiter *services.MemoryLimiter
 
+	// RenderRegistry is the single process-wide admission controller for
+	// ffmpeg/ffprobe and future CPU-heavy media subprocesses.
+	RenderRegistry *worker.RenderConcurrencyRegistry
+
 	// StorageProvider is the S3-compatible storage backend. Shared
 	// between the API (presign / complete / drive import) and the
 	// upload worker (background Drive → S3 streaming).
@@ -156,6 +160,7 @@ func Wire(ctx context.Context) (*App, error) {
 		WebhookRepo: s.webhookRepo, HTTPHandler: router.Setup(), Router: router,
 		Logger: s.logger, WorkerRegistry: worker.NewRegistry(), SentryHub: hub,
 		WorkerID: s.workerID, MemoryLimiter: s.memoryLimiter,
+		RenderRegistry:  s.renderRegistry,
 		StorageProvider: s.storageProvider, SessionsSvc: s.sessionsSvc,
 		OneTimeCodes: s.oneTimeCodes, Encryptor: s.enc,
 		YouTubeCredentialResolver: s.youtubeCredentialResolver,

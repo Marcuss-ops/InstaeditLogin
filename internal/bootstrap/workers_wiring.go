@@ -375,7 +375,7 @@ func (a *App) registerUploadWorker() {
 			// probed (the live wizard's compatibility badge reads from
 			// these columns). Best-effort by design: a missing ffprobe
 			// binary or a probe error never fails the ingest.
-			uw.SetMediaProber(worker.NewFFprobeProber())
+			uw.SetMediaProber(worker.NewFFprobeProberWithRegistry(a.RenderRegistry))
 			return uw.Run(ctx)
 		},
 	})

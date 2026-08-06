@@ -219,6 +219,21 @@ func (c *Config) validate() error {
 			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_CAP_MS (%d) must be >= YOUTUBE_UPLOAD_BACKOFF_BASE_MS (%d)", c.Worker.YouTubeUploadBackoffCapMs, c.Worker.YouTubeUploadBackoffBaseMs)
 		}
 	}
+	// Older callers build Config values directly and leave newly-added
+	// worker knobs at zero. Normalize that legacy shape to the same
+	// conservative defaults used by Load(); reject only explicit
+	// negative values, which are invalid operator input.
+	if c.Worker.RenderMaxConcurrency == 0 {
+		c.Worker.RenderMaxConcurrency = 1
+	} else if c.Worker.RenderMaxConcurrency < 0 {
+		return fmt.Errorf("RENDER_MAX_CONCURRENCY must not be negative (got %d)", c.Worker.RenderMaxConcurrency)
+	}
+	if c.Worker.FFmpegThreads == 0 {
+		c.Worker.FFmpegThreads = 1
+	} else if c.Worker.FFmpegThreads < 0 {
+		return fmt.Errorf("FFMPEG_THREADS must not be negative (got %d)", c.Worker.FFmpegThreads)
+	}
+
 	// Token refresh sweep knobs — active only when a Google provider
 	// (YouTube or Drive) is wired; a Google-less deployment has
 	// nothing to renew. Positive required: a 0 interval would spin

@@ -40,11 +40,18 @@ type MediaProber interface {
 // when the binary cannot be found — callers treat that as a soft
 // skip, never a job failure.
 func NewFFprobeProber() MediaProber {
-	return &ffprobeRunner{}
+	return &ffprobeRunner{registry: DefaultRenderConcurrencyRegistry()}
+}
+
+// NewFFprobeProberWithRegistry wires ffprobe into the shared media-process
+// registry used by the application worker graph.
+func NewFFprobeProberWithRegistry(registry *RenderConcurrencyRegistry) MediaProber {
+	return &ffprobeRunner{registry: registry}
 }
 
 type ffprobeRunner struct {
-	binPath string
+	binPath  string
+	registry *RenderConcurrencyRegistry
 }
 
 func (r *ffprobeRunner) Probe(ctx context.Context, mediaURL string) (*models.MediaProbe, error) {
@@ -55,6 +62,20 @@ func (r *ffprobeRunner) Probe(ctx context.Context, mediaURL string) (*models.Med
 	if _, err := exec.LookPath(bin); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrProbeUnavailable, err)
 	}
+	registry := r.registry
+	if registry == nil {
+		registry = DefaultRenderConcurrencyRegistry()
+	}
+	lease, err := registry.Acquire(ctx, RenderPriorityTranscode)
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe admission: %w", err)
+	}
+	defer lease.Release()
+	// ffprobe is admitted by the shared registry, but unlike ffmpeg it
+	// does not accept the ffmpeg-specific -threads execution flag. The
+	// registry still bounds the process count; ffprobe itself is a
+	// metadata probe rather than a render workload.
+	_ = lease.Threads
 	cmd := exec.CommandContext(ctx, bin,
 		"-v", "error",
 		"-print_format", "json",
