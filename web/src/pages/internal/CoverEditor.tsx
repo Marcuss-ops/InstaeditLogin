@@ -60,7 +60,7 @@ import { useThumbnailAutosave } from "../../features/thumbnailProjects/hooks/use
 import { SaveIndicator } from "../../features/thumbnailProjects/components/SaveIndicator";
 import {
   MediaPickerDialog,
-  type MediaPickerItem,
+  type MediaPickerDetail,
 } from "../../features/thumbnailProjects/components/MediaPickerDialog";
 import {
   ExportPanel,
@@ -141,7 +141,7 @@ function newRectObject(): ThumbnailSnapshotObject {
   };
 }
 
-function newImageObject(item: MediaPickerItem): ThumbnailSnapshotObject {
+function newImageObject(item: MediaPickerDetail): ThumbnailSnapshotObject {
   const width =
     item.width && item.width > 0 ? Math.min(item.width, MAX_CANVAS_DIMENSION) : 480;
   const height =
@@ -987,7 +987,7 @@ export function CoverEditorPage() {
     patchSnapshot({ ...snapshot, canvas: { ...snapshot.canvas, background } });
   };
 
-  const handlePickMedia = (item: MediaPickerItem) => {
+  const handlePickMedia = (item: MediaPickerDetail) => {
     setMediaUrls((prev) => {
       const next = new Map(prev);
       if (item.preview_url) next.set(item.id, item.preview_url);

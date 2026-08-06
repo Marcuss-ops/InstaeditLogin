@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,23 +82,13 @@ func TestMediaLibrary_ListsReadyAssetsWithCompatibility(t *testing.T) {
 	if a1.LiveCompatibility != liveCompatReady {
 		t.Errorf("a1 compatibility: got %q, want %q", a1.LiveCompatibility, liveCompatReady)
 	}
-	if a1.Width == nil || *a1.Width != 1920 || a1.Height == nil || *a1.Height != 1080 {
-		t.Errorf("a1 resolution: got %vx%v, want 1920x1080", a1.Width, a1.Height)
-	}
-	if a1.FPS == nil || *a1.FPS != 30 {
-		t.Errorf("a1 fps: got %v, want 30", a1.FPS)
-	}
-	if a1.HasAudio == nil || !*a1.HasAudio {
-		t.Error("a1 has_audio: want true")
-	}
-	if a1.VideoCodec != "h264" || a1.AudioCodec != "aac" {
-		t.Errorf("a1 codecs: got %s/%s, want h264/aac", a1.VideoCodec, a1.AudioCodec)
-	}
-	if a1.ProbedAt == nil {
-		t.Error("a1 probed_at: want set")
-	}
-	if a1.PreviewURL == "" {
-		t.Error("a1 preview_url: want minted presigned URL")
+	// List DTO is intentionally compact: probe metadata and the signed
+	// preview are fetched through GET /api/v1/media/{id} on demand.
+	listJSON := w.Body.String()
+	for _, field := range []string{"preview_url", "duration_seconds", "width", "height", "fps", "has_audio", "video_codec", "audio_codec", "probed_at"} {
+		if strings.Contains(listJSON, `"`+field+`"`) {
+			t.Errorf("list payload should not contain detail field %q: %s", field, listJSON)
+		}
 	}
 
 	a2 := byID["a2"]
@@ -111,6 +102,46 @@ func TestMediaLibrary_ListsReadyAssetsWithCompatibility(t *testing.T) {
 	a4 := byID["a4"]
 	if a4.LiveCompatibility != liveCompatNeedsNormalization {
 		t.Errorf("a4 compatibility: got %q, want %q (VFR)", a4.LiveCompatibility, liveCompatNeedsNormalization)
+	}
+}
+
+func TestMediaLibrary_DetailMintsAndCachesPreview(t *testing.T) {
+	store := newMockMediaStore()
+	store.assets["a1"] = readyAsset("a1", 42, "uploads/42/"+testUUID+"_video.mp4", true)
+	storage := newMockStorageProvider()
+	r := newMediaTestRouter(store, storage)
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/media/a1", nil)
+		withBearerJWT(t, req, 42)
+		w := httptest.NewRecorder()
+		r.Setup().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %d: want 200, got %d: %s", i, w.Code, w.Body.String())
+		}
+		var detail MediaLibraryDetail
+		if err := json.NewDecoder(w.Body).Decode(&detail); err != nil {
+			t.Fatalf("decode detail: %v", err)
+		}
+		if detail.PreviewURL == "" || detail.Width == nil || *detail.Width != 1920 {
+			t.Fatalf("detail should include preview and probe metadata: %#v", detail)
+		}
+	}
+	if storage.getObjectCalls != 1 {
+		t.Fatalf("signed URL calls: got %d, want 1 due to short cache", storage.getObjectCalls)
+	}
+}
+
+func TestMediaLibrary_DetailDoesNotLeakForeignAsset(t *testing.T) {
+	store := newMockMediaStore()
+	store.assets["foreign"] = readyAsset("foreign", 99, "uploads/99/"+testUUID+"_video.mp4", true)
+	r := newMediaTestRouter(store, newMockStorageProvider())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/foreign", nil)
+	withBearerJWT(t, req, 42)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for foreign asset, got %d", w.Code)
 	}
 }
 

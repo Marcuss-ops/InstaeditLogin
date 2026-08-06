@@ -31,6 +31,7 @@ type Router struct {
 	mediaStore            MediaStore
 	mediaPreviewCacheMu   sync.Mutex
 	mediaPreviewCache     map[string]mediaPreviewCacheEntry
+	mediaPreviewCacheTick uint64
 	auditLogStore         AuditLogStore
 	auth                  *auth.Manager
 	apiKeyAuth            *auth.Authenticator

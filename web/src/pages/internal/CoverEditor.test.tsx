@@ -167,11 +167,22 @@ function setEditorEndpoints(snapshotMock: ReturnType<typeof vi.fn>) {
             id: "00000000-0000-4000-8000-000000000001",
             filename: "bg.png",
             content_type: "image/png",
-            preview_url: "https://cdn.example/bg.png",
-            width: 1920,
-            height: 1080,
+            size_bytes: 2048,
+            created_at: "2026-08-04T10:00:00Z",
+            live_compatibility: "unknown",
           },
         ],
+      });
+    }
+    if (url === "/api/v1/media/00000000-0000-4000-8000-000000000001") {
+      return jsonResponse({
+        id: "00000000-0000-4000-8000-000000000001",
+        filename: "bg.png",
+        content_type: "image/png",
+        preview_url: "https://cdn.example/bg.png",
+        width: 1920,
+        height: 1080,
+        live_compatibility: "unknown",
       });
     }
     throw new Error(`Unexpected URL in test mock: ${url}`);

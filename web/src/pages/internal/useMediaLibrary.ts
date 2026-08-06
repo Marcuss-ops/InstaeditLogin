@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authedFetch, AuthError } from "../../lib/auth";
 import { isDemoMode } from "../../lib/demo";
-import type { MediaLibraryItem, MediaLibraryResponse } from "./livestreamsTypes";
+import { useSharedQuery } from "../../lib/queryRegistry";
+import type { MediaLibraryDetail, MediaLibraryItem, MediaLibraryResponse } from "./livestreamsTypes";
 
 export type MediaLibraryState =
   | { kind: "loading" }
@@ -15,20 +16,26 @@ export type MediaLibraryState =
     }
   | { kind: "error"; message: string };
 
-/**
- * Fetch the caller's ready media assets with their ffprobe metadata
- * (GET /api/v1/media — the Media Library). Powers the live wizard's
- * step 3 picker. Same abort/state pattern as useLivestreamChannels.
- */
-async function fetchMediaLibrary(
-  signal: AbortSignal,
-  cursor?: string,
-): Promise<MediaLibraryResponse> {
+async function fetchMediaLibrary(signal: AbortSignal, cursor?: string): Promise<MediaLibraryResponse> {
   if (isDemoMode()) return { items: [] };
   const params = new URLSearchParams({ limit: "100" });
   if (cursor) params.set("cursor", cursor);
   const response = await authedFetch(`/api/v1/media?${params.toString()}`, { signal });
   return (await response.json()) as MediaLibraryResponse;
+}
+
+/** Fetches one full row only after the card becomes visible. */
+async function fetchMediaDetail(id: string, signal: AbortSignal): Promise<MediaLibraryDetail> {
+  const response = await authedFetch(`/api/v1/media/${encodeURIComponent(id)}`, { signal });
+  return (await response.json()) as MediaLibraryDetail;
+}
+
+export function useMediaDetail(id: string, enabled: boolean) {
+  return useSharedQuery<MediaLibraryDetail>(`media-detail:${id}`, {
+    enabled,
+    staleTime: 5 * 60_000,
+    fetcher: (signal) => fetchMediaDetail(id, signal),
+  });
 }
 
 export function useMediaLibrary() {

@@ -56,6 +56,7 @@ Object.defineProperty(window, "ResizeObserver", {
 // explicitly use the bus for unit tests, AND those that side-effect it
 // through auth.ts's auto-emit) starts with an empty queue.
 import { toastBus } from "./src/components/toast/toast-bus";
+import { clearSharedQueryCache } from "./src/lib/queryRegistry";
 // Global accounts-manifest cache reset for cross-test hygiene.
 //
 // Why: `listAllAccounts` (channelsApi) caches the /api/v1/accounts
@@ -75,6 +76,7 @@ import { toastBus } from "./src/components/toast/toast-bus";
 afterEach(async () => {
   cleanup();
   toastBus.__resetForTests();
+  clearSharedQueryCache();
   // Files that vi.mock() the whole channelsApi module (e.g.
   // useYouTubeChannels.test.ts) resolve a strict mock with NO
   // clearAccountsCache export — vitest throws on property access, so a

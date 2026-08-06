@@ -153,10 +153,11 @@ func (m *mockMediaStore) ListVisibleInWorkspace(_ context.Context, workspaceID i
 // media endpoint tests. SignUpload returns a stable UploadGrant;
 // VerifyUpload is configurable per-test via the verifyFn hook.
 type mockStorageProvider struct {
-	providerName string
-	signFn       func(key string) *services.UploadGrant
-	verifyFn     func(key string) (string, int64, error)
-	assetURLFn   func(key string) string
+	providerName   string
+	signFn         func(key string) *services.UploadGrant
+	verifyFn       func(key string) (string, int64, error)
+	assetURLFn     func(key string) string
+	getObjectCalls int
 }
 
 func newMockStorageProvider() *mockStorageProvider {
@@ -187,6 +188,7 @@ func (m *mockStorageProvider) VerifyUpload(_ context.Context, key string) (strin
 }
 func (m *mockStorageProvider) AssetURL(key string) string { return m.assetURLFn(key) }
 func (m *mockStorageProvider) GetObject(_ context.Context, key string, _ time.Duration) (string, error) {
+	m.getObjectCalls++
 	return m.assetURLFn(key) + "?X-Amz-Signature=mock", nil
 }
 

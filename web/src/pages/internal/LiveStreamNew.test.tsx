@@ -95,9 +95,22 @@ function mockFetchWithMedia(channels: LivestreamChannel[], media: import("./live
     if (url.includes("/api/v1/livestreams/channels")) {
       return mockJsonResponse({ channels });
     }
+    if (url.includes("/api/v1/media/")) {
+      const id = url.split("/api/v1/media/")[1];
+      const item = media.find((candidate) => candidate.id === id);
+      return mockJsonResponse({
+        ...item,
+        preview_url: item ? `https://cdn.test/${id}.mp4` : undefined,
+        duration_seconds: item?.duration_seconds ?? null,
+        width: item?.width ?? null,
+        height: item?.height ?? null,
+        fps: item?.fps ?? null,
+        has_audio: item?.has_audio ?? null,
+      });
+    }
     if (url.includes("/api/v1/media")) {
       if (mediaError) return mockJsonResponse({ error: "boom" }, false, 500);
-      return mockJsonResponse({ items: media });
+      return mockJsonResponse({ items: media.map(({ id, filename, content_type, size_bytes, created_at, live_compatibility }) => ({ id, filename, content_type, size_bytes, created_at, live_compatibility })) });
     }
     return mockJsonResponse({}, false, 404);
   });

@@ -94,7 +94,11 @@ export type MediaLibraryItem = {
   content_type: string;
   size_bytes: number;
   created_at: string;
-  /** Short-lived presigned GET URL (15 min) for `<video>` preview. */
+  live_compatibility: "ready" | "needs_normalization" | "unknown";
+};
+
+/** Full row returned by GET /api/v1/media/{id}, fetched on demand. */
+export type MediaLibraryDetail = MediaLibraryItem & {
   preview_url?: string;
   duration_seconds?: number | null;
   width?: number | null;
@@ -104,7 +108,6 @@ export type MediaLibraryItem = {
   video_codec?: string;
   audio_codec?: string;
   probed_at?: string | null;
-  live_compatibility: "ready" | "needs_normalization" | "unknown";
 };
 
 export type MediaLibraryResponse = {

@@ -68,6 +68,7 @@ const (
 	// leaving enough time for a browser to finish a metadata request.
 	mediaLibraryPreviewCacheTTL = 5 * time.Minute
 	mediaLibraryPreviewTTL      = 15 * time.Minute
+	mediaLibraryPreviewCacheMax = 512
 )
 
 type mediaPreviewCacheEntry struct {
@@ -209,7 +210,11 @@ func (r *Router) mediaPreviewURL(id string) (string, bool) {
 	r.mediaPreviewCacheMu.Lock()
 	defer r.mediaPreviewCacheMu.Unlock()
 	entry, ok := r.mediaPreviewCache[id]
-	if !ok || time.Now().After(entry.expiresAt) {
+	if !ok {
+		return "", false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(r.mediaPreviewCache, id)
 		return "", false
 	}
 	return entry.url, true
@@ -221,7 +226,22 @@ func (r *Router) storeMediaPreviewURL(id, url string) {
 	if r.mediaPreviewCache == nil {
 		r.mediaPreviewCache = make(map[string]mediaPreviewCacheEntry)
 	}
-	r.mediaPreviewCache[id] = mediaPreviewCacheEntry{url: url, expiresAt: time.Now().Add(mediaLibraryPreviewCacheTTL)}
+	now := time.Now()
+	for key, entry := range r.mediaPreviewCache {
+		if now.After(entry.expiresAt) {
+			delete(r.mediaPreviewCache, key)
+		}
+	}
+	if len(r.mediaPreviewCache) >= mediaLibraryPreviewCacheMax {
+		// Evict one arbitrary live entry. The cache is an optimization,
+		// not a correctness store; bounded memory is more important than
+		// perfect LRU bookkeeping here.
+		for key := range r.mediaPreviewCache {
+			delete(r.mediaPreviewCache, key)
+			break
+		}
+	}
+	r.mediaPreviewCache[id] = mediaPreviewCacheEntry{url: url, expiresAt: now.Add(mediaLibraryPreviewCacheTTL)}
 }
 
 func mediaAssetFilename(uploadKey string) string {
