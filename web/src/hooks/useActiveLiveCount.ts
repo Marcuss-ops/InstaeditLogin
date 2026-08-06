@@ -36,17 +36,19 @@ export function countActiveLives(payload: unknown): number {
 
 type WorkspaceResponse = { workspace_id?: number };
 
-async function fetchActiveLiveCount(signal: AbortSignal): Promise<number | null> {
-  const meResponse = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
+async function fetchWorkspaceID(signal: AbortSignal): Promise<number | null> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
     credentials: "include",
     signal,
   });
-  if (!meResponse.ok) return null;
-  const me = (await meResponse.json()) as WorkspaceResponse;
-  const workspaceID = me.workspace_id;
-  if (typeof workspaceID !== "number" || !Number.isInteger(workspaceID) || workspaceID <= 0) {
-    return null;
-  }
+  if (!response.ok) return null;
+  const workspaceID = (await response.json() as WorkspaceResponse).workspace_id;
+  return typeof workspaceID === "number" && Number.isInteger(workspaceID) && workspaceID > 0
+    ? workspaceID
+    : null;
+}
+
+async function fetchActiveLiveCount(workspaceID: number, signal: AbortSignal): Promise<number | null> {
   const response = await fetch(livestreamsURL(workspaceID), {
     credentials: "include",
     signal,
@@ -61,11 +63,21 @@ async function fetchActiveLiveCount(signal: AbortSignal): Promise<number | null>
  * pauses it while the tab is hidden, and wakes it on visibility restore.
  */
 export function useActiveLiveCount(): number | null {
-  const query = useSharedQuery<number | null>("active-live-count", {
+  const workspaceQuery = useSharedQuery<number | null>("auth-me-workspace", {
     enabled: !isDemoMode(),
-    staleTime: 15_000,
+    staleTime: 30_000,
     pollingInterval: POLL_INTERVAL_MS,
-    fetcher: fetchActiveLiveCount,
+    fetcher: fetchWorkspaceID,
   });
-  return query.data ?? null;
+  const workspaceID = workspaceQuery.data;
+  const query = useSharedQuery<number | null>(
+    `active-live-count:${workspaceID ?? "none"}`,
+    {
+      enabled: !isDemoMode() && workspaceID != null,
+      staleTime: 15_000,
+      pollingInterval: POLL_INTERVAL_MS,
+      fetcher: (signal) => fetchActiveLiveCount(workspaceID as number, signal),
+    },
+  );
+  return workspaceID == null ? null : query.data ?? null;
 }

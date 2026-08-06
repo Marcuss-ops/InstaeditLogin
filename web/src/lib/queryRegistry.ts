@@ -67,6 +67,7 @@ function installVisibilityListener(): void {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden || document.visibilityState === "hidden") return;
     for (const entry of activeEntries) {
+      if (intervalFor(entry) == null) continue;
       clearTimer(entry);
       void fetchEntry(entry, true).catch(() => {
         // The error is retained in the query snapshot. Consumers decide
@@ -178,10 +179,7 @@ async function fetchEntry<T>(entry: Entry<T>, force: boolean): Promise<T | undef
 
 function getOrCreate<T>(key: string, options: QueryOptions<T>): Entry<T> {
   const existing = entries.get(key) as Entry<T> | undefined;
-  if (existing) {
-    existing.options = options;
-    return existing;
-  }
+  if (existing) return existing;
   const entry: Entry<T> = {
     key,
     options,
@@ -233,10 +231,9 @@ const registry = {
     };
   },
 
-  update<T>(key: string, options: QueryOptions<T>): void {
+  update<T>(key: string, options: QueryOptions<T>, wasEnabled = false): void {
     const entry = entries.get(key) as Entry<T> | undefined;
     if (!entry) return;
-    const wasEnabled = entry.options.enabled !== false;
     const wasInterval = intervalFor(entry);
     entry.options = options;
     const isEnabled = options.enabled !== false;
@@ -279,6 +276,8 @@ const registry = {
 export function useSharedQuery<T>(key: string, options: QueryOptions<T>): UseSharedQueryResult<T> {
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const previousKeyRef = useRef(key);
+  const previousEnabledRef = useRef(options.enabled !== false);
 
   const subscribe = useCallback((listener: Listener) => {
     return registry.subscribe(key, listener, optionsRef.current);
@@ -286,7 +285,10 @@ export function useSharedQuery<T>(key: string, options: QueryOptions<T>): UseSha
   const getSnapshot = useCallback(() => registry.getSnapshot<T>(key, optionsRef.current), [key]);
 
   useEffect(() => {
-    registry.update(key, optionsRef.current);
+    const sameKey = previousKeyRef.current === key;
+    registry.update(key, optionsRef.current, sameKey && previousEnabledRef.current);
+    previousKeyRef.current = key;
+    previousEnabledRef.current = optionsRef.current.enabled !== false;
   }, [key, options.enabled, options.fetcher, options.pollingInterval, options.staleTime]);
 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

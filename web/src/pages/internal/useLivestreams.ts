@@ -54,14 +54,15 @@ export function useLivestreams() {
   const [deletingID, setDeletingID] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const load = useCallback(async (initial: boolean) => {
+  const load = useCallback(async (initial: boolean, sharedSignal?: AbortSignal) => {
     abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const controller = sharedSignal ? null : new AbortController();
+    const signal = sharedSignal ?? controller!.signal;
+    if (controller) abortRef.current = controller;
     if (initial) setState({ kind: "loading" });
     try {
-      const data = await fetchItems(controller.signal);
-      if (controller.signal.aborted) return;
+      const data = await fetchItems(signal);
+      if (signal.aborted) return;
       setState({
         kind: "ready",
         items: Array.isArray(data.items) ? data.items : [],
@@ -69,7 +70,7 @@ export function useLivestreams() {
         hasMore: data.has_more === true,
       });
     } catch (err) {
-      if (controller.signal.aborted) return;
+      if (signal.aborted) return;
       if (err instanceof AuthError) {
         // Session expired — the protected layout redirects to /login.
         setState({ kind: "error", message: "Sessione scaduta. Accedi di nuovo." });
@@ -89,16 +90,12 @@ export function useLivestreams() {
     return () => abortRef.current?.abort();
   }, [load]);
 
-  const pollLivestreams = useSharedPolling("livestreams", {
+  useSharedPolling("livestreams:current-session", {
     interval: POLL_INTERVAL_MS,
-    task: async () => {
-      await load(false);
+    task: async (signal) => {
+      await load(false, signal);
     },
   });
-
-  useEffect(() => {
-    void pollLivestreams();
-  }, [pollLivestreams]);
 
   const loadMore = useCallback(async () => {
     if (state.kind !== "ready" || !state.hasMore || !state.nextCursor || state.loadingMore) return;

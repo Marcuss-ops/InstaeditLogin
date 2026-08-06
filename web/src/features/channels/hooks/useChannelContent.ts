@@ -215,7 +215,7 @@ export function useChannelContent({
   // interval listeners don't churn on every render. cfetchFnRef
   // is updated synchronously each render — listeners always call
   // the LATEST refetch.
-  const cfetchFnRef = useRef<() => Promise<void>>(async () => {});
+  const cfetchFnRef = useRef<(signal?: AbortSignal) => Promise<void>>(async () => {});
 
   const runFetch = useCallback(
     async (
@@ -312,12 +312,13 @@ export function useChannelContent({
     [],
   );
 
-  const refetch = useCallback(async (): Promise<void> => {
+  const refetch = useCallback(async (sharedSignal?: AbortSignal): Promise<void> => {
     abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    const ctrl = sharedSignal ? null : new AbortController();
+    const signal = sharedSignal ?? ctrl!.signal;
+    if (ctrl) abortRef.current = ctrl;
     setState({ kind: "loading" });
-    await runFetch(ctrl.signal, "refresh");
+    await runFetch(signal, "refresh");
   }, [runFetch]);
 
   const loadMore = useCallback(async (): Promise<void> => {
@@ -409,8 +410,8 @@ export function useChannelContent({
   useSharedPolling(`channel-content:${accountId ?? "none"}:${privacy}`, {
     enabled: enabled && accountId != null && intervalMs != null,
     interval: intervalMs,
-    task: async () => {
-      await cfetchFnRef.current();
+    task: async (signal) => {
+      await cfetchFnRef.current(signal);
     },
   });
 

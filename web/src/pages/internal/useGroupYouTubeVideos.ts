@@ -178,15 +178,16 @@ export function useGroupYouTubeVideos(groupId: number, enabled = false) {
   );
 
   const refreshVideos = useCallback(
-    (resetPolling = true, forceRefresh = false): Promise<void> => {
+    (resetPolling = true, forceRefresh = false, sharedSignal?: AbortSignal): Promise<void> => {
       if (resetPolling) pollingAttemptsRef.current = 0;
       abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
+      const controller = sharedSignal ? null : new AbortController();
+      const signal = sharedSignal ?? controller!.signal;
+      if (controller) abortRef.current = controller;
       if (resetPolling) {
         setState({ kind: "loading" });
       }
-      return loadVideos(controller.signal, 0, false, forceRefresh);
+      return loadVideos(signal, 0, false, forceRefresh);
     },
     [loadVideos],
   );
@@ -221,10 +222,10 @@ export function useGroupYouTubeVideos(groupId: number, enabled = false) {
   const pollPendingVideos = useSharedPolling(`group-youtube-videos:${groupId}:${recencyDays}`, {
     enabled: hasPendingVideos && pollingAttemptsRef.current < 12,
     interval: 10_000,
-    task: async () => {
+    task: async (signal) => {
       if (pollingAttemptsRef.current >= 12) return;
       pollingAttemptsRef.current += 1;
-      await refreshVideos(false);
+      await refreshVideos(false, false, signal);
     },
   });
 
