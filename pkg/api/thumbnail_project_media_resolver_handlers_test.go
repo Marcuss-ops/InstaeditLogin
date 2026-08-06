@@ -139,6 +139,25 @@ func TestThumbnailProjects_ResolveMediaEmptyIDsIs400(t *testing.T) {
 	}
 }
 
+func TestThumbnailProjects_ResolveMediaCachesTemporaryURLs(t *testing.T) {
+	media := resolveMediaStore()
+	storage := newMockStorageProvider()
+	r := thumbnailRenderRouter(t, &thumbnailProjectTestStore{}, media, storage, workspaceOwnerStore(1), nil)
+	body := `{"media_ids":["` + resolveMediaA + `"]}`
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_test/media/resolve?workspace_id=7", bytes.NewBufferString(body))
+		withBearerJWT(t, req, 1)
+		w := httptest.NewRecorder()
+		r.Setup().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %d: want 200, got %d: %s", i, w.Code, w.Body.String())
+		}
+	}
+	if storage.getObjectCalls != 1 {
+		t.Fatalf("signed URL calls: got %d, want 1 due to short cache", storage.getObjectCalls)
+	}
+}
+
 func TestThumbnailProjects_ResolveMediaDeduplicatesInput(t *testing.T) {
 	media := resolveMediaStore()
 	r := resolveMediaRouter(t, &thumbnailProjectTestStore{}, media, workspaceOwnerStore(1))

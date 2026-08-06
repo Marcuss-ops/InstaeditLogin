@@ -108,12 +108,17 @@ func (r *Router) handleResolveThumbnailProjectMedia(w http.ResponseWriter, req *
 	items := make([]thumbnailMediaResolveItem, 0, len(assets))
 	for i := range assets {
 		asset := &assets[i]
-		url, urlErr := r.storageProvider.GetObject(req.Context(), asset.UploadKey, mediaResolveTTL)
-		if urlErr != nil {
-			// A signing failure for one asset must not fail the whole
-			// resolve; the editor treats the object as unresolved and
-			// the user can retry. Mirrors handleListMediaAssets.
-			continue
+		cacheKey := asset.ID + "\x00" + asset.UploadKey
+		url, cached := r.mediaResolveURL(cacheKey)
+		if !cached {
+			url, err = r.storageProvider.GetObject(req.Context(), asset.UploadKey, mediaResolveTTL)
+			if err != nil {
+				// A signing failure for one asset must not fail the whole
+				// resolve; the editor treats the object as unresolved and
+				// the user can retry. Mirrors handleListMediaAssets.
+				continue
+			}
+			r.storeMediaResolveURL(cacheKey, url)
 		}
 		items = append(items, thumbnailMediaResolveItem{
 			MediaID:     asset.ID,
@@ -124,4 +129,43 @@ func (r *Router) handleResolveThumbnailProjectMedia(w http.ResponseWriter, req *
 		})
 	}
 	writeJSON(w, http.StatusOK, thumbnailMediaResolveResponse{Items: items})
+}
+
+// mediaResolveURL and storeMediaResolveURL keep a short-lived, bounded
+// cache for temporary GET URLs. The URL is never persisted and expires
+// before the provider's 15-minute signature, so a cache miss naturally
+// refreshes it without affecting correctness.
+func (r *Router) mediaResolveURL(id string) (string, bool) {
+	r.mediaResolveCacheMu.Lock()
+	defer r.mediaResolveCacheMu.Unlock()
+	entry, ok := r.mediaResolveCache[id]
+	if !ok {
+		return "", false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(r.mediaResolveCache, id)
+		return "", false
+	}
+	return entry.url, true
+}
+
+func (r *Router) storeMediaResolveURL(id, url string) {
+	r.mediaResolveCacheMu.Lock()
+	defer r.mediaResolveCacheMu.Unlock()
+	if r.mediaResolveCache == nil {
+		r.mediaResolveCache = make(map[string]mediaPreviewCacheEntry)
+	}
+	now := time.Now()
+	for key, entry := range r.mediaResolveCache {
+		if now.After(entry.expiresAt) {
+			delete(r.mediaResolveCache, key)
+		}
+	}
+	if len(r.mediaResolveCache) >= mediaLibraryPreviewCacheMax {
+		for key := range r.mediaResolveCache {
+			delete(r.mediaResolveCache, key)
+			break
+		}
+	}
+	r.mediaResolveCache[id] = mediaPreviewCacheEntry{url: url, expiresAt: now.Add(mediaTemporaryURLCacheTTL)}
 }

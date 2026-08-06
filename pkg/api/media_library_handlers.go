@@ -68,6 +68,7 @@ const (
 	// leaving enough time for a browser to finish a metadata request.
 	mediaLibraryPreviewCacheTTL = 5 * time.Minute
 	mediaLibraryPreviewTTL      = 15 * time.Minute
+	mediaTemporaryURLCacheTTL   = 5 * time.Minute
 	mediaLibraryPreviewCacheMax = 512
 )
 

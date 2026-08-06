@@ -376,8 +376,9 @@ func (r *Router) Setup() http.Handler {
 	// so its decisions are independent of those middlewares' behaviour.
 	// It is INSIDE recover so a panic inside its handler still gets
 	// caught + logged + translated to a 500.
+	compressedRoutes := gzipJSONMiddleware(r.mux)
 	rateLimitAndBelow := r.securityHeadersMiddleware(
-		r.rateLimiter.middleware(r.corsMiddleware(r.requestIDMiddleware(r.loggingMiddleware(r.mux)))),
+		r.rateLimiter.middleware(r.corsMiddleware(r.requestIDMiddleware(r.loggingMiddleware(compressedRoutes)))),
 	)
 	return r.recoverMiddleware(rateLimitAndBelow)
 }
