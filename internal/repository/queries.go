@@ -112,9 +112,10 @@ const qSelectPublishingTargets = `SELECT id, post_id, platform_account_id, statu
 	 FROM post_targets
 	 WHERE status = 'publishing'
 	   AND platform_post_id IS NOT NULL
-	   AND platform_post_id <> ''
-	   AND next_reconcile_at <= NOW()
-	 ORDER BY next_reconcile_at ASC, id ASC
+   AND platform_post_id <> ''
+   AND next_reconcile_at <= NOW()
+   AND (reconcile_owner_id IS NULL OR reconcile_until IS NULL OR reconcile_until <= NOW())
+ ORDER BY next_reconcile_at ASC, id ASC
 	 LIMIT $1`
 
 const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,

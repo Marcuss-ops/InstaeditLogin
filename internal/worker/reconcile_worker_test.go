@@ -17,6 +17,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -525,6 +526,79 @@ func TestTickReconcile_UsesBoundedPollingLimit(t *testing.T) {
 	}
 	if posts.listPublishingLimit != reconcilePollingBatchSize {
 		t.Fatalf("ListPublishing limit = %d, want %d", posts.listPublishingLimit, reconcilePollingBatchSize)
+	}
+}
+
+func TestTickReconcile_BoundedBatchThroughput(t *testing.T) {
+	const batch = reconcilePollingBatchSize
+	posts := &mockReconcilePostStore{listPublishingFn: func() ([]models.PostTarget, error) {
+		// The repository contract already bounds this slice to `batch`; the
+		// test verifies the worker consumes one bounded batch and never grows
+		// local work beyond the configured throughput budget.
+		targets := make([]models.PostTarget, batch)
+		for i := range targets {
+			targets[i] = models.PostTarget{
+				ID:                int64(i + 1),
+				PostID:            int64(i + 1),
+				PlatformAccountID: 10,
+				Status:            models.PostStatusPublishing,
+				PlatformPostID:    "publish-" + strconv.Itoa(i+1),
+			}
+		}
+		return targets, nil
+	}}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
+		},
+	}
+	provider := &mockAsyncProvider{
+		baseMockProvider: baseMockProvider{platform: "tiktok"},
+		reconcileFn: func(context.Context, string, string) (*models.PublishResult, error) {
+			return nil, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(context.Context, int64, string, credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "token"}, nil
+		},
+	}
+	w := newTestReconcileWorker(posts, users, "tiktok", provider, vault)
+
+	if _, _, err := w.tickReconcile(context.Background()); err != nil {
+		t.Fatalf("tickReconcile: %v", err)
+	}
+	if posts.listPublishingLimit != batch {
+		t.Fatalf("ListPublishing limit = %d, want %d", posts.listPublishingLimit, batch)
+	}
+	if provider.reconcileCalls != batch {
+		t.Fatalf("provider calls = %d, want exactly one bounded batch (%d)", provider.reconcileCalls, batch)
+	}
+}
+
+func TestReconcileWorker_AdaptiveBackoffCapsAtMaximum(t *testing.T) {
+	posts := &mockReconcilePostStore{}
+	w := &ReconcileWorker{postRepo: posts}
+	target := publishingTarget()
+	target.ReconcileAttempt = len(reconcileBackoffSchedule) + 20
+	expectedAttempt := target.ReconcileAttempt
+
+	before := time.Now()
+	if _, _, err := w.scheduleInFlight(target); err != nil {
+		t.Fatalf("scheduleInFlight: %v", err)
+	}
+	if posts.scheduleCalls != 1 {
+		t.Fatalf("schedule calls = %d, want 1", posts.scheduleCalls)
+	}
+	if posts.scheduleAttempts[0] != expectedAttempt {
+		t.Fatalf("expected attempt = %d, got %d", expectedAttempt, posts.scheduleAttempts[0])
+	}
+	if target.ReconcileAttempt != expectedAttempt+1 {
+		t.Fatalf("target attempt after scheduling = %d, want %d", target.ReconcileAttempt, expectedAttempt+1)
+	}
+	delta := posts.scheduleTimes[0].Sub(before)
+	if delta < reconcileBackoffCap-500*time.Millisecond || delta > reconcileBackoffCap+500*time.Millisecond {
+		t.Fatalf("adaptive backoff = %v, want approximately cap %v", delta, reconcileBackoffCap)
 	}
 }
 

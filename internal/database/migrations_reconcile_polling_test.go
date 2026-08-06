@@ -11,6 +11,37 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/postgres"
 )
 
+func TestMigration109_ReconcileDueUnleasedIndex(t *testing.T) {
+	db, cleanup := postgres.StartTestPostgres(t)
+	defer cleanup()
+
+	if err := RunMigrationsUpTo(db, 108); err != nil {
+		t.Fatalf("RunMigrationsUpTo(108): %v", err)
+	}
+	if err := applyMigrationByName(t, db, "109_reconcile_polling_lease_index.sql"); err != nil {
+		t.Fatalf("apply migration 109: %v", err)
+	}
+
+	var indexDef sql.NullString
+	if err := db.QueryRow(`
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = 'public'
+		  AND indexname = 'idx_post_targets_reconcile_due_unleased'`).Scan(&indexDef); err != nil {
+		t.Fatalf("find due unleased index: %v", err)
+	}
+	if !indexDef.Valid || indexDef.String == "" {
+		t.Fatal("due unleased index definition is empty")
+	}
+	if strings.Contains(indexDef.String, "NOW()") || strings.Contains(indexDef.String, "now()") {
+		t.Fatalf("partial index must not contain dynamic time predicate: %s", indexDef.String)
+	}
+	for _, predicate := range []string{"status = 'publishing'", "platform_post_id IS NOT NULL", "reconcile_owner_id IS NULL"} {
+		if !strings.Contains(indexDef.String, predicate) {
+			t.Fatalf("due unleased index lacks %q: %s", predicate, indexDef.String)
+		}
+	}
+}
+
 func TestMigration107_ReconcilePollingColumnsAndIndex(t *testing.T) {
 	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
