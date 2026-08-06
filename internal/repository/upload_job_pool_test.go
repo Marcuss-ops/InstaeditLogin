@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,14 @@ import (
 // =============================================================================
 // P1 — ClaimBatch (CTE + FOR UPDATE SKIP LOCKED)
 // =============================================================================
+
+func TestClaimBatch_SQLContract(t *testing.T) {
+	for _, want := range []string{"FOR UPDATE SKIP LOCKED", "status IN ('pending', 'retry_wait')", "COALESCE(next_attempt_at, NOW())", "LIMIT $1", "UPDATE upload_jobs"} {
+		if !strings.Contains(SQLClaimBatch, want) {
+			t.Errorf("SQLClaimBatch missing %q", want)
+		}
+	}
+}
 
 // TestClaimBatch_Happy verifies the canonical happy path: ClaimBatch
 // returns up to `limit` rows transitioned from pending to 'leased'

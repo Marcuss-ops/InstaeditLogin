@@ -202,12 +202,14 @@ func WireWorkers(core *Core) *worker.Registry {
 		Critical: true,
 		Run: func(ctx context.Context) error {
 			uploadOpts := worker.UploadWorkerOptions{
-				IngestConcurrency: core.Cfg.Worker.UploadIngestConcurrency,
-				UploadConcurrency: core.Cfg.Worker.YouTubeUploadConcurrency,
-				LeaseTTL:          time.Duration(core.Cfg.Worker.UploadLeaseTTLSeconds) * time.Second,
-				HeartbeatInterval: time.Duration(core.Cfg.Worker.UploadHeartbeatIntervalSeconds) * time.Second,
-				ReclaimInterval:   time.Duration(core.Cfg.Worker.UploadReclaimIntervalSeconds) * time.Second,
-				ReclaimOnStart:    core.Cfg.Worker.UploadReclaimOnStart,
+				IngestConcurrency:    core.Cfg.Worker.UploadIngestConcurrency,
+				UploadConcurrency:    core.Cfg.Worker.YouTubeUploadConcurrency,
+				LeaseTTL:             time.Duration(core.Cfg.Worker.UploadLeaseTTLSeconds) * time.Second,
+				HeartbeatInterval:    time.Duration(core.Cfg.Worker.UploadHeartbeatIntervalSeconds) * time.Second,
+				ReclaimInterval:      time.Duration(core.Cfg.Worker.UploadReclaimIntervalSeconds) * time.Second,
+				ReclaimOnStart:       core.Cfg.Worker.UploadReclaimOnStart,
+				EmptyQueueBackoffMin: time.Duration(core.Cfg.Worker.UploadEmptyQueueBackoffMinSeconds) * time.Second,
+				EmptyQueueBackoffMax: time.Duration(core.Cfg.Worker.UploadEmptyQueueBackoffMaxSeconds) * time.Second,
 			}
 			sourceRegistry := worker.NewArtifactSourceRegistry()
 			if provider, ok := core.CapRouter.Get("google-drive"); ok {

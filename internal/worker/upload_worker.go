@@ -157,6 +157,13 @@ type UploadWorkerOptions struct {
 	// don't race against any leases left over by a previous
 	// crash. Default true.
 	ReclaimOnStart bool
+	// EmptyQueueBackoffMin is the initial delay after a claim returns
+	// no jobs. It prevents an empty queue from becoming a tight DB loop.
+	// Default 1s.
+	EmptyQueueBackoffMin time.Duration
+	// EmptyQueueBackoffMax caps the exponential empty-queue delay.
+	// Default 30s.
+	EmptyQueueBackoffMax time.Duration
 	// VideoRetentionBufferDays (Blocco #2 P0) drives the media_asset
 	// expires_at calc at the worker ingest site. Default 7 = env
 	// VIDEO_RETENTION_BUFFER_DAYS. Without this, the worker used a

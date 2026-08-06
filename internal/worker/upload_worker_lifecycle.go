@@ -48,6 +48,15 @@ func (w *UploadWorker) applyDefaults() {
 	if w.opts.ReclaimInterval <= 0 {
 		w.opts.ReclaimInterval = 30 * time.Second
 	}
+	if w.opts.EmptyQueueBackoffMin <= 0 {
+		w.opts.EmptyQueueBackoffMin = time.Second
+	}
+	if w.opts.EmptyQueueBackoffMax <= 0 {
+		w.opts.EmptyQueueBackoffMax = 30 * time.Second
+	}
+	if w.opts.EmptyQueueBackoffMax < w.opts.EmptyQueueBackoffMin {
+		w.opts.EmptyQueueBackoffMax = w.opts.EmptyQueueBackoffMin
+	}
 	// Blocco #2 P0 — VideoRetentionBufferDays defaults to 7 (mirrors
 	// env VIDEO_RETENTION_BUFFER_DAYS=7). Zero would compute
 	// expires_at = now (already-expired asset → /complete 410 forever).
@@ -78,6 +87,8 @@ func (w *UploadWorker) Run(ctx context.Context) error {
 		"lease_ttl_seconds", w.opts.LeaseTTL.Seconds(),
 		"heartbeat_interval_seconds", w.opts.HeartbeatInterval.Seconds(),
 		"reclaim_interval_seconds", w.opts.ReclaimInterval.Seconds(),
+		"empty_queue_backoff_min_seconds", w.opts.EmptyQueueBackoffMin.Seconds(),
+		"empty_queue_backoff_max_seconds", w.opts.EmptyQueueBackoffMax.Seconds(),
 		"reclaim_on_start", w.opts.ReclaimOnStart,
 	)
 	defer w.logger.Info("upload worker pool stopped")
@@ -237,19 +248,25 @@ func (w *UploadWorker) runPoolLoop(
 		concurrency = 1
 	}
 	sem := make(chan struct{}, concurrency)
+	backoff := w.opts.EmptyQueueBackoffMin
 
-	// Run once immediately so we don't wait `interval` on the
-	// first tick after startup.
-	w.runPoolTick(ctx, poolName, sem, claimer, processor, poolWorkerID)
-
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		case <-ticker.C:
-			w.runPoolTick(ctx, poolName, sem, claimer, processor, poolWorkerID)
+		}
+		claimed := w.runPoolTick(ctx, poolName, sem, claimer, processor, poolWorkerID)
+		if claimed {
+			backoff = w.opts.EmptyQueueBackoffMin
+		} else {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > w.opts.EmptyQueueBackoffMax {
+				backoff = w.opts.EmptyQueueBackoffMax
+			}
 		}
 	}
 }
@@ -261,21 +278,21 @@ func (w *UploadWorker) runPoolTick(
 	claimer claimFn,
 	processor processFn,
 	poolWorkerID string,
-) {
+) bool {
 	jobs, err := claimer(ctx, cap(sem), w.opts.LeaseTTL)
 	if err != nil {
 		w.logger.Error("upload worker: claim batch failed", "pool", poolName, "error", err)
-		return
+		return false
 	}
 	if len(jobs) == 0 {
-		return
+		return false
 	}
 	w.logger.Info("upload worker: claimed batch", "pool", poolName, "count", len(jobs), "worker_id", poolWorkerID)
 
 	for _, job := range jobs {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case sem <- struct{}{}:
 		}
 		go func(j *models.UploadJob) {
@@ -291,6 +308,7 @@ func (w *UploadWorker) runPoolTick(
 			}
 		}(job)
 	}
+	return true
 }
 
 // runWithHeartbeat spawns a per-row heartbeat goroutine that ticks

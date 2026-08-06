@@ -313,12 +313,14 @@ func (a *App) registerUploadWorker() {
 		Critical: true,
 		Run: func(ctx context.Context) error {
 			uploadOpts := worker.UploadWorkerOptions{
-				IngestConcurrency: a.Cfg.Worker.UploadIngestConcurrency,
-				UploadConcurrency: a.Cfg.Worker.YouTubeUploadConcurrency,
-				LeaseTTL:          time.Duration(a.Cfg.Worker.UploadLeaseTTLSeconds) * time.Second,
-				HeartbeatInterval: time.Duration(a.Cfg.Worker.UploadHeartbeatIntervalSeconds) * time.Second,
-				ReclaimInterval:   time.Duration(a.Cfg.Worker.UploadReclaimIntervalSeconds) * time.Second,
-				ReclaimOnStart:    a.Cfg.Worker.UploadReclaimOnStart,
+				IngestConcurrency:    a.Cfg.Worker.UploadIngestConcurrency,
+				UploadConcurrency:    a.Cfg.Worker.YouTubeUploadConcurrency,
+				LeaseTTL:             time.Duration(a.Cfg.Worker.UploadLeaseTTLSeconds) * time.Second,
+				HeartbeatInterval:    time.Duration(a.Cfg.Worker.UploadHeartbeatIntervalSeconds) * time.Second,
+				ReclaimInterval:      time.Duration(a.Cfg.Worker.UploadReclaimIntervalSeconds) * time.Second,
+				ReclaimOnStart:       a.Cfg.Worker.UploadReclaimOnStart,
+				EmptyQueueBackoffMin: time.Duration(a.Cfg.Worker.UploadEmptyQueueBackoffMinSeconds) * time.Second,
+				EmptyQueueBackoffMax: time.Duration(a.Cfg.Worker.UploadEmptyQueueBackoffMaxSeconds) * time.Second,
 				// Blocco #2 P0 — propagate the env-driven retention
 				// buffer (default 7d) so processIngestJob's media_asset
 				// create site uses the same value as the HTTP layer's

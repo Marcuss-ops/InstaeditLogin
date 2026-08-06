@@ -115,36 +115,7 @@ func (r *UploadJobRepository) ClaimBatch(ctx context.Context, workerID string, l
 	}
 	leaseUntil := time.Now().Add(lease)
 
-	rows, err := r.db.QueryContext(ctx,
-		`WITH candidates AS (
-            SELECT id
-            FROM upload_jobs
-            WHERE status IN ('pending', 'retry_wait')
-              AND COALESCE(next_attempt_at, NOW()) <= NOW()
-              AND (ingest_after IS NULL OR ingest_after <= NOW())
-              AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
-            ORDER BY priority ASC, created_at ASC
-            FOR UPDATE SKIP LOCKED
-            LIMIT $1
-        )
-        UPDATE upload_jobs j
-        SET status           = 'leased',
-            lease_owner      = $2,
-            lease_expires_at = $3,
-            heartbeat_at     = NOW(),
-            attempt_count    = attempt_count + 1,
-            started_at       = COALESCE(started_at, NOW()),
-            updated_at       = NOW()
-        FROM candidates
-        WHERE j.id = candidates.id
-        RETURNING j.id, j.user_id, j.workspace_id, j.source_type, j.source_id, j.drive_account_id, j.folder_id, j.title, j.caption,
-                  j.targets, j.status, j.error_message, j.post_id, j.asset_id, j.ingest_after, j.publish_at, j.created_at, j.updated_at,
-                  j.attempt_count, j.max_attempts, j.next_attempt_at, j.lease_owner, j.lease_expires_at, j.heartbeat_at,
-                  j.progress_bytes, j.total_bytes, j.error_code, j.priority, j.started_at, j.completed_at,
-                  j.youtube_session_uri, j.youtube_session_offset, j.youtube_session_expires_at, j.youtube_chunk_size, j.youtube_last_chunk_at,
-		          j.default_privacy_level, j.metadata`,
-		limit, workerID, leaseUntil,
-	)
+	rows, err := r.db.QueryContext(ctx, SQLClaimBatch, limit, workerID, leaseUntil)
 	if err != nil {
 		return nil, fmt.Errorf("upload job ClaimBatch: %w", err)
 	}

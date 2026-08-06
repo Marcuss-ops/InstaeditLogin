@@ -308,6 +308,12 @@ type WorkerConfig struct {
 	UploadReclaimIntervalSeconds int
 	// UploadReclaimOnStart controls whether stale uploads are reclaimed at startup.
 	UploadReclaimOnStart bool
+	// UploadEmptyQueueBackoffMinSeconds is the initial delay after an
+	// empty upload queue claim. Defaults to 1 second.
+	UploadEmptyQueueBackoffMinSeconds int
+	// UploadEmptyQueueBackoffMaxSeconds caps the empty-queue backoff.
+	// Defaults to 30 seconds.
+	UploadEmptyQueueBackoffMaxSeconds int
 	// YouTubeUploadChunkBytes is the resumable upload chunk size.
 	YouTubeUploadChunkBytes int64
 	// YouTubeUploadMaxRetries is the per-chunk PUT retry budget.

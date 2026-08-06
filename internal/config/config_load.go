@@ -135,12 +135,14 @@ func Load() (*Config, error) {
 			// snapshot in the background within a minute.
 			SnapshotRefreshSweepIntervalSeconds: getEnvInt("SNAPSHOT_REFRESH_SWEEP_INTERVAL_SECONDS", 60),
 			// P1 step 2 — worker pool config (see struct comment above).
-			UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
-			YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),
-			UploadLeaseTTLSeconds:          getEnvInt("UPLOAD_LEASE_TTL_SECONDS", 60),
-			UploadHeartbeatIntervalSeconds: getEnvInt("UPLOAD_HEARTBEAT_INTERVAL_SECONDS", 20),
-			UploadReclaimIntervalSeconds:   getEnvInt("UPLOAD_RECLAIM_INTERVAL_SECONDS", 30),
-			UploadReclaimOnStart:           getEnvBool("UPLOAD_RECLAIM_ON_START", true),
+			UploadIngestConcurrency:           getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
+			YouTubeUploadConcurrency:          getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),
+			UploadLeaseTTLSeconds:             getEnvInt("UPLOAD_LEASE_TTL_SECONDS", 60),
+			UploadHeartbeatIntervalSeconds:    getEnvInt("UPLOAD_HEARTBEAT_INTERVAL_SECONDS", 20),
+			UploadReclaimIntervalSeconds:      getEnvInt("UPLOAD_RECLAIM_INTERVAL_SECONDS", 30),
+			UploadReclaimOnStart:              getEnvBool("UPLOAD_RECLAIM_ON_START", true),
+			UploadEmptyQueueBackoffMinSeconds: getEnvInt("UPLOAD_EMPTY_QUEUE_BACKOFF_MIN_SECONDS", 1),
+			UploadEmptyQueueBackoffMaxSeconds: getEnvInt("UPLOAD_EMPTY_QUEUE_BACKOFF_MAX_SECONDS", 30),
 		},
 		// AppMode lets operators pin the deployment to Google's OAuth-
 		// consent-screen publishing status. "production" means refresh
