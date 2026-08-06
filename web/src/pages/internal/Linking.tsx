@@ -14,6 +14,7 @@ import { API_BASE_URL } from "../../lib/api";
 import { PROVIDERS, type ProviderId } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 import { DriveBatchImportDialog } from "./DriveBatchImportDialog";
 import {
   accountStateLabel,
@@ -279,7 +280,12 @@ export function InternalLinking() {
                             provider.color,
                           )}
                         >
-                          {provider.icon}
+                          <ProviderBadge
+                            platform={provider.id}
+                            className="h-7 w-7 justify-center rounded-md border-0"
+                            compact
+                            logoClassName="h-6 w-6"
+                          />
                         </div>
                         <div>
                           <h3 className="font-bold text-[15px] text-white">{provider.name}</h3>

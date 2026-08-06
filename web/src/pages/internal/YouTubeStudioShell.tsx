@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Video } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 
 export function StudioShell({ children }: { children: ReactNode }) {
   return (
@@ -13,9 +14,12 @@ export function StudioShell({ children }: { children: ReactNode }) {
           <div className="flex items-center justify-between gap-4">
             <div>
               <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
-                <span className="inline-flex w-10 h-10 rounded-xl bg-gradient-to-br from-red-500 via-pink-500 to-violet-500 items-center justify-center text-white shadow-[0_4px_16px_rgba(239,68,68,0.30)]">
-                  <Video size={20} aria-hidden="true" />
-                </span>
+                <ProviderBadge
+                  platform="youtube"
+                  className="h-10 w-10 justify-center rounded-xl text-white shadow-[0_4px_16px_rgba(255,0,0,0.25)]"
+                  compact
+                  logoClassName="h-5 w-5"
+                />
                 YouTube Studio
               </h1>
               <p className="text-[15px] text-[#9aa0aa] mt-2 max-w-xl">

@@ -31,6 +31,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronRight, Lock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../../../lib/utils";
+import { ProviderBadge } from "../../../components/brand/PlatformLogos";
 import { AuthError } from "../../../lib/auth";
 import { Skeleton } from "../../../components/feedback/Skeleton";
 import { ErrorState } from "../../../components/feedback/ErrorState";
@@ -137,9 +138,18 @@ export function ChannelMetadataStep({
       data-testid="channel-metadata-step"
       noValidate
     >
-      <h2 className="text-xl font-semibold text-white mb-1">
-        Step 2 — Canale + Metadati YouTube
-      </h2>
+      <div className="mb-2 flex items-center gap-2">
+        <ProviderBadge
+          platform="youtube"
+          className="h-7 rounded-md border-0"
+          compact
+          logoClassName="h-6 w-6"
+          showName
+        />
+        <h2 className="text-xl font-semibold text-white">
+          Step 2 — Canale + Metadati YouTube
+        </h2>
+      </div>
       <p className="text-sm text-[#9aa0aa] mb-6">
         Seleziona il canale YouTube di destinazione e i metadati
         iniziali. La privacy è fissata a{" "}

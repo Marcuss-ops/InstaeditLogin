@@ -4,6 +4,7 @@ export {
   LinkedInLogo,
   PLATFORM_REGISTRY,
   PlatformLogo,
+  ProviderBadge,
   getPlatformLogo,
   ThreadsLogo,
   TikTokLogo,

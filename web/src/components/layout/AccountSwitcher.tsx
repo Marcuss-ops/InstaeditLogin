@@ -4,6 +4,7 @@ import { ChevronDown, User, Check } from "lucide-react";
 import { AuthError, fetchSession } from "../../lib/auth";
 import { listAllAccounts } from "../../features/channels/api/channelsApi";
 import { getProvider, type ProviderId } from "../../lib/providers";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 import { cn } from "../../lib/utils";
 import {
   accountStateLabel,
@@ -204,7 +205,16 @@ export function AccountSwitcher() {
                             provider?.color ?? "from-[#9aa0aa] to-[#6b7280]",
                           )}
                         >
-                          {provider?.icon ?? <User size={16} />}
+                          {provider ? (
+                            <ProviderBadge
+                              platform={provider.id}
+                              className="h-9 w-9 justify-center rounded-lg border-0"
+                              compact
+                              logoClassName="h-6 w-6"
+                            />
+                          ) : (
+                            <User size={16} />
+                          )}
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="text-[13px] font-semibold text-white truncate">

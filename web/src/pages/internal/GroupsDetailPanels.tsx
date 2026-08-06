@@ -17,6 +17,7 @@ import { cn } from "../../lib/utils";
 import { type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
+import { detectChannelLanguage } from "./groupChannelLanguage";
 
 const LANGUAGE_OPTIONS = [
   { code: "it", flag: "🇮🇹", name: "Italiano" },
@@ -58,6 +59,10 @@ export function GroupDetailPanel({
   const [languages, setLanguages] = useState<Record<number, string>>(() => Object.fromEntries(group.accounts.map((account) => [account.id, account.language ?? ""])));
   const [savingLanguageId, setSavingLanguageId] = useState<number | null>(null);
   const [languageError, setLanguageError] = useState<Record<number, string>>({});
+  const [languageSuggestionIds, setLanguageSuggestionIds] = useState<Set<number>>(new Set());
+  const [languageOverwriteIds, setLanguageOverwriteIds] = useState<Set<number>>(new Set());
+  const [languageDetectionBusy, setLanguageDetectionBusy] = useState(false);
+  const [languageApplyBusy, setLanguageApplyBusy] = useState(false);
   const [removedAccountIds, setRemovedAccountIds] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -73,10 +78,14 @@ export function GroupDetailPanel({
       return next;
     });
     setRemovedAccountIds(new Set());
+    setLanguageSuggestionIds(new Set());
+    setLanguageOverwriteIds(new Set());
+    setLanguageDetectionBusy(false);
+    setLanguageApplyBusy(false);
     setSaveError(null);
   }, [group.id, group.accounts]);
 
-  const saveLanguage = async (accountId: number, language: string) => {
+  const saveLanguage = async (accountId: number, language: string): Promise<boolean> => {
     const previous = languages[accountId] ?? "";
     setLanguages((current) => ({ ...current, [accountId]: language }));
     setLanguageError((current) => {
@@ -90,18 +99,83 @@ export function GroupDetailPanel({
         method: "PATCH",
         body: JSON.stringify({ metadata: { language } }),
       });
+      return true;
     } catch (error) {
       setLanguages((current) => ({ ...current, [accountId]: previous }));
       setLanguageError((current) => ({
         ...current,
         [accountId]: error instanceof Error ? error.message : "Unable to save language",
       }));
+      return false;
     } finally {
       setSavingLanguageId((current) => (current === accountId ? null : current));
     }
   };
 
   const visibleAccounts = group.accounts.filter((account) => !removedAccountIds.has(account.id));
+
+  const detectLanguages = () => {
+    setLanguageDetectionBusy(true);
+    setLanguageError((current) => {
+      const next = { ...current };
+      for (const account of visibleAccounts) delete next[account.id];
+      return next;
+    });
+    const suggestions = new Map<number, string>();
+    const overwriteIds = new Set<number>();
+    const ambiguous = new Map<number, string>();
+    for (const account of visibleAccounts) {
+      const currentLanguage = (languages[account.id] ?? "").trim();
+      const result = detectChannelLanguage(account.username || account.platform_user_id);
+      if (result.language && result.language !== currentLanguage) {
+        suggestions.set(account.id, result.language);
+        if (currentLanguage) overwriteIds.add(account.id);
+      } else if (result.reason === "ambiguous-markers") {
+        // Ambiguous titles are never converted into a suggestion. The current
+        // language remains untouched until the operator decides manually.
+        ambiguous.set(account.id, `Titolo ambiguo: possibili lingue ${result.candidates.join(", ")}.`);
+      }
+    }
+    setLanguages((current) => ({ ...current, ...Object.fromEntries(suggestions) }));
+    setLanguageSuggestionIds(new Set(suggestions.keys()));
+    setLanguageOverwriteIds(overwriteIds);
+    if (ambiguous.size > 0) {
+      setLanguageError((current) => ({ ...current, ...Object.fromEntries(ambiguous) }));
+    }
+    setLanguageDetectionBusy(false);
+  };
+
+  const confirmLanguageOverwrite = () => {
+    if (languageOverwriteIds.size === 0) return true;
+    const names = visibleAccounts
+      .filter((account) => languageOverwriteIds.has(account.id))
+      .map((account) => account.username || account.platform_user_id)
+      .join(", ");
+    return window.confirm(`Rilevamento: la lingua configurata verrà sovrascritta per ${names}. Continuare?`);
+  };
+
+  const applyLanguageSuggestions = async () => {
+    const suggestedAccounts = visibleAccounts.filter((account) => languageSuggestionIds.has(account.id));
+    if (suggestedAccounts.length === 0 || !confirmLanguageOverwrite() || languageApplyBusy) return;
+    setLanguageApplyBusy(true);
+    for (const account of suggestedAccounts) {
+      const language = languages[account.id] ?? "";
+      const saved = await saveLanguage(account.id, language);
+      if (saved) {
+        setLanguageSuggestionIds((current) => {
+          const next = new Set(current);
+          next.delete(account.id);
+          return next;
+        });
+        setLanguageOverwriteIds((current) => {
+          const next = new Set(current);
+          next.delete(account.id);
+          return next;
+        });
+      }
+    }
+    setLanguageApplyBusy(false);
+  };
   // "Rimuovi dalla cartella": dedicated endpoint that only deletes the
   // group_accounts membership and resyncs workspace_channels — it never
   // disconnects the channel or touches OAuth tokens.
@@ -228,7 +302,7 @@ export function GroupDetailPanel({
           <button
             type="button"
             onClick={() => void saveSettings()}
-            disabled={saving}
+            disabled={saving || languageApplyBusy}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-black text-[12px] font-semibold disabled:opacity-50 disabled:cursor-progress hover:bg-zinc-100 transition-colors"
           >
             {saving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
@@ -271,9 +345,34 @@ export function GroupDetailPanel({
 
       {/* Current accounts in this group */}
       <div className="mb-6">
-        <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa] mb-2">
-          Accounts in this folder ({visibleAccounts.length})
-        </h3>
+          <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa]">
+              Accounts in this folder ({visibleAccounts.length})
+            </h3>
+            <div className="flex flex-wrap items-center gap-2 self-start">
+              <button
+                type="button"
+                onClick={detectLanguages}
+                disabled={languageDetectionBusy || languageApplyBusy || visibleAccounts.length === 0}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-violet-300/30 bg-violet-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-500/20 disabled:cursor-progress disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={languageDetectionBusy ? "animate-spin" : ""} />
+                {languageDetectionBusy ? "Analisi…" : "Analizza lingue dai titoli"}
+              </button>
+              {languageSuggestionIds.size > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => void applyLanguageSuggestions()}
+                  disabled={languageApplyBusy || languageDetectionBusy}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-amber-300 px-2.5 py-1.5 text-[11px] font-bold text-black hover:bg-amber-200 disabled:cursor-progress disabled:opacity-50"
+                >
+                  <CheckCircle2 size={12} />
+                  {languageApplyBusy ? "Aggiornamento…" : `Applica suggerimenti (${languageSuggestionIds.size})`}
+                </button>
+              ) : null}
+            </div>
+          </div>
+
         {visibleAccounts.length === 0 ? (
           <p className="text-[12px] text-[#9aa0aa] italic">No accounts yet. Drag one in from below.</p>
         ) : (
@@ -284,11 +383,11 @@ export function GroupDetailPanel({
                   <span className="text-[13px]">{languageMeta(languages[a.id])?.flag ?? "🌍"}</span>
                   <button type="button" onClick={() => onPickAccount(a.id)} className="truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username}`}>{a.username || a.platform_user_id}</button>
                 </div>
-                <select value={languages[a.id] ?? ""} disabled={savingLanguageId === a.id} onChange={(event) => void saveLanguage(a.id, event.target.value)} className="max-w-[120px] rounded bg-black/30 border border-white/[0.10] px-1 py-1 text-[10px] text-[#c8cbd4] disabled:opacity-60" aria-label={`Language for ${a.username}`}>
+                <select value={languages[a.id] ?? ""} disabled={savingLanguageId === a.id} onChange={(event) => { setLanguageSuggestionIds((current) => { const next = new Set(current); next.delete(a.id); return next; }); void saveLanguage(a.id, event.target.value); }} className={cn("max-w-[120px] rounded bg-black/30 border px-1 py-1 text-[10px] text-[#c8cbd4] disabled:opacity-60", languageSuggestionIds.has(a.id) ? "border-amber-300/70 ring-1 ring-amber-300/30" : "border-white/[0.10]")} aria-label={`Language for ${a.username}`}>
                   <option value="">Lingua</option>
                   {LANGUAGE_OPTIONS.map(({ code, flag, name }) => <option key={code} value={code}>{flag} {name}</option>)}
                 </select>
-                {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]}>!</span> : null}
+                {languageError[a.id] ? <span className="text-[10px] text-amber-300" title={languageError[a.id]} aria-label={languageError[a.id]}>!</span> : null}
                 <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username || `canale #${a.id}`} dalla cartella`} title="Rimuovi dalla cartella — il canale resta collegato"><FolderMinus size={14} /></button>
               </div>
             ))}
@@ -364,7 +463,8 @@ export function AccountDetailPanel({
       <div className="flex items-start gap-4 mb-6">
         <ProviderBadge
           platform={account.platform}
-          className="h-16 w-16 shrink-0 justify-center rounded-xl p-0"
+          className="h-16 w-16 shrink-0 justify-center rounded-xl"
+          compact
           logoClassName="h-9 w-9"
         />
         <div className="flex-1 min-w-0">

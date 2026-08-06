@@ -11,6 +11,7 @@ import { authedFetch } from "../../lib/auth";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import { useDashboardData } from "./useDashboardData";
 import { isPublishableAccount } from "../../types/uploads";
+import { ProviderBadge, getProviderRegistryEntry } from "../../components/brand/PlatformLogos";
 
 function StatCard({
   label,
@@ -240,8 +241,13 @@ export function InternalDashboard() {
                           onDragEnd={() => setDraggedAccountId(null)}
                           className="flex cursor-grab items-center gap-3 rounded-xl border border-white/[0.10] bg-white/[0.03] p-3 no-underline hover:border-violet-400/50 hover:bg-white/[0.06] active:cursor-grabbing transition-colors"
                         >
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-500/15 text-[12px] font-bold text-violet-200">{account.platform.slice(0, 1).toUpperCase()}</div>
-                          <div className="min-w-0"><p className="truncate text-[13px] font-semibold text-white">{account.username || `Account ${account.id}`}</p><p className="text-[11px] text-[#9aa0aa]">{account.platform} · trascina nel gruppo</p></div>
+                          <ProviderBadge
+                            platform={account.platform}
+                            className="h-9 w-9 shrink-0 justify-center rounded-lg"
+                            compact
+                            logoClassName="h-5 w-5"
+                          />
+                          <div className="min-w-0"><p className="truncate text-[13px] font-semibold text-white">{account.username || `Account ${account.id}`}</p><p className="text-[11px] text-[#9aa0aa]">{getProviderRegistryEntry(account.platform)?.name ?? account.platform} · trascina nel gruppo</p></div>
                         </Link>
                       ))}
                     </div>

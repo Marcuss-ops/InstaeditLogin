@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
 import {
   FacebookLogo,
   getPlatformLogo,
@@ -8,6 +9,7 @@ import {
   LinkedInLogo,
   PLATFORM_REGISTRY,
   PROVIDER_REGISTRY,
+  ProviderBadge,
   ThreadsLogo,
   TikTokLogo,
   YouTubeLogo,
@@ -50,6 +52,20 @@ describe("PlatformLogos", () => {
     expect(getProviderRegistryEntry("x")?.id).toBe("twitter");
     expect(getPlatformLogo("twitter")).toBe(XLogo);
     expect(getPlatformLogo("x")).toBe(XLogo);
+  });
+
+  it("renders the canonical YouTube badge and supports compact layout", () => {
+    render(<ProviderBadge platform="youtube" compact showName />);
+
+    const badge = screen.getByLabelText("YouTube");
+    expect(badge).toHaveAttribute("data-provider", "youtube");
+    expect(badge).toHaveTextContent("YouTube");
+    expect(badge.className).toContain("p-0");
+  });
+
+  it("does not render a badge for an unknown provider", () => {
+    const { container } = render(<ProviderBadge platform="unknown" />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("keeps provider metadata and brand assets in one entry", () => {

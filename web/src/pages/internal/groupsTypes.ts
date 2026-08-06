@@ -41,18 +41,6 @@ export type FetchState =
 
 export type TreeNode = Group & { children: TreeNode[]; accounts: PlatformAccount[] };
 
-export const PLATFORM_GRADIENT: Record<string, string> = {
-  facebook: "from-blue-500 to-blue-700",
-  instagram: "from-pink-500 to-amber-500",
-  threads: "from-zinc-700 to-zinc-900",
-  tiktok: "from-fuchsia-500 to-rose-500",
-  twitter: "from-sky-400 to-sky-600",
-  youtube: "from-red-500 to-red-700",
-  linkedin: "from-blue-600 to-indigo-700",
-  google_drive: "from-emerald-500 to-emerald-700",
-  "google-drive": "from-emerald-500 to-emerald-700",
-};
-
 export function buildTree(
   groups: Group[],
   accountsByGroup: Map<number, PlatformAccount[]>,

@@ -9,6 +9,7 @@ import type { EditorSession } from "../../types/uploads";
 import { getRomeTZ, isScheduleInPast, localToUTC } from "./youtubeStudioTime";
 import { FormField } from "./YouTubeStudioFormElements";
 import { cn } from "../../lib/utils";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 
 export function SessionRow({
   session,
@@ -62,6 +63,13 @@ export function SessionRow({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
+          <ProviderBadge
+            platform="youtube"
+            className="mb-2 h-6 rounded-md border-0"
+            compact
+            logoClassName="h-5 w-5"
+            showName
+          />
           <p className="text-[13px] font-mono text-white truncate">
             {session.youtube_video_id || "(unknown video)"}
           </p>

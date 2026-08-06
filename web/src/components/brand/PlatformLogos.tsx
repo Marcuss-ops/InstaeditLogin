@@ -254,6 +254,42 @@ export function PlatformLogo({
   return <entry.Logo {...props} />;
 }
 
+/**
+ * Shared provider identity badge for authenticated, publishing and marketing
+ * surfaces. The logo, label and accent treatment are always resolved from the
+ * canonical registry; callers only choose layout classes and size.
+ */
+export function ProviderBadge({
+  platform,
+  className = "",
+  logoClassName = "h-5 w-5",
+  showName = false,
+  compact = false,
+}: {
+  platform: string;
+  className?: string;
+  logoClassName?: string;
+  showName?: boolean;
+  compact?: boolean;
+}) {
+  const entry = getProviderRegistryEntry(platform);
+  if (!entry) return null;
+  return (
+    <span
+      className={`inline-flex items-center gap-2 rounded-lg border ${compact ? "p-0" : "px-2 py-1"} ${className}`}
+      style={{
+        backgroundColor: `${entry.brandColor}15`,
+        borderColor: `${entry.brandColor}40`,
+      }}
+      data-provider={entry.id}
+      aria-label={entry.name}
+    >
+      <entry.Logo className={logoClassName} />
+      {showName && <span className="font-semibold">{entry.name}</span>}
+    </span>
+  );
+}
+
 export function getPlatformLogo(platform: PlatformLogoId) {
   return getProviderRegistryEntry(platform)?.Logo;
 }

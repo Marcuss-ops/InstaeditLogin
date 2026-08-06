@@ -5,6 +5,7 @@ import { clearSessionCache, fetchSession } from "../lib/auth";
 import { API_BASE_URL } from "../lib/api";
 import { isDemoMode } from "../lib/demo";
 import { PROVIDERS } from "../lib/providers";
+import { ProviderBadge } from "../components/brand/PlatformLogos";
 import { useBooking } from "../components/booking/BookingProvider";
 
 export function Login() {
@@ -177,13 +178,12 @@ export function Login() {
                   className="group flex items-center justify-center gap-2 h-11 px-3 rounded-xl bg-white/[0.04] border border-white/[0.10] text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:border-white/[0.20] hover:text-white transition-all focus:outline-none focus:border-[#0A84FF]/50 focus:ring-2 focus:ring-[#0A84FF]/20"
                   aria-label={`Connect ${p.name} after signing in`}
                 >
-                  <span
-                    aria-hidden="true"
-                    className="w-5 h-5 flex shrink-0"
-                    style={p.solidColor ? { color: p.solidColor } : undefined}
-                  >
-                    {p.icon}
-                  </span>
+                  <ProviderBadge
+                    platform={p.id}
+                    className="h-5 w-5 shrink-0 justify-center rounded-md border-0"
+                    compact
+                    logoClassName="h-5 w-5"
+                  />
                   <span className="truncate">{p.name}</span>
                 </button>
               ))}

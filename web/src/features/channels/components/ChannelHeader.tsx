@@ -26,6 +26,7 @@ import { ArrowLeft, ExternalLink, RefreshCw, Loader2, Video } from "lucide-react
 import { cn } from "../../../lib/utils";
 import type { ChannelAccount } from "../types";
 import { getStatusTone } from "../types";
+import { ProviderBadge } from "../../../components/brand/PlatformLogos";
 
 export interface ChannelHeaderProps {
   /** Undefined while the parent page is loading the channel. */
@@ -113,12 +114,20 @@ export function ChannelHeader({
           {/* Title + handle + public link */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3 flex-wrap">
-              <h1
-                className="text-[22px] font-extrabold text-white leading-tight"
-                data-testid="channel-header-name"
-              >
-                {resource?.display_name ?? account?.username ?? "..."}
-              </h1>
+              <div className="flex items-center gap-2 min-w-0">
+                <ProviderBadge
+                  platform={account?.platform ?? "youtube"}
+                  className="h-7 w-7 shrink-0 justify-center rounded-md"
+                  compact
+                  logoClassName="h-5 w-5"
+                />
+                <h1
+                  className="text-[22px] font-extrabold text-white leading-tight truncate"
+                  data-testid="channel-header-name"
+                >
+                  {resource?.display_name ?? account?.username ?? "..."}
+                </h1>
+              </div>
               {isLoaded && (
                 <span
                   className={cn(

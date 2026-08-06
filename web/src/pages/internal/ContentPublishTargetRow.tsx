@@ -2,6 +2,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { STATUS_VISUAL, RETRIABLE_STATUSES } from "./contentPublishStatusVisual";
 import type { PostTarget } from "../../features/publishing/api/types";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 
 /**
  * TargetRow — one card per target with a status badge, optional
@@ -47,6 +48,13 @@ export function TargetRow({
       )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
+          <ProviderBadge
+            platform="youtube"
+            className="h-6 rounded-md border-0"
+            compact
+            logoClassName="h-5 w-5"
+            showName
+          />
           <span
             className={cn("text-sm font-semibold", v.text)}
             data-testid={`target-status-${target.id}`}

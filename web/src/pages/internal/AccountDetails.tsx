@@ -15,6 +15,7 @@ import { useToast } from "../../components/toast";
 import { PROVIDERS } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 import { accountStateLabel } from "../../types/uploads";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
 import { useGroupVideosLiveUpdate } from "../../features/channels/hooks/useYouTubePublishLiveUpdate";
@@ -193,6 +194,12 @@ export function AccountDetailsPage() {
               )}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 flex-wrap">
+                  <ProviderBadge
+                    platform={account.platform}
+                    className="h-7 rounded-md border-0"
+                    compact
+                    logoClassName="h-6 w-6"
+                  />
                   <h1 className="text-[22px] font-extrabold text-white leading-tight">
                     {resource?.display_name ?? account.username}
                   </h1>

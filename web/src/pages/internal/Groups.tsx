@@ -18,10 +18,10 @@ import { useGroupsData } from "./useGroupsData";
 import { TreeView } from "./GroupsTreeView";
 import { AccountDetailPanel, GroupDetailPanel } from "./GroupsDetailPanels";
 import {
-  PLATFORM_GRADIENT,
   type PlatformAccount,
 } from "./groupsTypes";
 import { cn } from "../../lib/utils";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 
 export function GroupsPage() {
   const navigate = useNavigate();
@@ -531,7 +531,6 @@ function YouTubeChannelCard({
   onDragEnd: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
-  const grad = PLATFORM_GRADIENT[account.platform] ?? "from-zinc-500 to-zinc-700";
   const label = account.username || account.platform_user_id || `canale #${account.id}`;
   const initial = (account.username || account.platform_user_id || "?").charAt(0).toUpperCase();
   return (
@@ -564,12 +563,8 @@ function YouTubeChannelCard({
         size={14}
         className={cn("shrink-0 text-[#9aa0aa]", !busy && "cursor-grab active:cursor-grabbing")}
       />
-      <div
-        className={cn(
-          "flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br text-[13px] font-extrabold text-white ring-1 ring-white/[0.12]",
-          grad,
-        )}
-      >
+      <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+        <div className="absolute inset-0 overflow-hidden rounded-full bg-white/[0.04] ring-1 ring-white/[0.12]">
         {account.avatar_url && !imageFailed ? (
           <img
             src={account.avatar_url}
@@ -581,12 +576,19 @@ function YouTubeChannelCard({
             onError={() => setImageFailed(true)}
           />
         ) : (
-          <span aria-hidden="true">{initial}</span>
+          <span aria-hidden="true" className="flex h-full w-full items-center justify-center bg-white/[0.06] text-[13px] font-extrabold text-white">{initial}</span>
         )}
+        </div>
+        <ProviderBadge
+          platform={account.platform}
+          className="relative h-4 w-4 translate-x-3 translate-y-3 justify-center rounded-[4px] border-0 shadow-md"
+          compact
+          logoClassName="h-4 w-4"
+        />
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[12px] font-semibold text-white">{label}</p>
-        <p className="truncate text-[10px] uppercase tracking-wider text-[#9aa0aa]">{account.platform}</p>
+        <p className="truncate text-[10px] uppercase tracking-wider text-[#9aa0aa]">{account.platform === "youtube" ? "YouTube" : account.platform}</p>
       </div>
       {busy ? (
         <RefreshCw size={13} className="animate-spin text-amber-300" aria-label="Assegnazione in corso" />

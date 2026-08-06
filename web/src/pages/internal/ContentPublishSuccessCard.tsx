@@ -1,6 +1,7 @@
 import { CheckCircle2, ExternalLink, Tv } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { PostTarget } from "../../features/publishing/api/types";
+import { ProviderBadge } from "../../components/brand/PlatformLogos";
 
 /**
  * SuccessCard — shown when EVERY target is published. Renders one
@@ -51,8 +52,17 @@ function SuccessTargetRow({ target }: { target: PostTarget }) {
       className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3"
       data-testid={`success-row-${target.id}`}
     >
-      <div className="text-xs text-[#9aa0aa] font-mono break-all mb-2">
-        target_id={target.id} · video_id={videoId ?? "(sconosciuto)"}
+      <div className="mb-2 flex items-center gap-2">
+        <ProviderBadge
+          platform="youtube"
+          className="h-6 rounded-md border-0"
+          compact
+          logoClassName="h-5 w-5"
+          showName
+        />
+        <div className="text-xs text-[#9aa0aa] font-mono break-all">
+          target_id={target.id} · video_id={videoId ?? "(sconosciuto)"}
+        </div>
       </div>
       <div className="flex flex-wrap gap-2 mb-3 text-xs">
         <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[#cdd2da]">
