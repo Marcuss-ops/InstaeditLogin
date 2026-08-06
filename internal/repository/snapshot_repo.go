@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // AccountResourceSnapshot represents a cached snapshot of a remote
@@ -57,20 +59,72 @@ func (r *SnapshotRepository) GetSnapshot(platformAccountID int64) (*AccountResou
 		return nil, fmt.Errorf("get snapshot: %w", err)
 	}
 
-	if err := json.Unmarshal(profileJSON, &snap.Profile); err != nil {
-		return nil, fmt.Errorf("unmarshal profile: %w", err)
-	}
-	if err := json.Unmarshal(statsJSON, &snap.Statistics); err != nil {
-		return nil, fmt.Errorf("unmarshal statistics: %w", err)
-	}
-	if err := json.Unmarshal(statusJSON, &snap.Status); err != nil {
-		return nil, fmt.Errorf("unmarshal status: %w", err)
-	}
-	if err := json.Unmarshal(contentJSON, &snap.Content); err != nil {
-		return nil, fmt.Errorf("unmarshal content: %w", err)
+	if err := decodeSnapshotJSON(snap, profileJSON, statsJSON, statusJSON, contentJSON); err != nil {
+		return nil, err
 	}
 
 	return snap, nil
+}
+
+// ListSnapshotsByAccountIDs returns the cached snapshots for the given
+// platform account IDs in a SINGLE batched query. Accounts without a
+// snapshot are simply absent from the returned map. One round-trip
+// regardless of how many accounts are listed — the batch replacement
+// for the N+1 pattern where a page load read one snapshot row per
+// account (GET /api/v1/accounts/{id} fan-out).
+func (r *SnapshotRepository) ListSnapshotsByAccountIDs(platformAccountIDs []int64) (map[int64]*AccountResourceSnapshot, error) {
+	if len(platformAccountIDs) == 0 {
+		return map[int64]*AccountResourceSnapshot{}, nil
+	}
+	rows, err := r.db.Query(
+		`SELECT platform_account_id, resource_type, profile, statistics, status, content,
+		        provider_etag, fetched_at, updated_at
+		 FROM account_resource_snapshots
+		 WHERE platform_account_id = ANY($1)`,
+		pq.Array(platformAccountIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots by account ids: %w", err)
+	}
+	defer rows.Close()
+
+	snaps := make(map[int64]*AccountResourceSnapshot, len(platformAccountIDs))
+	for rows.Next() {
+		snap := &AccountResourceSnapshot{}
+		var profileJSON, statsJSON, statusJSON, contentJSON []byte
+		if err := rows.Scan(&snap.PlatformAccountID, &snap.ResourceType,
+			&profileJSON, &statsJSON, &statusJSON, &contentJSON,
+			&snap.ProviderETag, &snap.FetchedAt, &snap.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("list snapshots: scan: %w", err)
+		}
+		if err := decodeSnapshotJSON(snap, profileJSON, statsJSON, statusJSON, contentJSON); err != nil {
+			return nil, err
+		}
+		snaps[snap.PlatformAccountID] = snap
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list snapshots: rows: %w", err)
+	}
+	return snaps, nil
+}
+
+// decodeSnapshotJSON unmarshals the JSONB columns of a snapshot row into
+// the in-memory maps. Shared by the single-row (GetSnapshot) and the
+// batched (ListSnapshotsByAccountIDs) read paths.
+func decodeSnapshotJSON(snap *AccountResourceSnapshot, profileJSON, statsJSON, statusJSON, contentJSON []byte) error {
+	if err := json.Unmarshal(profileJSON, &snap.Profile); err != nil {
+		return fmt.Errorf("unmarshal profile: %w", err)
+	}
+	if err := json.Unmarshal(statsJSON, &snap.Statistics); err != nil {
+		return fmt.Errorf("unmarshal statistics: %w", err)
+	}
+	if err := json.Unmarshal(statusJSON, &snap.Status); err != nil {
+		return fmt.Errorf("unmarshal status: %w", err)
+	}
+	if err := json.Unmarshal(contentJSON, &snap.Content); err != nil {
+		return fmt.Errorf("unmarshal content: %w", err)
+	}
+	return nil
 }
 
 // UpsertSnapshot creates or updates the snapshot for a platform account.

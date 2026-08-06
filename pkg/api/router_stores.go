@@ -335,6 +335,12 @@ type SnapshotStore interface {
 	GetSnapshot(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
 	UpsertSnapshot(snap *repository.AccountResourceSnapshot) error
 	IsSnapshotStale(platformAccountID int64, maxAge time.Duration) (bool, error)
+	// ListSnapshotsByAccountIDs returns the cached snapshots for many
+	// accounts in ONE batched query, keyed by platform_account_id
+	// (accounts without a snapshot are absent from the map). Backs the
+	// aggregated GET /api/v1/accounts list so opening the channels page
+	// never issues one snapshot read per account.
+	ListSnapshotsByAccountIDs(platformAccountIDs []int64) (map[int64]*repository.AccountResourceSnapshot, error)
 }
 
 // MetricHistoryStore is the persistence contract for daily account

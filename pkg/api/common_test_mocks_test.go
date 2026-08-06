@@ -665,6 +665,7 @@ type mockSnapshotStore struct {
 	getFn    func(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
 	upsertFn func(snap *repository.AccountResourceSnapshot) error
 	staleFn  func(platformAccountID int64, maxAge time.Duration) (bool, error)
+	listFn   func(ids []int64) (map[int64]*repository.AccountResourceSnapshot, error)
 }
 
 func (m *mockSnapshotStore) GetSnapshot(platformAccountID int64) (*repository.AccountResourceSnapshot, error) {
@@ -684,6 +685,12 @@ func (m *mockSnapshotStore) IsSnapshotStale(platformAccountID int64, maxAge time
 		return m.staleFn(platformAccountID, maxAge)
 	}
 	return true, nil
+}
+func (m *mockSnapshotStore) ListSnapshotsByAccountIDs(ids []int64) (map[int64]*repository.AccountResourceSnapshot, error) {
+	if m.listFn != nil {
+		return m.listFn(ids)
+	}
+	return map[int64]*repository.AccountResourceSnapshot{}, nil
 }
 
 // mockDetailProvider extends mockProvider with AccountDetailsProvider + AccountContentProvider.

@@ -13,6 +13,11 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
+// accountSnapshotMaxAge is the freshness window for cached account
+// resource snapshots. Shared by the list endpoint (batch staleness stamp)
+// and the detail endpoint (on-demand refresh decision).
+const accountSnapshotMaxAge = 10 * time.Minute
+
 // AccountState is the stable lifecycle vocabulary exposed to clients.
 // Status remains in the response for backward compatibility; clients that
 // need to decide whether publishing is safe should use AccountState and
@@ -50,18 +55,24 @@ func classifyAccountStatus(status string) (AccountState, bool) {
 // We deliberately do NOT return PlatformAccount directly because it leaks
 // internal ownership, error and metadata columns.
 type accountListItem struct {
-	ID               int64        `json:"id"`
-	Platform         string       `json:"platform"`
-	PlatformUserID   string       `json:"platform_user_id"`
-	Username         string       `json:"username"`
-	AvatarURL        string       `json:"avatar_url,omitempty"`
-	Language         string       `json:"language,omitempty"`
-	Status           string       `json:"status"`
-	AccountState     AccountState `json:"account_state"`
-	IsPublishable    bool         `json:"is_publishable"`
-	ReauthRequiredAt *time.Time   `json:"reauth_required_at,omitempty"`
-	LastErrorCode    string       `json:"last_error_code,omitempty"`
-	CreatedAt        time.Time    `json:"created_at"`
+	ID             int64        `json:"id"`
+	Platform       string       `json:"platform"`
+	PlatformUserID string       `json:"platform_user_id"`
+	Username       string       `json:"username"`
+	AvatarURL      string       `json:"avatar_url,omitempty"`
+	Language       string       `json:"language,omitempty"`
+	Status         string       `json:"status"`
+	AccountState   AccountState `json:"account_state"`
+	IsPublishable  bool         `json:"is_publishable"`
+	// SnapshotStale reports whether the cached remote resource snapshot
+	// is missing or older than accountSnapshotMaxAge. Set by the
+	// aggregated list endpoint via one batched query; the UI uses it to
+	// render fresh/refreshable badges without fetching per-account
+	// details.
+	SnapshotStale    bool       `json:"snapshot_stale"`
+	ReauthRequiredAt *time.Time `json:"reauth_required_at,omitempty"`
+	LastErrorCode    string     `json:"last_error_code,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 func accountListItemFromAccount(account *models.PlatformAccount) accountListItem {
@@ -157,6 +168,44 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 		}
 		items = append(items, item)
 	}
+
+	// Aggregated snapshot enrichment (N+1 fix): ONE batched read covers
+	// every listed account. No per-account SQL, no Vault access, no
+	// provider (YouTube) calls on page load. avatar_url falls back to the
+	// cached snapshot profile when the account metadata has none;
+	// snapshot_stale is stamped from the same batch.
+	if r.snapshotStore != nil && len(items) > 0 {
+		ids := make([]int64, 0, len(items))
+		for _, it := range items {
+			ids = append(ids, it.ID)
+		}
+		snaps, err := r.snapshotStore.ListSnapshotsByAccountIDs(ids)
+		if err != nil {
+			// Best-effort: a single corrupt snapshot row or a transient DB
+			// error must not take down the whole page-critical accounts
+			// list. Log and serve the base list with every item marked
+			// stale; the per-account detail endpoint still surfaces the
+			// real error on its own path.
+			slog.Warn("accounts list: snapshot batch enrichment failed", "error", err.Error())
+		} else {
+			for i := range items {
+				snap, ok := snaps[items[i].ID]
+				if !ok {
+					// No cached snapshot yet → the detail page would have
+					// to refresh it; surface the staleness to the UI.
+					items[i].SnapshotStale = true
+					continue
+				}
+				if items[i].AvatarURL == "" {
+					if v, ok := snap.Profile["avatar_url"].(string); ok {
+						items[i].AvatarURL = v
+					}
+				}
+				items[i].SnapshotStale = time.Since(snap.FetchedAt) > accountSnapshotMaxAge
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": items})
 }
 
@@ -229,8 +278,6 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 		accountListItem: accountListItemFromAccount(account),
 	}
 
-	const snapshotMaxAge = 10 * time.Minute
-
 	// Shortcut: no snapshot store wired → return base account without resource.
 	if r.snapshotStore == nil {
 		writeJSON(w, http.StatusOK, resp)
@@ -240,11 +287,12 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	// Try to enrich with cached snapshot data. When the snapshot is fresh
 	// (< 10 min) we serve it directly; when it's stale or missing, we
 	// reach out to the provider, persist a fresh snapshot, and serve that.
-	stale, err := r.snapshotStore.IsSnapshotStale(account.ID, snapshotMaxAge)
+	stale, err := r.snapshotStore.IsSnapshotStale(account.ID, accountSnapshotMaxAge)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "snapshot freshness check failed: "+err.Error())
 		return
 	}
+	resp.SnapshotStale = stale
 
 	if stale {
 		// Cache miss or stale — fetch fresh details from the provider.
@@ -321,6 +369,9 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 						res.Properties = details.Properties
 					}
 					resp.Resource = res
+					// The refresh path just persisted a fresh snapshot;
+					// report it as fresh even though `stale` was true.
+					resp.SnapshotStale = false
 					writeJSON(w, http.StatusOK, resp)
 					return
 				}
