@@ -59,6 +59,7 @@ export function GroupDetailPanel({
   const [languages, setLanguages] = useState<Record<number, string>>(() => Object.fromEntries(group.accounts.map((account) => [account.id, account.language ?? ""])));
   const [savingLanguageId, setSavingLanguageId] = useState<number | null>(null);
   const [languageError, setLanguageError] = useState<Record<number, string>>({});
+  const [languageWarning, setLanguageWarning] = useState<Record<number, string>>({});
   const [languageSuggestionIds, setLanguageSuggestionIds] = useState<Set<number>>(new Set());
   const [languageOverwriteIds, setLanguageOverwriteIds] = useState<Set<number>>(new Set());
   const [languageDetectionBusy, setLanguageDetectionBusy] = useState(false);
@@ -70,6 +71,7 @@ export function GroupDetailPanel({
     setGroupName(group.name);
     setEditingName(false);
     setRenameError(null);
+    setLanguageWarning({});
     setLanguages((current) => {
       const next = { ...current };
       for (const account of group.accounts) {
@@ -85,10 +87,15 @@ export function GroupDetailPanel({
     setSaveError(null);
   }, [group.id, group.accounts]);
 
-  const saveLanguage = async (accountId: number, language: string): Promise<boolean> => {
+  const saveLanguage = async (accountId: number, language: string, preserveSuggestionOnFailure = false): Promise<boolean> => {
     const previous = languages[accountId] ?? "";
     setLanguages((current) => ({ ...current, [accountId]: language }));
     setLanguageError((current) => {
+      const next = { ...current };
+      delete next[accountId];
+      return next;
+    });
+    setLanguageWarning((current) => {
       const next = { ...current };
       delete next[accountId];
       return next;
@@ -102,6 +109,9 @@ export function GroupDetailPanel({
       return true;
     } catch (error) {
       setLanguages((current) => ({ ...current, [accountId]: previous }));
+      if (preserveSuggestionOnFailure) {
+        setLanguageSuggestionIds((current) => new Set(current).add(accountId));
+      }
       setLanguageError((current) => ({
         ...current,
         [accountId]: error instanceof Error ? error.message : "Unable to save language",
@@ -121,9 +131,14 @@ export function GroupDetailPanel({
       for (const account of visibleAccounts) delete next[account.id];
       return next;
     });
+    setLanguageWarning((current) => {
+      const next = { ...current };
+      for (const account of visibleAccounts) delete next[account.id];
+      return next;
+    });
     const suggestions = new Map<number, string>();
     const overwriteIds = new Set<number>();
-    const ambiguous = new Map<number, string>();
+    const reviewWarnings = new Map<number, string>();
     for (const account of visibleAccounts) {
       const currentLanguage = (languages[account.id] ?? "").trim();
       const result = detectChannelLanguage(account.username || account.platform_user_id);
@@ -132,16 +147,17 @@ export function GroupDetailPanel({
         if (currentLanguage) overwriteIds.add(account.id);
       } else if (result.reason === "ambiguous-markers") {
         // Ambiguous titles are never converted into a suggestion. The current
-        // language remains untouched until the operator decides manually.
-        ambiguous.set(account.id, `Titolo ambiguo: possibili lingue ${result.candidates.join(", ")}.`);
+        // language remains untouched until the operator decides manually,
+        // even when an older language value is already configured.
+        reviewWarnings.set(account.id, `Titolo ambiguo: possibili lingue ${result.candidates.join(", ")}.`);
+      } else if (!currentLanguage && result.reason === "insufficient-signal") {
+        reviewWarnings.set(account.id, "Lingua non determinabile dal titolo: revisione manuale necessaria.");
       }
     }
     setLanguages((current) => ({ ...current, ...Object.fromEntries(suggestions) }));
     setLanguageSuggestionIds(new Set(suggestions.keys()));
     setLanguageOverwriteIds(overwriteIds);
-    if (ambiguous.size > 0) {
-      setLanguageError((current) => ({ ...current, ...Object.fromEntries(ambiguous) }));
-    }
+    setLanguageWarning(Object.fromEntries(reviewWarnings));
     setLanguageDetectionBusy(false);
   };
 
@@ -154,6 +170,22 @@ export function GroupDetailPanel({
     return window.confirm(`Rilevamento: la lingua configurata verrà sovrascritta per ${names}. Continuare?`);
   };
 
+  const saveManualLanguage = async (accountId: number, language: string) => {
+    const saved = await saveLanguage(accountId, language, languageSuggestionIds.has(accountId));
+    if (saved) {
+      setLanguageSuggestionIds((current) => {
+        const next = new Set(current);
+        next.delete(accountId);
+        return next;
+      });
+      setLanguageOverwriteIds((current) => {
+        const next = new Set(current);
+        next.delete(accountId);
+        return next;
+      });
+    }
+  };
+
   const applyLanguageSuggestions = async () => {
     const suggestedAccounts = visibleAccounts.filter((account) => languageSuggestionIds.has(account.id));
     if (suggestedAccounts.length === 0 || !confirmLanguageOverwrite() || languageApplyBusy) return;
@@ -162,6 +194,11 @@ export function GroupDetailPanel({
       const language = languages[account.id] ?? "";
       const saved = await saveLanguage(account.id, language);
       if (saved) {
+        setLanguageWarning((current) => {
+          const next = { ...current };
+          delete next[account.id];
+          return next;
+        });
         setLanguageSuggestionIds((current) => {
           const next = new Set(current);
           next.delete(account.id);
@@ -296,13 +333,14 @@ export function GroupDetailPanel({
           <p className="text-[12px] text-[#9aa0aa] mt-0.5">
             {visibleAccounts.length} accounts · {group.children.length} sub-folders
           </p>
+          {languageSuggestionIds.size > 0 ? <p className="mt-2 text-[12px] text-amber-200" role="status">Applica o modifica manualmente i suggerimenti rilevati prima di salvare le impostazioni.</p> : null}
           {saveError ? <p className="mt-2 text-[12px] text-red-300" role="alert">{saveError}</p> : null}
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => void saveSettings()}
-            disabled={saving || languageApplyBusy}
+            disabled={saving || languageApplyBusy || languageSuggestionIds.size > 0}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-black text-[12px] font-semibold disabled:opacity-50 disabled:cursor-progress hover:bg-zinc-100 transition-colors"
           >
             {saving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
@@ -359,6 +397,11 @@ export function GroupDetailPanel({
                 <RefreshCw size={12} className={languageDetectionBusy ? "animate-spin" : ""} />
                 {languageDetectionBusy ? "Analisi…" : "Analizza lingue dai titoli"}
               </button>
+              {Object.keys(languageWarning).length > 0 ? (
+                <span className="text-[11px] font-medium text-amber-200" title="Alcuni titoli richiedono una revisione manuale">
+                  ⚠ {Object.keys(languageWarning).length} da verificare
+                </span>
+              ) : null}
               {languageSuggestionIds.size > 0 ? (
                 <button
                   type="button"
@@ -383,11 +426,16 @@ export function GroupDetailPanel({
                   <span className="text-[13px]">{languageMeta(languages[a.id])?.flag ?? "🌍"}</span>
                   <button type="button" onClick={() => onPickAccount(a.id)} className="truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username}`}>{a.username || a.platform_user_id}</button>
                 </div>
-                <select value={languages[a.id] ?? ""} disabled={savingLanguageId === a.id} onChange={(event) => { setLanguageSuggestionIds((current) => { const next = new Set(current); next.delete(a.id); return next; }); void saveLanguage(a.id, event.target.value); }} className={cn("max-w-[120px] rounded bg-black/30 border px-1 py-1 text-[10px] text-[#c8cbd4] disabled:opacity-60", languageSuggestionIds.has(a.id) ? "border-amber-300/70 ring-1 ring-amber-300/30" : "border-white/[0.10]")} aria-label={`Language for ${a.username}`}>
+                <select value={languages[a.id] ?? ""} disabled={savingLanguageId === a.id || languageApplyBusy} onChange={(event) => void saveManualLanguage(a.id, event.target.value)} className={cn("max-w-[120px] rounded bg-black/30 border px-1 py-1 text-[10px] text-[#c8cbd4] disabled:opacity-60", languageSuggestionIds.has(a.id) ? "border-amber-300/70 ring-1 ring-amber-300/30" : "border-white/[0.10]")} aria-label={`Language for ${a.username}`}>
                   <option value="">Lingua</option>
                   {LANGUAGE_OPTIONS.map(({ code, flag, name }) => <option key={code} value={code}>{flag} {name}</option>)}
                 </select>
-                {languageError[a.id] ? <span className="text-[10px] text-amber-300" title={languageError[a.id]} aria-label={languageError[a.id]}>!</span> : null}
+                {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]} aria-label={languageError[a.id]}>!</span> : null}
+                {languageWarning[a.id] ? (
+                  <span className="max-w-[180px] text-[10px] leading-tight text-amber-200" title={languageWarning[a.id]} aria-label={`Avviso lingua: ${languageWarning[a.id]}`}>
+                    ⚠ {languageWarning[a.id]}
+                  </span>
+                ) : null}
                 <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username || `canale #${a.id}`} dalla cartella`} title="Rimuovi dalla cartella — il canale resta collegato"><FolderMinus size={14} /></button>
               </div>
             ))}
