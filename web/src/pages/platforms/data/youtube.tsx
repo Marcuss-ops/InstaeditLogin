@@ -1,15 +1,9 @@
 import { Zap, RefreshCw, Upload } from "lucide-react";
-import type { PlatformData } from "../platformData";
+import type { PlatformContent } from "../platformData";
 
 export default {
   slug: "youtube",
   name: "YouTube",
-  color: "#ff0000",
-  icon: (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-      <path d="M21.6 7.2c-.2-.8-.8-1.4-1.6-1.6-1.6-.4-8-.4-8-.4s-6.4 0-8 .4c-.8.2-1.4.8-1.6 1.6C2 8.8 2 12 2 12s0 3.2.4 4.8c.2.8.8 1.4 1.6 1.6 1.6.4 8 .4 8 .4s6.4 0 8-.4c.8-.2 1.4-.8 1.6-1.6.4-1.6.4-4.8.4-4.8s0-3.2-.4-4.8zM10 15.2V8.8l5.2 3.2-5.2 3.2z" />
-    </svg>
-  ),
   heroTagline: "Ship your YouTube integration in minutes, not months",
   heroDescription:
     "Stop wrestling with YouTube Data API. InstaEdit handles OAuth, resumable uploads, quota management, and API changes — so you can focus on building your product.",
@@ -96,4 +90,4 @@ console.log('YouTube scheduled:', result.id);`,
       a: "Yes. The same API call can publish to YouTube, TikTok, Instagram Reels, and other platforms simultaneously.",
     },
   ],
-} satisfies PlatformData;
+} satisfies PlatformContent;

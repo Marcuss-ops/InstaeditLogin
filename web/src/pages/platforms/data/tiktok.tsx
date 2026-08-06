@@ -1,15 +1,9 @@
 import { Zap, Shield, RefreshCw } from "lucide-react";
-import type { PlatformData } from "../platformData";
+import type { PlatformContent } from "../platformData";
 
 export default {
   slug: "tiktok",
   name: "TikTok",
-  color: "#ff0050",
-  icon: (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-      <path d="M19.6 8.2c-1.2 0-2.3-.4-3.2-1.1v6.4c0 3.5-2.8 6.3-6.3 6.3S3.8 17 3.8 13.5 6.6 7.2 10.1 7.2c.4 0 .7 0 1 .1v2.8c-.3-.1-.7-.2-1-.2-1.9 0-3.5 1.6-3.5 3.6s1.6 3.5 3.5 3.5 3.5-1.6 3.5-3.5V3.5h2.7c.3 1.2 1.3 2.2 2.5 2.5v2.2z" />
-    </svg>
-  ),
   heroTagline: "Ship your TikTok integration in minutes, not months",
   heroDescription:
     "Stop wrestling with TikTok Content Posting API. InstaEdit handles OAuth, rate limits, media hosting, and API changes — so you can focus on building your product.",
@@ -99,4 +93,4 @@ console.log('TikTok scheduled:', result.id);`,
       a: "Absolutely. The same API call can publish to TikTok, Instagram Reels, YouTube Shorts, and other platforms simultaneously.",
     },
   ],
-} satisfies PlatformData;
+} satisfies PlatformContent;

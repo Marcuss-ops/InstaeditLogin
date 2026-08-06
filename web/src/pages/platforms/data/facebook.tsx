@@ -1,15 +1,9 @@
 import { Zap, Shield, RefreshCw } from "lucide-react";
-import type { PlatformData } from "../platformData";
+import type { PlatformContent } from "../platformData";
 
 export default {
   slug: "facebook",
   name: "Facebook",
-  color: "#0A84FF",
-  icon: (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-      <path d="M13.5 22v-8h2.7l.4-3.2H13.5V8.5c0-.9.3-1.5 1.6-1.5h1.7V4.1c-.3 0-1.3-.1-2.5-.1-2.5 0-4.2 1.5-4.2 4.3v2.5H7.3V14h2.8v8h3.4z" />
-    </svg>
-  ),
   heroTagline: "Ship your Facebook integration in minutes, not months",
   heroDescription:
     "Stop wrestling with Meta's Business API. InstaEdit handles OAuth, rate limits, page management, and API changes — so you can focus on building your product.",
@@ -99,4 +93,4 @@ console.log('Scheduled successfully:', result.id);`,
       a: "Yes. Include both 'facebook' and 'instagram' in your platforms array. InstaEdit optimizes media and content for each platform automatically.",
     },
   ],
-} satisfies PlatformData;
+} satisfies PlatformContent;

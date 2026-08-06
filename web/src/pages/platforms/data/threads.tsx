@@ -1,15 +1,9 @@
 import { Zap, Shield, RefreshCw } from "lucide-react";
-import type { PlatformData } from "../platformData";
+import type { PlatformContent } from "../platformData";
 
 export default {
   slug: "threads",
   name: "Threads",
-  color: "#9AA0AA",
-  icon: (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-      <path d="M12 3C7 3 3 7 3 12s4 9 9 9 9-4 9-9-4-9-9-9zm0 2c3.9 0 7 3.1 7 7s-3.1 7-7 7-7-3.1-7-7 3.1-7 7-7zm-1.5 4c-1.4 0-2.5 1.1-2.5 2.5s1.1 2.5 2.5 2.5c.6 0 1.1-.2 1.5-.6l.7.7c-.6.5-1.4.9-2.2.9-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5h3v2h-3zm5 0v2h-2v-2h2z" />
-    </svg>
-  ),
   heroTagline: "Ship your Threads integration in minutes, not months",
   heroDescription:
     "Stop wrestling with Meta's Threads API. InstaEdit handles OAuth, rate limits, media hosting, and API changes — so you can focus on building your product.",
@@ -95,4 +89,4 @@ console.log('Threads post scheduled:', result.id);`,
       a: "Absolutely. InstaEdit's unified API lets you post to Threads alongside TikTok, Instagram, Facebook, YouTube, LinkedIn, and Twitter/X in a single API call.",
     },
   ],
-} satisfies PlatformData;
+} satisfies PlatformContent;

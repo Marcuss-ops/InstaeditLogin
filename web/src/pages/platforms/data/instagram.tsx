@@ -1,15 +1,9 @@
 import { Zap, Shield, RefreshCw } from "lucide-react";
-import type { PlatformData } from "../platformData";
+import type { PlatformContent } from "../platformData";
 
 export default {
   slug: "instagram",
   name: "Instagram",
-  color: "#E1306C",
-  icon: (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-      <path d="M12 2.2c3.2 0 3.6 0 4.9.1 1.2.1 1.8.3 2.2.4.6.2 1 .5 1.4.9.4.4.7.8.9 1.4.2.4.3 1 .4 2.2.1 1.3.1 1.7.1 4.9s0 3.6-.1 4.9c-.1 1.2-.2 1.8-.4 2.2-.2.6-.5 1-.9 1.4-.4.4-.8.7-1.4.9-.4.2-1 .3-2.2.4-1.3.1-1.7.1-4.9.1s-3.6 0-4.9-.1c-1.2-.1-1.8-.2-2.2-.4-.6-.2-1-.5-1.4-.9-.4-.4-.7.8-.9 1.4-.2.4-.3 1-.4 2.2-.1 1.3-.1 1.7-.1 4.9s0 3.6.1 4.9c.1 1.2.3 1.8.4 2.2.2.6.5 1 .9 1.4.4.4.8.7 1.4.9.4.2 1 .3 2.2.4 1.3.1 1.7.1 4.9.1s3.6 0 4.9-.1c1.1 0 1.7-.2 2.1-.4.5-.2.9-.5 1.3-.9.4-.4.8.7.9 1.3.2.4.4 1 .4 2.1.1 1.2.1 1.5.1 4.6s0 3.4-.1 4.6c0 1.1-.2 1.7-.4 2.1-.2.5-.5.9-.9 1.3-.4.4-.8.7-1.3.9-.4.2-1 .4-2.1.4-1.2.1-1.5.1-4.6.1s-3.4 0-4.6-.1c-1.1 0-1.7-.2-2.1-.4-.5-.2-.9-.5-1.3-.9-.4-.4-.8-.7-.9-1.3-.2-.4-.4-1-.4-2.1-.1-1.2-.1-1.5-.1-4.6s0-3.4.1-4.6c0-1.1.2-1.7.4-2.1.2-.5.5-.9.9-1.3.4-.4.8-.7 1.3-.9.4-.2 1-.4 2.1-.4 1.2-.1 1.5-.1 4.6-.1zm0 3.4a4.4 4.4 0 110 8.8 4.4 4.4 0 010-8.8zm0 1.8a2.6 2.6 0 100 5.2 2.6 2.6 0 000-5.2zm5.7-3.6a1 1 0 110 2 1 1 0 010-2z" />
-    </svg>
-  ),
   heroTagline: "Ship your Instagram integration in minutes, not months",
   heroDescription:
     "Stop wrestling with Instagram Graph API. InstaEdit handles OAuth, rate limits, media hosting, and API changes — so you can focus on building your product.",
@@ -99,4 +93,4 @@ console.log('Scheduled successfully:', result.id);`,
       a: "Yes. Set the content type to 'story' in your API call and InstaEdit handles format optimization and scheduling.",
     },
   ],
-} satisfies PlatformData;
+} satisfies PlatformContent;

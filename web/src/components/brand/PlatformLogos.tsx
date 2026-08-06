@@ -99,6 +99,8 @@ export type ProviderRegistryEntry = {
   name: string;
   Logo: (props: LogoProps) => React.ReactElement;
   brandColor: string;
+  /** Accent used by public platform pages; kept separate from logo fill color. */
+  accentColor: string;
   gradient: string;
   iconBg: string;
   glowColor: string;
@@ -120,6 +122,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     name: "Instagram",
     Logo: InstagramLogo,
     brandColor: "#E4405F",
+    accentColor: "#E1306C",
     gradient: "from-[#E1306C] to-[#C13584]",
     iconBg: "from-[#E1306C] to-[#C13584]",
     glowColor: "rgba(225,48,108,0.35)",
@@ -134,6 +137,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     name: "Facebook",
     Logo: FacebookLogo,
     brandColor: "#1877F2",
+    accentColor: "#0A84FF",
     gradient: "from-[#0A84FF] to-[#0866FF]",
     iconBg: "from-[#0A84FF] to-[#0866FF]",
     glowColor: "rgba(10,132,255,0.35)",
@@ -148,6 +152,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     name: "Threads",
     Logo: ThreadsLogo,
     brandColor: "#FFFFFF",
+    accentColor: "#9AA0AA",
     gradient: "from-[#000000] to-[#333333]",
     iconBg: "from-[#000000] to-[#333333]",
     glowColor: "rgba(0,0,0,0.25)",
@@ -162,6 +167,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     name: "TikTok",
     Logo: TikTokLogo,
     brandColor: "#25F4EE",
+    accentColor: "#ff0050",
     gradient: "from-[#ff0050] to-[#00f2ea]",
     iconBg: "from-[#ff0050] to-[#00f2ea]",
     glowColor: "rgba(255,0,80,0.35)",
@@ -176,6 +182,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     name: "X (Twitter)",
     Logo: XLogo,
     brandColor: "#FFFFFF",
+    accentColor: "#e8e8ef",
     gradient: "from-[#e8e8ef] to-[#9aa0aa]",
     iconBg: "from-[#2a2a32] to-[#1a1a22]",
     glowColor: "rgba(200,200,210,0.2)",
@@ -190,6 +197,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     name: "YouTube",
     Logo: YouTubeLogo,
     brandColor: "#FF0000",
+    accentColor: "#ff0000",
     gradient: "from-[#ff0000] to-[#cc0000]",
     iconBg: "from-[#ff0000] to-[#cc0000]",
     glowColor: "rgba(255,0,0,0.35)",
@@ -204,6 +212,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     name: "LinkedIn",
     Logo: LinkedInLogo,
     brandColor: "#0A66C2",
+    accentColor: "#0A66C2",
     gradient: "from-[#0A66C2] to-[#004182]",
     iconBg: "from-[#0A66C2] to-[#004182]",
     glowColor: "rgba(10,102,194,0.35)",
@@ -218,6 +227,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     name: "Google Drive",
     Logo: GoogleDriveLogo,
     brandColor: "#0F9D58",
+    accentColor: "#0F9D58",
     gradient: "from-[#34A853] to-[#0F9D58]",
     iconBg: "from-[#34A853] to-[#0F9D58]",
     glowColor: "rgba(52,168,83,0.35)",
@@ -228,9 +238,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
 ];
 
-export function getProviderRegistryEntry(id: PlatformLogoId): ProviderRegistryEntry | undefined {
+export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
   return PROVIDER_REGISTRY.find(
-    (entry) => entry.id === id || entry.aliases.includes(id),
+    (entry) => entry.id === id || entry.aliases.some((alias) => alias === id),
   );
 }
 

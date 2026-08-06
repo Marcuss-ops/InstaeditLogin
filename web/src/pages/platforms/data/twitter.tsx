@@ -1,15 +1,9 @@
 import { Zap, Shield, RefreshCw } from "lucide-react";
-import type { PlatformData } from "../platformData";
+import type { PlatformContent } from "../platformData";
 
 export default {
   slug: "twitter",
   name: "X (Twitter)",
-  color: "#e8e8ef",
-  icon: (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-      <path d="M17.5 4.5h3.1l-6.8 7.8 8 10.6h-6.3l-4.9-6.4-5.6 6.4H2l7.3-8.3L1.7 4.5h6.4l4.4 5.9 5-5.9z" />
-    </svg>
-  ),
   heroTagline: "Ship your X integration in minutes, not months",
   heroDescription:
     "Stop wrestling with X API v2. InstaEdit handles OAuth 2.0 PKCE, rate limits, and API changes — so you can focus on building your product.",
@@ -95,4 +89,4 @@ console.log('Tweet scheduled:', result.id);`,
       a: "Yes. Include 'twitter' in your platforms array alongside other platforms. InstaEdit optimizes content length and format for each platform.",
     },
   ],
-} satisfies PlatformData;
+} satisfies PlatformContent;
