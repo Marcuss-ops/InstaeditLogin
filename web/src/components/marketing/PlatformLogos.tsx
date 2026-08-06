@@ -3,9 +3,11 @@ export {
   InstagramLogo,
   LinkedInLogo,
   PLATFORM_REGISTRY,
+  PlatformLogo,
+  getPlatformLogo,
   ThreadsLogo,
   TikTokLogo,
   XLogo,
   YouTubeLogo,
 } from "../brand/PlatformLogos";
-export type { LogoProps } from "../brand/PlatformLogos";
+export type { LogoProps, PlatformLogoId } from "../brand/PlatformLogos";
