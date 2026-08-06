@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // AccountMetricPoint represents a single daily metric row for an account.
@@ -154,6 +156,74 @@ func (r *AccountMetricsRepository) GetHistory(
 		return nil, fmt.Errorf("iterate metric history: %w", err)
 	}
 	return points, nil
+}
+
+// GetHistoryBatch returns the daily metric history for all supplied
+// accounts in one SQL round-trip. The result is grouped by account and
+// ordered by metric_date ASC within each group so callers can apply the
+// same growth calculations as GetHistory without an N+1 query fan-out.
+//
+// The account/date index created by migration 061 covers the equality
+// predicate on platform_account_id and the metric_date range/order.
+func (r *AccountMetricsRepository) GetHistoryBatch(
+	platformAccountIDs []int64,
+	from time.Time,
+	to time.Time,
+) (map[int64][]AccountMetricPoint, error) {
+	out := make(map[int64][]AccountMetricPoint, len(platformAccountIDs))
+	if len(platformAccountIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := r.db.Query(
+		`SELECT platform_account_id, metric_date, subscribers, views, videos,
+		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents, cpm_cents
+		 FROM account_metric_history
+		 WHERE platform_account_id = ANY($1::bigint[])
+		   AND metric_date >= $2
+		   AND metric_date <= $3
+		 ORDER BY platform_account_id ASC, metric_date DESC`,
+		pq.Array(platformAccountIDs), from.Truncate(24*time.Hour), to.Truncate(24*time.Hour),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query metric history for accounts: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var accountID int64
+		var point AccountMetricPoint
+		if err := rows.Scan(
+			&accountID,
+			&point.Date,
+			&point.Subscribers,
+			&point.Views,
+			&point.Videos,
+			&point.WatchTimeMins,
+			&point.Impressions,
+			&point.CTR,
+			&point.RevenueCents,
+			&point.RPMCents,
+			&point.CPMCents,
+		); err != nil {
+			return nil, fmt.Errorf("scan metric history for account %d: %w", accountID, err)
+		}
+		out[accountID] = append(out[accountID], point)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate metric history for accounts: %w", err)
+	}
+	// The composite index is ordered by account ASC, metric_date DESC,
+	// which avoids a global sort in PostgreSQL. Restore the historical
+	// GetHistory contract (oldest to newest) independently per account
+	// before returning to callers.
+	for accountID, history := range out {
+		for left, right := 0, len(history)-1; left < right; left, right = left+1, right-1 {
+			history[left], history[right] = history[right], history[left]
+		}
+		out[accountID] = history
+	}
+	return out, nil
 }
 
 // LatestForAccount returns the most recent metric point for an

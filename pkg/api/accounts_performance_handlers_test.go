@@ -52,7 +52,9 @@ var _ MetricHistoryStore = (*fakeMetricHistoryStore)(nil)
 // nil to keep the compile-time interface assertion intact.
 type fakeMetricHistoryStore struct {
 	getFn          func(platformAccountID int64, from, to time.Time) ([]repository.AccountMetricPoint, error)
+	getBatchFn     func(platformAccountIDs []int64, from, to time.Time) (map[int64][]repository.AccountMetricPoint, error)
 	getCallCount   int
+	getBatchCount  int
 	lastGetAccount int64
 }
 
@@ -65,6 +67,22 @@ func (f *fakeMetricHistoryStore) GetHistory(platformAccountID int64, from, to ti
 		return f.getFn(platformAccountID, from, to)
 	}
 	return nil, nil
+}
+
+func (f *fakeMetricHistoryStore) GetHistoryBatch(platformAccountIDs []int64, from, to time.Time) (map[int64][]repository.AccountMetricPoint, error) {
+	f.getBatchCount++
+	if f.getBatchFn != nil {
+		return f.getBatchFn(platformAccountIDs, from, to)
+	}
+	out := make(map[int64][]repository.AccountMetricPoint, len(platformAccountIDs))
+	for _, id := range platformAccountIDs {
+		history, err := f.GetHistory(id, from, to)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = history
+	}
+	return out, nil
 }
 
 func (f *fakeMetricHistoryStore) UpsertDaily(int64, time.Time, repository.AccountMetricPoint) error {

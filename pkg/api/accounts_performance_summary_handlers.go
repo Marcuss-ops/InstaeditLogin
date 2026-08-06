@@ -127,15 +127,31 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 
 	enrichedList := make([]enrichedChannel, 0, len(youtubeAccounts))
 	histories := make(map[int64][]repository.AccountMetricPoint, len(youtubeAccounts))
-
-	for _, a := range youtubeAccounts {
-		history, err := r.metricHistoryStore.GetHistory(a.ID, from, to)
+	if batcher, ok := r.metricHistoryStore.(BatchMetricHistoryStore); ok {
+		accountIDs := make([]int64, 0, len(youtubeAccounts))
+		for _, a := range youtubeAccounts {
+			accountIDs = append(accountIDs, a.ID)
+		}
+		histories, err = batcher.GetHistoryBatch(accountIDs, from, to)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load performance history: "+err.Error())
 			return
 		}
-		histories[a.ID] = history
+	} else {
+		// Compatibility path for legacy injected stores. Production uses
+		// AccountMetricsRepository, which implements the batch capability.
+		for _, a := range youtubeAccounts {
+			history, historyErr := r.metricHistoryStore.GetHistory(a.ID, from, to)
+			if historyErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load performance history: "+historyErr.Error())
+				return
+			}
+			histories[a.ID] = history
+		}
+	}
 
+	for _, a := range youtubeAccounts {
+		history := histories[a.ID]
 		item := enrichedChannel{account: a}
 		var latest repository.AccountMetricPoint
 		if len(history) > 0 {

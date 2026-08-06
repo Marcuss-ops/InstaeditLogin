@@ -369,6 +369,13 @@ type MetricHistoryStore interface {
 	GetHistory(platformAccountID int64, from, to time.Time) ([]repository.AccountMetricPoint, error)
 }
 
+// BatchMetricHistoryStore is an optional capability for aggregate
+// dashboard reads. Implementations can load all account histories in one
+// query; older injected stores continue to work through MetricHistoryStore.
+type BatchMetricHistoryStore interface {
+	GetHistoryBatch(platformAccountIDs []int64, from, to time.Time) (map[int64][]repository.AccountMetricPoint, error)
+}
+
 // ContentPipelineStore (Blocco Carosello content-pipeline endpoint) is
 // the read-only contract for GET /api/v1/content/{id}/pipeline.
 // One call returns a workspace-scoped fan-out covering posts +
