@@ -238,7 +238,7 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 					item.AvatarURL = v
 				}
 			}
-			item.SnapshotStale = time.Since(row.Snapshot.FetchedAt) > accountSnapshotMaxAge
+			item.SnapshotStale = time.Since(row.Snapshot.FetchedAt) > repository.SnapshotFreshnessTTL(item.ID, accountSnapshotMaxAge)
 		} else {
 			item.SnapshotStale = true
 		}
@@ -347,7 +347,7 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	// is returned as-is; a stale or missing one is served as a cached
 	// fallback and flagged refresh_pending so the background worker
 	// refreshes it asynchronously — never a synchronous provider call.
-	stale, err := r.snapshotStore.IsSnapshotStale(account.ID, accountSnapshotMaxAge)
+	stale, err := r.snapshotStore.IsSnapshotStale(account.ID, repository.SnapshotFreshnessTTL(account.ID, accountSnapshotMaxAge))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "snapshot freshness check failed: "+err.Error())
 		return

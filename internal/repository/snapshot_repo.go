@@ -24,6 +24,32 @@ type AccountResourceSnapshot struct {
 	UpdatedAt         time.Time
 }
 
+// SnapshotRefreshTTLJitter is the maximum deterministic jitter added to the
+// base snapshot TTL. The jitter is derived from platform_account_id rather
+// than sampled on every read, so all replicas agree on the freshness boundary
+// for an account and repeated page loads cannot move that boundary around.
+const SnapshotRefreshTTLJitter = 10 * time.Minute
+
+// SnapshotFreshnessTTL returns the effective stale threshold for one account.
+// A stable, evenly distributed hash of platform_account_id spreads refreshes
+// from snapshots created together across the jitter window while preserving
+// stale-while-revalidate semantics: the old snapshot remains readable and is
+// merely queued once it crosses this threshold.
+func SnapshotFreshnessTTL(platformAccountID int64, baseTTL time.Duration) time.Duration {
+	if baseTTL <= 0 || platformAccountID <= 0 {
+		return baseTTL
+	}
+
+	// SplitMix64 finalizer: inexpensive, deterministic, and well distributed
+	// for sequential database IDs. Include the endpoint so the upper bound is
+	// inclusive and the function remains entirely local (no shared RNG state).
+	x := uint64(platformAccountID) + 0x9e3779b97f4a7c15
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+	x ^= x >> 31
+	return baseTTL + time.Duration(x%uint64(SnapshotRefreshTTLJitter+1))
+}
+
 // SnapshotRepository handles CRUD for account_resource_snapshots.
 type SnapshotRepository struct {
 	db *sql.DB
@@ -139,6 +165,7 @@ func (r *SnapshotRepository) MarkSnapshotRefreshPending(platformAccountID int64,
 // statement. The read path uses this to keep account-list refresh marking
 // constant in round-trips rather than issuing one write per stale account.
 func (r *SnapshotRepository) MarkSnapshotsRefreshPending(platformAccountIDs []int64, now time.Time) error {
+	platformAccountIDs = uniquePlatformAccountIDs(platformAccountIDs)
 	if len(platformAccountIDs) == 0 {
 		return nil
 	}
@@ -168,6 +195,27 @@ func (r *SnapshotRepository) MarkSnapshotsRefreshPending(platformAccountIDs []in
 		return fmt.Errorf("mark snapshots refresh pending: %w", err)
 	}
 	return nil
+}
+
+// uniquePlatformAccountIDs removes duplicate and invalid queue keys while
+// preserving first-seen order. This is required because PostgreSQL rejects a
+// single INSERT ... ON CONFLICT statement containing the same conflict key
+// more than once; it also makes repeated account-list observations a single
+// durable refresh job per platform account.
+func uniquePlatformAccountIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	unique := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }
 
 // MarkAllSnapshotRefreshesPending durably enqueues every non-deleted,
@@ -237,6 +285,9 @@ type PendingSnapshotRefresh struct {
 	Attempts          int
 }
 
+// SnapshotRefreshBatchLimit is the maximum number of rows a worker can
+// claim in one pass; the unique platform-account primary key makes each row
+// itself the deduplicated refresh job.
 const SnapshotRefreshBatchLimit = 25
 
 // The lease covers the worst case of a bounded batch waiting behind the

@@ -106,8 +106,12 @@ func TestHandleGetAccount_FreshSnapshot_NoPendingMark(t *testing.T) {
 		FetchedAt:         now,
 		Profile:           map[string]any{"display_name": "Fresh Channel"},
 	}
+	var observedTTL time.Duration
 	snapStore := &mockSnapshotStore{
-		staleFn: func(id int64, maxAge time.Duration) (bool, error) { return false, nil },
+		staleFn: func(id int64, maxAge time.Duration) (bool, error) {
+			observedTTL = maxAge
+			return false, nil
+		},
 		getFn: func(id int64) (*repository.AccountResourceSnapshot, error) {
 			return freshSnap, nil
 		},
@@ -134,5 +138,9 @@ func TestHandleGetAccount_FreshSnapshot_NoPendingMark(t *testing.T) {
 	}
 	if resp.SnapshotStale {
 		t.Errorf("snapshot_stale: want false (fresh snapshot), got true")
+	}
+	wantTTL := repository.SnapshotFreshnessTTL(21, accountSnapshotMaxAge)
+	if observedTTL != wantTTL {
+		t.Errorf("stale check TTL: got %s, want jittered TTL %s", observedTTL, wantTTL)
 	}
 }
