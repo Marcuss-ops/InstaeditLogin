@@ -26,6 +26,8 @@ export type Session = {
   email?: string;
   expiresAt: string;
   isAdmin: boolean;
+  /** Workspace scope returned by /auth/me, reused by sidebar queries. */
+  workspaceId?: number;
 };
 
 let sessionCache: Session | null | undefined = undefined;
@@ -53,6 +55,7 @@ export async function fetchSession(): Promise<Session | null> {
         name?: string;
         email?: string;
         is_admin?: boolean;
+        workspace_id?: number;
       }>("/api/v1/auth/me");
       sessionCache = {
         userId: data.user_id,
@@ -61,6 +64,10 @@ export async function fetchSession(): Promise<Session | null> {
         email: data.email ?? undefined,
         expiresAt: "",
         isAdmin: data.is_admin ?? false,
+        workspaceId:
+          typeof data.workspace_id === "number" && Number.isInteger(data.workspace_id) && data.workspace_id > 0
+            ? data.workspace_id
+            : undefined,
       };
       return sessionCache;
     } catch {

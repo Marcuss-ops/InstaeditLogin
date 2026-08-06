@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "../lib/api";
+import { authedFetch, fetchSession } from "../lib/auth";
 import { isDemoMode } from "../lib/demo";
 import { useSharedQuery } from "../lib/queryRegistry";
 
@@ -34,26 +35,17 @@ export function countActiveLives(payload: unknown): number {
   );
 }
 
-type WorkspaceResponse = { workspace_id?: number };
-
 async function fetchWorkspaceID(signal: AbortSignal): Promise<number | null> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
-    credentials: "include",
-    signal,
-  });
-  if (!response.ok) return null;
-  const workspaceID = (await response.json() as WorkspaceResponse).workspace_id;
-  return typeof workspaceID === "number" && Number.isInteger(workspaceID) && workspaceID > 0
-    ? workspaceID
-    : null;
+  // ProtectedRoute and the internal data loaders already resolve /auth/me.
+  // Reuse that cached session instead of starting a second polling request
+  // which can keep producing 401s after the browser session expires.
+  const session = await fetchSession();
+  return signal.aborted ? null : session?.workspaceId ?? null;
 }
 
 async function fetchActiveLiveCount(workspaceID: number, signal: AbortSignal): Promise<number | null> {
-  const response = await fetch(livestreamsURL(workspaceID), {
-    credentials: "include",
-    signal,
-  });
-  if (!response.ok) return null;
+  const params = new URLSearchParams({ workspace_id: String(workspaceID) });
+  const response = await authedFetch(`/api/v1/livestreams?${params}`, { signal });
   return countActiveLives(await response.json());
 }
 

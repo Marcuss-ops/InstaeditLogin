@@ -52,7 +52,7 @@ export function GroupsPage() {
   const [channelSearch, setChannelSearch] = useState("");
   const [channelFilter, setChannelFilter] = useState<"all" | "assigned" | "unassigned">("all");
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set());
-  const [batchBusy, setBatchBusy] = useState(false);
+  const [draggedChannelIds, setDraggedChannelIds] = useState<number[]>([]);
 
   const allGroups = flattenTree(tree);
   const assignedToAnyGroup = state.kind === "ready"
@@ -118,28 +118,30 @@ export function GroupsPage() {
 
   const clearChannelSelection = () => setSelectedChannelIds(new Set());
 
-  const runBatchMembership = async (mode: "add" | "remove") => {
-    if (selectedGroupId == null || visibleSelectedIDs.length === 0 || batchBusy) return;
-    setBatchBusy(true);
-    try {
-      const selectedIDs = new Set(visibleSelectedIDs);
-      await setGroupAccounts(selectedGroupId, (currentIDs) => mode === "add"
-        ? [...currentIDs, ...Array.from(selectedIDs)]
-        : currentIDs.filter((id) => !selectedIDs.has(id))
-      );
-      clearChannelSelection();
-    } finally {
-      setBatchBusy(false);
-    }
-  };
-
   const handleDropOnGroup = (event: DragEvent, groupId: number) => {
     event.preventDefault();
     setDragOverGroupId(null);
-    const accountId = Number(event.dataTransfer.getData("text/plain"));
-    setDraggedAccountId((current) => (current === accountId ? null : current));
-    if (!Number.isFinite(accountId) || accountId <= 0) return;
-    void assignAccountToGroup(accountId, groupId);
+    const rawPayload = event.dataTransfer.getData("application/x-instaedit-channel-ids")
+      || event.dataTransfer.getData("text/plain");
+    let droppedIDs: number[] = [];
+    try {
+      const parsed = JSON.parse(rawPayload) as unknown;
+      if (Array.isArray(parsed)) droppedIDs = parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+    } catch {
+      const accountId = Number(rawPayload);
+      if (Number.isInteger(accountId) && accountId > 0) droppedIDs = [accountId];
+    }
+    if (droppedIDs.length === 0) droppedIDs = draggedChannelIds;
+    const accountIDs = Array.from(new Set(droppedIDs));
+    setDraggedAccountId(null);
+    setDraggedChannelIds([]);
+    if (accountIDs.length === 0) return;
+    if (accountIDs.length === 1) {
+      void assignAccountToGroup(accountIDs[0], groupId);
+      clearChannelSelection();
+      return;
+    }
+    void setGroupAccounts(groupId, (currentIDs) => Array.from(new Set([...currentIDs, ...accountIDs]))).then(clearChannelSelection);
   };
 
   return (
@@ -169,7 +171,7 @@ export function GroupsPage() {
         </div>
 
         <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 sm:flex-row sm:items-center">
-          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+          <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
             {state.kind === "loading" && <span className="text-[12px] text-[#9aa0aa]">Caricamento gruppi…</span>}
             {state.kind === "error" && <span className="text-[12px] text-red-300">{state.message}</span>}
             {state.kind === "ready" && tree.length === 0 && <span className="text-[12px] text-[#9aa0aa]">Nessun gruppo creato.</span>}
@@ -339,9 +341,7 @@ export function GroupsPage() {
             filter={channelFilter}
             selectedIds={selectedChannelIds}
             selectedGroupName={selectedGroup?.name ?? null}
-            selectedGroupId={selectedGroupId}
             visibleSelectedCount={visibleSelectedCount}
-            batchBusy={batchBusy}
             busyAccountId={busyAccountId}
             draggedAccountId={draggedAccountId}
             allVisibleSelected={allVisibleSelected}
@@ -350,11 +350,13 @@ export function GroupsPage() {
             onToggleSelection={toggleChannelSelection}
             onSelectAll={toggleSelectAllVisibleChannels}
             onClearSelection={clearChannelSelection}
-            onBatchAdd={() => void runBatchMembership("add")}
-            onBatchRemove={() => void runBatchMembership("remove")}
-            onDragStart={setDraggedAccountId}
+            onDragStart={(accountId, ids) => {
+              setDraggedAccountId(accountId);
+              setDraggedChannelIds(ids);
+            }}
             onDragEnd={() => {
               setDraggedAccountId(null);
+              setDraggedChannelIds([]);
               setDragOverGroupId(null);
             }}
           />
@@ -371,10 +373,9 @@ function YouTubeChannelsTray({
   filter,
   selectedIds,
   selectedGroupName,
-  selectedGroupId,
   visibleSelectedCount,
+  onDragStart,
   allVisibleSelected,
-  batchBusy,
   busyAccountId,
   draggedAccountId,
   onSearchChange,
@@ -382,9 +383,6 @@ function YouTubeChannelsTray({
   onToggleSelection,
   onSelectAll,
   onClearSelection,
-  onBatchAdd,
-  onBatchRemove,
-  onDragStart,
   onDragEnd,
 }: {
   accounts: PlatformAccount[];
@@ -393,10 +391,9 @@ function YouTubeChannelsTray({
   filter: "all" | "assigned" | "unassigned";
   selectedIds: Set<number>;
   selectedGroupName: string | null;
-  selectedGroupId: number | null;
   visibleSelectedCount: number;
+  onDragStart: (accountId: number, ids: number[]) => void;
   allVisibleSelected: boolean;
-  batchBusy: boolean;
   busyAccountId: number | null;
   draggedAccountId: number | null;
   onSearchChange: (value: string) => void;
@@ -404,9 +401,6 @@ function YouTubeChannelsTray({
   onToggleSelection: (accountId: number) => void;
   onSelectAll: () => void;
   onClearSelection: () => void;
-  onBatchAdd: () => void;
-  onBatchRemove: () => void;
-  onDragStart: (accountId: number | null) => void;
   onDragEnd: () => void;
 }) {
   const dragging = draggedAccountId != null;
@@ -449,9 +443,9 @@ function YouTubeChannelsTray({
               {totalAccounts}
             </span>
             {accounts.length !== totalAccounts ? <span className="text-[11px] font-normal normal-case tracking-normal text-[#9aa0aa]">({accounts.length} mostrati)</span> : null}
-          </h2>
-          <p className={cn("text-[12px] transition-colors", dragging ? "text-amber-300" : "text-[#9aa0aa]")}>
-            {dragging ? "Rilascia su una cartella qui sopra per aggiungere il canale." : "Trascina o seleziona più canali per gestirli insieme."}
+          </h2>          <p className={cn("text-[12px] transition-colors", dragging ? "text-amber-300" : "text-[#9aa0aa]")}>
+            {dragging ? "Rilascia su un gruppo per aggiungere tutti i canali selezionati." : "Clicca le card per selezionarle, poi trascinane una nel gruppo desiderato."}
+
           </p>
         </div>
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
@@ -477,11 +471,10 @@ function YouTubeChannelsTray({
         </div>
         {visibleSelectedCount > 0 ? (
           <div className="flex flex-col gap-2 rounded-xl border border-violet-400/30 bg-violet-500/[0.10] p-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-[12px] font-semibold text-violet-100">{visibleSelectedCount} canali selezionati{selectedGroupName ? <> · gruppo: {selectedGroupName}</> : null}</p>
+            <p className="text-[12px] font-semibold text-violet-100"><span>{visibleSelectedCount} canali selezionati</span>{selectedGroupName ? <> · trascina nel gruppo «{selectedGroupName}»</> : <> · trascina su un gruppo</>}</p>
             <div className="flex flex-wrap items-center gap-2">
-              <button type="button" onClick={onBatchAdd} disabled={selectedGroupId == null || batchBusy} className="rounded-lg bg-white px-3 py-2 text-[12px] font-bold text-black disabled:cursor-not-allowed disabled:opacity-40">{batchBusy ? "Salvataggio…" : "Aggiungi al gruppo"}</button>
-              <button type="button" onClick={onBatchRemove} disabled={selectedGroupId == null || batchBusy} className="rounded-lg border border-red-300/30 bg-red-500/10 px-3 py-2 text-[12px] font-semibold text-red-200 disabled:cursor-not-allowed disabled:opacity-40">Rimuovi dal gruppo</button>
-              <button type="button" onClick={onClearSelection} disabled={batchBusy} aria-label="Deseleziona canali" className="rounded-lg p-2 text-[#c7c9d1] hover:bg-white/[0.08] hover:text-white disabled:opacity-40"><X size={15} /></button>
+              <span className="hidden text-[11px] text-violet-200/70 sm:inline">Clicca le card, poi trascinane una per assegnarle tutte</span>
+              <button type="button" onClick={onClearSelection} aria-label="Deseleziona canali" className="rounded-lg p-2 text-[#c7c9d1] transition hover:bg-white/[0.08] hover:text-white"><X size={15} /></button>
             </div>
           </div>
         ) : null}
@@ -502,9 +495,10 @@ function YouTubeChannelsTray({
             account={account}
             busy={busyAccountId === account.id}
             selected={selectedIds.has(account.id)}
+            selectedIds={selectedIds}
             dragging={draggedAccountId === account.id}
             onToggleSelect={() => onToggleSelection(account.id)}
-            onDragStart={() => onDragStart(account.id)}
+            onDragStart={(ids) => onDragStart(account.id, ids)}
             onDragEnd={onDragEnd}
           />
         ))}
@@ -517,6 +511,7 @@ function YouTubeChannelCard({
   account,
   busy,
   selected,
+  selectedIds,
   dragging,
   onToggleSelect,
   onDragStart,
@@ -525,9 +520,10 @@ function YouTubeChannelCard({
   account: PlatformAccount;
   busy: boolean;
   selected: boolean;
+  selectedIds: Set<number>;
   dragging: boolean;
   onToggleSelect: () => void;
-  onDragStart: () => void;
+  onDragStart: (ids: number[]) => void;
   onDragEnd: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
@@ -537,32 +533,37 @@ function YouTubeChannelCard({
     <div
       draggable={!busy}
       onDragStart={(event) => {
-        event.dataTransfer.setData("text/plain", String(account.id));
+        const ids = selected ? Array.from(selectedIds) : [account.id];
+        const payload = JSON.stringify(ids);
+        event.dataTransfer.setData("application/x-instaedit-channel-ids", payload);
+        event.dataTransfer.setData("text/plain", payload);
         event.dataTransfer.effectAllowed = "move";
-        onDragStart();
+        onDragStart(ids);
       }}
       onDragEnd={onDragEnd}
+      onClick={onToggleSelect}
       data-account-id={account.id}
       className={cn(
-        "flex items-center gap-2 rounded-xl border border-white/[0.10] bg-white/[0.04] p-2.5 transition-all",
-        busy && "opacity-60 pointer-events-none",
-        dragging && "opacity-40 border-amber-300/50 scale-[0.98]",
-        !busy && "hover:border-white/[0.20] hover:bg-white/[0.07]",
+        "group flex cursor-pointer items-center gap-2 rounded-2xl border bg-white/[0.04] p-2.5 transition-all duration-200",
+        selected ? "border-violet-300/70 bg-violet-500/[0.13] shadow-[0_0_0_1px_rgba(167,139,250,0.16),0_12px_28px_rgba(99,102,241,0.12)]" : "border-white/[0.10]",
+        busy && "pointer-events-none opacity-60",
+        dragging && "scale-[0.98] opacity-40 ring-2 ring-amber-300/50",
+        !busy && "hover:-translate-y-0.5 hover:border-violet-300/40 hover:bg-white/[0.07]",
       )}
     >
       <button
         type="button"
-        onClick={onToggleSelect}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleSelect();
+        }}
         aria-label={`${selected ? "Deseleziona" : "Seleziona"} ${label}`}
         aria-pressed={selected}
-        className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors", selected ? "border-violet-300 bg-violet-500 text-white" : "border-white/20 bg-black/20 text-transparent hover:border-white/50")}
+        className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-lg border transition-all", selected ? "border-violet-300 bg-violet-500 text-white shadow-[0_0_12px_rgba(139,92,246,0.45)]" : "border-white/20 bg-black/20 text-transparent hover:border-white/50")}
       >
         {selected ? <Check size={13} /> : <Square size={12} />}
       </button>
-      <GripVertical
-        size={14}
-        className={cn("shrink-0 text-[#9aa0aa]", !busy && "cursor-grab active:cursor-grabbing")}
-      />
+      <GripVertical size={14} className={cn("shrink-0 text-[#9aa0aa] transition-colors", !busy && "cursor-grab text-white/35 group-hover:text-violet-200")} />
       <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
         <div className="absolute inset-0 overflow-hidden rounded-full bg-white/[0.04] ring-1 ring-white/[0.12]">
         {account.avatar_url && !imageFailed ? (
@@ -593,7 +594,7 @@ function YouTubeChannelCard({
       {busy ? (
         <RefreshCw size={13} className="animate-spin text-amber-300" aria-label="Assegnazione in corso" />
       ) : (
-        <GripVertical size={14} className="shrink-0 text-[#9aa0aa]" aria-hidden="true" />
+        <span className="hidden text-[10px] font-semibold text-violet-200/75 sm:inline">Trascina</span>
       )}
     </div>
   );

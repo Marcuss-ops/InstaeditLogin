@@ -155,7 +155,7 @@ describe("GroupsPage", () => {
     expect(assignAccountToGroup).toHaveBeenCalledWith(secondYouTubeAccount.id, 7);
   });
 
-  it("filters channels by search and selects visible channels for batch actions", () => {
+  it("selects multiple channels and sends them together when one selected card is dragged", () => {
     const setGroupAccounts = vi.fn().mockResolvedValue(undefined);
     makeMock({
       selectedGroupId: 7,
@@ -166,17 +166,20 @@ describe("GroupsPage", () => {
     renderPage();
 
     const tray = screen.getByTestId("youtube-channels-tray");
-    fireEvent.change(within(tray).getByRole("textbox", { name: "Cerca canali" }), { target: { value: "UC-two" } });
-    expect(within(tray).getByText("channel-available")).toBeInTheDocument();
-    expect(within(tray).queryByText("channel-grouped")).not.toBeInTheDocument();
-
-    fireEvent.change(within(tray).getByRole("textbox", { name: "Cerca canali" }), { target: { value: "available" } });
-    expect(within(tray).getByText("channel-available")).toBeInTheDocument();
-    expect(within(tray).queryByText("channel-grouped")).not.toBeInTheDocument();
-
+    fireEvent.click(within(tray).getByRole("button", { name: "Seleziona channel-grouped" }));
     fireEvent.click(within(tray).getByRole("button", { name: "Seleziona channel-available" }));
-    expect(within(tray).getByText(/1 canali selezionati/)).toBeInTheDocument();
-    fireEvent.click(within(tray).getByRole("button", { name: "Aggiungi al gruppo" }));
+    expect(within(tray).getByText(/2 canali selezionati/)).toBeInTheDocument();
+
+    const card = screen.getByText("channel-available").closest("[data-account-id]");
+    expect(card).not.toBeNull();
+    const dataTransfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => type === "application/x-instaedit-channel-ids" ? JSON.stringify([1, 2]) : JSON.stringify([1, 2])),
+      effectAllowed: "",
+    };
+    fireEvent.dragStart(card!, { dataTransfer });
+    fireEvent.drop(screen.getByRole("button", { name: /WWE1 canali/ }), { dataTransfer });
+
     expect(setGroupAccounts).toHaveBeenCalledWith(7, expect.any(Function));
     const membershipUpdater = setGroupAccounts.mock.calls[0]?.[1] as (currentIDs: number[]) => number[];
     expect(membershipUpdater([groupedAccount.id])).toEqual([groupedAccount.id, secondYouTubeAccount.id]);

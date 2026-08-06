@@ -1,5 +1,6 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearSessionCache } from "../lib/auth";
 import { clearSharedQueryCache } from "../lib/queryRegistry";
 import { countActiveLives, livestreamsURL, useActiveLiveCount } from "./useActiveLiveCount";
 
@@ -42,7 +43,9 @@ describe("livestreamsURL", () => {
 
 describe("useActiveLiveCount", () => {
   afterEach(() => {
+    vi.useRealTimers();
     clearSharedQueryCache();
+    clearSessionCache();
     vi.unstubAllGlobals();
   });
 
@@ -58,23 +61,41 @@ describe("useActiveLiveCount", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       expect.stringMatching(/\/api\/v1\/auth\/me$/),
-      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ credentials: "include" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       expect.stringMatching(/\/api\/v1\/livestreams\?workspace_id=7$/),
-      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ credentials: "include" }),
     );
     unmount();
   });
 
-  it("hides the badge when the workspace lookup fails", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) });
+  it("hides the badge and caches an unauthenticated session after a 401", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: "unauthorized" }),
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const { result, unmount } = renderHook(() => useActiveLiveCount());
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.current).toBeNull();
+
+    // The shared query schedules a later poll, but fetchSession has cached
+    // the failed session lookup; advancing beyond that poll must not hit
+    // /auth/me again.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_001);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     unmount();
   });
 });

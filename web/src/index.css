@@ -130,6 +130,15 @@ html {
     @apply absolute rounded-full blur-[120px] pointer-events-none opacity-25;
   }
 
+  /* Keep compact horizontal controls clean while preserving native scrolling. */
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
   /* =====================================================================
    * HERO AURORA — three radial gradients layered into one utility so the
    * hero gets visible violet/cyan/magenta color without stacking three
