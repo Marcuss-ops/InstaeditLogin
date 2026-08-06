@@ -128,8 +128,8 @@ func (m *mockTokenStore) UpdateCiphertexts(tokenID int64, oldEncrypted, newEncry
 	if m.updateCiphertextsFn != nil {
 		return m.updateCiphertextsFn(tokenID, oldEncrypted, newEncrypted)
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, bucket := range m.state {
 		for _, t := range bucket {
 			if t.ID == tokenID {
