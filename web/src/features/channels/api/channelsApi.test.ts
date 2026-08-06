@@ -147,4 +147,33 @@ describe("listAllAccounts — shared manifest cache (N+1 DoD)", () => {
 
     expect(calls).toBe(2);
   });
+
+  // DoD "refetchOnWindowFocus: false": the manifest cache registers NO
+  // window-focus listener, so returning to the tab must never re-fetch
+  // /api/v1/accounts. Header, Linking page, groups and the account
+  // selector all share this single source of truth within the stale
+  // window, no matter how often the user switches tabs.
+  it("never refetches the manifest on window focus (refetchOnWindowFocus: false)", async () => {
+    let calls = 0;
+    const fixture = [account({ id: 1, account_state: "valid", is_publishable: true })];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        calls += 1;
+        return jsonResponse({ accounts: fixture });
+      }),
+    );
+
+    await listAllAccounts();
+    expect(calls).toBe(1);
+
+    // Simulate the user leaving and returning to the tab.
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("focus"));
+
+    const served = await listAllAccounts();
+    expect(calls).toBe(1);
+    expect(served).toEqual(fixture);
+  });
+
 });
