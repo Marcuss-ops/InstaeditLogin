@@ -283,6 +283,10 @@ type Router struct {
 	// cmd/server/main.go via WithYouTubeService(svc); the handler
 	// owns the routing decision.
 	youTubeSvc YouTubeOAuthService
+	// youtubeCredentialResolver deduplicates shared-grant refresh and
+	// token validation by oauth_connection_id. It is optional for legacy
+	// test/deployment wiring; when absent, existing validation remains.
+	youtubeCredentialResolver *services.YouTubeCredentialResolver
 	// oauthGrantRevoker is discovered from the concrete provider when
 	// WithYouTubeService is applied. Complete grant disconnects require this
 	// capability before local token deletion is allowed.
@@ -397,9 +401,7 @@ func NewRouter(
 		analyticsClock:            analytics.RealClock{},
 		rateLimiter:               newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)
 		publishingInFlightTimeout: DefaultPublishingInFlightTimeout,
-		thumbnailDownloadClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		thumbnailDownloadClient:   services.NewHTTPClientWithTimeout(30 * time.Second),
 	}
 	for _, opt := range opts {
 		opt(r)

@@ -40,11 +40,9 @@ type MetadataGenerator struct {
 // apiKey to disable NVIDIA (Generate returns ErrNVIDIANotConfigured).
 func NewMetadataGenerator(apiKey string) *MetadataGenerator {
 	return &MetadataGenerator{
-		apiKey: apiKey,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
-		apiURL: "https://integrate.api.nvidia.com/v1/chat/completions",
+		apiKey:     apiKey,
+		httpClient: NewHTTPClientWithTimeout(60 * time.Second),
+		apiURL:     "https://integrate.api.nvidia.com/v1/chat/completions",
 	}
 }
 

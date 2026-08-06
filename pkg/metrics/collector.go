@@ -235,7 +235,13 @@ func collectPoolGauges(db *sql.DB) {
 	if db == nil {
 		return
 	}
-	stats := db.Stats()
+	collectPoolGaugesFromStats(db.Stats())
+}
+
+// collectPoolGaugesFromStats maps database/sql's snapshot to metrics. Keeping
+// the mapping independent from *sql.DB makes the cumulative wait fields
+// directly testable without depending on driver-specific pool contention.
+func collectPoolGaugesFromStats(stats sql.DBStats) {
 	// stats.InUse, .Idle, .OpenConnections are instantaneous. .WaitCount
 	// is cumulative (the number of times a caller has waited for a
 	// connection since process start) — exposed as a gauge-style

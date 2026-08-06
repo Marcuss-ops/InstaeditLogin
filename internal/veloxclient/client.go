@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
 
@@ -47,24 +48,12 @@ func New(baseURL, jwtSecret string) *Client {
 	if baseURL == "" || jwtSecret == "" {
 		return nil
 	}
-	// NOTE: we deliberately do NOT reuse services.NewHTTPClient()
-	// here. That shared client's retryRoundTripper retries 404
-	// responses for idempotent methods (GET), which would convert
-	// a definitive "not found" from Velox into a retryableHTTPError
-	// — preventing do() from mapping 404 to veloxapi.ErrNotFound.
-	// The Velox BFF needs raw status codes, so we use a plain
-	// http.Client with a conservative timeout instead.
+	// Preserve raw status handling (notably 404 → ErrNotFound) while
+	// still sharing the process-wide keep-alive transport.
 	return &Client{
 		baseURL: baseURL,
 		secret:  []byte(jwtSecret),
-		http: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		},
+		http:    services.NewHTTPClientWithTimeoutNoRetry(30 * time.Second),
 	}
 }
 

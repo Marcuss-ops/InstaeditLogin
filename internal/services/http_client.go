@@ -2,11 +2,13 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
@@ -27,20 +29,69 @@ import (
 //   - Retry-After header is honored (capped at 30s) and jitter is applied
 //   - The final response (body + headers) is always returned, even when the
 //     status code is in the retry set
+var (
+	sharedHTTPTransportOnce sync.Once
+	sharedHTTPTransport     http.RoundTripper
+)
+
+// sharedTransport returns the one process-wide connection pool used by
+// production HTTP clients. http.Transport is safe for concurrent use and
+// owns the reusable keep-alive connections; clients may still have different
+// request timeouts without forfeiting that pool.
+func sharedTransport() http.RoundTripper {
+	sharedHTTPTransportOnce.Do(func() {
+		sharedHTTPTransport = &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   20,
+			MaxConnsPerHost:       100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+	})
+	return sharedHTTPTransport
+}
+
+// NewHTTPClient returns a client with the standard 30-second request timeout.
+// Its retry/logging wrappers all share the process-wide keep-alive transport.
 func NewHTTPClient() *http.Client {
+	return NewHTTPClientWithTimeout(30 * time.Second)
+}
+
+// NewHTTPClientWithTimeout returns a client with a caller-specific timeout
+// while preserving the shared transport and connection pool. Use longer
+// deadlines for streaming uploads/downloads and the default for metadata.
+func NewHTTPClientWithTimeout(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	return &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: timeout,
 		Transport: &retryRoundTripper{
-			next: &loggingRoundTripper{
-				next: &http.Transport{
-					MaxIdleConns:        100,
-					MaxIdleConnsPerHost: 10,
-					IdleConnTimeout:     90 * time.Second,
-				},
-			},
+			next: &loggingRoundTripper{next: sharedTransport()},
 		},
 	}
 }
+
+// NewHTTPClientWithTimeoutNoRetry returns a client that shares the same
+// process-wide transport and logging/metrics wrapper, but does not replay
+// requests. Use it for callers that must inspect the original HTTP status
+// (for example, a 404 must remain a typed not-found result).
+func NewHTTPClientWithTimeoutNoRetry(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: &loggingRoundTripper{next: sharedTransport()},
+	}
+}
+
+// SharedHTTPTransportForTest reports the underlying process-wide transport
+// identity without exposing the mutable transport in production APIs.
+func SharedHTTPTransportForTest() http.RoundTripper { return sharedTransport() }
 
 // retryContextKey is the context key used to opt POST/PUT requests into the
 // retry policy. Callers wrap the request context with WithRetryOptIn.
@@ -247,6 +298,20 @@ func googleOperation(req *http.Request) string {
 	return "google_api"
 }
 
+func requestHost(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ""
+	}
+	return req.URL.Host
+}
+
+func requestPath(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ""
+	}
+	return req.URL.EscapedPath()
+}
+
 func (lrt *loggingRoundTripper) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	start := time.Now()
 	resp, err = lrt.next.RoundTrip(req)
@@ -262,16 +327,18 @@ func (lrt *loggingRoundTripper) RoundTrip(req *http.Request) (resp *http.Respons
 	if err != nil {
 		slog.Debug("http: request failed",
 			"method", req.Method,
-			"url", req.URL.String(),
+			"host", requestHost(req),
+			"path", requestPath(req),
 			"duration_ms", elapsed.Milliseconds(),
-			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
 		)
 		return nil, err
 	}
 
 	slog.Debug("http: request completed",
 		"method", req.Method,
-		"url", req.URL.String(),
+		"host", requestHost(req),
+		"path", requestPath(req),
 		"status", resp.StatusCode,
 		"duration_ms", elapsed.Milliseconds(),
 	)

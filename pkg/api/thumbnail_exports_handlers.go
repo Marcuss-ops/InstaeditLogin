@@ -229,7 +229,7 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 	uploadReq.ContentLength = sizeBytes
 	uploadClient := r.thumbnailDownloadClient
 	if uploadClient == nil {
-		uploadClient = &http.Client{Timeout: renderS3UploadTimeout}
+		uploadClient = services.NewHTTPClientWithTimeout(renderS3UploadTimeout)
 	}
 	uploadResp, err := uploadClient.Do(uploadReq)
 	if err != nil {

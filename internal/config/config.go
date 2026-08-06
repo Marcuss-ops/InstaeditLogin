@@ -30,6 +30,13 @@ type DatabaseConfig struct {
 	// require EXPECTED_DATABASE_INSTALLATION_UUID; local dev may leave
 	// it empty while the migration bootstrap creates the identity row.
 	ExpectedInstallationUUID string
+
+	// Explicit database/sql pool sizing. The total across API and worker
+	// processes must remain below PostgreSQL max_connections.
+	DBMaxOpenConns           int
+	DBMaxIdleConns           int
+	DBConnMaxLifetimeSeconds int
+	DBConnMaxIdleTimeSeconds int
 }
 
 // DSN returns the PostgreSQL connection string.

@@ -396,7 +396,7 @@ func (r *Router) importDriveFileToAsset(
 		uploadReq.ContentLength = sizeBytes
 	}
 
-	s3Client := &http.Client{Timeout: driveImportS3UploadTimeout}
+	s3Client := services.NewHTTPClientWithTimeout(driveImportS3UploadTimeout)
 	uploadResp, err := s3Client.Do(uploadReq)
 	if err != nil {
 		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)

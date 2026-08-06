@@ -77,6 +77,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // VeloxCallbackDispatcher fans a signed POST to
@@ -130,7 +131,7 @@ func NewVeloxCallbackDispatcher(
 		logger = slog.Default()
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: DefaultVeloxCallbackRequestTimeout}
+		httpClient = services.NewHTTPClientWithTimeoutNoRetry(DefaultVeloxCallbackRequestTimeout)
 	}
 	return &VeloxCallbackDispatcher{
 		secret:      secret,

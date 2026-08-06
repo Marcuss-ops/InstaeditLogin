@@ -208,7 +208,7 @@ func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, pathSt
 		baseHost:  baseHost,
 		pathStyle: pathStyle,
 		mediaBase: host + "/" + bucket,
-		http:      &http.Client{Timeout: 15 * time.Second},
+		http:      NewHTTPClientWithTimeout(15 * time.Second),
 		logger:    logger,
 	}, nil
 }

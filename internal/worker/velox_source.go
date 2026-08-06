@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // veloxDownloadTimeout is the per-HTTP-request timeout for both
@@ -63,7 +64,7 @@ func NewVeloxSource(logger *slog.Logger, tokens ...string) *VeloxSource {
 		token = strings.TrimSpace(tokens[0])
 	}
 	return &VeloxSource{
-		client: &http.Client{Timeout: veloxDownloadTimeout},
+		client: services.NewHTTPClientWithTimeout(veloxDownloadTimeout),
 		token:  token,
 		logger: logger,
 	}

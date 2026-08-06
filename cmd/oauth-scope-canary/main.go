@@ -37,6 +37,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // canonicalScopes is the InstaEdit OAuth manifest — every scope the
@@ -148,7 +150,7 @@ func checkLiveScopeDrift(ctx context.Context, logger *slog.Logger, token, endpoi
 	if err != nil {
 		return fmt.Errorf("%w: build request: %v", errScopeDrift, err)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := services.NewHTTPClientWithTimeout(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("%w: tokeninfo request: %v", errScopeDrift, err)

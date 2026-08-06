@@ -89,6 +89,10 @@ func Load() (*Config, error) {
 		},
 		Database: DatabaseConfig{
 			DatabaseURL:              getEnv("DATABASE_URL", ""),
+			DBMaxOpenConns:           getEnvInt("DB_MAX_OPEN_CONNS", 25),
+			DBMaxIdleConns:           getEnvInt("DB_MAX_IDLE_CONNS", 5),
+			DBConnMaxLifetimeSeconds: getEnvInt("DB_CONN_MAX_LIFETIME_SECONDS", 1800),
+			DBConnMaxIdleTimeSeconds: getEnvInt("DB_CONN_MAX_IDLE_TIME_SECONDS", 300),
 			DBHost:                   getEnv("DB_HOST", "localhost"),
 			DBPort:                   getEnv("DB_PORT", "5432"),
 			DBUser:                   getEnv("DB_USER", "instaedit"),

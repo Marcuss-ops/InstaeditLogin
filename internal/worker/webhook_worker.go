@@ -92,7 +92,7 @@ func NewWebhookWorker(repo WebhookRepo, interval time.Duration) *WebhookWorker {
 		repo:       repo,
 		signer:     services.NewWebhookSigner(),
 		dispatcher: services.NewWebhookDispatcher(nil), // unused on the worker hot path
-		httpClient: &http.Client{Timeout: DefaultWebhookHTTPTimeout},
+		httpClient: services.NewHTTPClientWithTimeout(DefaultWebhookHTTPTimeout),
 		interval:   interval,
 		batchSize:  DefaultWebhookBatchSize,
 		logger:     slog.Default(),
@@ -122,7 +122,7 @@ func NewWebhookWorkerWithDeps(
 		repo:       repo,
 		signer:     signer,
 		dispatcher: dispatcher,
-		httpClient: &http.Client{Timeout: DefaultWebhookHTTPTimeout},
+		httpClient: services.NewHTTPClientWithTimeout(DefaultWebhookHTTPTimeout),
 		interval:   interval,
 		batchSize:  batchSize,
 		logger:     logger,

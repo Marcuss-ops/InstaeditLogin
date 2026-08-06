@@ -49,6 +49,31 @@ func (c *Config) validate() error {
 	}
 
 	// Database: DATABASE_URL takes precedence; individual params fallback.
+	// Pool limits are explicit and fail closed to avoid silently creating
+	// too many connections. Zero idle connections is valid and means
+	// callers intentionally disable the idle connection cache; Load()
+	// supplies the normal default of five when the environment is unset.
+	if c.Database.DBMaxOpenConns == 0 {
+		c.Database.DBMaxOpenConns = 25
+	}
+	if c.Database.DBConnMaxLifetimeSeconds == 0 {
+		c.Database.DBConnMaxLifetimeSeconds = 1800
+	}
+	if c.Database.DBConnMaxIdleTimeSeconds == 0 {
+		c.Database.DBConnMaxIdleTimeSeconds = 300
+	}
+	if c.Database.DBMaxOpenConns < 1 {
+		return fmt.Errorf("DB_MAX_OPEN_CONNS must be positive (got %d)", c.Database.DBMaxOpenConns)
+	}
+	if c.Database.DBMaxIdleConns < 0 || c.Database.DBMaxIdleConns > c.Database.DBMaxOpenConns {
+		return fmt.Errorf("DB_MAX_IDLE_CONNS must be between 0 and DB_MAX_OPEN_CONNS (%d) (got %d)", c.Database.DBMaxOpenConns, c.Database.DBMaxIdleConns)
+	}
+	if c.Database.DBConnMaxLifetimeSeconds < 1 {
+		return fmt.Errorf("DB_CONN_MAX_LIFETIME_SECONDS must be positive (got %d)", c.Database.DBConnMaxLifetimeSeconds)
+	}
+	if c.Database.DBConnMaxIdleTimeSeconds < 1 {
+		return fmt.Errorf("DB_CONN_MAX_IDLE_TIME_SECONDS must be positive (got %d)", c.Database.DBConnMaxIdleTimeSeconds)
+	}
 	if c.Database.DatabaseURL == "" {
 		if c.Database.DBPassword == "" {
 			return fmt.Errorf("DB_PASSWORD is required (or set DATABASE_URL)")

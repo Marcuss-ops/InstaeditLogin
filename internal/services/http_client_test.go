@@ -511,3 +511,56 @@ func TestNewHTTPClient_Wiring(t *testing.T) {
 		t.Errorf("Transport should be *retryRoundTripper, got %T", c.Transport)
 	}
 }
+
+func TestNewHTTPClient_ReusesTransportWithCustomTimeout(t *testing.T) {
+	defaultClient := NewHTTPClient()
+	streamClient := NewHTTPClientWithTimeout(5 * time.Minute)
+	if defaultClient.Transport.(*retryRoundTripper).next.(*loggingRoundTripper).next !=
+		streamClient.Transport.(*retryRoundTripper).next.(*loggingRoundTripper).next {
+		t.Fatal("clients must share the same underlying transport")
+	}
+	if streamClient.Timeout != 5*time.Minute {
+		t.Fatalf("custom timeout: want 5m, got %v", streamClient.Timeout)
+	}
+}
+
+func TestNewHTTPClientWithTimeoutNoRetry_SharesTransportAndPreservesStatus(t *testing.T) {
+	var h sequencedHandler
+	h.scenario = []response{{status: http.StatusNotFound}, {status: http.StatusOK, body: "unexpected retry"}}
+	srv := httptest.NewServer(&h)
+	defer srv.Close()
+
+	client := NewHTTPClientWithTimeoutNoRetry(4 * time.Second)
+	resp, err := client.Get(srv.URL + "?X-Amz-Signature=secret")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status: want 404, got %d", resp.StatusCode)
+	}
+	if got := h.calls.Load(); got != 1 {
+		t.Fatalf("request count: want 1, got %d", got)
+	}
+
+	shared := SharedHTTPTransportForTest()
+	wrapped := client.Transport.(*loggingRoundTripper)
+	if wrapped.next != shared {
+		t.Fatal("no-retry client must use the shared transport")
+	}
+	if client.Timeout != 4*time.Second {
+		t.Fatalf("timeout: want 4s, got %v", client.Timeout)
+	}
+}
+
+func TestLoggingRoundTripperDoesNotExposeQuerySecrets(t *testing.T) {
+	// The logging wrapper is intentionally exercised through a request with
+	// a presigned-style query; requestPath must exclude RawQuery.
+	req, err := http.NewRequest(http.MethodGet, "https://storage.example/object?X-Amz-Signature=secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestPath(req); got != "/object" {
+		t.Fatalf("requestPath: want /object, got %q", got)
+	}
+}

@@ -50,6 +50,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // Env-var names. Exported so tests reference a single source of truth.
@@ -519,7 +521,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	httpClient := &http.Client{Timeout: 60 * time.Second}
+	httpClient := services.NewHTTPClientWithTimeout(60 * time.Second)
 	transport := func(req *http.Request) (*http.Response, error) { return httpClient.Do(req) }
 
 	code := runChain(ctx, cfg, cookies.session, cookies.csrf, transport, out)
