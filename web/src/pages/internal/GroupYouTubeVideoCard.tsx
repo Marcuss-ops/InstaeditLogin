@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Edit3, ExternalLink, Loader2, MoreHorizontal, Video } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { GroupYouTubeVideo } from "./groupYouTubeVideosTypes";
@@ -9,7 +10,7 @@ import {
   toneClasses,
 } from "./groupYouTubeVideosVisual";
 
-export function GroupYouTubeVideoCard({
+export const GroupYouTubeVideoCard = memo(function GroupYouTubeVideoCard({
   video,
   openingVideoID,
   onPreview,
@@ -39,7 +40,7 @@ export function GroupYouTubeVideoCard({
     >
       <div className="relative h-[92px] w-[142px] shrink-0 overflow-hidden rounded-xl bg-white/[0.08] max-[700px]:h-[76px] max-[700px]:w-[112px]">
         {thumbnail ? (
-          <img src={thumbnail} alt="" className="h-full w-full object-cover" />
+          <img src={thumbnail} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
         ) : (
           <div className="flex h-full items-center justify-center text-white/20"><Video size={20} aria-hidden="true" /></div>
         )}
@@ -82,4 +83,4 @@ export function GroupYouTubeVideoCard({
       </div>
     </article>
   );
-}
+});

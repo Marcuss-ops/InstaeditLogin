@@ -34,7 +34,7 @@ describe("InternalPosts", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/posts")) {
+        if (url.split("?")[0]!.endsWith("/api/v1/posts")) {
           return mockJsonResponse({
             posts: [
               {
@@ -98,7 +98,7 @@ describe("InternalPosts", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/posts")) {
+        if (url.split("?")[0]!.endsWith("/api/v1/posts")) {
           return mockJsonResponse({ posts: [] });
         }
         if (url.endsWith("/api/v1/workspaces")) {
@@ -130,7 +130,7 @@ describe("InternalPosts", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/posts")) {
+        if (url.split("?")[0]!.endsWith("/api/v1/posts")) {
           return mockJsonResponse({
             posts: [
               {
@@ -179,7 +179,7 @@ describe("InternalPosts", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/posts")) {
+        if (url.split("?")[0]!.endsWith("/api/v1/posts")) {
           return mockJsonResponse({
             posts: [
               {
@@ -228,7 +228,7 @@ describe("InternalPosts", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/posts")) {
+        if (url.split("?")[0]!.endsWith("/api/v1/posts")) {
           return mockJsonResponse({
             posts: [
               {

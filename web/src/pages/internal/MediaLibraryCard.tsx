@@ -1,7 +1,6 @@
 import { memo, useEffect, useState } from "react";
 import { CheckCircle2, Clapperboard, Film, Loader2, Lock } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { useMediaDetail } from "./useMediaLibrary";
 import type { MediaLibraryItem } from "./livestreamsTypes";
 import {
   compatibilityMeta,
@@ -15,35 +14,35 @@ import {
 export interface MediaLibraryCardProps {
   item: MediaLibraryItem;
   order: number | null;
-  eager?: boolean;
   onToggle: (item: MediaLibraryItem) => void;
   onPreview: (id: string) => void;
   previewActive: boolean;
+  detail?: import("./livestreamsTypes").MediaLibraryDetail;
+  detailLoading?: boolean;
+  onVisible?: (item: MediaLibraryItem) => void;
 }
 
 /**
- * A memoized list row. Only the first viewport-sized batch is eager; the
- * rest starts its detail request when IntersectionObserver reports that it
- * is near the viewport. The detail query is shared and cached for 5 minutes.
+ * A memoized, network-free list row. The parent owns detail loading and
+ * supplies the cached detail when this row becomes visible.
  */
 export const MediaLibraryCard = memo(function MediaLibraryCard({
   item,
   order,
-  eager = false,
   onToggle,
   onPreview,
   previewActive,
+  detail,
+  detailLoading = false,
+  onVisible,
 }: MediaLibraryCardProps) {
   const [node, setNode] = useState<HTMLLIElement | null>(null);
-  const [visible, setVisible] = useState(eager);
-  const detail = useMediaDetail(item.id, visible);
-
   useEffect(() => {
-    if (eager || visible || !node || typeof IntersectionObserver === "undefined") return;
+    if (!node || !onVisible || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          setVisible(true);
+          onVisible(item);
           observer.disconnect();
         }
       },
@@ -51,9 +50,9 @@ export const MediaLibraryCard = memo(function MediaLibraryCard({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [eager, node, visible]);
+  }, [item.id, node, onVisible]);
 
-  const full = detail.data;
+  const full = detail;
   const compat = compatibilityMeta(item.live_compatibility);
   const selectable = item.live_compatibility === "ready";
 
@@ -89,7 +88,7 @@ export const MediaLibraryCard = memo(function MediaLibraryCard({
               className="h-full w-full object-contain"
               data-testid={`ls-step3-preview-${item.id}`}
             />
-          ) : detail.isFetching ? (
+          ) : detailLoading ? (
             <div className="flex h-full w-full items-center justify-center">
               <Loader2 size={22} className="animate-spin text-white/30" aria-hidden="true" />
             </div>

@@ -37,7 +37,7 @@ export function LiveStreamWizardStep3({
   onBack: () => void;
   onContinue: () => void;
 }) {
-  const { state, reload, loadMore } = useMediaLibrary();
+  const { state, reload, loadMore, loadDetail } = useMediaLibrary();
   const [previewId, setPreviewId] = useState<string | null>(null);
   const canContinue = selectedIds.length > 0;
   const toggle = useCallback((item: MediaLibraryItem) => {
@@ -113,10 +113,12 @@ export function LiveStreamWizardStep3({
               key={item.id}
               item={item}
               order={orderOf(item.id)}
-              eager={index < 4}
               onToggle={toggle}
               onPreview={setPreviewId}
               previewActive={previewId === item.id}
+              detail={state.details[item.id]}
+              detailLoading={!state.details[item.id] && index < 4}
+              onVisible={loadDetail}
             />
           ))}
         </ul>

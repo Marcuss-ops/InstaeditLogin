@@ -351,7 +351,7 @@ function ContentGrid({
           video={video}
           highlightVideoId={highlightVideoId}
           cacheBust={cacheBust}
-          onEditThumbnail={(v) => void onEditThumbnail(v)}
+          onEditThumbnail={onEditThumbnail}
         />
       ))}
 

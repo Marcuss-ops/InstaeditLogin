@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -42,7 +42,7 @@ const SECONDARY_ACTIONS = [
   { label: "Termina live", icon: Square, hint: "Disponibile con il worker live" },
 ] as const;
 
-export function LiveStreamCard({
+export const LiveStreamCard = memo(function LiveStreamCard({
   livestream,
   deleting,
   onDelete,
@@ -248,4 +248,4 @@ export function LiveStreamCard({
       )}
     </article>
   );
-}
+});

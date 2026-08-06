@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { memo, type MouseEvent } from "react";
 import { ExternalLink, Video } from "lucide-react";
 import { withThumbnailCacheBust } from "../../features/channels/utils/thumbnailUrl";
 
@@ -23,7 +23,7 @@ export type ContentItem = {
   properties?: Record<string, unknown>;
 };
 
-export function AccountDetailsVideoCard({
+export const AccountDetailsVideoCard = memo(function AccountDetailsVideoCard({
   item,
   onEditThumbnail,
   cacheBust,
@@ -46,6 +46,8 @@ export function AccountDetailsVideoCard({
           <img
             src={withThumbnailCacheBust(item.thumbnail_url, cacheBust)}
             alt={item.title ?? ""}
+            loading="lazy"
+            decoding="async"
             className="w-full h-full object-cover"
           />
         ) : (
@@ -102,7 +104,7 @@ export function AccountDetailsVideoCard({
       </div>
     </div>
   );
-}
+});
 
 function formatDuration(iso: string): string {
   const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);

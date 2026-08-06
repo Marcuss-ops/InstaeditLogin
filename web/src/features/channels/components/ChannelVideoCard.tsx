@@ -27,6 +27,7 @@
  *   • "Modifica copertina" → calls `onEditThumbnail(video)` so the
  *     parent page keeps ownership of the editor-sessions POST.
  */
+import { memo } from "react";
 import { ExternalLink, Sparkles, Video } from "lucide-react";
 import { cn } from "../../../lib/utils";
 import type { ChannelVideo } from "../types";
@@ -183,7 +184,7 @@ const STATUS_CHIP_LABEL: Record<string, string> = {
   unknown: "Sconosciuto",
 };
 
-export function ChannelVideoCard({
+export const ChannelVideoCard = memo(function ChannelVideoCard({
   video,
   highlightVideoId,
   cacheBust,
@@ -245,6 +246,8 @@ export function ChannelVideoCard({
           <img
             src={thumbnailSrc}
             alt={video.title ?? ""}
+            loading="lazy"
+            decoding="async"
             className="w-full h-full object-cover"
           />
         ) : (
@@ -343,4 +346,4 @@ export function ChannelVideoCard({
       </div>
     </div>
   );
-}
+});
