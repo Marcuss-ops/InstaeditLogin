@@ -78,7 +78,7 @@ export function InternalLinking() {
   const [syncingAll, setSyncingAll] = useState(false);
   const [syncAllNotice, setSyncAllNotice] = useState<string | null>(null);
 
-  const loadAccounts = useCallback(async () => {
+  const loadAccounts = useCallback(async (opts?: { force?: boolean }) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -87,8 +87,13 @@ export function InternalLinking() {
     try {
       // listAllAccounts returns the uploads PlatformAccount shape (platform:
       // string); the page's local type narrows it to ProviderId for the card
-      // grid, so the assertion is required (not redundant).
-      const accounts = (await listAllAccounts(controller.signal)) as PlatformAccount[];
+      // grid, so the assertion is required (not redundant). The shared
+      // manifest cache collapses this fetch with the header switcher into
+      // ONE request; force is set only for explicit user refreshes.
+      const accounts = (await listAllAccounts({
+        signal: controller.signal,
+        force: opts?.force,
+      })) as PlatformAccount[];
       if (controller.signal.aborted) return;
       // The list endpoint is the single source of truth for the cards: it
       // already returns avatar_url (cached snapshot fallback) and
@@ -123,8 +128,9 @@ export function InternalLinking() {
           : "No channels to refresh.",
       );
       // Reload the list so freshly written snapshots appear as the worker
-      // finishes; the N+1 fan-out stays gone (single batch request).
-      await loadAccounts();
+      // finishes; force bypasses the 60s shared cache so the user sees the
+      // refreshed manifest, and the N+1 fan-out stays gone (one request).
+      await loadAccounts({ force: true });
     } catch {
       setSyncAllNotice("Could not schedule the refresh. Please try again.");
     } finally {
@@ -202,7 +208,7 @@ export function InternalLinking() {
               </button>
               <button
                 type="button"
-                onClick={() => void loadAccounts()}
+                onClick={() => void loadAccounts({ force: true })}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
               >
                 <RefreshCw size={14} /> Refresh

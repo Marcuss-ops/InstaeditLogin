@@ -78,6 +78,9 @@ export async function fetchSession(): Promise<Session | null> {
 export function clearSessionCache(): void {
   sessionCache = undefined;
   sessionPromise = null;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("instaedit:session-cleared"));
+  }
 }
 
 export class AuthError extends Error {

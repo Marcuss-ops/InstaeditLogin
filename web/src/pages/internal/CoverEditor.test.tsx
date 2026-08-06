@@ -69,6 +69,7 @@ vi.mock("../../lib/auth", () => ({
 // src/lib/auth) match the error thrown by the fetch mock.
 import { ApiError } from "../../lib/auth";
 import { CoverEditorPage } from "./CoverEditor";
+import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 
 const PROJECT = {
   id: "thumbproj_1",
@@ -189,6 +190,7 @@ function renderPage() {
 
 beforeEach(() => {
   authedFetchMock.mockReset();
+  clearAccountsCache();
   vi.stubGlobal("ResizeObserver", ResizeObserverFire);
 });
 
@@ -534,7 +536,7 @@ describe("CoverEditorPage", () => {
           ],
         });
       }
-      if (url === "/api/v1/accounts") {
+      if (new URL(url, "http://localhost").pathname === "/api/v1/accounts") {
         return jsonResponse({
           accounts: [
             {

@@ -15,6 +15,7 @@ import { getProvider } from "../../lib/providers";
 import { cn } from "../../lib/utils";
 import { useUploadMedia } from "../../features/publishing/hooks/useUploadMedia";
 import { isPublishableAccount } from "../../types/uploads";
+import { listAllAccounts } from "../../features/channels/api/channelsApi";
 
 type Workspace = {
   id: number;
@@ -157,23 +158,22 @@ export function InternalCompose() {
     setState({ kind: "loading" });
 
     try {
-      const [wsResp, accResp] = await Promise.all([
+      const [wsResp, accounts] = await Promise.all([
         authedFetch("/api/v1/workspaces", { signal: controller.signal }),
-        authedFetch("/api/v1/accounts", { signal: controller.signal }),
+        listAllAccounts({ signal: controller.signal }),
       ]);
       if (controller.signal.aborted) return;
 
       const wsData = (await wsResp.json()) as { workspaces: Workspace[] };
-      const accData = (await accResp.json()) as { accounts: PlatformAccount[] };
       const workspaces = wsData.workspaces ?? [];
-      const accounts = (accData.accounts ?? []).filter(isPublishableAccount);
+      const publishableAccounts = accounts.filter(isPublishableAccount);
 
-      setState({ kind: "ready", workspaces, accounts });
+      setState({ kind: "ready", workspaces, accounts: publishableAccounts });
       if (workspaces.length === 1) {
         setWorkspaceId(workspaces[0].id);
       }
-      if (accounts.length === 1) {
-        setSelectedAccounts(new Set([accounts[0].id]));
+      if (publishableAccounts.length === 1) {
+        setSelectedAccounts(new Set([publishableAccounts[0].id]));
       }
     } catch (err) {
       if (controller.signal.aborted) return;

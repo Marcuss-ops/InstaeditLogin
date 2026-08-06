@@ -86,16 +86,10 @@ export interface ListAccountsOptions {
 
 /** Follow account cursors so callers keep seeing the complete manifest. */
 export async function listAllAccounts(
-  options: ListAccountsOptions | AbortSignal = {},
+  options: ListAccountsOptions = {},
 ): Promise<PlatformAccount[]> {
-  // Keep the historical `listAllAccounts(signal)` call shape source-compatible
-  // while callers migrate to the shared-cache options object.
-  const normalized: ListAccountsOptions =
-    typeof AbortSignal !== "undefined" && options instanceof AbortSignal
-      ? { signal: options }
-      : options as ListAccountsOptions;
   const now = Date.now();
-  if (!normalized.force && accountsCache && now - accountsCache.at < ACCOUNTS_STALE_MS) {
+  if (!options.force && accountsCache && now - accountsCache.at < ACCOUNTS_STALE_MS) {
     return accountsCache.value;
   }
   if (!accountsInFlight) {
@@ -109,6 +103,10 @@ export async function listAllAccounts(
       });
   }
   return accountsInFlight;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("instaedit:session-cleared", clearAccountsCache);
 }
 
 export function filterYouTube(accounts: PlatformAccount[]): PlatformAccount[] {

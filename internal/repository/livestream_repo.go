@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -105,6 +106,44 @@ func (r *LivestreamRepository) FindByID(ctx context.Context, id string) (*models
 		return nil, fmt.Errorf("find livestream: %w", err)
 	}
 	return ls, nil
+}
+
+func (r *LivestreamRepository) ListByWorkspacePage(ctx context.Context, workspaceID int64, afterTime *time.Time, afterID string, limit int) ([]models.Livestream, bool, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var after interface{}
+	if afterTime != nil {
+		after = *afterTime
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+livestreamColumns+` FROM livestreams
+		 WHERE workspace_id = $1
+		   AND ($2::timestamptz IS NULL OR (updated_at, id) < ($2, $3))
+		 ORDER BY updated_at DESC, id DESC LIMIT $4`, workspaceID, after, afterID, limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("list paginated livestreams: %w", err)
+	}
+	defer rows.Close()
+	result := make([]models.Livestream, 0, limit+1)
+	for rows.Next() {
+		ls, scanErr := scanLivestream(rows)
+		if scanErr != nil {
+			return nil, false, fmt.Errorf("scan paginated livestream: %w", scanErr)
+		}
+		result = append(result, *ls)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("iterate paginated livestreams: %w", err)
+	}
+	hasMore := len(result) > limit
+	if hasMore {
+		result = result[:limit]
+	}
+	return result, hasMore, nil
 }
 
 func (r *LivestreamRepository) ListByWorkspace(ctx context.Context, workspaceID int64) ([]models.Livestream, error) {

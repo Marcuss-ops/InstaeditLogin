@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 
 // The session shape is data-driven so tests can exercise both the
 // name-preference and the email-fallback branches of the header.
@@ -81,6 +82,9 @@ describe("AccountSwitcher header", () => {
       ok: true,
       json: async () => ACCOUNTS,
     } as Response);
+    // The header now loads the manifest through the shared listAllAccounts
+    // cache (60s stale window); reset it so each test sees its own stub.
+    clearAccountsCache();
   });
 
   it("shows the logged-in InstaEdit user name instead of the linked channel", async () => {

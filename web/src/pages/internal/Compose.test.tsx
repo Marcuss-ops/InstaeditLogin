@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 
 const { startUploadMock, resetUploadMock, useUploadMediaMock } = vi.hoisted(() => ({
   startUploadMock: vi.fn(),
@@ -35,6 +36,7 @@ function renderCompose() {
 describe("InternalCompose", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    clearAccountsCache();
     useUploadMediaMock.mockReturnValue({
       state: { kind: "idle" },
       start: startUploadMock,
@@ -53,7 +55,7 @@ describe("InternalCompose", () => {
         if (url.endsWith("/api/v1/workspaces")) {
           return mockJsonResponse({ workspaces: [{ id: 1, name: "Marketing" }] });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url).pathname === "/api/v1/accounts") {
           return mockJsonResponse({ accounts: [] });
         }
         return mockJsonResponse({}, false, 404);
@@ -84,7 +86,7 @@ describe("InternalCompose", () => {
         if (url.endsWith("/api/v1/workspaces")) {
           return mockJsonResponse({ workspaces: [{ id: 1, name: "Marketing" }] });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url).pathname === "/api/v1/accounts") {
           return mockJsonResponse({
             accounts: [{ id: 10, platform: "instagram", username: "demo", status: "active", is_publishable: true }],
           });

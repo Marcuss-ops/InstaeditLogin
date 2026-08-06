@@ -42,6 +42,8 @@ export type LivestreamRow = {
 
 export type LivestreamsResponse = {
   items: LivestreamRow[];
+  next_cursor?: string;
+  has_more?: boolean;
 };
 
 /**
@@ -107,6 +109,8 @@ export type MediaLibraryItem = {
 
 export type MediaLibraryResponse = {
   items: MediaLibraryItem[];
+  next_cursor?: string;
+  has_more?: boolean;
 };
 
 /**

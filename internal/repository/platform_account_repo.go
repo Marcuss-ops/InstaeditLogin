@@ -16,10 +16,12 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -100,8 +102,20 @@ func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUser(userID int64, p
 	}
 	defer rows.Close()
 
+	out, err := scanAccountSnapshotRows(rows, 0)
+	if err != nil {
+		return nil, err
+	}
+	return out, rows.Err()
+}
+
+func scanAccountSnapshotRows(rows *sql.Rows, max int) ([]*AccountWithSnapshot, error) {
 	var out []*AccountWithSnapshot
 	for rows.Next() {
+		if max > 0 && len(out) >= max {
+			break
+		}
+
 		a := &models.PlatformAccount{}
 		var metadata []byte
 		var (
@@ -145,6 +159,50 @@ func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUser(userID int64, p
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// ListPlatformAccountsWithSnapshotsByUserPage returns one keyset-paginated
+// account page. Ordering is deterministic on (created_at, id), newest first;
+// the extra row is used to report hasMore without an OFFSET scan.
+func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUserPage(ctx context.Context, userID int64, platform string, includeDeleted bool, afterTime *time.Time, afterID int64, limit int) ([]*AccountWithSnapshot, bool, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	const base = `SELECT pa.id, pa.user_id, pa.platform, pa.platform_user_id, pa.username, pa.status, pa.connected_at,
+	        pa.last_validated_at, pa.last_refresh_at, pa.reauth_required_at,
+	        COALESCE(pa.last_error_code, '') AS last_error_code,
+	        COALESCE(pa.last_error_message, '') AS last_error_message,
+	        pa.metadata, pa.created_at, pa.updated_at,
+	        ars.platform_account_id, ars.resource_type, ars.profile, ars.statistics, ars.status, ars.content,
+	        ars.provider_etag, ars.fetched_at, ars.updated_at
+	 FROM platform_accounts pa
+	 LEFT JOIN account_resource_snapshots ars ON ars.platform_account_id = pa.id
+	 WHERE pa.user_id = $1
+	   AND ($2::timestamptz IS NULL OR (pa.created_at, pa.id) < ($2, $3))
+	   AND ($4::bool OR pa.status NOT IN ('disconnected', 'revoked', 'deleted', 'cancelled', 'canceled'))`
+	query := base + ` AND ($5::text = '' OR pa.platform = $5)
+	 ORDER BY pa.created_at DESC, pa.id DESC LIMIT $6`
+	var after interface{}
+	if afterTime != nil {
+		after = *afterTime
+	}
+	rows, err := r.db.QueryContext(ctx, query, userID, after, afterID, includeDeleted, platform, limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to list paginated platform accounts: %w", err)
+	}
+	defer rows.Close()
+	out, err := scanAccountSnapshotRows(rows, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	return out, hasMore, nil
 }
 
 // ListPlatformAccountsByUser returns all platform accounts for a user, optionally filtered by platform.

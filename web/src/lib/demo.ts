@@ -208,8 +208,8 @@ export function handleDemoRequest(
     return json({ ok: true });
   }
 
-  if (path === "/api/v1/accounts") {
-    return json({ accounts: demoAccounts });
+  if (path === "/api/v1/accounts" || path.startsWith("/api/v1/accounts?")) {
+    return json({ accounts: demoAccounts, has_more: false });
   }
 
   // "Rimuovi dalla cartella": dedicated DELETE for a single membership.

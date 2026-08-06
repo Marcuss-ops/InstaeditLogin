@@ -1,9 +1,9 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"path"
-	"strconv"
 	"strings"
 	"time"
 
@@ -67,17 +67,42 @@ func (r *Router) handleListMediaAssets(w http.ResponseWriter, req *http.Request)
 	if !ok {
 		return
 	}
-	limit := 100
-	if raw := strings.TrimSpace(req.URL.Query().Get("limit")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-			limit = parsed
+	limit, rawCursor, err := parseListPageWithBounds(req.URL.Query(), 100, 500)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cursorContext := ""
+	cursorTime, cursorID, cursorNull, err := decodeListCursorDetails(rawCursor, "media", cursorContext)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if cursorNull {
+		writeError(w, http.StatusBadRequest, "invalid list cursor: media cursor timestamp is required")
+		return
+	}
+	var assets []models.MediaAsset
+	hasMore := false
+	if paged, ok := r.mediaStore.(interface {
+		ListReadyByUserPage(context.Context, int64, *time.Time, string, int) ([]models.MediaAsset, bool, error)
+	}); ok {
+		var afterTime *time.Time
+		if rawCursor != "" {
+			afterTime = &cursorTime
+		}
+		assets, hasMore, err = paged.ListReadyByUserPage(req.Context(), userID, afterTime, cursorID, limit)
+	} else {
+		if rawCursor != "" {
+			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this media store")
+			return
+		}
+		assets, err = r.mediaStore.ListReadyByUser(req.Context(), userID, limit)
+		if len(assets) > limit {
+			hasMore = true
+			assets = assets[:limit]
 		}
 	}
-	if limit > 500 {
-		limit = 500
-	}
-
-	assets, err := r.mediaStore.ListReadyByUser(req.Context(), userID, limit)
 	if err != nil {
 		logAndError(w, req, "failed to list media library", err, "user_id", userID)
 		return
@@ -106,7 +131,12 @@ func (r *Router) handleListMediaAssets(w http.ResponseWriter, req *http.Request)
 		}
 		items = append(items, item)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	response := map[string]any{"items": items, "has_more": hasMore}
+	if hasMore && len(assets) > 0 {
+		last := assets[len(assets)-1]
+		response["next_cursor"] = encodeListCursorForContext("media", cursorContext, last.CreatedAt, last.ID)
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // mediaAssetFilename recovers the display name from the S3 object key

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { authedFetch, AuthError, ApiError, fetchSession } from "../../lib/auth";
 import { isPublishableAccount } from "../../types/uploads";
+import { listAllAccounts } from "../../features/channels/api/channelsApi";
 import {
   buildTree,
   type FetchState,
@@ -42,15 +43,15 @@ export function useGroupsData() {
         if (controller.signal.aborted) return;
         const meData = (await meResp.json()) as { workspace_id: number };
         const workspaceId = meData.workspace_id;
-        const [groupsResp, accountsResp] = await Promise.all([
+        const [groupsResp, accounts] = await Promise.all([
           authedFetch("/api/v1/groups/aggregate", { signal: controller.signal }),
-          authedFetch("/api/v1/accounts", { signal: controller.signal }),
+          listAllAccounts({ signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return;
         const groupsData = (await groupsResp.json()) as {
           groups: Array<Group & { account_ids?: number[] }>;
         };
-        const accountsData = (await accountsResp.json()) as { accounts: PlatformAccount[] };
+        const accountsData = { accounts };
         // The groups UI is an operational publishing view: accounts that are
         // not active (revoked, suspended or requiring re-auth) must not be
         // selectable or displayed as usable channels.

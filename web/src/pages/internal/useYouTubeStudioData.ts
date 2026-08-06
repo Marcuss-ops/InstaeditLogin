@@ -3,8 +3,9 @@ import { AuthError, authedFetch } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import { listYouTubeEditorSessions } from "../../features/youtube/api/editorSessionsApi";
 import { isPublishableAccount } from "../../types/uploads";
+import { listAllAccounts } from "../../features/channels/api/channelsApi";
 import type { LoadState } from "./youtubeStudioTypes";
-import type { EditorSession, PlatformAccount, Workspace } from "../../types/uploads";
+import type { EditorSession, Workspace } from "../../types/uploads";
 
 /**
  * useYouTubeStudioData owns the YouTube Studio read path: the initial
@@ -51,17 +52,15 @@ export function useYouTubeStudioData() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
-      const [wsR, acctsR] = await Promise.all([
+      const [wsR, accounts] = await Promise.all([
         authedFetch("/api/v1/workspaces", { signal: ctrl.signal }),
-        authedFetch("/api/v1/accounts", { signal: ctrl.signal }),
+        listAllAccounts({ signal: ctrl.signal }),
       ]);
       if (ctrl.signal.aborted) return;
 
       const ws =
         ((await wsR.json()) as { workspaces: Workspace[] }).workspaces ?? [];
-      const accts =
-        ((await acctsR.json()) as { accounts: PlatformAccount[] }).accounts ??
-        [];
+      const accts = accounts;
       const youtubeChannels = accts.filter(
         (a) => a.platform === "youtube" && isPublishableAccount(a),
       );

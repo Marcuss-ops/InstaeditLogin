@@ -27,6 +27,7 @@ type UploadJob = {
   caption?: string;
   status: string;
   scheduled_at?: string | null;
+  publish_at?: string | null;
   created_at: string;
   targets: number[];
   source_type: string;
@@ -51,6 +52,8 @@ type CalendarResponse = {
   first_publish_at?: string | null;
   last_publish_at?: string | null;
   by_day: UploadJobBucket[];
+  next_cursor?: string;
+  has_more?: boolean;
 };
 
 type CalendarState =
@@ -151,10 +154,23 @@ export function ScheduledByAccount() {
         `/api/v1/uploads/by-account?account_id=${accountID}` +
         `&from=${encodeURIComponent(fromUTC.toISOString())}` +
         `&to=${encodeURIComponent(toUTC.toISOString())}`;
-      const resp = await authedFetch(url, { signal: controller.signal });
-      if (controller.signal.aborted) return;
-      const data = (await resp.json()) as CalendarResponse;
-      setState({ kind: "ready", data, monthStart });
+      let nextCursor: string | undefined;
+      let merged: CalendarResponse | null = null;
+      do {
+        const pageURL = nextCursor ? `${url}&cursor=${encodeURIComponent(nextCursor)}` : url;
+        const resp = await authedFetch(pageURL, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        const page = (await resp.json()) as CalendarResponse;
+        if (!merged) {
+          merged = { ...page, by_day: [] };
+        }
+        merged.by_day = [...merged.by_day, ...(page.by_day ?? [])];
+        nextCursor = page.has_more ? page.next_cursor : undefined;
+      } while (nextCursor);
+      if (!merged) return;
+      merged.has_more = false;
+      merged.next_cursor = undefined;
+      setState({ kind: "ready", data: merged, monthStart });
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) {

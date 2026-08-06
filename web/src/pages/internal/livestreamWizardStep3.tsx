@@ -48,7 +48,7 @@ export function LiveStreamWizardStep3({
   onBack: () => void;
   onContinue: () => void;
 }) {
-  const { state, reload } = useMediaLibrary();
+  const { state, reload, loadMore } = useMediaLibrary();
   const [previewId, setPreviewId] = useState<string | null>(null);
 
   const canContinue = selectedIds.length > 0;
@@ -126,6 +126,7 @@ export function LiveStreamWizardStep3({
       )}
 
       {state.kind === "ready" && state.items.length > 0 && (
+        <>
         <ul className="grid grid-cols-1 gap-3 md:grid-cols-2" data-testid="ls-step3-list">
           {state.items.map((item) => {
             const compat = compatibilityMeta(item.live_compatibility);
@@ -205,6 +206,22 @@ export function LiveStreamWizardStep3({
             );
           })}
         </ul>
+        {state.hasMore && (
+          <div className="flex flex-col items-center gap-2 pt-1">
+            {state.loadMoreError && <p className="text-[12px] text-red-300">{state.loadMoreError}</p>}
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={state.loadingMore}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.12] bg-white/[0.05] px-3.5 py-2 text-[12px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.1] disabled:opacity-50"
+              data-testid="ls-step3-load-more"
+            >
+              {state.loadingMore && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
+              {state.loadingMore ? "Caricamento…" : "Carica altri asset"}
+            </button>
+          </div>
+        )}
+        </>
       )}
 
       {/* Action bar */}

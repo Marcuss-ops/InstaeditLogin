@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ToastProvider } from "../../components/toast";
 import { InternalUploads } from "./Uploads";
+import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 
 function mockJsonResponse(data: unknown, ok = true, status = 202) {
   return {
@@ -118,7 +119,7 @@ function setupFetchMock(opts: {
       if (url.endsWith("/api/v1/workspaces")) {
         return mockJsonResponse({ workspaces: sampleWorkspaces });
       }
-      if (url.endsWith("/api/v1/accounts")) {
+      if (new URL(url).pathname === "/api/v1/accounts") {
         // Always include all three platform types so the InternalUploads
         // form renders past all EmptyState gates. The drive-account
         // selection test explicitly targets the "21" id from sampleDrives;
@@ -160,6 +161,7 @@ function renderPage() {
 describe("InternalUploads (/app/uploads)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    clearAccountsCache();
   });
 
   it("renders the form fields after dependencies load", async () => {
@@ -403,7 +405,7 @@ describe("InternalUploads (/app/uploads)", () => {
         if (url.endsWith("/api/v1/workspaces")) {
           return mockJsonResponse({ workspaces: sampleWorkspaces });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url).pathname === "/api/v1/accounts") {
           return mockJsonResponse({ accounts: [] });
         }
         return mockJsonResponse({}, false, 404);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authedFetch, AuthError } from "../../lib/auth";
+import { listAllAccounts } from "../../features/channels/api/channelsApi";
 import type { FormEvent } from "react";
 import {
   DEFAULT_MAX_JITTER_MIN,
@@ -11,7 +12,6 @@ import {
   type BatchResponse,
   type FormValues,
   type LoadState,
-  type PlatformAccount,
   type SubmitState,
   type Workspace,
 } from "./driveBatchImportTypes";
@@ -60,17 +60,15 @@ export function useDriveBatchImport({
       abortRef.current = ctrl;
       void (async () => {
         try {
-          const [wsR, acctsR] = await Promise.all([
+          const [wsR, accounts] = await Promise.all([
             authedFetch("/api/v1/workspaces", { signal: ctrl.signal }),
-            authedFetch("/api/v1/accounts", { signal: ctrl.signal }),
+            listAllAccounts({ signal: ctrl.signal }),
           ]);
           if (ctrl.signal.aborted) return;
           const ws =
             ((await wsR.json()) as { workspaces: Workspace[] }).workspaces ??
             [];
-          const accts =
-            ((await acctsR.json()) as { accounts: PlatformAccount[] })
-              .accounts ?? [];
+          const accts = accounts;
           const pages = accts.filter((a) => a.platform === "facebook");
           setLoadState({ kind: "ready", workspaces: ws, pages });
           setForm((f) => ({

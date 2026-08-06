@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FolderTree, ImageIcon, Loader2, X } from "lucide-react";
 import { authedFetch } from "../../../lib/auth";
-import { filterYouTube, type PlatformAccount } from "../../channels/api/channelsApi";
+import { filterYouTube, listAllAccounts, type PlatformAccount } from "../../channels/api/channelsApi";
 import { createThumbnailAssignments } from "../api/thumbnailProjectsApi";
 import type { ContentItem } from "../../../pages/internal/calendarTypes";
 
@@ -85,15 +85,12 @@ export function LinkToVideoDialog({
       try {
         // Group memberships + channels load in parallel (one aggregate
         // call, no per-group fan-out — mirrors useGroupsData).
-        const [groupsResp, accountsResp] = await Promise.all([
+        const [groupsResp, accounts] = await Promise.all([
           authedFetch("/api/v1/groups/aggregate"),
-          authedFetch("/api/v1/accounts"),
+          listAllAccounts(),
         ]);
         const groupsData = (await groupsResp.json()) as {
           groups?: Array<{ id: number; name: string; account_ids?: number[] }>;
-        };
-        const accountsData = (await accountsResp.json()) as {
-          accounts?: PlatformAccount[];
         };
         if (cancelled) return;
         setGroupsState({
@@ -106,7 +103,7 @@ export function LinkToVideoDialog({
         });
         setChannelsState({
           kind: "ready",
-          channels: filterYouTube(accountsData.accounts ?? []),
+          channels: filterYouTube(accounts),
         });
       } catch (err) {
         if (cancelled) return;
@@ -145,11 +142,35 @@ export function LinkToVideoDialog({
     setVideosState({ kind: "loading" });
     setSelectedVideo(null);
     try {
-      const resp = await authedFetch(
-        `/api/v1/accounts/${channel.id}/content?limit=50&privacy=private`,
-      );
-      const data = (await resp.json()) as { items?: ContentItem[] };
-      setVideosState({ kind: "ready", items: data.items ?? [] });
+      const items: ContentItem[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      let loadedAllPages = false;
+      for (let page = 0; page < 10_000; page += 1) {
+        const params = new URLSearchParams({ limit: "50", privacy: "private" });
+        if (cursor) params.set("cursor", cursor);
+        const resp = await authedFetch(
+          `/api/v1/accounts/${channel.id}/content?${params.toString()}`,
+        );
+        const data = (await resp.json()) as {
+          items?: ContentItem[];
+          next_cursor?: string;
+        };
+        items.push(...(data.items ?? []));
+        if (!data.next_cursor) {
+          loadedAllPages = true;
+          break;
+        }
+        if (seenCursors.has(data.next_cursor)) {
+          throw new Error("La paginazione dei video ha restituito un cursore ripetuto.");
+        }
+        seenCursors.add(data.next_cursor);
+        cursor = data.next_cursor;
+      }
+      if (!loadedAllPages) {
+        throw new Error("La lista video ha superato il limite massimo di pagine.");
+      }
+      setVideosState({ kind: "ready", items });
     } catch (err) {
       setVideosState({
         kind: "error",

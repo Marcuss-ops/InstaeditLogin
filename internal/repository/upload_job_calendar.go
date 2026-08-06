@@ -62,9 +62,24 @@ func (r *UploadJobRepository) ListByUser(userID int64, filter UploadJobListFilte
 		   AND ($3::upload_job_status   IS NULL OR status = $3::upload_job_status)
 		   AND ($4::timestamptz         IS NULL OR publish_at >= $4)
 		   AND ($5::timestamptz         IS NULL OR publish_at <= $5)
+		   AND (
+				$6::bool OR
+				(
+					$7::timestamptz IS NULL AND $8::bigint = 0 AND $9::bool = false
+				)
+				OR (
+					$9::bool = false AND publish_at IS NOT NULL AND
+					($7::timestamptz IS NULL OR (publish_at, id) > ($7, $8))
+				)
+				OR (
+					$9::bool = true AND publish_at IS NULL AND id > $8
+				)
+			)
 		 ORDER BY publish_at ASC NULLS LAST, id ASC
-		 LIMIT $6`,
-		userID, accountID, status, timeFrom, timeTo, filter.Limit,
+		 LIMIT $10`,
+		userID, accountID, status, timeFrom, timeTo,
+		filter.AfterPublishAt == nil && filter.AfterID == 0 && !filter.AfterPublishNull,
+		filter.AfterPublishAt, filter.AfterID, filter.AfterPublishNull, filter.Limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list upload_jobs by user: %w", err)

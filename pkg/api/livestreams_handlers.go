@@ -309,7 +309,42 @@ func (r *Router) handleListLivestreams(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	items, err := r.livestreamStore.ListByWorkspace(req.Context(), workspaceID)
+	limit, rawCursor, err := parseListPage(req.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cursorContext := listCursorFilterContext(req.URL.Query(), "workspace_id")
+	cursorTime, cursorID, cursorNull, err := decodeListCursorDetails(rawCursor, "livestreams", cursorContext)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if cursorNull {
+		writeError(w, http.StatusBadRequest, "invalid list cursor: livestream cursor timestamp is required")
+		return
+	}
+	var items []models.Livestream
+	hasMore := false
+	if paged, ok := r.livestreamStore.(interface {
+		ListByWorkspacePage(context.Context, int64, *time.Time, string, int) ([]models.Livestream, bool, error)
+	}); ok {
+		var afterTime *time.Time
+		if rawCursor != "" {
+			afterTime = &cursorTime
+		}
+		items, hasMore, err = paged.ListByWorkspacePage(req.Context(), workspaceID, afterTime, cursorID, limit)
+	} else {
+		if rawCursor != "" {
+			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this livestream store")
+			return
+		}
+		items, err = r.livestreamStore.ListByWorkspace(req.Context(), workspaceID)
+		if len(items) > limit {
+			hasMore = true
+			items = items[:limit]
+		}
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list livestreams: "+err.Error())
 		return
@@ -320,6 +355,11 @@ func (r *Router) handleListLivestreams(w http.ResponseWriter, req *http.Request)
 		row := toLivestreamResponse(&items[i])
 		row.ChannelName = names[row.PlatformAccountID]
 		resp.Items = append(resp.Items, row)
+	}
+	resp.HasMore = hasMore
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		resp.NextCursor = encodeListCursorForContext("livestreams", cursorContext, last.UpdatedAt, last.ID)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

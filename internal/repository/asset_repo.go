@@ -144,6 +144,53 @@ func (r *MediaAssetRepository) ListReadyByUser(ctx context.Context, userID int64
 	return result, nil
 }
 
+// ListReadyByUserPage returns one keyset-paginated media page ordered by
+// (created_at, id), newest first. It fetches one extra row to report hasMore.
+func (r *MediaAssetRepository) ListReadyByUserPage(ctx context.Context, userID int64, afterTime *time.Time, afterID string, limit int) ([]models.MediaAsset, bool, error) {
+	if userID <= 0 {
+		return nil, false, fmt.Errorf("list media assets: invalid user id %d", userID)
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var after interface{}
+	if afterTime != nil {
+		after = *afterTime
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+mediaAssetColumns+`
+		 FROM media_assets
+		 WHERE user_id = $1 AND status = $2 AND expires_at > NOW()
+		   AND ($3::timestamptz IS NULL OR (created_at, id::text) < ($3, $4))
+		 ORDER BY created_at DESC, id::text DESC
+		 LIMIT $5`,
+		userID, string(models.MediaAssetStatusReady), after, afterID, limit+1,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("list paginated media assets: %w", err)
+	}
+	defer rows.Close()
+	result := make([]models.MediaAsset, 0, limit+1)
+	for rows.Next() {
+		asset, scanErr := scanMediaAsset(rows)
+		if scanErr != nil {
+			return nil, false, fmt.Errorf("scan paginated media asset: %w", scanErr)
+		}
+		result = append(result, *asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("iterate paginated media assets: %w", err)
+	}
+	hasMore := len(result) > limit
+	if hasMore {
+		result = result[:limit]
+	}
+	return result, hasMore, nil
+}
+
 // ListVisibleInWorkspace returns the ready, non-expired media assets
 // among mediaIDs that are visible to the workspace: the asset owner is
 // the workspace owner OR a workspace member. Missing, foreign,

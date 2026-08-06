@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { authedFetch, AuthError } from "../../lib/auth";
+import { listAllAccounts } from "../../features/channels/api/channelsApi";
 import { useToast } from "../../components/toast";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
 import type { ContentItem, ContentPage, VideoState } from "./calendarTypes";
@@ -12,11 +13,8 @@ export function usePrivateVideos(accountId: string | null, enabled: boolean) {
     async (cursor?: string) => {
       let accountIDs: number[] = accountId ? [Number(accountId)] : [];
       if (!accountId) {
-        const accountsResponse = await authedFetch("/api/v1/accounts");
-        const accountsData = (await accountsResponse.json()) as {
-          accounts?: Array<{ id: number; platform: string; username?: string }>;
-        };
-        accountIDs = (accountsData.accounts ?? [])
+        const accounts = await listAllAccounts();
+        accountIDs = accounts
           .filter((account) => account.platform === "youtube")
           .map((account) => account.id);
       }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronDown, User, Check } from "lucide-react";
-import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
+import { AuthError, fetchSession } from "../../lib/auth";
+import { listAllAccounts } from "../../features/channels/api/channelsApi";
 import { getProvider, type ProviderId } from "../../lib/providers";
 import { cn } from "../../lib/utils";
 import {
@@ -34,10 +35,9 @@ export function AccountSwitcher() {
 
   const loadAccounts = useCallback(async () => {
     try {
-      const response = await authedFetch("/api/v1/accounts");
-      const data = (await response.json()) as { accounts: PlatformAccount[] };
-      setState({ kind: "ready", accounts: data.accounts ?? [] });
-      const firstPublishable = data.accounts.find(isPublishableAccount);
+      const accounts = (await listAllAccounts()) as PlatformAccount[];
+      setState({ kind: "ready", accounts });
+      const firstPublishable = accounts.find(isPublishableAccount);
       if (firstPublishable) {
         setSelectedId((prev) => (prev === null ? firstPublishable.id : prev));
       }

@@ -32,11 +32,14 @@ func NewUploadJobRepository(db *sql.DB) *UploadJobRepository {
 // ListByAccount. Zero-value fields are interpreted as "no filter"; the
 // handler applies only the predicates it has non-zero values for.
 type UploadJobListFilter struct {
-	AccountID *int64                  // restrict to jobs whose targets @> jsonb_build_array(AccountID)
-	Status    *models.UploadJobStatus // restrict to one of the enum values
-	From      *time.Time              // publish_at >= From (nil = no lower bound)
-	To        *time.Time              // publish_at <= To   (nil = no upper bound)
-	Limit     int                     // hard cap; 0 = default 200
+	AccountID        *int64                  // restrict to jobs whose targets @> jsonb_build_array(AccountID)
+	Status           *models.UploadJobStatus // restrict to one of the enum values
+	From             *time.Time              // publish_at >= From (nil = no lower bound)
+	To               *time.Time              // publish_at <= To   (nil = no upper bound)
+	AfterPublishAt   *time.Time              // keyset cursor; nil timestamp means the NULL publish_at tail
+	AfterID          int64
+	AfterPublishNull bool
+	Limit            int // hard cap; 0 = default 200
 }
 
 const uploadJobListDefaultLimit = 200

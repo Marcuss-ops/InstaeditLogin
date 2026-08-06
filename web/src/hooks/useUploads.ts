@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AuthError, authedFetch } from "../lib/auth";
+import { listAllAccounts } from "../features/channels/api/channelsApi";
 import { useToast } from "../components/toast";
 import type {
   AsyncBatchResponse,
   BatchStatusResponse,
   FormValues,
   LoadState,
-  PlatformAccount,
   SubmitState,
   Workspace,
 } from "../types/uploads";
@@ -61,15 +61,13 @@ export function useUploads() {
       try {
         const [wsR, acctsR] = await Promise.all([
           authedFetch("/api/v1/workspaces", { signal: ctrl.signal }),
-          authedFetch("/api/v1/accounts", { signal: ctrl.signal }),
+          listAllAccounts({ signal: ctrl.signal }),
         ]);
         if (ctrl.signal.aborted) return;
 
         const ws =
           ((await wsR.json()) as { workspaces: Workspace[] }).workspaces ?? [];
-        const accts =
-          ((await acctsR.json()) as { accounts: PlatformAccount[] }).accounts ??
-          [];
+        const accts = acctsR;
         const publishableAccounts = accts.filter(isPublishableAccount);
         const youtubeChannels = publishableAccounts.filter(
           (a) => a.platform === "youtube",

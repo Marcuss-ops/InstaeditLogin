@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -32,11 +33,35 @@ func (r *Router) handleListUploads(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	filter, err := parseUploadJobFilter(req.URL.Query(), true /* allowEmpty */)
+	q := req.URL.Query()
+	filter, err := parseUploadJobFilter(q, true /* allowEmpty */)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	limit, rawCursor, pageErr := parseListPageWithBounds(q, 200, 500)
+	if pageErr != nil {
+		writeError(w, http.StatusBadRequest, pageErr.Error())
+		return
+	}
+	cursorContext := listCursorFilterContext(q, "account_id", "status", "from", "to")
+	cursorTime, cursorID, cursorNull, pageErr := decodeListCursorDetails(rawCursor, "uploads", cursorContext)
+	if pageErr != nil {
+		writeError(w, http.StatusBadRequest, pageErr.Error())
+		return
+	}
+	if rawCursor != "" {
+		filter.AfterID = parseCursorID(cursorID)
+		if filter.AfterID <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid list cursor")
+			return
+		}
+		if !cursorNull {
+			filter.AfterPublishAt = &cursorTime
+		}
+		filter.AfterPublishNull = cursorNull
+	}
+	filter.Limit = limit + 1
 
 	jobs, listErr := r.uploadJobStore.ListByUser(identity.UserID(), filter)
 	if listErr != nil {
@@ -44,14 +69,28 @@ func (r *Router) handleListUploads(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not list uploads")
 		return
 	}
+	hasMore := len(jobs) > limit
+	if hasMore {
+		jobs = jobs[:limit]
+	}
 	items := make([]UploadJobDTO, 0, len(jobs))
 	for i := range jobs {
 		items = append(items, toUploadJobDTO(&jobs[i]))
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"uploads": items,
-		"count":   len(items),
-	})
+	response := map[string]interface{}{
+		"uploads":  items,
+		"count":    len(items),
+		"has_more": hasMore,
+	}
+	if hasMore && len(jobs) > 0 {
+		last := jobs[len(jobs)-1]
+		var when time.Time
+		if last.PublishAt != nil {
+			when = *last.PublishAt
+		}
+		response["next_cursor"] = encodeListCursorForContext("uploads", cursorContext, when, fmt.Sprint(last.ID))
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // handleListUploadsByAccount is GET /api/v1/uploads/by-account backing
@@ -99,9 +138,29 @@ func (r *Router) handleListUploadsByAccount(w http.ResponseWriter, req *http.Req
 		return
 	}
 	filter.AccountID = &accountID
-	if filter.Limit == 0 {
-		filter.Limit = uploadJobCalendarDefaultLimit
+	limit, rawCursor, pageErr := parseListPageWithBounds(q, uploadJobCalendarDefaultLimit, 500)
+	if pageErr != nil {
+		writeError(w, http.StatusBadRequest, pageErr.Error())
+		return
 	}
+	cursorContext := listCursorFilterContext(q, "account_id", "status", "from", "to")
+	cursorTime, cursorID, cursorNull, pageErr := decodeListCursorDetails(rawCursor, "uploads-account", cursorContext)
+	if pageErr != nil {
+		writeError(w, http.StatusBadRequest, pageErr.Error())
+		return
+	}
+	if rawCursor != "" {
+		filter.AfterID = parseCursorID(cursorID)
+		if filter.AfterID <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid list cursor")
+			return
+		}
+		if !cursorNull {
+			filter.AfterPublishAt = &cursorTime
+		}
+		filter.AfterPublishNull = cursorNull
+	}
+	filter.Limit = limit + 1
 
 	jobs, listErr := r.uploadJobStore.ListByUser(identity.UserID(), filter)
 	if listErr != nil {
@@ -112,6 +171,11 @@ func (r *Router) handleListUploadsByAccount(w http.ResponseWriter, req *http.Req
 		)
 		writeError(w, http.StatusInternalServerError, "could not list uploads")
 		return
+	}
+
+	hasMore := len(jobs) > limit
+	if hasMore {
+		jobs = jobs[:limit]
 	}
 
 	type UploadJobBucket struct {
@@ -172,9 +236,10 @@ func (r *Router) handleListUploadsByAccount(w http.ResponseWriter, req *http.Req
 	}
 	sort.Slice(buckets, func(i, j int) bool { return buckets[i].Date < buckets[j].Date })
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	response := map[string]interface{}{
 		"account_id":       accountID,
 		"platform":         account.Platform,
+		"has_more":         hasMore,
 		"username":         account.Username,
 		"count":            len(jobs),
 		"pending_count":    pending,
@@ -184,5 +249,14 @@ func (r *Router) handleListUploadsByAccount(w http.ResponseWriter, req *http.Req
 		"first_publish_at": firstScheduled,
 		"last_publish_at":  lastScheduled,
 		"by_day":           buckets,
-	})
+	}
+	if hasMore && len(jobs) > 0 {
+		last := jobs[len(jobs)-1]
+		var when time.Time
+		if last.PublishAt != nil {
+			when = *last.PublishAt
+		}
+		response["next_cursor"] = encodeListCursorForContext("uploads-account", cursorContext, when, fmt.Sprint(last.ID))
+	}
+	writeJSON(w, http.StatusOK, response)
 }

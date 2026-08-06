@@ -56,10 +56,38 @@ Object.defineProperty(window, "ResizeObserver", {
 // explicitly use the bus for unit tests, AND those that side-effect it
 // through auth.ts's auto-emit) starts with an empty queue.
 import { toastBus } from "./src/components/toast/toast-bus";
-
-afterEach(() => {
+// Global accounts-manifest cache reset for cross-test hygiene.
+//
+// Why: `listAllAccounts` (channelsApi) caches the /api/v1/accounts
+// manifest for 60s and dedupes concurrent callers. Page tests that stub
+// fetch (Compose, Uploads, Linking, DriveBatchImportDialog, ...) rely on
+// their OWN stub being hit; without a reset, a cache entry populated by an
+// earlier test (same file or same worker) short-circuits the stub and the
+// page renders stale data. Centralizing the reset here means every test
+// file starts with an empty accounts cache, exactly like toastBus.
+//
+// The import is DYNAMIC on purpose: a static import here would resolve the
+// real channelsApi → lib/auth graph at setup time, BEFORE a test file's
+// vi.mock("../../lib/auth", ...) registration (e.g.
+// AccountSwitcher.test.tsx) — the mock would then never apply to the
+// already-cached module instance. The afterEach dynamic import resolves
+// the per-file registry AFTER the file's mocks are in place.
+afterEach(async () => {
   cleanup();
   toastBus.__resetForTests();
+  // Files that vi.mock() the whole channelsApi module (e.g.
+  // useYouTubeChannels.test.ts) resolve a strict mock with NO
+  // clearAccountsCache export — vitest throws on property access, so a
+  // try/catch is required (not just optional chaining). Skipping is
+  // exactly right there because those files never touch the real cache.
+  try {
+    const { clearAccountsCache } = await import(
+      "./src/features/channels/api/channelsApi",
+    );
+    clearAccountsCache?.();
+  } catch {
+    // mocked channelsApi without the cache reset export
+  }
 });
 
 // Stub VITE_API_BASE_URL so isomorphic fetch mocks in component tests

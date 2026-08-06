@@ -8,7 +8,14 @@ const POLL_INTERVAL_MS = 30_000;
 
 export type LivestreamsState =
   | { kind: "loading" }
-  | { kind: "ready"; items: LivestreamRow[] }
+  | {
+      kind: "ready";
+      items: LivestreamRow[];
+      nextCursor?: string;
+      hasMore: boolean;
+      loadingMore?: boolean;
+      loadMoreError?: string;
+    }
   | { kind: "error"; message: string };
 
 /**
@@ -19,18 +26,18 @@ export type LivestreamsState =
  * keeps the list correct when the user switches workspace (the JWT
  * workspace_id is re-stamped server-side on switch).
  */
-async function fetchItems(signal: AbortSignal): Promise<LivestreamRow[]> {
-  if (isDemoMode()) return [];
+async function fetchItems(signal: AbortSignal, cursor?: string): Promise<LivestreamsResponse> {
+  if (isDemoMode()) return { items: [] };
   const meResponse = await authedFetch("/api/v1/auth/me", { signal });
   const me = (await meResponse.json()) as { workspace_id?: number };
   const workspaceID = me.workspace_id;
   if (typeof workspaceID !== "number" || !Number.isInteger(workspaceID) || workspaceID <= 0) {
-    return [];
+    return { items: [] };
   }
-  const params = new URLSearchParams({ workspace_id: String(workspaceID) });
+  const params = new URLSearchParams({ workspace_id: String(workspaceID), limit: "50" });
+  if (cursor) params.set("cursor", cursor);
   const response = await authedFetch(`/api/v1/livestreams?${params.toString()}`, { signal });
-  const data = (await response.json()) as LivestreamsResponse;
-  return Array.isArray(data.items) ? data.items : [];
+  return (await response.json()) as LivestreamsResponse;
 }
 
 /**
@@ -52,9 +59,14 @@ export function useLivestreams() {
     abortRef.current = controller;
     if (initial) setState({ kind: "loading" });
     try {
-      const items = await fetchItems(controller.signal);
+      const data = await fetchItems(controller.signal);
       if (controller.signal.aborted) return;
-      setState({ kind: "ready", items });
+      setState({
+        kind: "ready",
+        items: Array.isArray(data.items) ? data.items : [],
+        nextCursor: data.next_cursor,
+        hasMore: data.has_more === true,
+      });
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) {
@@ -88,6 +100,27 @@ export function useLivestreams() {
     };
   }, [load]);
 
+  const loadMore = useCallback(async () => {
+    if (state.kind !== "ready" || !state.hasMore || !state.nextCursor || state.loadingMore) return;
+    const controller = new AbortController();
+    abortRef.current?.abort();
+    abortRef.current = controller;
+    setState((previous) => previous.kind === "ready" ? { ...previous, loadingMore: true, loadMoreError: undefined } : previous);
+    try {
+      const data = await fetchItems(controller.signal, state.nextCursor);
+      if (controller.signal.aborted) return;
+      setState((previous) => previous.kind === "ready" ? {
+        kind: "ready",
+        items: [...previous.items, ...(data.items ?? [])],
+        nextCursor: data.next_cursor,
+        hasMore: data.has_more === true,
+      } : previous);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      setState((previous) => previous.kind === "ready" ? { ...previous, loadingMore: false, loadMoreError: err instanceof Error ? err.message : "Impossibile caricare altre live." } : previous);
+    }
+  }, [state]);
+
   const reload = useCallback(() => void load(true), [load]);
 
   const deleteLivestream = useCallback(async (id: string): Promise<boolean> => {
@@ -111,5 +144,5 @@ export function useLivestreams() {
     }
   }, []);
 
-  return { state, deletingID, deleteLivestream, reload };
+  return { state, deletingID, deleteLivestream, reload, loadMore };
 }

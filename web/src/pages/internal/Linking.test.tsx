@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 import { InternalLinking } from "./Linking";
 
 function mockJsonResponse(data: unknown, ok = true, status = 200) {
@@ -24,6 +25,9 @@ function renderLinking() {
 describe("InternalLinking", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // The shared accounts manifest cache (60s stale window) persists across
+    // tests within this file; reset it so each test sees its own fetch stub.
+    clearAccountsCache();
   });
 
   it("renders the linking heading and all 6 provider cards", async () => {
@@ -34,7 +38,7 @@ describe("InternalLinking", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url).pathname === "/api/v1/accounts") {
           return mockJsonResponse({ accounts: [] });
         }
         return mockJsonResponse({}, false, 404);
@@ -82,7 +86,7 @@ describe("InternalLinking", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url).pathname === "/api/v1/accounts") {
           return mockJsonResponse({ accounts: [] });
         }
         return mockJsonResponse({}, false, 404);
@@ -109,7 +113,7 @@ describe("InternalLinking", () => {
         if (url.endsWith("/api/v1/auth/me")) {
           return mockJsonResponse({ user_id: 1 });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url).pathname === "/api/v1/accounts") {
           return mockJsonResponse({
             accounts: [
               {
@@ -175,7 +179,7 @@ describe("InternalLinking", () => {
         if (url.endsWith("/api/v1/accounts/sync-all")) {
           return mockJsonResponse({ status: "scheduled", count: 3 });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url).pathname === "/api/v1/accounts") {
           return mockJsonResponse({ accounts: [] });
         }
         return mockJsonResponse({}, false, 404);

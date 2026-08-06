@@ -33,7 +33,7 @@ const SUMMARY_CARDS = [
  * (POST + prepare/start flow) lands with the next module step.
  */
 export function LiveStreamsPage() {
-  const { state, deletingID, deleteLivestream, reload } = useLivestreams();
+  const { state, deletingID, deleteLivestream, reload, loadMore } = useLivestreams();
   const [tab, setTab] = useState<LivestreamTab>("all");
 
   const items = state.kind === "ready" ? state.items : [];
@@ -179,6 +179,22 @@ export function LiveStreamsPage() {
                 onDelete={deleteLivestream}
               />
             ))}
+          </div>
+        )}
+
+        {state.kind === "ready" && state.hasMore && (
+          <div className="mt-5 flex flex-col items-center gap-2">
+            {state.loadMoreError && <p className="text-[12px] text-red-300">{state.loadMoreError}</p>}
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={state.loadingMore}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.12] bg-white/[0.05] px-3.5 py-2 text-[12px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.1] disabled:opacity-50"
+              data-testid="livestreams-load-more"
+            >
+              {state.loadingMore && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
+              {state.loadingMore ? "Caricamento…" : "Carica altre live"}
+            </button>
           </div>
         )}
 

@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { DriveBatchImportDialog } from "./DriveBatchImportDialog";
+import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 
 function mockJsonResponse(data: unknown, ok = true, status = 200) {
   return {
@@ -88,7 +89,7 @@ function setupFetchMock(opts: {
       if (url.endsWith("/api/v1/workspaces")) {
         return mockJsonResponse({ workspaces: sampleWorkspaces });
       }
-      if (url.endsWith("/api/v1/accounts")) {
+      if (new URL(url).pathname === "/api/v1/accounts") {
         return mockJsonResponse({ accounts: samplePages });
       }
       if (url.includes("/api/v1/media/import/drive/folder")) {
@@ -115,6 +116,7 @@ function renderDialog(props: Partial<React.ComponentProps<typeof DriveBatchImpor
 describe("DriveBatchImportDialog", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    clearAccountsCache();
   });
 
   it("renders the dialog title and form fields on open", async () => {
@@ -145,7 +147,7 @@ describe("DriveBatchImportDialog", () => {
         if (url.endsWith("/api/v1/workspaces")) {
           return mockJsonResponse({ workspaces: sampleWorkspaces });
         }
-        if (url.endsWith("/api/v1/accounts")) {
+        if (new URL(url).pathname === "/api/v1/accounts") {
           return mockJsonResponse({ accounts: [] }); // no pages
         }
         return mockJsonResponse({}, false, 404);

@@ -119,7 +119,9 @@ type livestreamResponse struct {
 }
 
 type listLivestreamsResponse struct {
-	Items []livestreamResponse `json:"items"`
+	Items      []livestreamResponse `json:"items"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+	HasMore    bool                 `json:"has_more"`
 }
 
 // livestreamChannelResponse is the per-channel preflight row for the
