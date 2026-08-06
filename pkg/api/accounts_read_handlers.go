@@ -215,10 +215,13 @@ func (r *Router) loadOwnAccountByID(w http.ResponseWriter, req *http.Request, id
 }
 
 // handleGetAccount returns a single platform account owned by the
-// authenticated user. When the provider implements AccountDetailsProvider
-// and a cached snapshot exists, the response includes a "resource" field
-// with rich details (metrics, branding, stats). The base 6-field shape
-// is always present for backward compatibility.
+// authenticated user. The response always carries the base account shape
+// plus, when a cached resource snapshot exists, a "resource" field with
+// rich details (metrics, branding, stats). STRICT RULE: this handler
+// NEVER calls the provider (YouTube) — opening a channel page only reads
+// PostgreSQL. Stale snapshots are served from cache and recorded as
+// refresh_pending for the background worker; explicit refreshes live on
+// POST /accounts/{id}/sync (handleSyncAccount).
 func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
@@ -263,9 +266,10 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Try to enrich with cached snapshot data. When the snapshot is fresh
-	// (< 10 min) we serve it directly; when it's stale or missing, we
-	// reach out to the provider, persist a fresh snapshot, and serve that.
+	// Serve from the cache ONLY. A fresh snapshot (< accountSnapshotMaxAge)
+	// is returned as-is; a stale or missing one is served as a cached
+	// fallback and flagged refresh_pending so the background worker
+	// refreshes it asynchronously — never a synchronous provider call.
 	stale, err := r.snapshotStore.IsSnapshotStale(account.ID, accountSnapshotMaxAge)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "snapshot freshness check failed: "+err.Error())
@@ -274,90 +278,12 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	resp.SnapshotStale = stale
 
 	if stale {
-		// Cache miss or stale — fetch fresh details from the provider.
-		if detailsProvider, ok := r.capabilities.AccountDetails(account.Platform); ok {
-			token, tokenErr := r.vault.Get(req.Context(), account.ID, models.TokenTypeBearer)
-			if tokenErr != nil {
-				token, tokenErr = r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
-				if tokenErr != nil {
-					token, tokenErr = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
-				}
-			}
-			if tokenErr == nil {
-				details, detailsErr := detailsProvider.GetAccountDetails(req.Context(), token.AccessToken, account.PlatformUserID)
-				if detailsErr == nil {
-					// Build and persist the snapshot.
-					snap := &repository.AccountResourceSnapshot{
-						PlatformAccountID: account.ID,
-						ResourceType:      details.ResourceType,
-						Profile: map[string]any{
-							"display_name": details.DisplayName,
-							"handle":       details.Handle,
-							"description":  details.Description,
-							"avatar_url":   details.AvatarURL,
-							"banner_url":   details.BannerURL,
-							"public_url":   details.PublicURL,
-							"external_id":  details.ExternalID,
-						},
-						FetchedAt: details.FetchedAt,
-					}
-					stats := make(map[string]any)
-					for _, m := range details.Metrics {
-						stats[m.Key] = map[string]any{
-							"label":         m.Label,
-							"value":         m.Value,
-							"display_value": m.DisplayValue,
-						}
-					}
-					snap.Statistics = stats
-					if details.Properties != nil {
-						snap.Content = details.Properties
-					}
-					// Best-effort save — if it fails we're already holding the
-					// fresh data in memory and can serve it.
-					_ = r.snapshotStore.UpsertSnapshot(snap)
-
-					// Persist the daily metric history row. This is also best-
-					// effort: a failure here should not break the request.
-					if r.metricHistoryStore != nil {
-						_ = r.metricHistoryStore.UpsertDaily(account.ID, details.FetchedAt, metricsToPoint(details.Metrics))
-						r.storeYouTubeEarnings(req.Context(), account, token.AccessToken)
-					}
-
-					// Build resource from the fresh details.
-					res := &accountResource{
-						ResourceType: details.ResourceType,
-						ExternalID:   details.ExternalID,
-						DisplayName:  details.DisplayName,
-						Handle:       details.Handle,
-						Description:  details.Description,
-						AvatarURL:    details.AvatarURL,
-						BannerURL:    details.BannerURL,
-						PublicURL:    details.PublicURL,
-						FetchedAt:    details.FetchedAt,
-					}
-					for _, m := range details.Metrics {
-						res.Metrics = append(res.Metrics, accountMetric{
-							Key:          m.Key,
-							Label:        m.Label,
-							Value:        m.Value,
-							DisplayValue: m.DisplayValue,
-						})
-					}
-					if details.Properties != nil {
-						res.Properties = details.Properties
-					}
-					resp.Resource = res
-					// The refresh path just persisted a fresh snapshot;
-					// report it as fresh even though `stale` was true.
-					resp.SnapshotStale = false
-					writeJSON(w, http.StatusOK, resp)
-					return
-				}
-			}
-		}
-		// Fall through: provider call failed or platform doesn't support
-		// details — serve whatever stale snapshot (if any) is still in the DB.
+		// STRICT RULE: opening a channel page must never call the provider
+		// (YouTube). Serve the cached value immediately and record
+		// refresh_pending so the background worker refreshes the snapshot
+		// asynchronously. Explicit refreshes stay on
+		// POST /accounts/{id}/sync (handleSyncAccount).
+		_ = r.snapshotStore.MarkSnapshotRefreshPending(account.ID, time.Now())
 	}
 
 	// Serve from cache (fresh snapshot, or stale snapshot as fallback).

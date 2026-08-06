@@ -342,6 +342,12 @@ type SnapshotStore interface {
 	GetSnapshot(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
 	UpsertSnapshot(snap *repository.AccountResourceSnapshot) error
 	IsSnapshotStale(platformAccountID int64, maxAge time.Duration) (bool, error)
+	// MarkSnapshotRefreshPending stamps refresh_pending_at on the
+	// account's snapshot row so the background worker knows a refresh
+	// is due. Called (best-effort) by the read path instead of calling
+	// the provider synchronously — opening a channel page never blocks
+	// on YouTube. UpsertSnapshot clears the flag on completion.
+	MarkSnapshotRefreshPending(platformAccountID int64, now time.Time) error
 }
 
 // MetricHistoryStore is the persistence contract for daily account

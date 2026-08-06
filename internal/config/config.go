@@ -333,6 +333,15 @@ type WorkerConfig struct {
 	// months — 2 months of margin under Google's 6-month GC). Env
 	// TOKEN_REFRESH_SWEEP_HORIZON_DAYS.
 	TokenRefreshSweepHorizonDays int
+	// SnapshotRefreshSweepIntervalSeconds is the cadence of the
+	// snapshot refresh sweep worker — drains accounts whose cached
+	// resource snapshot is stale (refresh_pending_at stamped by the
+	// read path serving a cached snapshot) and refreshes them in the
+	// background with bounded concurrency (4), so opening a channel
+	// page NEVER triggers a provider call (strict rule). Default 60s:
+	// a page load stamps pending and the worker refreshes within a
+	// minute. Env SNAPSHOT_REFRESH_SWEEP_INTERVAL_SECONDS.
+	SnapshotRefreshSweepIntervalSeconds int
 	// PublishHorizonDays (Blocco #2 P0) caps how far in the future a
 	// user/operator can schedule a publish. Used by:
 	//   - uploads_handlers.go::handleRescheduleUpload (drag-drop reject

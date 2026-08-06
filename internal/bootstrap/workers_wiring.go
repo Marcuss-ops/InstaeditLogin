@@ -461,6 +461,54 @@ func (a *App) registerTokenRefreshSweepWorker() {
 	})
 }
 
+// registerSnapshotRefreshSweepWorker wires the snapshot refresh sweep:
+// the background half of the strict rule "opening a channel page never
+// calls the provider". The read path (GET /accounts and GET
+// /accounts/{id}) serves the cached snapshot and stamps
+// refresh_pending_at; this worker drains those rows and refreshes the
+// snapshots asynchronously with bounded concurrency (4). NON-critical:
+// a transient failure here must not take the process down (same
+// classification as asset_cleanup / token_refresh_sweep).
+//
+// Fetchers are discovered via the AccountDetails capability (NOT a
+// concrete type assertion): the router's Register() type-asserts at
+// registration time, so a provider-shape change surfaces at boot
+// wiring instead of silently leaving the fetcher map empty. Refreshers
+// reuse the OAuth capability map, exactly like the token refresh sweep.
+func (a *App) registerSnapshotRefreshSweepWorker() {
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "snapshot_refresh_sweep",
+		Critical: false,
+		Run: func(ctx context.Context) error {
+			refreshers := map[string]credentials.TokenRefresher{}
+			fetchers := map[string]worker.AccountDetailsFetcher{}
+			for _, name := range a.CapRouter.Names() {
+				if oauth, ok := a.CapRouter.OAuth(name); ok {
+					refreshers[name] = oauth.RefreshOAuthToken
+				}
+				if dp, ok := a.CapRouter.AccountDetails(name); ok {
+					fetchers[name] = dp
+				}
+			}
+			if len(fetchers) == 0 {
+				// Not an error: a deployment without AccountDetails
+				// providers simply idles. Logged so a MISWIRE (provider
+				// registered but details capability missing) is visible.
+				a.Logger.Info("snapshot refresh sweep: no AccountDetails providers wired — sweep will idle")
+			}
+			sw := worker.NewSnapshotRefreshSweepWorker(
+				repository.NewSnapshotRepository(a.DB),
+				a.Vault,
+				refreshers,
+				fetchers,
+				time.Duration(a.Cfg.Worker.SnapshotRefreshSweepIntervalSeconds)*time.Second,
+				slog.Default(),
+			)
+			return sw.Run(ctx)
+		},
+	})
+}
+
 // registerYouTubeProcessingReconciler wires goroutine 10: the YouTube
 // processing reconciler — polls youtube_target_publications rows in
 // 'processed' state that haven't been linked to an editor session
@@ -489,11 +537,11 @@ func (a *App) registerYouTubeProcessingReconciler() {
 	})
 }
 
-// RunWorkers starts the 11 background goroutines (publish, reconcile,
+// RunWorkers starts the 12 background goroutines (publish, reconcile,
 // outbox, webhook, metrics, sessions_cleanup, asset_cleanup,
 // velox_downloader, upload, drive_batch_crawler,
-// youtube_processing_reconciler, token_refresh_sweep) under the
-// shared WorkerRegistry. The registry handles startup, heartbeat
+// youtube_processing_reconciler, token_refresh_sweep,
+// snapshot_refresh_sweep) under the shared WorkerRegistry. The registry handles startup, heartbeat
 // tracking, supervision, logging, and shutdown. A critical worker
 // that exits with a non-context error aborts the whole process by
 // returning the error from RunWorkers.
@@ -526,12 +574,13 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		a.registerDriveBatchCrawler,           // 9. drive_batch_crawler
 		a.registerYouTubeProcessingReconciler, // 10. youtube_processing_reconciler
 		a.registerTokenRefreshSweepWorker,     // 11. token_refresh_sweep (non-critical)
+		a.registerSnapshotRefreshSweepWorker,  // 12. snapshot_refresh_sweep (non-critical)
 	}
 	for _, register := range registrations {
 		register()
 	}
 
-	slog.Info("11 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / token_refresh_sweep")
+	slog.Info("12 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / token_refresh_sweep / snapshot_refresh_sweep")
 
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 

@@ -235,6 +235,17 @@ func (c *Config) validate() error {
 			return fmt.Errorf("TOKEN_REFRESH_SWEEP_HORIZON_DAYS must be a positive integer (got %d); set to a large value (e.g. 365) to effectively disable proactive renewal, not 0", c.Worker.TokenRefreshSweepHorizonDays)
 		}
 	}
+	// Snapshot refresh sweep cadence. Fail-safe default (not an error):
+	// Configs assembled directly by tests/older callers may omit the
+	// field, and a 0 here must not fail an otherwise valid boot — the
+	// worker constructor applies the same 60s fallback, so the default
+	// converges on the same cadence as config.Load(). Operators wanting
+	// to effectively disable the background refresh set a very large
+	// value (e.g. 86400*365) — the explicit-default shape mirrors the
+	// token sweep above.
+	if c.Worker.SnapshotRefreshSweepIntervalSeconds <= 0 {
+		c.Worker.SnapshotRefreshSweepIntervalSeconds = 60
+	}
 	if err := c.validateOptionalPlatform("GOOGLE_DRIVE", c.Auth.GoogleDriveClientID, c.Auth.GoogleDriveClientSecret); err != nil {
 		return err
 	}

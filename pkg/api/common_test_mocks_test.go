@@ -682,9 +682,10 @@ func (m *mockPostStore) RetryTarget(id int64) error {
 
 // mockSnapshotStore implements SnapshotStore for tests.
 type mockSnapshotStore struct {
-	getFn    func(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
-	upsertFn func(snap *repository.AccountResourceSnapshot) error
-	staleFn  func(platformAccountID int64, maxAge time.Duration) (bool, error)
+	getFn         func(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
+	upsertFn      func(snap *repository.AccountResourceSnapshot) error
+	staleFn       func(platformAccountID int64, maxAge time.Duration) (bool, error)
+	markPendingFn func(platformAccountID int64, now time.Time) error
 }
 
 func (m *mockSnapshotStore) GetSnapshot(platformAccountID int64) (*repository.AccountResourceSnapshot, error) {
@@ -704,6 +705,12 @@ func (m *mockSnapshotStore) IsSnapshotStale(platformAccountID int64, maxAge time
 		return m.staleFn(platformAccountID, maxAge)
 	}
 	return true, nil
+}
+func (m *mockSnapshotStore) MarkSnapshotRefreshPending(platformAccountID int64, now time.Time) error {
+	if m.markPendingFn != nil {
+		return m.markPendingFn(platformAccountID, now)
+	}
+	return nil
 }
 
 // mockDetailProvider extends mockProvider with AccountDetailsProvider + AccountContentProvider.

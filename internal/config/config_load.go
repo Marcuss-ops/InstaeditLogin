@@ -128,6 +128,10 @@ func Load() (*Config, error) {
 			// refresh-token inactivity GC).
 			TokenRefreshSweepIntervalSeconds: getEnvInt("TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS", 86400),
 			TokenRefreshSweepHorizonDays:     getEnvInt("TOKEN_REFRESH_SWEEP_HORIZON_DAYS", 120),
+			// Snapshot refresh sweep — 60s cadence: a page load stamps
+			// refresh_pending_at and the worker refreshes the cached
+			// snapshot in the background within a minute.
+			SnapshotRefreshSweepIntervalSeconds: getEnvInt("SNAPSHOT_REFRESH_SWEEP_INTERVAL_SECONDS", 60),
 			// P1 step 2 — worker pool config (see struct comment above).
 			UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
 			YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),
