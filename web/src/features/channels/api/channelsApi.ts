@@ -4,17 +4,7 @@
  * `GET /api/v1/accounts` returns the full list of connected
  * accounts across all platforms (YouTube, Google Drive, TikTok,
  * Instagram, …). We filter the returned list client-side so the
- * wizard receives only YouTube channels. This is fine for the wizard
- * scope: a user
- * has at most a few dozen accounts and the filter runs in memory.
- *
- * `GET /api/v1/workspaces` returns the workspace manifests the
- * user is a member of. Step 3 needs `workspace_id` for the
- * `CreatePostRequest` payload, so the wizard loads it alongside
- * the channel list to avoid a second round-trip.
- *
- * Both calls accept a shared `AbortSignal`; the wizard passes the
- * hook-owned controller so unmount cancels mid-flight.
+ * wizard receives only YouTube channels.
  */
 import { authedFetch } from "../../../lib/auth";
 import {
@@ -25,6 +15,8 @@ import {
 
 interface AccountsResponse {
   accounts?: PlatformAccount[];
+  next_cursor?: string;
+  has_more?: boolean;
 }
 
 interface WorkspacesResponse {
@@ -36,16 +28,26 @@ export interface YouTubeChannelsAndWorkspaces {
   workspaces: Workspace[];
 }
 
-/**
- * Public re-export of the upstream types so callers don't have to
- * reach into `../../../types/uploads`. Mirrors the same pattern
- * the publishing feature uses for `MediaAsset` (re-exported from
- * `mediaApi`).
- */
 export type { PlatformAccount, Workspace };
 
 const ACCOUNTS_PATH = "/api/v1/accounts";
 const WORKSPACES_PATH = "/api/v1/workspaces";
+
+/** Follow account cursors so callers keep seeing the complete manifest. */
+export async function listAllAccounts(signal?: AbortSignal): Promise<PlatformAccount[]> {
+  const accounts: PlatformAccount[] = [];
+  let cursor: string | undefined;
+  do {
+    const params = new URLSearchParams({ limit: "100" });
+    if (cursor) params.set("cursor", cursor);
+    const path = cursor ? `${ACCOUNTS_PATH}?${params.toString()}` : ACCOUNTS_PATH;
+    const response = await authedFetch(path, { signal });
+    const page = (await response.json()) as AccountsResponse;
+    accounts.push(...(page.accounts ?? []));
+    cursor = page.has_more ? page.next_cursor : undefined;
+  } while (cursor);
+  return accounts;
+}
 
 export function filterYouTube(accounts: PlatformAccount[]): PlatformAccount[] {
   return accounts.filter(
@@ -53,26 +55,13 @@ export function filterYouTube(accounts: PlatformAccount[]): PlatformAccount[] {
   );
 }
 
-/**
- * Load accounts + workspaces in parallel using a shared signal.
- * Returns ONLY the YouTube channels (filtered client-side); other
- * platforms (drive, instagram, etc.) are dropped here so the
- * wizard UI doesn't have to know about them.
- *
- * Caller-side conventions:
- *   • AuthError is re-thrown (router-level ProtectedRoute handles
- *     the redirect to /login)
- *   • ApiError surfaces the server's typed message
- */
 export async function listYouTubeChannelsAndWorkspaces(
   signal?: AbortSignal,
 ): Promise<YouTubeChannelsAndWorkspaces> {
-  const [accountsResp, workspacesResp] = await Promise.all([
-    authedFetch(ACCOUNTS_PATH, { signal }),
+  const [accounts, workspacesResp] = await Promise.all([
+    listAllAccounts(signal),
     authedFetch(WORKSPACES_PATH, { signal }),
   ]);
-  const accounts =
-    ((await accountsResp.json()) as AccountsResponse).accounts ?? [];
   const workspaces =
     ((await workspacesResp.json()) as WorkspacesResponse).workspaces ?? [];
   return { channels: filterYouTube(accounts), workspaces };

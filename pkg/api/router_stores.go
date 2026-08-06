@@ -348,6 +348,16 @@ type SnapshotStore interface {
 	// the provider synchronously — opening a channel page never blocks
 	// on YouTube. UpsertSnapshot clears the flag on completion.
 	MarkSnapshotRefreshPending(platformAccountID int64, now time.Time) error
+	// MarkAllSnapshotRefreshesPending enqueues every non-deleted account
+	// owned by userID for a background refresh in ONE statement and
+	// returns the count. Backs POST /accounts/sync-all ("refresh all
+	// channels"): the request only stamps the queue, the sweep worker
+	// performs the actual provider calls with bounded concurrency — no
+	// per-account fan-out from the API layer.
+	MarkAllSnapshotRefreshesPending(userID int64, now time.Time) (int64, error)
+	// MarkSnapshotsRefreshPending batches stale/missing account ids into
+	// the durable refresh queue without an N+1 write fan-out.
+	MarkSnapshotsRefreshPending(platformAccountIDs []int64, now time.Time) error
 }
 
 // MetricHistoryStore is the persistence contract for daily account

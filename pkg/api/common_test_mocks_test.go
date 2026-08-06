@@ -682,10 +682,12 @@ func (m *mockPostStore) RetryTarget(id int64) error {
 
 // mockSnapshotStore implements SnapshotStore for tests.
 type mockSnapshotStore struct {
-	getFn         func(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
-	upsertFn      func(snap *repository.AccountResourceSnapshot) error
-	staleFn       func(platformAccountID int64, maxAge time.Duration) (bool, error)
-	markPendingFn func(platformAccountID int64, now time.Time) error
+	getFn            func(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
+	upsertFn         func(snap *repository.AccountResourceSnapshot) error
+	staleFn          func(platformAccountID int64, maxAge time.Duration) (bool, error)
+	markPendingFn    func(platformAccountID int64, now time.Time) error
+	markAllPendingFn func(userID int64, now time.Time) (int64, error)
+	markPendingsFn   func(platformAccountIDs []int64, now time.Time) error
 }
 
 func (m *mockSnapshotStore) GetSnapshot(platformAccountID int64) (*repository.AccountResourceSnapshot, error) {
@@ -709,6 +711,23 @@ func (m *mockSnapshotStore) IsSnapshotStale(platformAccountID int64, maxAge time
 func (m *mockSnapshotStore) MarkSnapshotRefreshPending(platformAccountID int64, now time.Time) error {
 	if m.markPendingFn != nil {
 		return m.markPendingFn(platformAccountID, now)
+	}
+	return nil
+}
+func (m *mockSnapshotStore) MarkAllSnapshotRefreshesPending(userID int64, now time.Time) (int64, error) {
+	if m.markAllPendingFn != nil {
+		return m.markAllPendingFn(userID, now)
+	}
+	return 0, nil
+}
+func (m *mockSnapshotStore) MarkSnapshotsRefreshPending(platformAccountIDs []int64, now time.Time) error {
+	if m.markPendingsFn != nil {
+		return m.markPendingsFn(platformAccountIDs, now)
+	}
+	for _, id := range platformAccountIDs {
+		if err := m.MarkSnapshotRefreshPending(id, now); err != nil {
+			return err
+		}
 	}
 	return nil
 }

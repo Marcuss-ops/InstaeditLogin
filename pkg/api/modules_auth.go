@@ -31,6 +31,7 @@ type AuthHandlers struct {
 	DeleteAccountData             http.HandlerFunc
 	DeleteOAuthGrant              http.HandlerFunc
 	SyncAccount                   http.HandlerFunc
+	SyncAllAccounts               http.HandlerFunc
 	AccountContent                http.HandlerFunc
 	UpdateAccount                 http.HandlerFunc
 	CreateWorkspace               http.HandlerFunc
@@ -159,6 +160,11 @@ func (m *AuthModule) Register(mux chi.Router) {
 	mux.Method(http.MethodDelete, "/api/v1/accounts/{id}/data", m.deps.Protected(m.deps.Handlers.DeleteAccountData))
 	mux.Method(http.MethodDelete, "/api/v1/accounts/{id}/oauth-grant", m.deps.Protected(m.deps.Handlers.DeleteOAuthGrant))
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/sync", m.deps.Protected(m.deps.Handlers.SyncAccount))
+	// Bulk "refresh all channels": enqueues every account owned by the
+	// caller for a background snapshot refresh (worker drains with bounded
+	// concurrency). Static segment wins over {id} in chi, so this can never
+	// collide with the per-account routes.
+	mux.Method(http.MethodPost, "/api/v1/accounts/sync-all", m.deps.Protected(m.deps.Handlers.SyncAllAccounts))
 	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/content", m.deps.Protected(m.deps.Handlers.AccountContent))
 	mux.Method(http.MethodPatch, "/api/v1/accounts/{id}", m.deps.Protected(m.deps.Handlers.UpdateAccount))
 

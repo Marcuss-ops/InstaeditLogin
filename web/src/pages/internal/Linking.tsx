@@ -9,6 +9,7 @@ import {
   FolderInput,
 } from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
+import { listAllAccounts } from "../../features/channels/api/channelsApi";
 import { API_BASE_URL } from "../../lib/api";
 import { PROVIDERS, type ProviderId } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
@@ -70,6 +71,12 @@ export function InternalLinking() {
   const navigate = useNavigate();
   const [state, setState] = useState<FetchState>({ kind: "loading" });
   const abortRef = useRef<AbortController | null>(null);
+  // "Refresh all channels" state: enqueues a background snapshot refresh
+  // for every account (POST /accounts/sync-all) and reloads the list. The
+  // actual provider calls happen in the sweep worker with bounded
+  // concurrency — never one request per channel from the browser.
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [syncAllNotice, setSyncAllNotice] = useState<string | null>(null);
 
   const loadAccounts = useCallback(async () => {
     abortRef.current?.abort();
@@ -78,12 +85,11 @@ export function InternalLinking() {
     setState({ kind: "loading" });
 
     try {
-      const response = await authedFetch("/api/v1/accounts", {
-        signal: controller.signal,
-      });
+      // listAllAccounts returns the uploads PlatformAccount shape (platform:
+      // string); the page's local type narrows it to ProviderId for the card
+      // grid, so the assertion is required (not redundant).
+      const accounts = (await listAllAccounts(controller.signal)) as PlatformAccount[];
       if (controller.signal.aborted) return;
-      const data = (await response.json()) as { accounts: PlatformAccount[] };
-      const accounts = data.accounts ?? [];
       // The list endpoint is the single source of truth for the cards: it
       // already returns avatar_url (cached snapshot fallback) and
       // snapshot_stale per account via the aggregated backend query. Missing
@@ -101,6 +107,30 @@ export function InternalLinking() {
       setState({ kind: "error", message });
     }
   }, [navigate]);
+
+  const syncAllAccounts = useCallback(async () => {
+    setSyncingAll(true);
+    setSyncAllNotice(null);
+    try {
+      const response = await authedFetch("/api/v1/accounts/sync-all", {
+        method: "POST",
+      });
+      const data = (await response.json()) as { status?: string; count?: number };
+      const count = typeof data.count === "number" ? data.count : 0;
+      setSyncAllNotice(
+        count > 0
+          ? `Refresh scheduled for ${count} channel${count === 1 ? "" : "s"} — snapshots update in the background.`
+          : "No channels to refresh.",
+      );
+      // Reload the list so freshly written snapshots appear as the worker
+      // finishes; the N+1 fan-out stays gone (single batch request).
+      await loadAccounts();
+    } catch {
+      setSyncAllNotice("Could not schedule the refresh. Please try again.");
+    } finally {
+      setSyncingAll(false);
+    }
+  }, [loadAccounts]);
 
   useEffect(() => {
     let cancelled = false;
@@ -162,6 +192,16 @@ export function InternalLinking() {
               </button>
               <button
                 type="button"
+                onClick={() => void syncAllAccounts()}
+                disabled={syncingAll}
+                data-testid="sync-all-accounts"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <RefreshCw size={14} className={cn(syncingAll && "animate-spin")} />
+                {syncingAll ? "Scheduling…" : "Refresh all channels"}
+              </button>
+              <button
+                type="button"
                 onClick={() => void loadAccounts()}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
               >
@@ -170,6 +210,15 @@ export function InternalLinking() {
             </div>
           )}
         </div>
+
+        {syncAllNotice && (
+          <p
+            className="text-[12px] text-[#9aa0aa] -mt-4 mb-6"
+            data-testid="sync-all-notice"
+          >
+            {syncAllNotice}
+          </p>
+        )}
 
         {state.kind === "loading" && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

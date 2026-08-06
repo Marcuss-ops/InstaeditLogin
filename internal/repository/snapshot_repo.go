@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -131,24 +132,81 @@ func (r *SnapshotRepository) UpsertSnapshot(snap *AccountResourceSnapshot) error
 // queue claimable and prevents every worker tick from selecting the same
 // missing row indefinitely.
 func (r *SnapshotRepository) MarkSnapshotRefreshPending(platformAccountID int64, now time.Time) error {
-	_, err := r.db.Exec(
-		`INSERT INTO account_resource_snapshots
+	return r.MarkSnapshotsRefreshPending([]int64{platformAccountID}, now)
+}
+
+// MarkSnapshotsRefreshPending enqueues multiple accounts with one SQL
+// statement. The read path uses this to keep account-list refresh marking
+// constant in round-trips rather than issuing one write per stale account.
+func (r *SnapshotRepository) MarkSnapshotsRefreshPending(platformAccountIDs []int64, now time.Time) error {
+	if len(platformAccountIDs) == 0 {
+		return nil
+	}
+	args := make([]interface{}, 0, len(platformAccountIDs)*2)
+	values := make([]string, 0, len(platformAccountIDs))
+	for i, accountID := range platformAccountIDs {
+		accountParam := i*2 + 1
+		timeParam := i*2 + 2
+		values = append(values, fmt.Sprintf("($%d, 'pending', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, to_timestamp(0), NOW(), $%d, 0)", accountParam, timeParam))
+		args = append(args, accountID, now)
+	}
+	query := fmt.Sprintf(`INSERT INTO account_resource_snapshots
 		    (platform_account_id, resource_type, profile, statistics, status, content,
 		     fetched_at, updated_at, refresh_pending_at, refresh_attempts)
-		 VALUES ($1, 'pending', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
-		         to_timestamp(0), NOW(), $2, 0)
+		 VALUES %s
 		 ON CONFLICT (platform_account_id) DO UPDATE SET
 		    refresh_pending_at = LEAST(
 		        COALESCE(account_resource_snapshots.refresh_pending_at, EXCLUDED.refresh_pending_at),
 		        EXCLUDED.refresh_pending_at
 		    ),
-		    refresh_claimed_until = NULL`,
-		platformAccountID, now,
-	)
-	if err != nil {
-		return fmt.Errorf("mark snapshot refresh pending: %w", err)
+		    refresh_claimed_until = CASE
+		        WHEN account_resource_snapshots.refresh_claimed_until > NOW()
+		        THEN account_resource_snapshots.refresh_claimed_until
+		        ELSE NULL
+		    END`, strings.Join(values, ", "))
+	if _, err := r.db.Exec(query, args...); err != nil {
+		return fmt.Errorf("mark snapshots refresh pending: %w", err)
 	}
 	return nil
+}
+
+// MarkAllSnapshotRefreshesPending durably enqueues every non-deleted,
+// non-disconnected account owned by userID for a background refresh in a
+// SINGLE statement — the backend for the "refresh all channels" action.
+// Returns the number of accounts enqueued (rows inserted or re-stamped).
+//
+// Explicit user-action semantics: the pending time is stamped NOW
+// (overriding any worker backoff) so a deliberately requested refresh is
+// never silently swallowed. The sweep worker still bounds the actual
+// provider fan-out to a small concurrency (see SnapshotRefreshSweepWorker),
+// so this never translates into N simultaneous YouTube calls.
+func (r *SnapshotRepository) MarkAllSnapshotRefreshesPending(userID int64, now time.Time) (int64, error) {
+	res, err := r.db.Exec(
+		`INSERT INTO account_resource_snapshots
+		    (platform_account_id, resource_type, profile, statistics, status, content,
+		     fetched_at, updated_at, refresh_pending_at, refresh_attempts)
+		 SELECT pa.id, 'pending', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+		        to_timestamp(0), NOW(), $2, 0
+		   FROM platform_accounts pa
+		  WHERE pa.user_id = $1
+		    AND pa.status NOT IN ('deleted', 'disconnected')
+		 ON CONFLICT (platform_account_id) DO UPDATE SET
+		    refresh_pending_at = EXCLUDED.refresh_pending_at,
+		    refresh_claimed_until = CASE
+		        WHEN account_resource_snapshots.refresh_claimed_until > NOW()
+		        THEN account_resource_snapshots.refresh_claimed_until
+		        ELSE NULL
+		    END`,
+		userID, now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("mark all snapshot refreshes pending: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("mark all snapshot refreshes pending rows: %w", err)
+	}
+	return n, nil
 }
 
 func (r *SnapshotRepository) DeleteSnapshot(platformAccountID int64) error {
@@ -279,7 +337,7 @@ func (r *SnapshotRepository) RescheduleSnapshotRefresh(ctx context.Context, acco
 	}
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE account_resource_snapshots
-		    SET refresh_pending_at = $2,
+		    SET refresh_pending_at = NULLIF($2, to_timestamp(0)),
 		        refresh_claimed_until = NULL,
 		        refresh_attempts = LEAST(refresh_attempts + 1, 20),
 		        refresh_last_error = $3,

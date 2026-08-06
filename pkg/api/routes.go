@@ -114,6 +114,7 @@ func (r *Router) Setup() http.Handler {
 			DeleteAccountData:             r.handleDeleteAccountData,
 			DeleteOAuthGrant:              r.handleDeleteOAuthGrant,
 			SyncAccount:                   r.handleSyncAccount,
+			SyncAllAccounts:               r.handleSyncAllAccounts,
 			AccountContent:                r.handleAccountContent,
 			UpdateAccount:                 r.handleUpdateAccount,
 			CreateWorkspace:               r.handleCreateWorkspace,

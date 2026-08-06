@@ -161,4 +161,45 @@ describe("InternalLinking", () => {
     const detailCalls = requestedUrls.filter((u) => /\/api\/v1\/accounts\/\d+$/.test(u));
     expect(detailCalls.length).toBe(0);
   });
+
+  it("schedules a background refresh for all channels via POST /accounts/sync-all", async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        requestedUrls.push(url);
+        if (url.endsWith("/api/v1/auth/me")) {
+          return mockJsonResponse({ user_id: 1 });
+        }
+        if (url.endsWith("/api/v1/accounts/sync-all")) {
+          return mockJsonResponse({ status: "scheduled", count: 3 });
+        }
+        if (url.endsWith("/api/v1/accounts")) {
+          return mockJsonResponse({ accounts: [] });
+        }
+        return mockJsonResponse({}, false, 404);
+      }),
+    );
+
+    renderLinking();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Linking/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("sync-all-accounts"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sync-all-notice")).toHaveTextContent(
+        /Refresh scheduled for 3 channels/,
+      );
+    });
+
+    // Exactly ONE bulk enqueue request — no per-account fan-out.
+    const syncAllCalls = requestedUrls.filter((u) => u.includes("/api/v1/accounts/sync-all"));
+    expect(syncAllCalls.length).toBe(1);
+    const detailCalls = requestedUrls.filter((u) => /\/api\/v1\/accounts\/\d+$/.test(u));
+    expect(detailCalls.length).toBe(0);
+  });
 });
