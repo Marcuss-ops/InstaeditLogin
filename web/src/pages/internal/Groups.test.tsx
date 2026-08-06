@@ -122,13 +122,14 @@ describe("GroupsPage", () => {
     );
   });
 
-  it("keeps the tray visible with an empty-state when no YouTube channels exist", () => {
+  it("shows a clear empty state when no YouTube channels exist", () => {
     makeMock({ availableYouTubeAccounts: [] });
 
     renderPage();
 
     expect(screen.getByTestId("youtube-channels-tray")).toBeInTheDocument();
-    expect(screen.getByText("Nessun canale YouTube disponibile")).toBeInTheDocument();
+    expect(screen.getByTestId("youtube-channels-empty")).toHaveTextContent("Nessun canale YouTube disponibile");
+    expect(screen.getByTestId("youtube-channels-empty")).toHaveTextContent("Collega un canale YouTube");
   });
 
   it("assigns a channel to a group when dropped onto a group chip", () => {
@@ -181,7 +182,7 @@ describe("GroupsPage", () => {
     expect(membershipUpdater([groupedAccount.id])).toEqual([groupedAccount.id, secondYouTubeAccount.id]);
   });
 
-  it("filters channels assigned to any group versus unassigned channels", () => {
+  it("supports the explicit all, assigned, and unassigned filters", () => {
     makeMock({
       selectedGroupId: 7,
       state: {
@@ -195,6 +196,10 @@ describe("GroupsPage", () => {
     const tray = screen.getByTestId("youtube-channels-tray");
     const filter = within(tray).getByRole("combobox", { name: "Filtra canali" });
 
+    fireEvent.change(filter, { target: { value: "all" } });
+    expect(within(tray).getByText("channel-grouped")).toBeInTheDocument();
+    expect(within(tray).getByText("channel-available")).toBeInTheDocument();
+
     fireEvent.change(filter, { target: { value: "assigned" } });
     expect(within(tray).getByText("channel-grouped")).toBeInTheDocument();
     expect(within(tray).queryByText("channel-available")).not.toBeInTheDocument();
@@ -202,6 +207,53 @@ describe("GroupsPage", () => {
     fireEvent.change(filter, { target: { value: "unassigned" } });
     expect(within(tray).getByText("channel-available")).toBeInTheDocument();
     expect(within(tray).queryByText("channel-grouped")).not.toBeInTheDocument();
+  });
+
+  it("shows the unassigned empty state when every channel is already organized", () => {
+    makeMock({
+      state: {
+        ...makeReadyState(),
+        groupAccountIDs: new Map([[7, [groupedAccount.id, secondYouTubeAccount.id]]]),
+      },
+      availableYouTubeAccounts: [groupedAccount, secondYouTubeAccount],
+    });
+
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+    fireEvent.change(within(tray).getByRole("combobox", { name: "Filtra canali" }), { target: { value: "unassigned" } });
+
+    expect(within(tray).getByTestId("youtube-channels-empty")).toHaveTextContent("Tutti i canali sono già nei gruppi");
+  });
+
+  it("shows filter-specific empty states for assigned and unassigned channels", () => {
+    makeMock({
+      state: {
+        ...makeReadyState(),
+        groupAccountIDs: new Map([[7, []]]),
+      },
+      availableYouTubeAccounts: [groupedAccount, secondYouTubeAccount],
+    });
+
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+    const filter = within(tray).getByRole("combobox", { name: "Filtra canali" });
+
+    fireEvent.change(filter, { target: { value: "assigned" } });
+    expect(within(tray).getByTestId("youtube-channels-empty")).toHaveTextContent("Nessun canale nei gruppi");
+
+    fireEvent.change(filter, { target: { value: "unassigned" } });
+    expect(within(tray).queryByTestId("youtube-channels-empty")).not.toBeInTheDocument();
+    expect(within(tray).getByText("channel-available")).toBeInTheDocument();
+  });
+
+  it("shows a clear empty state when the current search has no matches", () => {
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+
+    fireEvent.change(within(tray).getByRole("textbox", { name: "Cerca canali" }), { target: { value: "missing-channel" } });
+
+    expect(within(tray).getByTestId("youtube-channels-empty")).toHaveTextContent("Nessun canale trovato");
+    expect(within(tray).getByTestId("youtube-channels-empty")).toHaveTextContent("missing-channel");
   });
 
   it("removes the folder selector so assignment uses drag and drop", () => {

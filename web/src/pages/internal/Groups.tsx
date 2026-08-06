@@ -375,6 +375,31 @@ function YouTubeChannelsTray({
   onDragEnd: () => void;
 }) {
   const dragging = draggedAccountId != null;
+  const emptyState = totalAccounts === 0
+    ? {
+        title: "Nessun canale YouTube disponibile",
+        description: "Collega un canale YouTube per poterlo organizzare nei gruppi.",
+      }
+    : search.trim()
+      ? {
+          title: "Nessun canale trovato",
+          description: `Nessun canale corrisponde a «${search.trim()}». Prova con un altro nome o ID.`,
+        }
+      : filter === "assigned"
+        ? {
+            title: "Nessun canale nei gruppi",
+            description: "Non ci sono ancora canali assegnati a nessun gruppo.",
+          }
+        : filter === "unassigned"
+          ? {
+              title: "Tutti i canali sono già nei gruppi",
+              description: "Ogni canale YouTube disponibile è già organizzato in almeno un gruppo.",
+            }
+          : {
+              title: "Nessun canale da mostrare",
+              description: "Non ci sono canali che corrispondono al filtro corrente.",
+            };
+
   return (
     <section
       className="mt-6 rounded-2xl border border-white/[0.08] bg-[#0b0c12] p-5 shadow-[0_18px_60px_rgba(0,0,0,0.18)]"
@@ -427,9 +452,12 @@ function YouTubeChannelsTray({
         ) : null}
       </div>
       {accounts.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-white/[0.12] bg-white/[0.02] px-4 py-8 text-center">
-          <p className="text-[13px] font-semibold text-white">Nessun canale YouTube disponibile</p>
-          <p className="mt-1 text-[12px] text-[#9aa0aa]">Collega un canale YouTube per poterlo organizzare nei gruppi.</p>
+        <div
+          className="rounded-xl border border-dashed border-white/[0.12] bg-white/[0.02] px-4 py-8 text-center"
+          data-testid="youtube-channels-empty"
+        >
+          <p className="text-[13px] font-semibold text-white">{emptyState.title}</p>
+          <p className="mt-1 text-[12px] text-[#9aa0aa]">{emptyState.description}</p>
         </div>
       ) : null}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
