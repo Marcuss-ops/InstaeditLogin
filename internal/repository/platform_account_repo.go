@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -132,9 +133,14 @@ func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUser(userID int64, p
 				UpdatedAt:         arsUpdatedAt.Time,
 			}
 			if err := decodeSnapshotJSON(snap, arsProfile, arsStatistics, arsStatus, arsContent); err != nil {
-				return nil, err
+				// Best-effort: a single corrupt snapshot row must not 500
+				// the page-critical accounts list. Degrade only this
+				// account (Snapshot stays nil → the handler marks it
+				// stale, no avatar fallback) and keep going.
+				slog.Warn("accounts list: skipping corrupt snapshot row", "account_id", a.ID, "error", err.Error())
+			} else {
+				row.Snapshot = snap
 			}
-			row.Snapshot = snap
 		}
 		out = append(out, row)
 	}
