@@ -14,16 +14,19 @@ type LanguageMarker = {
 // Generic words such as "news" or "official" are deliberately excluded: they
 // are too common to be reliable evidence and would create silent overwrites.
 const LANGUAGE_MARKERS: LanguageMarker[] = [
-  { code: "it", pattern: /\b(?:italiano|italian|italia|italy|ita)\b/i },
-  { code: "en", pattern: /\b(?:english|inglese|england|eng)\b/i },
-  { code: "es", pattern: /\b(?:español|espanol|spanish|españa|espana|spain|castellano)\b/i },
-  { code: "fr", pattern: /\b(?:français|francais|french|france)\b/i },
-  { code: "de", pattern: /\b(?:deutsch|german|deutschland|germany)\b/i },
-  { code: "pl", pattern: /\b(?:polski|polish|polska|poland)\b/i },
-  { code: "ru", pattern: /(?:русский|россия|russian|russia)\b/i },
-  { code: "tr", pattern: /\b(?:türkçe|turkce|turkish|türkiye|turkiye|turkey)\b/i },
-  { code: "hi", pattern: /(?:हिन्दी|हिंदी|hindi|भारतीय)\b/i },
-  { code: "id", pattern: /\b(?:bahasa indonesia|indonesian|indonesia)\b/i },
+  // The short forms are intentionally accepted after a title separator or
+  // at the end of a concatenated brand name (BoxeClubITA, BoxeClubFr).
+  { code: "it", pattern: /(?:^|[\s._-])(?:italiano|italian|italia|italy|ita)(?=$|[\s._-])|ita$/i },
+  { code: "en", pattern: /(?:^|[\s._-])(?:english|inglese|england|eng)(?=$|[\s._-])|eng$/i },
+  { code: "es", pattern: /(?:^|[\s._-])(?:español|espanol|spanish|españa|espana|spain|castellano|es)(?=$|[\s._-])|es$/i },
+  { code: "fr", pattern: /(?:^|[\s._-])(?:français|francais|french|france|fr)(?=$|[\s._-])|fr$/i },
+  { code: "de", pattern: /(?:^|[\s._-])(?:deutsch|german|deutschland|germany|de)(?=$|[\s._-])|de$/i },
+  { code: "pt", pattern: /(?:^|[\s._-])(?:português|portugues|portuguese|brasil|brazil|pt)(?=$|[\s._-])|pt$/i },
+  { code: "pl", pattern: /(?:^|[\s._-])(?:polski|polish|polska|poland|pl)(?=$|[\s._-])|pl$/i },
+  { code: "ru", pattern: /(?:^|[\s._-])(?:русский|россия|russian|russia|ru)(?=$|[\s._-])|ru$/i },
+  { code: "tr", pattern: /(?:^|[\s._-])(?:türkçe|turkce|turkish|türkiye|turkiye|turkey|tr)(?=$|[\s._-])|tr$/i },
+  { code: "hi", pattern: /(?:^|[\s._-])(?:हिन्दी|हिंदी|hindi|भारतीय)(?=$|[\s._-])|hindi$/i },
+  { code: "id", pattern: /(?:^|[\s._-])(?:bahasa indonesia|indonesian|indonesia|id)(?=$|[\s._-])|id$/i },
 ];
 
 export function detectChannelLanguage(title: string): DetectedChannelLanguage {

@@ -62,6 +62,30 @@ func (r *UserRepository) FinalizeAttach(ctx context.Context, accountID int64, sc
 	if userID <= 0 {
 		return 0, fmt.Errorf("finalize attach: platform_accounts.user_id is zero for account %d", accountID)
 	}
+	storedPlatform := platform
+	platform = models.NormalizePlatformIdentifier(platform)
+	if storedPlatform == models.PlatformX && platform == models.PlatformTwitter {
+		result, canonicalizeErr := tx.ExecContext(ctx,
+			`UPDATE platform_accounts
+			    SET platform = $1, updated_at = NOW()
+			  WHERE id = $2
+			    AND user_id = $3
+			    AND platform = $4
+			    AND NOT EXISTS (
+				      SELECT 1 FROM platform_accounts
+				       WHERE user_id = $3 AND platform = $1 AND platform_user_id = $5
+			    )`,
+			models.PlatformTwitter, accountID, userID, models.PlatformX, providerResourceID,
+		)
+		if canonicalizeErr != nil {
+			return 0, fmt.Errorf("finalize attach: canonicalize legacy X alias: %w", canonicalizeErr)
+		}
+		if affected, affectedErr := result.RowsAffected(); affectedErr != nil {
+			return 0, fmt.Errorf("finalize attach: inspect X alias canonicalization: %w", affectedErr)
+		} else if affected == 0 {
+			return 0, fmt.Errorf("finalize attach: canonical Twitter account already exists for account %d", accountID)
+		}
+	}
 
 	// UPSERT oauth_connections. The unique key (user_id, provider,
 	// provider_resource_id) makes this idempotent across rechannels
@@ -154,6 +178,7 @@ func (r *UserRepository) AttachPlatformAccount(userID int64, profile *models.Pla
 	if profile.PlatformUserID == "" {
 		return nil, fmt.Errorf("attach platform account: empty platform_user_id")
 	}
+	platform = models.NormalizePlatformIdentifier(platform)
 	if platform == "" {
 		return nil, fmt.Errorf("attach platform account: empty platform")
 	}
@@ -163,6 +188,27 @@ func (r *UserRepository) AttachPlatformAccount(userID int64, profile *models.Pla
 		return nil, fmt.Errorf("attach platform account: lookup: %w", err)
 	}
 	if existing != nil {
+		// A legacy `x` row is read through the canonical Twitter lookup.
+		// Promote that same row in place only when no canonical duplicate
+		// exists; the WHERE guard makes this safe under concurrent relinks
+		// and leaves a pre-existing canonical row untouched.
+		if platform == models.PlatformTwitter {
+			if _, err := r.db.Exec(
+				`UPDATE platform_accounts
+				 SET platform = $1, updated_at = $2
+				 WHERE id = $3 AND user_id = $5 AND platform = $4
+				   AND NOT EXISTS (
+					 SELECT 1 FROM platform_accounts
+					 WHERE user_id = $5 AND platform = $1 AND platform_user_id = $6
+				   )`,
+				models.PlatformTwitter, time.Now(), existing.ID, models.PlatformX,
+				userID, profile.PlatformUserID,
+			); err != nil {
+				return nil, fmt.Errorf("attach platform account: canonicalize legacy X alias: %w", err)
+			}
+			existing.Platform = models.PlatformTwitter
+		}
+
 		if existing.UserID != userID {
 			// 409 surface echoes this message verbatim — keep it minimal:
 			// do NOT embed profile.PlatformUserID (provider-scoped stable

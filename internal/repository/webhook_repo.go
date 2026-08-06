@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
 
@@ -212,10 +213,20 @@ type WebhookDelivery struct {
 	ScheduledAt time.Time
 	CompletedAt *time.Time
 	LastError   string
+	// LeaseID fences every in-flight owner. It is returned by ClaimDueDeliveries
+	// and must be supplied to heartbeat and terminal state transitions.
+	LeaseID     string
+	LeaseUntil  *time.Time
+	HeartbeatAt *time.Time
 }
 
 // ErrWebhookDeliveryNotFound is the delivery lookup sentinel.
 var ErrWebhookDeliveryNotFound = errors.New("webhook delivery not found")
+
+// ErrWebhookLeaseLost means the caller no longer owns the delivery lease.
+// This is deliberately returned for both stale owners and expired leases so
+// callers cannot accidentally persist a result after takeover.
+var ErrWebhookLeaseLost = errors.New("webhook delivery lease lost")
 
 // CreateDelivery inserts a delivery row (fan-out). Returns the new id.
 func (r *WebhookRepository) CreateDelivery(ctx context.Context, d *WebhookDelivery) error {
@@ -231,14 +242,17 @@ func (r *WebhookRepository) CreateDelivery(ctx context.Context, d *WebhookDelive
 	return nil
 }
 
-// ClaimDueDeliveries atomically claims up to `limit` due deliveries
-// (status='pending' AND scheduled_at <= NOW()) using SELECT FOR UPDATE
-// SKIP LOCKED + UPDATE inside a transaction. Returns the claimed rows
-// with their full state. Multi-replica safe: each replica only sees
-// rows no other replica is currently processing.
-func (r *WebhookRepository) ClaimDueDeliveries(ctx context.Context, limit int) ([]WebhookDelivery, error) {
+// ClaimDueDeliveries atomically claims up to limit due deliveries and stamps
+// each row with an independent UUID lease. The lease remains on the pending
+// row while the HTTP request runs; scheduled_at is not moved as a pseudo-lease.
+// A peer can reclaim only after lease_until expires, and every later write is
+// fenced by the returned lease_id.
+func (r *WebhookRepository) ClaimDueDeliveries(ctx context.Context, limit int, leaseTTL time.Duration) ([]WebhookDelivery, error) {
 	if limit <= 0 {
 		limit = 25
+	}
+	if leaseTTL <= 0 {
+		return nil, fmt.Errorf("claim due deliveries: lease TTL must be positive")
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -250,8 +264,10 @@ func (r *WebhookRepository) ClaimDueDeliveries(ctx context.Context, limit int) (
 		`SELECT id, event_id, endpoint_id, attempt, status, COALESCE(request_log, ''),
 		        COALESCE(response_log, ''), scheduled_at, completed_at, COALESCE(last_error, '')
 		 FROM webhook_deliveries
-		 WHERE status = 'pending' AND scheduled_at <= NOW()
-		 ORDER BY scheduled_at ASC
+		 WHERE status = 'pending'
+		   AND scheduled_at <= NOW()
+		   AND (lease_until IS NULL OR lease_until <= NOW())
+		 ORDER BY scheduled_at ASC, id ASC
 		 LIMIT $1
 		 FOR UPDATE SKIP LOCKED`,
 		limit,
@@ -259,7 +275,6 @@ func (r *WebhookRepository) ClaimDueDeliveries(ctx context.Context, limit int) (
 	if err != nil {
 		return nil, fmt.Errorf("claim due deliveries: %w", err)
 	}
-	var ids []int64
 	var out []WebhookDelivery
 	for rows.Next() {
 		var d WebhookDelivery
@@ -268,82 +283,124 @@ func (r *WebhookRepository) ClaimDueDeliveries(ctx context.Context, limit int) (
 			rows.Close()
 			return nil, fmt.Errorf("scan delivery: %w", err)
 		}
-		ids = append(ids, d.ID)
 		out = append(out, d)
 	}
-	rows.Close()
-	if len(ids) == 0 {
-		return nil, nil
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("read due deliveries: %w", err)
 	}
-	// Bump attempt + reschedule by a small lease window (5s) so a
-	// mid-flight crash doesn't leave the row in 'pending' for the
-	// next tick to immediately re-pick. The next tick will see
-	// scheduled_at > NOW() and skip; the lease expires after 5s.
-	const leaseSeconds = 5
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx,
+	rows.Close()
+
+	// The candidate rows remain locked until the transaction commits. Stamp
+	// each row after closing the SELECT cursor so the same connection can
+	// safely execute the UPDATEs.
+	for i := range out {
+		leaseID := uuid.NewString()
+		var leaseUntil, heartbeat time.Time
+		if err := tx.QueryRowContext(ctx,
 			`UPDATE webhook_deliveries
 			 SET attempt = attempt + 1,
-			     scheduled_at = NOW() + ($2 || ' seconds')::INTERVAL
-			 WHERE id = $1`,
-			id, fmt.Sprintf("%d", leaseSeconds),
-		); err != nil {
-			return nil, fmt.Errorf("bump attempt: %w", err)
+			     lease_id = $2::uuid,
+			     lease_until = NOW() + ($3 || ' seconds')::INTERVAL,
+			     heartbeat_at = NOW()
+			 WHERE id = $1
+			   AND status = 'pending'
+			   AND (lease_until IS NULL OR lease_until <= NOW())
+			 RETURNING attempt, lease_until, heartbeat_at`,
+			out[i].ID, leaseID, fmt.Sprintf("%f", leaseTTL.Seconds()),
+		).Scan(&out[i].Attempt, &leaseUntil, &heartbeat); err != nil {
+			return nil, fmt.Errorf("stamp webhook lease: %w", err)
 		}
+		out[i].LeaseID = leaseID
+		out[i].LeaseUntil = &leaseUntil
+		out[i].HeartbeatAt = &heartbeat
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit claim tx: %w", err)
 	}
-	// The in-memory structs reflect the pre-update attempt; the
-	// caller uses them to know which attempt THIS invocation is on
-	// (the attempt value was already incremented, so the dispatcher's
-	// `attempt` field IS the post-update value).
 	return out, nil
 }
 
-// MarkSuccess transitions a delivery to status='success' with
-// response_log + completed_at set.
-func (r *WebhookRepository) MarkSuccess(ctx context.Context, id int64, responseLog string) error {
-	_, err := r.db.ExecContext(ctx,
+// HeartbeatLease extends an active lease only when the supplied lease_id
+// still owns the pending row and the previous lease has not expired.
+func (r *WebhookRepository) HeartbeatLease(ctx context.Context, id int64, leaseID string, leaseTTL time.Duration) error {
+	if leaseID == "" || leaseTTL <= 0 {
+		return fmt.Errorf("heartbeat webhook lease: invalid lease arguments")
+	}
+	result, err := r.db.ExecContext(ctx,
 		`UPDATE webhook_deliveries
-		 SET status = 'success', response_log = $2, completed_at = NOW()
-		 WHERE id = $1`,
-		id, responseLog,
+		 SET lease_until = NOW() + ($3 || ' seconds')::INTERVAL,
+		     heartbeat_at = NOW()
+		 WHERE id = $1 AND status = 'pending'
+		   AND lease_id = $2::uuid AND lease_until > NOW()`,
+		id, leaseID, fmt.Sprintf("%f", leaseTTL.Seconds()),
+	)
+	if err != nil {
+		return fmt.Errorf("heartbeat webhook lease: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrWebhookLeaseLost, id)
+	}
+	return nil
+}
+
+// MarkSuccess transitions a delivery to success only for the current,
+// unexpired lease. A stale worker gets ErrWebhookLeaseLost and cannot fence
+// a result written by the recovering owner.
+func (r *WebhookRepository) MarkSuccess(ctx context.Context, id int64, leaseID, responseLog string) error {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE webhook_deliveries
+		 SET status = 'success', response_log = $3, completed_at = NOW(),
+		     lease_id = NULL, lease_until = NULL, heartbeat_at = NULL
+		 WHERE id = $1 AND lease_id = $2::uuid AND status = 'pending'
+		   AND lease_until > NOW()`,
+		id, leaseID, responseLog,
 	)
 	if err != nil {
 		return fmt.Errorf("mark success: %w", err)
 	}
-	return nil
-}
-
-// MarkRetry reschedules a delivery with attempt increment + last_error
-// set. Used for transient failures (5xx, timeout) below max_attempts.
-func (r *WebhookRepository) MarkRetry(ctx context.Context, id int64, lastError, requestLog, responseLog string, nextAttemptAt time.Time) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE webhook_deliveries
-		 SET scheduled_at = $2, last_error = $3,
-		     request_log = $4, response_log = $5
-		 WHERE id = $1`,
-		id, nextAttemptAt, lastError, requestLog, responseLog,
-	)
-	if err != nil {
-		return fmt.Errorf("mark retry: %w", err)
+	if n, _ := result.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrWebhookLeaseLost, id)
 	}
 	return nil
 }
 
-// MarkDead transitions a delivery to status='dead' (DLQ). Used for
-// 4xx terminal errors OR when attempt >= max_attempts.
-func (r *WebhookRepository) MarkDead(ctx context.Context, id int64, lastError, requestLog, responseLog string) error {
-	_, err := r.db.ExecContext(ctx,
+// MarkRetry reschedules a delivery and releases its lease using CAS.
+func (r *WebhookRepository) MarkRetry(ctx context.Context, id int64, leaseID, lastError, requestLog, responseLog string, nextAttemptAt time.Time) error {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE webhook_deliveries
+		 SET scheduled_at = $3, last_error = $4,
+		     request_log = $5, response_log = $6,
+		     lease_id = NULL, lease_until = NULL, heartbeat_at = NULL
+		 WHERE id = $1 AND lease_id = $2::uuid AND status = 'pending'
+		   AND lease_until > NOW()`,
+		id, leaseID, nextAttemptAt, lastError, requestLog, responseLog,
+	)
+	if err != nil {
+		return fmt.Errorf("mark retry: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrWebhookLeaseLost, id)
+	}
+	return nil
+}
+
+// MarkDead transitions a delivery to DLQ using lease CAS.
+func (r *WebhookRepository) MarkDead(ctx context.Context, id int64, leaseID, lastError, requestLog, responseLog string) error {
+	result, err := r.db.ExecContext(ctx,
 		`UPDATE webhook_deliveries
 		 SET status = 'dead', completed_at = NOW(),
-		     last_error = $2, request_log = $3, response_log = $4
-		 WHERE id = $1`,
-		id, lastError, requestLog, responseLog,
+		     last_error = $3, request_log = $4, response_log = $5,
+		     lease_id = NULL, lease_until = NULL, heartbeat_at = NULL
+		 WHERE id = $1 AND lease_id = $2::uuid AND status = 'pending'
+		   AND lease_until > NOW()`,
+		id, leaseID, lastError, requestLog, responseLog,
 	)
 	if err != nil {
 		return fmt.Errorf("mark dead: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrWebhookLeaseLost, id)
 	}
 	return nil
 }
@@ -351,18 +408,33 @@ func (r *WebhookRepository) MarkDead(ctx context.Context, id int64, lastError, r
 // FindDeliveryByID returns (nil, ErrWebhookDeliveryNotFound) when missing.
 func (r *WebhookRepository) FindDeliveryByID(ctx context.Context, id int64) (*WebhookDelivery, error) {
 	d := &WebhookDelivery{}
+	var leaseID sql.NullString
+	var leaseUntil, heartbeat sql.NullTime
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, event_id, endpoint_id, attempt, status, COALESCE(request_log, ''),
-		        COALESCE(response_log, ''), scheduled_at, completed_at, COALESCE(last_error, '')
-		 FROM webhook_deliveries WHERE id = $1`,
+		       COALESCE(response_log, ''), scheduled_at, completed_at, COALESCE(last_error, ''),
+		       lease_id, lease_until, heartbeat_at
+		FROM webhook_deliveries WHERE id = $1`,
 		id,
 	).Scan(&d.ID, &d.EventID, &d.EndpointID, &d.Attempt, &d.Status,
-		&d.RequestLog, &d.ResponseLog, &d.ScheduledAt, &d.CompletedAt, &d.LastError)
+		&d.RequestLog, &d.ResponseLog, &d.ScheduledAt, &d.CompletedAt, &d.LastError,
+		&leaseID, &leaseUntil, &heartbeat)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrWebhookDeliveryNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("find delivery: %w", err)
+	}
+	if leaseID.Valid {
+		d.LeaseID = leaseID.String
+	}
+	if leaseUntil.Valid {
+		t := leaseUntil.Time
+		d.LeaseUntil = &t
+	}
+	if heartbeat.Valid {
+		t := heartbeat.Time
+		d.HeartbeatAt = &t
 	}
 	return d, nil
 }
@@ -375,7 +447,8 @@ func (r *WebhookRepository) MarkReplay(ctx context.Context, id int64) error {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE webhook_deliveries
 		 SET status = 'pending', attempt = 0, scheduled_at = NOW(),
-		     completed_at = NULL, last_error = NULL, response_log = NULL
+		     completed_at = NULL, last_error = NULL, response_log = NULL,
+		     lease_id = NULL, lease_until = NULL, heartbeat_at = NULL
 		 WHERE id = $1 AND status = 'dead'`,
 		id,
 	)

@@ -205,16 +205,66 @@ describe("GroupDetailPanel batch settings", () => {
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Nome già utilizzato"));
     expect(screen.getByRole("textbox", { name: "Nome del gruppo" })).toBeInTheDocument();
+  });  it("auto-saves uniquely detected title languages and flags generic titles for manual review", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const sampleGroup: TreeNode = {
+      ...group,
+      accounts: [
+        { ...group.accounts[0], username: "BoxeClubITA", language: "" },
+        { ...group.accounts[1], username: "BoxeClubFr", language: "" },
+        { ...group.accounts[0], id: 103, username: "BoxeClubEs", language: "" },
+        { ...group.accounts[1], id: 104, username: "BoxeClubPt", language: "" },
+        { ...group.accounts[0], id: 105, username: "RedGloveTR", language: "" },
+        { ...group.accounts[1], id: 106, username: "RedGloveRU", language: "" },
+        { ...group.accounts[0], id: 107, username: "BoxeClubDE", language: "" },
+        { ...group.accounts[1], id: 108, username: "Boxing Prime", language: "" },
+        { ...group.accounts[0], id: 109, username: "Boxing Zone", language: "" },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={sampleGroup}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={() => {}}
+          onRename={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
+    // The seven uniquely-detectable channels are persisted immediately with
+    // a single click — no second confirmation step is needed.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(7));
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/accounts/101"),
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ metadata: { language: "it" } }) }),
+    );
+    expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveValue("it");
+    expect(screen.getByLabelText("Language for BoxeClubFr")).toHaveValue("fr");
+    expect(screen.getByLabelText("Language for BoxeClubEs")).toHaveValue("es");
+    expect(screen.getByLabelText("Language for BoxeClubPt")).toHaveValue("pt");
+    expect(screen.getByLabelText("Language for RedGloveTR")).toHaveValue("tr");
+    expect(screen.getByLabelText("Language for RedGloveRU")).toHaveValue("ru");
+    expect(screen.getByLabelText("Language for BoxeClubDE")).toHaveValue("de");
+    expect(screen.getByLabelText("Avviso lingua: Lingua non determinabile per «Boxing Prime»: revisione manuale necessaria.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Avviso lingua: Lingua non determinabile per «Boxing Zone»: revisione manuale necessaria.")).toBeInTheDocument();
+    expect(screen.getByText(/2 da verificare/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Applica suggerimenti/ })).not.toBeInTheDocument();
   });
 
-  it("previews certain title languages, flags ambiguous titles, and does not overwrite silently", async () => {
+  it("auto-saves unique title languages and flags ambiguous titles for manual review", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
     const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(false);
     const detectionGroup: TreeNode = {
       ...group,
       accounts: [
-        { ...group.accounts[0], username: "WWE Italia" , language: "" },
+        { ...group.accounts[0], username: "WWE Italia", language: "" },
         { ...group.accounts[1], username: "Italia English Wrestling", language: "" },
       ],
     };
@@ -233,14 +283,8 @@ describe("GroupDetailPanel batch settings", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    expect(screen.getByLabelText("Language for WWE Italia")).toHaveValue("it");
-    expect(screen.getByLabelText("Avviso lingua: Titolo ambiguo: possibili lingue it, en.")).toBeInTheDocument();
-    expect(screen.getByText(/1 da verificare/)).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /Save changes/i })).toBeDisabled();
-
-    fireEvent.click(screen.getByRole("button", { name: /Applica suggerimenti/ }));
-    expect(confirmMock).not.toHaveBeenCalled();
+    // "WWE Italia" has no configured language → its unique detection is
+    // persisted immediately, without any overwrite confirmation.
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/accounts/101"),
       expect.objectContaining({
@@ -248,6 +292,13 @@ describe("GroupDetailPanel batch settings", () => {
         body: JSON.stringify({ metadata: { language: "it" } }),
       }),
     ));
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Language for WWE Italia")).toHaveValue("it");
+    expect(screen.getByLabelText("Avviso lingua: Titolo ambiguo: possibili lingue it, en.")).toBeInTheDocument();
+    expect(screen.getByText(/1 da verificare/)).toBeInTheDocument();
+    // The ambiguous title is never converted into a suggestion.
+    expect(screen.queryByRole("button", { name: /Applica suggerimenti/ })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/groups/7/settings"))).toBe(false);
   });
 
   it("flags an ambiguous title even when a language is already configured", () => {
@@ -362,7 +413,7 @@ describe("GroupDetailPanel batch settings", () => {
     ));
   });
 
-  it("restores the suggested language and keeps it pending when PATCH fails", async () => {
+  it("keeps the auto-saved suggestion pending when the PATCH fails", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("salvataggio lingua non riuscito"));
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -385,9 +436,8 @@ describe("GroupDetailPanel batch settings", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    fireEvent.click(screen.getByRole("button", { name: /Applica suggerimenti/ }));
-    // The failed PATCH restores the pre-submit suggestion ("it") and keeps
-    // the suggestion pending so the operator can retry without re-running detection.
+    // The failed auto-save restores the detected suggestion ("it") and keeps
+    // it pending so the operator can retry without re-running detection.
     await waitFor(() => expect(screen.getByLabelText("Language for WWE Italia")).toHaveValue("it"));
     expect(screen.getByRole("button", { name: /Applica suggerimenti \(1\)/ })).toBeInTheDocument();
     expect(screen.getByLabelText(/salvataggio lingua non riuscito/)).toBeInTheDocument();
@@ -415,6 +465,10 @@ describe("GroupDetailPanel batch settings", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
+    // Wait for the auto-save attempt to settle (it fails) before editing the
+    // dropdown — the select is disabled while a save is in flight.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByLabelText(/modifica lingua non riuscita/)).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("Language for WWE Italia"), { target: { value: "en" } });
     await waitFor(() => expect(screen.getByLabelText("Language for WWE Italia")).toHaveValue("it"));
     expect(screen.getByRole("button", { name: /Applica suggerimenti \(1\)/ })).toBeInTheDocument();

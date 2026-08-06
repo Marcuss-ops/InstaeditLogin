@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -39,7 +40,11 @@ func (w *PublishWorker) markRateLimited(target *models.PostTarget, pubErr error)
 		retryAfter = defaultRateLimitBackoff
 	}
 	nextAttempt := time.Now().Add(retryAfter)
-	if err := w.postRepo.MarkRateLimitedRetry(target.ID, nextAttempt, pubErr.Error()); err != nil {
+	if leaseStore, ok := w.postRepo.(LeaseAwarePublisherPostStore); ok {
+		if err := leaseStore.MarkRateLimitedRetryWithLease(target.ID, w.workerID, nextAttempt, pubErr.Error()); err != nil {
+			return errors.Join(errors.New("reschedule rate-limited target: "+err.Error()), pubErr)
+		}
+	} else if err := w.postRepo.MarkRateLimitedRetry(target.ID, nextAttempt, pubErr.Error()); err != nil {
 		return errors.Join(errors.New("reschedule rate-limited target: "+err.Error()), pubErr)
 	}
 	target.Status = models.PostStatusQueued
@@ -66,7 +71,16 @@ func (w *PublishWorker) markRateLimited(target *models.PostTarget, pubErr error)
 func (w *PublishWorker) markFailed(target *models.PostTarget, reason string) error {
 	target.Status = models.PostStatusFailed
 	target.ErrorMessage = reason
-	_ = w.postRepo.UpdateStatus(target)
+	// Lease-aware repositories use the child retry state machine so a
+	// transient failure affects only this target. Legacy test doubles keep
+	// the historical terminal failed write through UpdateStatus.
+	if _, ok := w.postRepo.(LeaseAwarePublisherPostStore); ok {
+		if err := w.retryTarget(context.Background(), target, reason); err != nil {
+			w.logger.Warn("publish worker: failed to persist child retry", "target_id", target.ID, "error", err)
+		}
+	} else {
+		_ = w.updateTargetStatus(context.Background(), target)
+	}
 	return errors.New(reason)
 }
 
@@ -100,6 +114,8 @@ func (w *PublishWorker) markPublishBlockedAuth(target *models.PostTarget, reason
 	// transient failures get codes like "RATE_LIMITED" /
 	// "INVALID_TOKEN" etc.
 	target.LastErrorCode = "blocked_auth"
-	_ = w.postRepo.UpdateStatus(target)
+	if err := w.updateTargetStatus(context.Background(), target); err != nil {
+		w.logger.Warn("publish worker: failed to persist blocked_auth target", "target_id", target.ID, "error", err)
+	}
 	return errors.New(reason)
 }

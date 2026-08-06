@@ -153,8 +153,8 @@ func TestThumbnailProjects_ResolveMediaCachesTemporaryURLs(t *testing.T) {
 			t.Fatalf("request %d: want 200, got %d: %s", i, w.Code, w.Body.String())
 		}
 	}
-	if storage.getObjectCalls != 1 {
-		t.Fatalf("signed URL calls: got %d, want 1 due to short cache", storage.getObjectCalls)
+	if storage.getObjectCalls.Load() != 1 {
+		t.Fatalf("signed URL calls: got %d, want 1 due to short cache", storage.getObjectCalls.Load())
 	}
 }
 

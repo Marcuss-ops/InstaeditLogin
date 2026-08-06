@@ -80,6 +80,7 @@ type AccountWithSnapshot struct {
 // repository half of the aggregated GET /api/v1/accounts list: no
 // per-account snapshot reads, no Vault access, no provider calls.
 func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUser(userID int64, platform string) ([]*AccountWithSnapshot, error) {
+	platform = models.NormalizePlatformIdentifier(platform)
 	const joinedSelect = `SELECT pa.id, pa.user_id, pa.platform, pa.platform_user_id, pa.username, pa.status, pa.connected_at,
 	        pa.last_validated_at, pa.last_refresh_at, pa.reauth_required_at,
 	        COALESCE(pa.last_error_code, '') AS last_error_code,
@@ -95,7 +96,7 @@ func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUser(userID int64, p
 	if platform == "" {
 		rows, err = r.db.Query(joinedSelect+` WHERE pa.user_id = $1 ORDER BY pa.created_at DESC`, userID)
 	} else {
-		rows, err = r.db.Query(joinedSelect+` WHERE pa.user_id = $1 AND pa.platform = $2 ORDER BY pa.created_at DESC`, userID, platform)
+		rows, err = r.db.Query(joinedSelect+` WHERE pa.user_id = $1 AND (pa.platform = $2 OR (pa.platform = 'x' AND $2 = 'twitter')) ORDER BY pa.created_at DESC`, userID, platform)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to list platform accounts with snapshots: %w", err)
@@ -137,6 +138,7 @@ func scanAccountSnapshotRows(rows *sql.Rows, max int) ([]*AccountWithSnapshot, e
 			return nil, fmt.Errorf("failed to scan platform account with snapshot: %w", err)
 		}
 		a.Metadata = scanMetadata(metadata)
+		a.Platform = models.NormalizePlatformIdentifier(a.Platform)
 		row := &AccountWithSnapshot{Account: a}
 		if arsID.Valid {
 			snap := &AccountResourceSnapshot{
@@ -183,7 +185,8 @@ func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUserPage(ctx context
 	 WHERE pa.user_id = $1
 	   AND ($2::timestamptz IS NULL OR (pa.created_at, pa.id) < ($2, $3))
 	   AND ($4::bool OR pa.status NOT IN ('disconnected', 'revoked', 'deleted', 'cancelled', 'canceled'))`
-	query := base + ` AND ($5::text = '' OR pa.platform = $5)
+	platform = models.NormalizePlatformIdentifier(platform)
+	query := base + ` AND ($5::text = '' OR pa.platform = $5 OR (pa.platform = 'x' AND $5 = 'twitter'))
 	 ORDER BY pa.created_at DESC, pa.id DESC LIMIT $6`
 	var after interface{}
 	if afterTime != nil {
@@ -207,6 +210,7 @@ func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUserPage(ctx context
 
 // ListPlatformAccountsByUser returns all platform accounts for a user, optionally filtered by platform.
 func (r *UserRepository) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
+	platform = models.NormalizePlatformIdentifier(platform)
 	var rows *sql.Rows
 	var err error
 
@@ -225,7 +229,9 @@ func (r *UserRepository) ListPlatformAccountsByUser(userID int64, platform strin
 			        COALESCE(last_error_code, '') AS last_error_code,
 			        COALESCE(last_error_message, '') AS last_error_message,
 			        metadata, created_at, updated_at
-			 FROM platform_accounts WHERE user_id = $1 AND platform = $2 ORDER BY created_at DESC`,
+			 FROM platform_accounts
+			 WHERE user_id = $1 AND (platform = $2 OR (platform = 'x' AND $2 = 'twitter'))
+			 ORDER BY created_at DESC`,
 			userID, platform)
 	}
 
@@ -251,6 +257,7 @@ func scanPlatformAccountRows(rows *sql.Rows) ([]*models.PlatformAccount, error) 
 			return nil, fmt.Errorf("failed to scan platform account: %w", err)
 		}
 		a.Metadata = scanMetadata(metadata)
+		a.Platform = models.NormalizePlatformIdentifier(a.Platform)
 		accounts = append(accounts, a)
 	}
 	return accounts, nil

@@ -11,17 +11,23 @@ import (
 
 // FindPlatformAccount finds a platform account by platform and platform user ID.
 func (r *UserRepository) FindPlatformAccount(platform, platformUserID string) (*models.PlatformAccount, error) {
+	platform = models.NormalizePlatformIdentifier(platform)
 	account := &models.PlatformAccount{}
 	var metadata []byte
+	var storedPlatform string
 	err := r.db.QueryRow(
 		`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
 		        last_validated_at, last_refresh_at, reauth_required_at,
 		        COALESCE(last_error_code, '') AS last_error_code,
 		        COALESCE(last_error_message, '') AS last_error_message,
 		        metadata, created_at, updated_at
-		 FROM platform_accounts WHERE platform = $1 AND platform_user_id = $2`,
+		 FROM platform_accounts
+		 WHERE (platform = $1 OR (platform = 'x' AND $1 = 'twitter'))
+		   AND platform_user_id = $2
+		 ORDER BY CASE WHEN platform = $1 THEN 0 ELSE 1 END, id ASC
+		 LIMIT 1`,
 		platform, platformUserID,
-	).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
+	).Scan(&account.ID, &account.UserID, &storedPlatform, &account.PlatformUserID,
 		&account.Username, &account.Status, &account.ConnectedAt, &account.LastValidatedAt,
 		&account.LastRefreshAt, &account.ReauthRequiredAt, &account.LastErrorCode,
 		&account.LastErrorMessage, &metadata, &account.CreatedAt, &account.UpdatedAt)
@@ -33,11 +39,16 @@ func (r *UserRepository) FindPlatformAccount(platform, platformUserID string) (*
 		return nil, fmt.Errorf("failed to find platform account: %w", err)
 	}
 	account.Metadata = scanMetadata(metadata)
+	account.Platform = models.NormalizePlatformIdentifier(storedPlatform)
 	return account, nil
 }
 
 // CreatePlatformAccount inserts a new platform account.
 func (r *UserRepository) CreatePlatformAccount(account *models.PlatformAccount) error {
+	if account == nil {
+		return fmt.Errorf("failed to create platform account: nil account")
+	}
+	account.Platform = models.NormalizePlatformIdentifier(account.Platform)
 	if account.Status == "" {
 		account.Status = models.AccountStatusActive
 	}
@@ -99,6 +110,7 @@ func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAcco
 	if oauthConnectionID != 0 {
 		account.OAuthConnectionID = &oauthConnectionID
 	}
+	account.Platform = models.NormalizePlatformIdentifier(account.Platform)
 	return account, nil
 }
 

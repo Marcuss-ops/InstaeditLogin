@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { detectChannelLanguage } from "./groupChannelLanguage";
 
 describe("detectChannelLanguage", () => {
+  it.each([
+    ["BoxeClubITA", "it"],
+    ["BoxeClubFr", "fr"],
+    ["BoxeClubEs", "es"],
+    ["BoxeClubPt", "pt"],
+    ["RedGloveTR", "tr"],
+    ["RedGloveRU", "ru"],
+    ["BoxeClubDE", "de"],
+  ])("detects %s as %s", (title, language) => {
+    expect(detectChannelLanguage(title)).toEqual({
+      language,
+      candidates: [language],
+      reason: "explicit-marker",
+    });
+  });
+
   it("detects a unique explicit language marker", () => {
     expect(detectChannelLanguage("WWE Italia ufficiale")).toEqual({
       language: "it",
@@ -18,11 +34,14 @@ describe("detectChannelLanguage", () => {
     });
   });
 
-  it("reports titles without a reliable marker for manual review", () => {
-    expect(detectChannelLanguage("Wrestling Discovery")).toEqual({
-      language: null,
-      candidates: [],
-      reason: "insufficient-signal",
-    });
-  });
+  it.each(["Boxing Prime", "Boxing Zone", "Wrestling Discovery"])(
+    "reports %s without a reliable marker for manual review",
+    (title) => {
+      expect(detectChannelLanguage(title)).toEqual({
+        language: null,
+        candidates: [],
+        reason: "insufficient-signal",
+      });
+    },
+  );
 });

@@ -133,6 +133,7 @@ func queryDormantRefreshGrants(ctx context.Context, q sweepQueryer, horizonDays 
 		if err := rows.Scan(&g.OAuthConnectionID, &g.PlatformAccountID, &g.Provider); err != nil {
 			return nil, fmt.Errorf("refresh sweep: scan dormant grant: %w", err)
 		}
+		g.Provider = models.NormalizePlatformIdentifier(g.Provider)
 		out = append(out, g)
 	}
 	if err := rows.Err(); err != nil {

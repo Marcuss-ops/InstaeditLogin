@@ -21,9 +21,9 @@ import (
 const YouTubeForceSSLScope = "https://www.googleapis.com/auth/youtube.force-ssl"
 
 const (
-	grantCacheTTL       = 60 * time.Second
-	grantValidationTTL  = 30 * time.Second
-	grantRefreshGrace   = 60 * time.Second
+	grantCacheTTL      = 60 * time.Second
+	grantValidationTTL = 30 * time.Second
+	grantRefreshGrace  = 60 * time.Second
 )
 
 var (
@@ -140,11 +140,11 @@ type cachedGrantValidation struct {
 type YouTubeCredentialResolver struct {
 	deps YouTubeCredentialResolverDeps
 
-	cacheMu       sync.RWMutex
-	grantCache    map[int64]cachedOAuthGrant
-	validation    map[int64]cachedGrantValidation
-	bindingCache  map[string]time.Time
-	flight        singleflight.Group
+	cacheMu      sync.RWMutex
+	grantCache   map[int64]cachedOAuthGrant
+	validation   map[int64]cachedGrantValidation
+	bindingCache map[string]time.Time
+	flight       singleflight.Group
 }
 
 func NewYouTubeCredentialResolver(deps YouTubeCredentialResolverDeps) *YouTubeCredentialResolver {

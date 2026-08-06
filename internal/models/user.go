@@ -14,6 +14,7 @@ const (
 	PlatformThreads  = "threads"
 	PlatformTikTok   = "tiktok"
 	PlatformTwitter  = "twitter"
+	PlatformX        = "x" // legacy input alias; persistence uses PlatformTwitter
 	PlatformYouTube  = "youtube"
 	PlatformLinkedIn = "linkedin"
 )

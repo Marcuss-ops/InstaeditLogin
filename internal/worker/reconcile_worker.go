@@ -11,12 +11,9 @@
 //     publishing→published transition is observed promptly without
 //     being coupled to the driver's cadence.
 //  2. NO DOUBLE-POLL. With tickReconcile removed from PublishWorker,
-//     there is exactly ONE goroutine reading the publishing row
-//     set per replica. Two replicas each have ONE reconciler —
-//     multi-replica safety is delegated to the platform's
-//     state-string idempotency (and the publisher_idempotency_key
-//     column on post_targets for any publisher that uses the
-//     provider reconciler idempotency model).
+//     there is exactly ONE goroutine reading the publishing row set per
+//     replica. Durable per-target leases then serialize provider polling
+//     across replicas; publisher idempotency remains a second safety net.
 //  3. FAILURE ISOLATION. A stuck reconciler tick does NOT block
 //     the publish driver. With the old in-runOnce shape, a slow
 //     platform API on the reconciler tick held the publish driver
@@ -108,17 +105,10 @@ type ReconcileUserStore = PublisherUserStore
 // (publishing → published | failed) by polling ListPublishing
 // every interval and calling AsyncPublisher.Reconcile on each
 // target. One struct, one goroutine (its Run method), ctx-cancellable.
-// Multi-replica safety is delegated to the platform's per-publish_id
-// state idempotency: two reconcilers cannot transition the same row
-// to two conflicting states because:
-//
-//  1. UpdateStatus on terminal states is idempotent (same target→
-//     same status: UPDATE post_targets SET status='published' WHERE
-//     id=? is a no-op the second time).
-//  2. The transitions are the only writer to status at this row's
-//     lifecycle stage. The publish driver already transitioned
-//     queued→publishing via ClaimQueuedTarget and is no longer the
-//     row's writer.
+// Multi-replica safety is provided by the durable reconciler lease: the
+// claim stamps owner and expiry before provider I/O, heartbeats extend it,
+// and terminal/scheduling writes require owner-and-unexpired-lease CAS.
+// Publisher idempotency remains a defense in depth for provider retries.
 //
 // The dispatcher's outbox-based retry path is the
 // platform-decoupled equivalent for failures; the per-target retry
@@ -270,10 +260,9 @@ func (w *ReconcileWorker) repairDirtyAggregates() (int, error) {
 // before reading it (SKIP LOCKED). If another reconciler replica
 // already claimed the row, we skip it. The winner has
 // exclusive ownership for the duration of the reconcileTarget call.
-// On terminal transitions (published|failed), UpdateStatus is
-// idempotent — if two reconcilers somehow both claim the same row
-// (degenerate race), the second UPDATE simply overwrites the first
-// with the same terminal state.
+// If the lease expires, a successor may take over; all writes from the
+// stale owner then fail their owner-and-expiry CAS instead of overwriting
+// the successor's result.
 func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed int, err error) {
 	publishing, err := w.postRepo.ListPublishing(reconcilePollingBatchSize)
 	if err != nil {

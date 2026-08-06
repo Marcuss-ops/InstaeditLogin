@@ -77,7 +77,7 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 		w.logger.Info("async publish initiated, reconciler will poll",
 			"target_id", target.ID, "platform", account.Platform,
 			"publish_id", result.PlatformMediaID)
-		if err := w.postRepo.UpdateStatus(target); err != nil {
+		if err := w.updateTargetStatus(ctx, target); err != nil {
 			return fmt.Errorf("update status for async publish: %w", err)
 		}
 		return nil
@@ -88,7 +88,7 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 	target.PlatformPostID = result.PlatformMediaID
 	now := time.Now()
 	target.PublishedAt = &now
-	if err := w.postRepo.UpdateStatus(target); err != nil {
+	if err := w.updateTargetStatus(ctx, target); err != nil {
 		return fmt.Errorf("transition to published: %w", err)
 	}
 	// Post-completion dispatch (Task 7/10): fire DeliveryRegistry

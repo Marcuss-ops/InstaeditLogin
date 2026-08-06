@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -85,7 +86,7 @@ func (r *Router) oauthSessionRedirect(next http.HandlerFunc) http.HandlerFunc {
 		identity := r.extractSessionIdentity(req)
 		if identity == nil {
 			if r.frontendURL != "" {
-				provider := req.PathValue("provider")
+				provider := models.NormalizePlatformIdentifier(req.PathValue("provider"))
 				nextURL := url.QueryEscape("/connections/" + provider)
 				http.Redirect(w, req,
 					strings.TrimRight(r.frontendURL, "/")+"/login?next="+nextURL,

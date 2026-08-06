@@ -328,6 +328,32 @@ func applyE2ESchema(db *sql.DB) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		// Keep the reduced E2E schema aligned with the production
+		// accounts-list LEFT JOIN. Migration 042 owns this table in
+		// production; migration 102 adds the refresh coordination
+		// columns. The harness uses an idempotent CREATE TABLE rather
+		// than changing an applied migration checksum.
+		`CREATE TABLE IF NOT EXISTS account_resource_snapshots (
+			platform_account_id BIGINT PRIMARY KEY
+				REFERENCES platform_accounts(id) ON DELETE CASCADE,
+			resource_type TEXT NOT NULL DEFAULT 'channel',
+			profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+			statistics JSONB NOT NULL DEFAULT '{}'::jsonb,
+			status JSONB NOT NULL DEFAULT '{}'::jsonb,
+			content JSONB NOT NULL DEFAULT '{}'::jsonb,
+			provider_etag TEXT,
+			fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			refresh_pending_at TIMESTAMPTZ,
+			refresh_claimed_until TIMESTAMPTZ,
+			refresh_attempts INTEGER NOT NULL DEFAULT 0,
+			refresh_last_error TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_e2e_account_resource_snapshots_fetched
+			ON account_resource_snapshots (fetched_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_e2e_account_resource_snapshots_refresh_pending
+			ON account_resource_snapshots (refresh_pending_at)
+			WHERE refresh_pending_at IS NOT NULL`,
 		// posts: user_id + workspace_id + status + publish_at
 		// cover scenario_5. Other columns are present for shape
 		// parity with the production migration so any future

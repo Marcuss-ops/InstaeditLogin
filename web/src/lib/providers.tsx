@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import {
   PROVIDER_REGISTRY,
   PlatformLogo,
+  normalizeProviderIdentifier,
   type CanonicalProviderId,
 } from "../components/brand/PlatformLogos";
 
@@ -36,5 +37,6 @@ export const PROVIDERS: ProviderMeta[] = PROVIDER_REGISTRY.map((entry) => ({
 }));
 
 export function getProvider(id: string): ProviderMeta | undefined {
-  return PROVIDERS.find((provider) => provider.id === id);
+  const canonicalID = normalizeProviderIdentifier(id);
+  return PROVIDERS.find((provider) => provider.id === canonicalID);
 }

@@ -52,10 +52,10 @@ func (w *PublishWorker) runOnce(ctx context.Context) {
 	}
 }
 
-// tick processes all pending targets exactly once. Returns
-// (processed, succeeded, failed, err). Sequential per-target — no
-// per-target goroutines — for predictable load on the OAuth APIs and
-// easier rate-limit debugging.
+// tick processes a bounded, fair batch of independent child targets exactly
+// once. Each target owns its own claim, lease, retry budget, error state and
+// idempotency key; no parent can hold a worker slot while its siblings run.
+// Returns (processed, succeeded, failed, err).
 //
 // Per-target errors are LOGGED and counted but do not abort the tick;
 // the worker should keep trying other targets even if Meta/Twitter/etc.

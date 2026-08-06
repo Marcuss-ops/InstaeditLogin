@@ -211,7 +211,13 @@ func (a *App) registerWebhookWorker() {
 		Name:     "webhook",
 		Critical: true,
 		Run: func(ctx context.Context) error {
-			ww := worker.NewWebhookWorker(a.WebhookRepo, time.Duration(a.Cfg.Worker.WebhookWorkerIntervalSeconds)*time.Second)
+			ww := worker.NewWebhookWorkerWithOptions(a.WebhookRepo, worker.WebhookWorkerOptions{
+				Interval:          time.Duration(a.Cfg.Worker.WebhookWorkerIntervalSeconds) * time.Second,
+				Concurrency:       a.Cfg.Worker.WebhookWorkerConcurrency,
+				HTTPTimeout:       time.Duration(a.Cfg.Worker.WebhookHTTPTimeoutSeconds) * time.Second,
+				LeaseTTL:          time.Duration(a.Cfg.Worker.WebhookLeaseTTLSeconds) * time.Second,
+				HeartbeatInterval: time.Duration(a.Cfg.Worker.WebhookHeartbeatIntervalSeconds) * time.Second,
+			})
 			return ww.Run(ctx)
 		},
 	})

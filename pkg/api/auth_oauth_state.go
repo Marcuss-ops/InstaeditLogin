@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 const (
@@ -33,7 +35,9 @@ const oauthStateExpectedChannelSuffix = "_expected_channel"
 // consent URL.
 const oauthStateOAuthClientSuffix = "_oauth_client"
 
-func OAuthStateCookieName(provider string) string { return oauthStateCookiePrefix + provider }
+func OAuthStateCookieName(provider string) string {
+	return oauthStateCookiePrefix + models.NormalizePlatformIdentifier(provider)
+}
 
 // OAuthStateExpectedChannelCookieName returns the sibling cookie name used
 // when /api/v1/auth/{provider}/login is invoked with
@@ -43,7 +47,7 @@ func OAuthStateCookieName(provider string) string { return oauthStateCookiePrefi
 // parameter (which Google echoes back verbatim, so we keep it a pure
 // CSRF nonce).
 func OAuthStateExpectedChannelCookieName(provider string) string {
-	return oauthStateCookiePrefix + provider + oauthStateExpectedChannelSuffix
+	return oauthStateCookiePrefix + models.NormalizePlatformIdentifier(provider) + oauthStateExpectedChannelSuffix
 }
 
 // OAuthStateOAuthClientCookieName returns the sibling cookie name used
@@ -58,7 +62,7 @@ func OAuthStateExpectedChannelCookieName(provider string) string {
 // from a previous OAuth round-trip cannot steer a new flow to the wrong
 // client.
 func OAuthStateOAuthClientCookieName(provider string) string {
-	return oauthStateCookiePrefix + provider + oauthStateOAuthClientSuffix
+	return oauthStateCookiePrefix + models.NormalizePlatformIdentifier(provider) + oauthStateOAuthClientSuffix
 }
 
 // isValidYouTubeChannelID returns true for strings that look like a

@@ -67,7 +67,7 @@ func (r *Router) exchangeOAuthCode(ctx context.Context, provider string, p servi
 }
 
 func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
-	provider := req.PathValue("provider")
+	provider := models.NormalizePlatformIdentifier(req.PathValue("provider"))
 	p, ok := r.capabilities.OAuth(provider)
 	if !ok {
 		writeError(w, http.StatusNotFound, "unsupported provider: "+provider)
@@ -251,7 +251,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 // orchestrator to stop (stop=true). The step order, status codes,
 // messages and log lines are identical to the previous monolith.
 func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
-	provider := req.PathValue("provider")
+	provider := models.NormalizePlatformIdentifier(req.PathValue("provider"))
 	p, ok := r.capabilities.OAuth(provider)
 	if !ok {
 		writeError(w, http.StatusNotFound, "unsupported provider: "+provider)

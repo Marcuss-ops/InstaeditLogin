@@ -329,6 +329,14 @@ type WorkerConfig struct {
 	ReconcileWorkerIntervalSeconds int
 	// WebhookWorkerIntervalSeconds is the cadence of the webhook worker.
 	WebhookWorkerIntervalSeconds int
+	// WebhookWorkerConcurrency caps concurrent HTTP deliveries per replica.
+	WebhookWorkerConcurrency int
+	// WebhookHTTPTimeoutSeconds bounds one outbound webhook request.
+	WebhookHTTPTimeoutSeconds int
+	// WebhookLeaseTTLSeconds must exceed the HTTP timeout with margin.
+	WebhookLeaseTTLSeconds int
+	// WebhookHeartbeatIntervalSeconds renews active delivery leases.
+	WebhookHeartbeatIntervalSeconds int
 	// SessionCleanupIntervalSeconds is the cadence of the sessions cleanup worker.
 	SessionCleanupIntervalSeconds int
 	// AssetCleanupIntervalSeconds is the cadence of the media-asset

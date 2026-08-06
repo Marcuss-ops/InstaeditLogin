@@ -127,8 +127,8 @@ func TestMediaLibrary_DetailMintsAndCachesPreview(t *testing.T) {
 			t.Fatalf("detail should include preview and probe metadata: %#v", detail)
 		}
 	}
-	if storage.getObjectCalls != 1 {
-		t.Fatalf("signed URL calls: got %d, want 1 due to short cache", storage.getObjectCalls)
+	if storage.getObjectCalls.Load() != 1 {
+		t.Fatalf("signed URL calls: got %d, want 1 due to short cache", storage.getObjectCalls.Load())
 	}
 }
 

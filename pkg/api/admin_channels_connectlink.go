@@ -102,6 +102,7 @@ func (m *AdminModule) handleAdminChannelConnectLink(w http.ResponseWriter, req *
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
+	account.Platform = models.NormalizePlatformIdentifier(account.Platform)
 
 	// The connect-link feature is YouTube-specific — the
 	// metadata.bind path is Google-only and other providers

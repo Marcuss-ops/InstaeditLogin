@@ -162,8 +162,10 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	return targets, nil
 }
 
-// ListPublishing (Taglio 4.2) returns post_targets whose status='publishing'
-// AND platform_post_id IS NOT NULL. These are the targets the reconciler
+// ListPublishing returns at most limit ready publishing targets whose
+// next_reconcile_at is due. Targets without a non-empty provider publish ID
+// and targets scheduled for the future remain invisible to the reconciler.
+// These are the targets the reconciler
 // goroutine needs to poll for async state transitions (TikTok's
 // PROCESSING_UPLOAD → PUBLISH_COMPLETE flow).
 //
@@ -225,7 +227,7 @@ func (r *PostRepository) ListPublishing(limit int) ([]models.PostTarget, error) 
 // migration 035 (SPRINT 5.2) for consistency with ListByPost/ListPublishing.
 func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
-		qSelectPendingTargets,
+		qSelectPendingTargetsFair,
 		before,
 	)
 	if err != nil {
@@ -244,6 +246,34 @@ func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, err
 		targets = append(targets, t)
 	}
 	return targets, nil
+}
+
+// ScheduleNextReconcile advances the target's adaptive polling schedule.
+// The status/readiness predicates make stale worker calls harmless after a
+// terminal transition or provider ID loss.
+func (r *PostRepository) ScheduleNextReconcile(id int64, ownerID string, expectedAttempt int, next time.Time) error {
+	if id <= 0 {
+		return fmt.Errorf("schedule next reconcile: target ID must be positive (got %d)", id)
+	}
+	if ownerID == "" {
+		return fmt.Errorf("schedule next reconcile: ownerID must not be empty")
+	}
+	if expectedAttempt < 0 {
+		return fmt.Errorf("schedule next reconcile: attempt must be non-negative (got %d)", expectedAttempt)
+	}
+	if next.IsZero() {
+		return fmt.Errorf("schedule next reconcile: next time must be non-zero")
+	}
+	result, err := r.db.Exec(qScheduleNextReconcile, id, next, expectedAttempt, ownerID)
+	if err != nil {
+		return fmt.Errorf("schedule next reconcile for target %d: %w", id, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("schedule next reconcile rows affected for target %d: %w", id, err)
+	} else if affected == 0 {
+		return fmt.Errorf("schedule next reconcile lost CAS for target %d", id)
+	}
+	return nil
 }
 
 // SaveTarget saves a post target.

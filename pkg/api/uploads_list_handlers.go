@@ -238,7 +238,7 @@ func (r *Router) handleListUploadsByAccount(w http.ResponseWriter, req *http.Req
 
 	response := map[string]interface{}{
 		"account_id":       accountID,
-		"platform":         account.Platform,
+		"platform":         models.NormalizePlatformIdentifier(account.Platform),
 		"has_more":         hasMore,
 		"username":         account.Username,
 		"count":            len(jobs),

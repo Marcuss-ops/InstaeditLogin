@@ -129,6 +129,36 @@ const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id,
 	   AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= NOW())
 	 ORDER BY p.publish_at ASC NULLS FIRST`
 
+// qSelectPendingTargetsFair interleaves children from different parents so
+// one post with a large fan-out cannot occupy the entire publish batch. The
+// row number is the child position within each parent; ordering by it gives
+// round-robin fairness while retaining publish-time and id determinism.
+// Note: every COALESCE projection in the CTE must carry an explicit alias —
+// Postgres names bare expression columns `coalesce`, which both duplicates
+// the column name and breaks the outer SELECT's `platform_post_id` reference.
+const qSelectPendingTargetsFair = `WITH pending AS (
+	SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
+	       COALESCE(pt.platform_post_id, '') AS platform_post_id,
+	       COALESCE(pt.error_message, '') AS error_message,
+	       pt.published_at,
+	       COALESCE(pt.provider_state, '') AS provider_state,
+	       COALESCE(pt.container_id, '') AS container_id,
+	       pt.provider_idempotency_key, pt.completed_at,
+	       p.publish_at,
+	       ROW_NUMBER() OVER (PARTITION BY pt.post_id ORDER BY pt.id ASC) AS child_position
+	FROM post_targets pt
+	JOIN posts p ON p.id = pt.post_id
+	WHERE pt.status IN ('queued', 'waiting_provider', 'retrying')
+	  AND (p.publish_at IS NULL OR p.publish_at <= $1)
+	  AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= NOW())
+)
+SELECT id, post_id, platform_account_id, status,
+       platform_post_id, error_message, published_at,
+       provider_state, container_id, provider_idempotency_key, completed_at
+FROM pending
+ORDER BY child_position ASC, publish_at ASC NULLS FIRST, post_id ASC, id ASC
+LIMIT 100`
+
 // qSelectTargetByID — single post_target lookup for the GET
 // /api/v1/post-targets/{id} polling endpoint (Taglio 5.1 step 2).
 // Returns ALL retry-aware columns the polling frontend needs:
@@ -222,6 +252,19 @@ const qUpdateTargetStatus = `UPDATE post_targets
  WHERE id = $5
    AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq'))`
 
+const qUpdateTargetStatusWithLease = `UPDATE post_targets
+ SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+     provider_state = $6, container_id = $7,
+     lease_owner_id = CASE WHEN $1 = 'publishing' THEN lease_owner_id ELSE NULL END,
+     leased_until = CASE WHEN $1 = 'publishing' THEN leased_until ELSE NULL END,
+     heartbeat_at = CASE WHEN $1 = 'publishing' THEN heartbeat_at ELSE NULL END
+ WHERE id = $5
+   AND lease_owner_id = $8
+   AND status = 'publishing'`
+
+// qUpdateTargetStatusWithReconcileLease is the reconciler terminal CAS.
+// A stale replica cannot write after its lease expires, even if a successor
+// has not claimed the row yet. Terminal transitions release the lease.
 const qUpdateTargetStatusWithReconcileLease = `UPDATE post_targets
  SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
      provider_state = $6, container_id = $7,
@@ -229,37 +272,6 @@ const qUpdateTargetStatusWithReconcileLease = `UPDATE post_targets
  WHERE id = $5
    AND status = 'publishing'
    AND reconcile_owner_id = $8
-   AND reconcile_until > NOW()`
-
-const qHeartbeatReconcileTarget = `UPDATE post_targets
- SET reconcile_until = NOW() + ($3 || ' seconds')::INTERVAL,
-     reconcile_heartbeat_at = NOW()
- WHERE id = $1
-   AND reconcile_owner_id = $2
-   AND reconcile_until > NOW()
-   AND status = 'publishing'`
-
-const qReleaseReconcileTarget = `UPDATE post_targets
- SET reconcile_owner_id = NULL,
-     reconcile_until = NULL,
-     reconcile_heartbeat_at = NULL
- WHERE id = $1
-   AND reconcile_owner_id = $2
-   AND reconcile_until > NOW()
-   AND status = 'publishing'`
-
-const qScheduleNextReconcile = `UPDATE post_targets
- SET reconcile_attempt = reconcile_attempt + 1,
-     next_reconcile_at = $2,
-     reconcile_owner_id = NULL,
-     reconcile_until = NULL,
-     reconcile_heartbeat_at = NULL
- WHERE id = $1
-   AND reconcile_attempt = $3
-   AND status = 'publishing'
-   AND platform_post_id IS NOT NULL
-   AND platform_post_id <> ''
-   AND reconcile_owner_id = $4
    AND reconcile_until > NOW()`
 
 const qDeletePost = `DELETE FROM posts WHERE id = $1`
@@ -306,12 +318,20 @@ const qClaimQueuedTargetSelect = `SELECT id FROM post_targets
 
 const qClaimQueuedTargetUpdate = `UPDATE post_targets SET status = 'publishing' WHERE id = $1`
 
+const qClaimQueuedTargetWithLeaseSelect = `SELECT id FROM post_targets
+ WHERE id = $1
+   AND status IN ('queued', 'waiting_provider', 'retrying')
+   AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+ FOR UPDATE SKIP LOCKED`
+
 const qClaimQueuedTargetWithLeaseUpdate = `UPDATE post_targets
  SET status = 'publishing',
      lease_owner_id = $2,
      leased_until = NOW() + ($3 || ' seconds')::INTERVAL,
      heartbeat_at = NOW()
- WHERE id = $1`
+ WHERE id = $1
+   AND status IN ('queued', 'waiting_provider', 'retrying')`
 
 const qUpdatePublishProgress = `UPDATE post_targets
  SET upload_offset = $3,
@@ -358,10 +378,23 @@ const qMarkRateLimitedRetry = `UPDATE post_targets
      last_error_code = 'RATE_LIMITED'
  WHERE id = $1 AND status = 'publishing'`
 
+const qMarkRateLimitedRetryWithLease = `UPDATE post_targets
+ SET status = 'queued',
+     attempt_count = attempt_count + 1,
+     next_attempt_at = $3,
+     rate_limit_reset_at = $3,
+     error_message = $4,
+     last_error_code = 'RATE_LIMITED',
+     lease_owner_id = NULL,
+     leased_until = NULL,
+     heartbeat_at = NULL
+ WHERE id = $1 AND lease_owner_id = $2 AND status = 'publishing'`
+
 const qMarkRetrying = `UPDATE post_targets
  SET status = 'retrying',
      attempt_count = attempt_count + 1,
      next_retry_at = $3,
+     next_attempt_at = $3,
      lease_owner_id = NULL,
      leased_until = NULL,
      heartbeat_at = NULL,
@@ -371,6 +404,7 @@ const qMarkRetrying = `UPDATE post_targets
 const qMarkRateLimited = `UPDATE post_targets
  SET status = 'queued',
      next_retry_at = $3,
+     next_attempt_at = $3,
      rate_limit_reset_at = $3,
      lease_owner_id = NULL,
      leased_until = NULL,
@@ -391,6 +425,9 @@ const qReclaimExpiredLeases = `UPDATE post_targets
    AND status IN ('publishing', 'queued')
  RETURNING post_id`
 
+// qClaimPublishingTargetSelect atomically claims one due publishing target.
+// The CTE's FOR UPDATE SKIP LOCKED prevents replicas from waiting on or
+// selecting the same row; the UPDATE stamps durable ownership before commit.
 const qClaimPublishingTargetSelect = `WITH candidate AS (
  SELECT id
  FROM post_targets
@@ -409,3 +446,34 @@ UPDATE post_targets pt
  FROM candidate
  WHERE pt.id = candidate.id
  RETURNING pt.id`
+
+const qHeartbeatReconcileTarget = `UPDATE post_targets
+ SET reconcile_until = NOW() + ($3 || ' seconds')::INTERVAL,
+     reconcile_heartbeat_at = NOW()
+ WHERE id = $1
+   AND reconcile_owner_id = $2
+   AND reconcile_until > NOW()
+   AND status = 'publishing'`
+
+const qReleaseReconcileTarget = `UPDATE post_targets
+ SET reconcile_owner_id = NULL,
+     reconcile_until = NULL,
+     reconcile_heartbeat_at = NULL
+ WHERE id = $1
+   AND reconcile_owner_id = $2
+   AND reconcile_until > NOW()
+   AND status = 'publishing'`
+
+const qScheduleNextReconcile = `UPDATE post_targets
+ SET reconcile_attempt = reconcile_attempt + 1,
+     next_reconcile_at = $2,
+     reconcile_owner_id = NULL,
+     reconcile_until = NULL,
+     reconcile_heartbeat_at = NULL
+ WHERE id = $1
+   AND reconcile_attempt = $3
+   AND status = 'publishing'
+   AND platform_post_id IS NOT NULL
+   AND platform_post_id <> ''
+   AND reconcile_owner_id = $4
+   AND reconcile_until > NOW()`

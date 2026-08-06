@@ -332,6 +332,30 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	if userID <= 0 {
 		return 0, fmt.Errorf("channel authorization: platform_accounts.user_id is zero for account %d", accountID)
 	}
+	storedPlatform := platform
+	platform = models.NormalizePlatformIdentifier(platform)
+	if storedPlatform == models.PlatformX && platform == models.PlatformTwitter {
+		result, canonicalizeErr := tx.ExecContext(ctx,
+			`UPDATE platform_accounts
+			    SET platform = $1, updated_at = NOW()
+			  WHERE id = $2
+			    AND user_id = $3
+			    AND platform = $4
+			    AND NOT EXISTS (
+				      SELECT 1 FROM platform_accounts
+				       WHERE user_id = $3 AND platform = $1 AND platform_user_id = $5
+			    )`,
+			models.PlatformTwitter, accountID, userID, models.PlatformX, providerResourceID,
+		)
+		if canonicalizeErr != nil {
+			return 0, fmt.Errorf("channel authorization: canonicalize legacy X alias: %w", canonicalizeErr)
+		}
+		if affected, affectedErr := result.RowsAffected(); affectedErr != nil {
+			return 0, fmt.Errorf("channel authorization: inspect X alias canonicalization: %w", affectedErr)
+		} else if affected == 0 {
+			return 0, fmt.Errorf("channel authorization: canonical Twitter account already exists for account %d", accountID)
+		}
+	}
 	// Eligibility gate. Routes through the package-level
 	// `eligibilityGate` function-pointer indirection (default =
 	// services.IsEligibleForActivePromotion — see

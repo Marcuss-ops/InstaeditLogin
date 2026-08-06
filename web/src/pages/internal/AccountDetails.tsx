@@ -13,6 +13,7 @@ import {
 import { authedFetch, AuthError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import { PROVIDERS } from "../../lib/providers";
+import { normalizeProviderIdentifier } from "../../components/brand/PlatformLogos";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
@@ -139,7 +140,8 @@ export function AccountDetailsPage() {
   // it is healthy (Google reuses the cached grant → no new refresh
   // token against the 100-per-client cap). Unpinned reconnect keeps
   // force-consent (channel unknown → health unverifiable).
-  const reconnectHref = `/api/v1/auth/${account.platform}/login?mode=reconnect${
+  const canonicalPlatform = normalizeProviderIdentifier(account.platform);
+  const reconnectHref = `/api/v1/auth/${canonicalPlatform}/login?mode=reconnect${
     account.platform === "youtube" && account.platform_user_id
       ? `&expected_channel_id=${encodeURIComponent(account.platform_user_id)}`
       : ""
@@ -460,5 +462,6 @@ export function AccountDetailsPage() {
 }
 
 function getProviderMeta(id: string) {
-  return PROVIDERS.find((p) => p.id === id);
+  const canonicalID = normalizeProviderIdentifier(id);
+  return PROVIDERS.find((p) => p.id === canonicalID);
 }

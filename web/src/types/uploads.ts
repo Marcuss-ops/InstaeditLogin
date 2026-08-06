@@ -14,6 +14,8 @@ export type PlatformAccount = {
   platform: string;
   platform_user_id: string;
   username: string;
+  /** Cached provider avatar returned by the accounts manifest. */
+  avatar_url?: string;
   /** Legacy provider/database status retained for compatibility. */
   status: string;
   /** Stable lifecycle state exposed by GET /api/v1/accounts. */

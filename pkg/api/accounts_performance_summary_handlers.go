@@ -189,7 +189,7 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 	for _, e := range enrichedList {
 		resp.Channels = append(resp.Channels, channelPerformanceSummary{
 			ID:       e.account.ID,
-			Platform: e.account.Platform,
+			Platform: models.NormalizePlatformIdentifier(e.account.Platform),
 			Username: e.account.Username,
 			Metrics:  e.metrics,
 			Growth:   e.growth,

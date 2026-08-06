@@ -25,6 +25,7 @@ const LANGUAGE_OPTIONS = [
   { code: "es", flag: "🇪🇸", name: "Español" },
   { code: "fr", flag: "🇫🇷", name: "Français" },
   { code: "de", flag: "🇩🇪", name: "Deutsch" },
+  { code: "pt", flag: "🇵🇹", name: "Português" },
   { code: "pl", flag: "🇵🇱", name: "Polski" },
   { code: "ru", flag: "🇷🇺", name: "Русский" },
   { code: "tr", flag: "🇹🇷", name: "Türkçe" },
@@ -108,7 +109,15 @@ export function GroupDetailPanel({
       });
       return true;
     } catch (error) {
-      setLanguages((current) => ({ ...current, [accountId]: previous }));
+      // On failure, restore the previous value. When the save was an
+      // auto-save of a detected suggestion (no language configured before),
+      // `previous` is empty and the pending suggestion must stay visible so
+      // the operator can retry it — otherwise the dropdown would silently
+      // drop the detection result.
+      setLanguages((current) => ({
+        ...current,
+        [accountId]: preserveSuggestionOnFailure && previous.trim() === "" ? language : previous,
+      }));
       if (preserveSuggestionOnFailure) {
         setLanguageSuggestionIds((current) => new Set(current).add(accountId));
       }
@@ -124,7 +133,8 @@ export function GroupDetailPanel({
 
   const visibleAccounts = group.accounts.filter((account) => !removedAccountIds.has(account.id));
 
-  const detectLanguages = () => {
+  const detectLanguages = async () => {
+    if (languageDetectionBusy || languageApplyBusy) return;
     setLanguageDetectionBusy(true);
     setLanguageError((current) => {
       const next = { ...current };
@@ -138,26 +148,67 @@ export function GroupDetailPanel({
     });
     const suggestions = new Map<number, string>();
     const overwriteIds = new Set<number>();
+    const autoSaveIds: number[] = [];
     const reviewWarnings = new Map<number, string>();
     for (const account of visibleAccounts) {
       const currentLanguage = (languages[account.id] ?? "").trim();
       const result = detectChannelLanguage(account.username || account.platform_user_id);
       if (result.language && result.language !== currentLanguage) {
         suggestions.set(account.id, result.language);
-        if (currentLanguage) overwriteIds.add(account.id);
+        if (currentLanguage) {
+          // A language is already configured: never overwrite it silently.
+          // Keep the explicit confirm-and-apply flow for these channels.
+          overwriteIds.add(account.id);
+        } else {
+          // No language configured yet: persist the unique detection
+          // immediately — one click saves every channel that can be
+          // resolved from its title.
+          autoSaveIds.push(account.id);
+        }
       } else if (result.reason === "ambiguous-markers") {
         // Ambiguous titles are never converted into a suggestion. The current
         // language remains untouched until the operator decides manually,
         // even when an older language value is already configured.
         reviewWarnings.set(account.id, `Titolo ambiguo: possibili lingue ${result.candidates.join(", ")}.`);
       } else if (!currentLanguage && result.reason === "insufficient-signal") {
-        reviewWarnings.set(account.id, "Lingua non determinabile dal titolo: revisione manuale necessaria.");
+        // The channel name makes the warning label unique per row and tells
+        // the operator exactly which channel needs a manual language pick.
+        reviewWarnings.set(account.id, `Lingua non determinabile per «${account.username || account.platform_user_id}»: revisione manuale necessaria.`);
       }
     }
     setLanguages((current) => ({ ...current, ...Object.fromEntries(suggestions) }));
     setLanguageSuggestionIds(new Set(suggestions.keys()));
     setLanguageOverwriteIds(overwriteIds);
     setLanguageWarning(Object.fromEntries(reviewWarnings));
+    // Auto-save: channels without a configured language get the unique
+    // detection persisted right away (a failed PATCH keeps the channel as a
+    // pending suggestion so the operator can retry or adjust manually).
+    if (autoSaveIds.length > 0) {
+      setLanguageApplyBusy(true);
+      for (const accountId of autoSaveIds) {
+        const language = suggestions.get(accountId) ?? "";
+        if (!language) continue;
+        const saved = await saveLanguage(accountId, language, true);
+        if (saved) {
+          setLanguageSuggestionIds((current) => {
+            const next = new Set(current);
+            next.delete(accountId);
+            return next;
+          });
+          setLanguageOverwriteIds((current) => {
+            const next = new Set(current);
+            next.delete(accountId);
+            return next;
+          });
+          setLanguageWarning((current) => {
+            const next = { ...current };
+            delete next[accountId];
+            return next;
+          });
+        }
+      }
+      setLanguageApplyBusy(false);
+    }
     setLanguageDetectionBusy(false);
   };
 
@@ -390,7 +441,7 @@ export function GroupDetailPanel({
             <div className="flex flex-wrap items-center gap-2 self-start">
               <button
                 type="button"
-                onClick={detectLanguages}
+                onClick={() => void detectLanguages()}
                 disabled={languageDetectionBusy || languageApplyBusy || visibleAccounts.length === 0}
                 className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-violet-300/30 bg-violet-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-500/20 disabled:cursor-progress disabled:opacity-50"
               >

@@ -136,16 +136,20 @@ func Load() (*Config, error) {
 			// env-driven. Defaults (30 days / 7 days) match the user-facing
 			// spec; surface them via the Worker's struct fields so the HTTP
 			// layer + worker pool read the same source of truth.
-			PublishHorizonDays:             getEnvInt("PUBLISH_HORIZON_DAYS", 30),
-			VideoRetentionBufferDays:       getEnvInt("VIDEO_RETENTION_BUFFER_DAYS", 7),
-			PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
-			ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
-			WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
-			SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
-			AssetCleanupIntervalSeconds:    getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
-			UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
-			RenderMaxConcurrency:           getEnvInt("RENDER_MAX_CONCURRENCY", 1),
-			FFmpegThreads:                  getEnvInt("FFMPEG_THREADS", 1),
+			PublishHorizonDays:              getEnvInt("PUBLISH_HORIZON_DAYS", 30),
+			VideoRetentionBufferDays:        getEnvInt("VIDEO_RETENTION_BUFFER_DAYS", 7),
+			PublishWorkerIntervalSeconds:    getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
+			ReconcileWorkerIntervalSeconds:  getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
+			WebhookWorkerIntervalSeconds:    getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
+			WebhookWorkerConcurrency:        getEnvInt("WEBHOOK_WORKER_CONCURRENCY", 4),
+			WebhookHTTPTimeoutSeconds:       getEnvInt("WEBHOOK_HTTP_TIMEOUT_SECONDS", 30),
+			WebhookLeaseTTLSeconds:          getEnvInt("WEBHOOK_LEASE_TTL_SECONDS", 60),
+			WebhookHeartbeatIntervalSeconds: getEnvInt("WEBHOOK_HEARTBEAT_INTERVAL_SECONDS", 20),
+			SessionCleanupIntervalSeconds:   getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+			AssetCleanupIntervalSeconds:     getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
+			UploadWorkerIntervalSeconds:     getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+			RenderMaxConcurrency:            getEnvInt("RENDER_MAX_CONCURRENCY", 1),
+			FFmpegThreads:                   getEnvInt("FFMPEG_THREADS", 1),
 			// Token refresh sweep — daily cadence + 4-month inactivity
 			// horizon (2 months of margin under Google's ~6-month
 			// refresh-token inactivity GC).

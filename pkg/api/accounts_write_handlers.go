@@ -43,7 +43,7 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 	actor := strconv.FormatInt(identity.UserID(), 10)
 	resource := strconv.FormatInt(account.ID, 10)
 	_ = r.auditLogStore.Log(ctx, eventType, actor, "platform_account", resource, map[string]interface{}{
-		"platform":         account.Platform,
+		"platform":         models.NormalizePlatformIdentifier(account.Platform),
 		"platform_user_id": account.PlatformUserID,
 	})
 }

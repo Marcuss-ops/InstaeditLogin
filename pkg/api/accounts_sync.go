@@ -157,7 +157,7 @@ func (r *Router) handleUpdateAccount(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":       account.ID,
-		"platform": account.Platform,
+		"platform": models.NormalizePlatformIdentifier(account.Platform),
 		"username": account.Username,
 		"status":   account.Status,
 		"metadata": account.Metadata,

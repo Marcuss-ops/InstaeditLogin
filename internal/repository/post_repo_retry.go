@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 // RetryPost transitions failed post targets back to queued and recomputes the
@@ -142,7 +144,7 @@ func (r *PostRepository) ClaimQueuedTargetWithLease(id int64, ownerID string, le
 
 	var foundID int64
 	err = tx.QueryRow(
-		qClaimQueuedTargetSelect,
+		qClaimQueuedTargetWithLeaseSelect,
 		id,
 	).Scan(&foundID)
 	if err == sql.ErrNoRows {
@@ -336,6 +338,64 @@ func (r *PostRepository) MarkRateLimitedRetry(id int64, nextAttemptAt time.Time,
 // (the existing ListPending filter, when extended in commit 2,
 // handles this). status stays 'queued' so the next claim is
 // permitted by ClaimQueuedTargetWithLease's WHERE clause.
+// UpdateStatusWithLease is the child-job terminal/intermediate CAS. It
+// releases the lease only when the caller still owns the publishing row.
+func (r *PostRepository) UpdateStatusWithLease(target *models.PostTarget, ownerID string) error {
+	if target == nil {
+		return fmt.Errorf("update post_target with lease: nil target")
+	}
+	if ownerID == "" {
+		return fmt.Errorf("update post_target with lease: empty ownerID")
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin leased target status: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	postID, err := postIDForTargetTx(tx, target.ID)
+	if err != nil {
+		return err
+	}
+	if err = lockPostTx(tx, postID); err != nil {
+		return err
+	}
+	result, err := tx.Exec(qUpdateTargetStatusWithLease,
+		target.Status, target.PlatformPostID, target.ErrorMessage,
+		target.PublishedAt, target.ID, target.ProviderState, target.ContainerID, ownerID)
+	if err != nil {
+		return fmt.Errorf("update leased target status: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read leased target status rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d owner=%s", ErrPostTargetTransitionStale, target.ID, ownerID)
+	}
+	if err = persistAggregatePostStatusLockedTx(tx, postID); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit leased target status: %w", err)
+	}
+	return nil
+}
+
+// MarkRateLimitedRetryWithLease requeues a rate-limited child while preserving
+// the lease CAS used by the publication worker. The parent aggregate is
+// recalculated in the same transaction, so one child can wait without
+// changing any sibling's state.
+func (r *PostRepository) MarkRateLimitedRetryWithLease(id int64, ownerID string, nextAttemptAt time.Time, lastError string) error {
+	if ownerID == "" {
+		return fmt.Errorf("MarkRateLimitedRetryWithLease: ownerID is empty")
+	}
+	return r.mutateLeasedTarget(id, ownerID, qMarkRateLimitedRetryWithLease, nextAttemptAt, lastError)
+}
+
 func (r *PostRepository) MarkRateLimited(id int64, ownerID string, retryAfter time.Time) error {
 	if ownerID == "" {
 		return fmt.Errorf("MarkRateLimited: ownerID is empty")
@@ -470,68 +530,6 @@ func (r *PostRepository) ClaimWaitingProviderTarget(id int64) (bool, error) {
 
 	if err = tx.Commit(); err != nil {
 		return false, fmt.Errorf("failed to commit claim-waiting: %w", err)
-	}
-	return true, nil
-}
-
-// ClaimPublishingTarget (FASE 1.1 — SKIP LOCKED for ReconcileWorker)
-// atomically claims a post_target that is in status='publishing' with
-// a non-null platform_post_id. Uses the same SELECT FOR UPDATE SKIP
-// LOCKED + UPDATE pattern as ClaimQueuedTarget.
-//
-// This is the reconciler's claim primitive: before calling
-// AsyncPublisher.Reconcile, the reconciler claims the row so two
-// reconciler replicas racing the same publishing target don't both
-// spend an API call on the same publish_id. The first reconciler wins
-// the claim; the loser sees (false, nil) and skips.
-//
-// Note: unlike ClaimQueuedTarget, this does NOT transition the status
-// — the row stays in 'publishing'. The claim is a pure row-lock
-// ownership check ("I'm working on this row, nobody else touch it")
-// scoped to the duration of the transaction. The status transition
-// (publishing → published|failed) is still done by UpdateStatus after
-// Reconcile returns.
-func (r *PostRepository) ClaimPublishingTarget(id int64) (bool, error) {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return false, fmt.Errorf("failed to begin claim-publishing tx: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	var foundID int64
-	err = tx.QueryRow(
-		qClaimPublishingTargetSelect,
-		id,
-	).Scan(&foundID)
-	if err == sql.ErrNoRows {
-		_ = tx.Rollback()
-		err = nil // prevent deferred double-rollback
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("failed to select for update (publishing): %w", err)
-	}
-
-	// Claim acquired — commit the tx to release the row lock. The
-	// reconciler proceeds with Reconcile OUTSIDE the tx because
-	// holding a row lock across an HTTP call to a platform API
-	// would be a connection-leak antipattern.
-	//
-	// IMPORTANT (FASE 1.1 design note): this is a BEST-EFFORT claim.
-	// Between this COMMIT and the Reconcile API call, another
-	// reconciler replica COULD claim the same row (the lock is
-	// released). The claim reduces wasted API calls but does NOT
-	// serialise Reconcile — two reconcilers racing the same row
-	// may both call the platform. Terminal-state updates are
-	// idempotent (same status, same UPDATE is a no-op), so this
-	// is safe. The real protection against double-publish is the
-	// post_targets.status column, not the claim.
-	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("failed to commit claim-publishing: %w", err)
 	}
 	return true, nil
 }

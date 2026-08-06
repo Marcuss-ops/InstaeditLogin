@@ -51,7 +51,11 @@ describe("InternalLinking", () => {
       expect(screen.getByRole("heading", { name: /Linking/i })).toBeInTheDocument();
     });
 
-    expect(screen.getByText("YouTube")).toBeInTheDocument();
+    // The provider grid mounts only after the accounts manifest resolves;
+    // wait for the first card, then assert the full set (same render pass).
+    await waitFor(() => {
+      expect(screen.getByText("YouTube")).toBeInTheDocument();
+    });
     expect(screen.getByText("TikTok")).toBeInTheDocument();
     expect(screen.getByText("Facebook")).toBeInTheDocument();
     expect(screen.getByText("Instagram")).toBeInTheDocument();
@@ -99,8 +103,9 @@ describe("InternalLinking", () => {
       expect(screen.getByRole("heading", { name: /Linking/i })).toBeInTheDocument();
     });
 
-    const notConnected = screen.getAllByText("Not connected");
-    expect(notConnected.length).toBe(6);
+    await waitFor(() => {
+      expect(screen.getAllByText("Not connected").length).toBe(6);
+    });
   });
 
   it("renders accounts from the list with avatar placeholders and ZERO per-account detail fan-out", async () => {

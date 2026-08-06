@@ -82,22 +82,20 @@ func computeProviderIdempotencyKey(postID, platformAccountID int64) string {
 // or sqlmock. The concrete *PostRepository satisfies it via duck-
 // typing at the wireup site (main.go).
 type PublisherPostStore interface {
-	// ListPending returns post_targets whose status='queued' AND whose
-	// parent post.scheduled_at <= before. Ordered by post.scheduled_at ASC.
+	// ListPending returns due child publication jobs in fair round-robin
+	// order across parent posts. Each row is an independently claimable
+	// target job; the parent post is only the aggregate status owner.
 	ListPending(before time.Time) ([]models.PostTarget, error)
 	// FindByID loads the parent post for the publish payload (caption/title/media_url).
 	FindByID(id int64) (*models.Post, error)
-	// ClaimQueuedTarget atomically transitions a target from
-	// status='queued' to 'publishing'. Returns true on claim, false
-	// if already claimed by another worker (verdict §10 — this is
-	// the atomic primitive that unblocks 2+ worker replicas).
+	// ClaimQueuedTarget remains available for legacy callers; the worker
+	// prefers the optional lease-aware contract below when the concrete
+	// repository provides it.
 	ClaimQueuedTarget(id int64) (bool, error)
 	// UpdateStatus persists the publishing→published|failed
-	// transitions the driver writes (after a successful claim) and
-	// the async-publish intermediate state (publishing with a
-	// publish_id stamped onto platform_post_id). The claim guarantees
-	// only the winning worker reaches this step, so no atomic check
-	// is needed here.
+	// transitions. Lease-aware terminal writes use the optional
+	// LeaseAwarePublisherPostStore contract so test doubles and legacy
+	// callers remain source-compatible.
 	UpdateStatus(target *models.PostTarget) error
 	// SetProviderIdempotencyKey (Taglio 4.7 LEVEL 2, migration 022)
 	// writes the worker-computed deterministic per-target
@@ -132,6 +130,19 @@ type PublisherPostStore interface {
 // without dragging in the full UserRepository surface. ReconcileWorker
 // uses the same type via the ReconcileUserStore alias defined in
 // reconcile_worker.go.
+// LeaseAwarePublisherPostStore is implemented by the SQL repository for
+// independent child-job ownership. Keeping it separate from
+// PublisherPostStore preserves compatibility with small test doubles.
+type LeaseAwarePublisherPostStore interface {
+	ClaimQueuedTargetWithLease(id int64, ownerID string, leaseTTL time.Duration) (bool, error)
+	UpdateStatusWithLease(target *models.PostTarget, ownerID string) error
+	MarkRetrying(id int64, ownerID string, lastError string, nextAttemptAt time.Time) error
+	MarkDeadLetter(id int64, ownerID string, lastError string) error
+	MarkRateLimitedRetryWithLease(id int64, ownerID string, nextAttemptAt time.Time, lastError string) error
+	UpdatePublishProgress(id int64, ownerID string, uploadOffset int64, providerState string, leaseTTL time.Duration) error
+	ReclaimExpiredLeases(ownerID string) (int64, error)
+}
+
 type PublisherUserStore interface {
 	// FindPlatformAccountByID returns (nil, nil) when no row matches, matching
 	// the codebase's repository convention (nil/nil not-found, no ErrNoRows).

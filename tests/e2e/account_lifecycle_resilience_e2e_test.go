@@ -61,6 +61,12 @@ func TestAccountLifecycle_ConcurrentLastDisconnectAndRestartPersistence(t *testi
 		t.Fatalf("disconnect A: got %d", w.Code)
 	}
 
+	// Route wiring is initialization, not request work. Build the handler
+	// once before starting concurrent requests; Setup serializes accidental
+	// repeated callers, while this test focuses on the lifecycle operation's
+	// transaction/advisory-lock concurrency.
+	handler := router.Setup()
+
 	var wg sync.WaitGroup
 	type response struct {
 		code int
@@ -79,7 +85,7 @@ func TestAccountLifecycle_ConcurrentLastDisconnectAndRestartPersistence(t *testi
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/"+itoa(f.accountB)+"/disconnect", nil)
 			req.Header.Set("Authorization", "Bearer "+token)
 			w := httptest.NewRecorder()
-			router.Setup().ServeHTTP(w, req)
+			handler.ServeHTTP(w, req)
 			responses <- response{code: w.Code}
 		}()
 	}

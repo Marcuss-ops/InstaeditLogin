@@ -90,7 +90,7 @@ func TestUserRepository_ListPlatformAccountsWithSnapshotsByUser_PlatformFilter(t
 	defer db.Close()
 
 	now := time.Now()
-	mock.ExpectQuery(joinedSelect+` WHERE pa.user_id = $1 AND pa.platform = $2 ORDER BY pa.created_at DESC`).
+	mock.ExpectQuery(joinedSelect+` WHERE pa.user_id = $1 AND (pa.platform = $2 OR (pa.platform = 'x' AND $2 = 'twitter')) ORDER BY pa.created_at DESC`).
 		WithArgs(int64(7), "youtube").
 		WillReturnRows(sqlmock.NewRows(joinedCols).
 			AddRow(

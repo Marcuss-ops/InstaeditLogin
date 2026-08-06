@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -13,6 +14,16 @@ import (
 // itself failed (e.g. DB error), in which case the caller must NOT
 // mark the target failed because the row was never owned.
 func (w *PublishWorker) claimTarget(ctx context.Context, target *models.PostTarget) (bool, error) {
+	if leaseStore, ok := w.postRepo.(LeaseAwarePublisherPostStore); ok {
+		claimed, err := leaseStore.ClaimQueuedTargetWithLease(target.ID, w.workerID, w.publishLeaseTTL())
+		if err != nil {
+			return false, fmt.Errorf("claim target %d with lease: %w", target.ID, err)
+		}
+		if !claimed {
+			w.logger.Info("target already claimed by another worker, skipping", "target_id", target.ID, "post_id", target.PostID)
+		}
+		return claimed, nil
+	}
 	claimed, err := w.postRepo.ClaimQueuedTarget(target.ID)
 	if err != nil {
 		return false, fmt.Errorf("claim target %d: %w", target.ID, err)
@@ -23,6 +34,10 @@ func (w *PublishWorker) claimTarget(ctx context.Context, target *models.PostTarg
 		return false, nil
 	}
 	return true, nil
+}
+
+func (w *PublishWorker) publishLeaseTTL() time.Duration {
+	return 2 * time.Minute
 }
 
 // loadPostAndAccount loads the parent post and the platform account

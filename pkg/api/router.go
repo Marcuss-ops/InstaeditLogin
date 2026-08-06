@@ -21,6 +21,11 @@ import (
 )
 
 type Router struct {
+	// setupMu serializes route construction. Setup rebuilds the mux and
+	// returns a handler that captures that mux; concurrent callers must
+	// not race while assigning r.mux or registering routes. The lock is
+	// intentionally per Router, so independent routers remain concurrent.
+	setupMu               sync.Mutex
 	mux                   *chi.Mux
 	capabilities          *services.CapabilityRouter
 	userRepo              UserStore

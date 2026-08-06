@@ -11,6 +11,9 @@ import (
 // top-level cross-cutting concerns (health/readiness, metrics, CORS,
 // rate-limiting, logging, recovery and security headers).
 func (r *Router) Setup() http.Handler {
+	r.setupMu.Lock()
+	defer r.setupMu.Unlock()
+
 	r.mux = chi.NewRouter()
 	// Register inside chi so the route context is populated before metrics
 	// labels are derived. Applying this middleware outside the mux would

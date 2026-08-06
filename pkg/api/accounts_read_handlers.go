@@ -76,10 +76,13 @@ type accountListItem struct {
 }
 
 func accountListItemFromAccount(account *models.PlatformAccount) accountListItem {
+	if account == nil {
+		return accountListItem{}
+	}
 	state, publishable := classifyAccountStatus(account.Status)
 	return accountListItem{
 		ID:               account.ID,
-		Platform:         account.Platform,
+		Platform:         models.NormalizePlatformIdentifier(account.Platform),
 		PlatformUserID:   account.PlatformUserID,
 		Username:         account.Username,
 		AvatarURL:        avatarURLFromMetadata(account),
@@ -288,6 +291,10 @@ func (r *Router) loadOwnAccountByID(w http.ResponseWriter, req *http.Request, id
 		writeError(w, http.StatusNotFound, "account not found")
 		return nil, nil, false
 	}
+	// Normalize once at the shared account boundary so every handler that
+	// reuses this helper dispatches capabilities and emits JSON with the
+	// canonical provider identifier, including legacy `platform='x'` rows.
+	account.Platform = models.NormalizePlatformIdentifier(account.Platform)
 	return account, identity, true
 }
 

@@ -158,6 +158,18 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusInternalServerError, "youtube tokeninfo unavailable")
 		return
 	}
+	// Enforce the P0 force-ssl scope contract on BOTH credential paths.
+	// GetTokenInfo only PARSES the tokeninfo scope; the resolver's
+	// ValidateAccount enforces it, so the legacy path (resolver == nil)
+	// must apply the same guard here — otherwise a grant without
+	// youtube.force-ssl would pass step 2 and fail later on
+	// thumbnails.set / videos.update / metadata writes / livestream.
+	if !info.HasUpload || !info.HasReadonly || !info.HasForceSSL {
+		scopeErr := fmt.Errorf("%w: HasUpload=%v HasReadonly=%v HasForceSSL=%v scope=%q",
+			services.ErrYouTubeCredentialScope, info.HasUpload, info.HasReadonly, info.HasForceSSL, info.Scope)
+		r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_scope_missing", scopeErr.Error())
+		return
+	}
 	if r.youtubeCredentialResolver != nil {
 		if err := r.youtubeCredentialResolver.ValidateChannelBinding(ctx, account, accessToken); err != nil {
 			if errors.Is(err, services.ErrYouTubeChannelMismatch) {
@@ -172,12 +184,12 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 	// === STEP 3: paginated channel binding ===
 	if r.youtubeCredentialResolver == nil {
 		if cbErr := r.youTubeSvc.ValidateChannelBinding(ctx, accessToken, account.PlatformUserID); cbErr != nil {
-		if errors.Is(cbErr, services.ErrYouTubeChannelMismatch) {
-			r.flagReauthAndRespond(w, ctx, account, identity, "channel_binding_mismatch", cbErr.Error())
+			if errors.Is(cbErr, services.ErrYouTubeChannelMismatch) {
+				r.flagReauthAndRespond(w, ctx, account, identity, "channel_binding_mismatch", cbErr.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "youtube channel binding failed: "+cbErr.Error())
 			return
-		}
-		writeError(w, http.StatusInternalServerError, "youtube channel binding failed: "+cbErr.Error())
-		return
 		}
 	}
 

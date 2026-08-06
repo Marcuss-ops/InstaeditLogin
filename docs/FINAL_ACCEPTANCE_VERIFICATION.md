@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-06
 **Branch:** `main`
-**HEAD verified before this follow-up:** `7fd7d47` (`docs(acceptance): record final scalability verification`)
+**HEAD verified before this follow-up:** `d27e466` (`docs(acceptance): verify concurrent postgres claims`)
 **Remote:** `main` was aligned with `origin/main` before this report was created.
 
 This document records the final verification of the scalability acceptance criteria. It separates deterministic offline evidence from tests that require PostgreSQL, Docker, OAuth credentials, or a live provider. A passing handler benchmark is **not** presented as a live HTTP + PostgreSQL p95.
@@ -18,9 +18,15 @@ This document records the final verification of the scalability acceptance crite
 | Cursor pagination | **PASS for covered endpoints** | Cursor primitives, accounts, groups, posts/jobs and related list-handler tests pass with the race detector. Coverage is endpoint-specific; this row does not claim that every list endpoint has been exhaustively exercised. |
 | Safe job claim | **PASS** | SQL contract tests verify `FOR UPDATE SKIP LOCKED`; empty-queue backoff test passes; the PostgreSQL multi-worker integration test passed with 8 concurrent workers and 24 jobs under the race detector. |
 | Accounts p95 below 300–500 ms | **PARTIAL** | Repeated fake-store handler benchmark runs had an approximate 95th percentile of **165,055 ns/op (0.165 ms)**. This is a percentile across benchmark-run samples, not an HTTP request p95. Real HTTP + PostgreSQL + network p95 was not measured in this environment. |
-| Full live E2E | **NOT FULLY GREEN** | Named runner events include the 12 pipeline scenarios and other passing scenarios, 1 intentional skip, and 2 failures. Details are documented below. |
+| Full live E2E | **PASS with one intentional skip** | Clean checkout with the E2E schema and Router.Setup fixes: 23 named runner pass events, no failures, and 1 intentional skip for the real browser OAuth smoke test. |
 
-The implementation satisfies the acceptance criteria that can be proven for the tested paths in this repository. The remaining acceptance gaps are operational and coverage-related: measure `GET /api/v1/accounts` against a running PostgreSQL/API deployment, broaden upload/provider coverage if required, and repair the two E2E environment/test-harness failures before calling the live suite fully green.
+The implementation satisfies the acceptance criteria that can be proven for the tested paths in this repository. The remaining acceptance gaps are operational and coverage-related: measure `GET /api/v1/accounts` against a running PostgreSQL/API deployment and broaden upload/provider coverage if required. The previously observed E2E schema and Router.Setup race failures are resolved by the harness fixes recorded below.
+
+## Fixes verified in this run
+
+- `internal/database/migrations/042_account_resource_snapshots.sql` was **not modified**: it already creates the production table and migration checksums are immutable after application.
+- `tests/e2e/e2e_harness_helpers.go` now creates an idempotent reduced-schema equivalent of `account_resource_snapshots`, including the production 042 columns and refresh coordination fields from migration 102, plus the relevant indexes.
+- `pkg/api/router.go` and `pkg/api/routes.go` serialize accidental concurrent `Router.Setup()` calls; `tests/e2e/account_lifecycle_resilience_e2e_test.go` initializes the handler once before concurrent requests, with `pkg/api/routes_concurrency_test.go` providing the regression coverage.
 
 ## Commands and results
 
@@ -144,25 +150,19 @@ Command:
 go test -tags=e2e -race -timeout 15m -v ./tests/e2e/...
 ```
 
-Observed result from the JSON runner output:
+Observed result from the JSON runner output in a clean checkout containing only the acceptance fixes:
 
-- The pipeline parent and its 12 scenario subtests passed, along with the OAuth callback, fake resumable-session, and account-validation scenarios reported by the runner.
-- **1 test skipped intentionally:** `Test_Z_YouTubeOAuth_EndToEnd_RealBrowser_Smoke` is disabled without live OAuth/browser credentials.
-- **2 tests failed:** `TestDisconnectSharedGrant_DisconnectA_KeepsBSiblingPublishing_E2E` and `TestAccountLifecycle_ConcurrentLastDisconnectAndRestartPersistence`.
+- **23 named runner pass events**
+- **0 failures**
+- **1 intentional skip:** `Test_Z_YouTubeOAuth_EndToEnd_RealBrowser_Smoke` is disabled without live OAuth/browser credentials.
 
-Because `go test -json` emits both parent and subtest events, this report intentionally avoids presenting an ambiguous single “passed test count”; the named pass/skip/failure events above are the reproducible source of truth.
+The command was:
 
-Failures:
+```bash
+go test -tags=e2e -race -timeout 20m -json ./tests/e2e/...
+```
 
-1. `TestDisconnectSharedGrant_DisconnectA_KeepsBSiblingPublishing_E2E`
-   - The test reached `GET /accounts`, but the configured database reported that relation `account_resource_snapshots` did not exist.
-   - This is an E2E database schema/migration setup failure, not evidence that the zero-provider page-load rule failed.
-
-2. `TestAccountLifecycle_ConcurrentLastDisconnectAndRestartPersistence`
-   - The race-enabled run reported concurrent writes from `Router.Setup()` in the E2E harness (`pkg/api/routes.go`) while the test launched concurrent setup calls.
-   - This is a test-harness/router-initialization race that must be fixed before the complete race-enabled E2E suite can be called green.
-
-Because of these two failures, the full E2E verdict is **not green**. They remain explicitly visible rather than being classified as unrelated without a follow-up fix.
+The clean-checkout run included the idempotent E2E schema bootstrap for `account_resource_snapshots` and the `Router.Setup()` lifecycle fix. The previously observed `account_resource_snapshots` relation-not-found failure and `Router.Setup()` race did not recur. The single skipped browser test remains expected because it requires live OAuth/browser credentials.
 
 ## Reproduction map
 
@@ -180,8 +180,8 @@ Because of these two failures, the full E2E verdict is **not green**. They remai
 ## Required follow-ups to close the remaining gaps
 
 1. Run the accounts p95 benchmark against a staging deployment with a real PostgreSQL database, connection pool, HTTP server, and representative 100-channel data. Record p50/p95/p99 and SQL/pool metrics.
-2. Ensure the E2E database setup applies the migration that creates `account_resource_snapshots` before the shared-grant scenario.
-3. Make router setup safe for concurrent E2E use, or serialize setup in the lifecycle harness, then rerun the tagged suite with `-race`.
+2. Keep the reduced E2E schema synchronized with production read-path tables and migrations when new columns are added.
+3. Keep `Router.Setup()` as initialization and reuse the returned handler for concurrent requests; the current per-router mutex protects accidental repeated setup calls.
 
 ## Worktree safety
 
@@ -193,5 +193,6 @@ This report was created while unrelated local changes were present in:
 - `web/src/pages/internal/groupsTypes.ts`
 - `web/src/pages/internal/useGroupsData.ts`
 - pre-existing deleted Vite result artifact under `node_modules/.vite/`
+- unrelated in-progress repository/worker changes present during this follow-up
 
-Those files are intentionally excluded from the acceptance report commit.
+Those files are intentionally excluded from the acceptance report and E2E fix commits.

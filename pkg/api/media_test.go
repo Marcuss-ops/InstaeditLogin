@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,11 +154,14 @@ func (m *mockMediaStore) ListVisibleInWorkspace(_ context.Context, workspaceID i
 // media endpoint tests. SignUpload returns a stable UploadGrant;
 // VerifyUpload is configurable per-test via the verifyFn hook.
 type mockStorageProvider struct {
-	providerName   string
-	signFn         func(key string) *services.UploadGrant
-	verifyFn       func(key string) (string, int64, error)
-	assetURLFn     func(key string) string
-	getObjectCalls int
+	providerName string
+	signFn       func(key string) *services.UploadGrant
+	verifyFn     func(key string) (string, int64, error)
+	assetURLFn   func(key string) string
+	// getObjectCalls is atomic: the publish concurrency test fires N
+	// concurrent handlers, all of which preload the thumbnail via
+	// GetObject, so a plain counter would trip the race detector.
+	getObjectCalls atomic.Int32
 }
 
 func newMockStorageProvider() *mockStorageProvider {
@@ -188,7 +192,7 @@ func (m *mockStorageProvider) VerifyUpload(_ context.Context, key string) (strin
 }
 func (m *mockStorageProvider) AssetURL(key string) string { return m.assetURLFn(key) }
 func (m *mockStorageProvider) GetObject(_ context.Context, key string, _ time.Duration) (string, error) {
-	m.getObjectCalls++
+	m.getObjectCalls.Add(1)
 	return m.assetURLFn(key) + "?X-Amz-Signature=mock", nil
 }
 

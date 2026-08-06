@@ -68,7 +68,7 @@ func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models
 			//      (RowsAffected==0 → ErrPostTargetNotFound). Same
 			//      warning-shape handling.
 			target.Status = models.PostStatusQueued
-			if rbErr := w.postRepo.UpdateStatus(target); rbErr != nil {
+			if rbErr := w.updateTargetStatus(ctx, target); rbErr != nil {
 				w.logger.Warn(
 					"publish worker: yt-pub lookup transient — could not roll back claim to queued",
 					"target_id", target.ID, "post_id", target.PostID,
@@ -170,7 +170,7 @@ func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models
 						// and never transition publishing → published.
 						target.PlatformPostID = services.EncodeYouTubePublishID(account.PlatformUserID, *ytPub.YouTubeVideoID)
 						target.PublishedAt = &now
-						if err := w.postRepo.UpdateStatus(target); err != nil {
+						if err := w.updateTargetStatus(ctx, target); err != nil {
 							return false, fmt.Errorf("publish worker: update target after YouTube reuse: %w", err)
 						}
 						// Post-completion dispatch is best-effort. Resolve a fresh

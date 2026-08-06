@@ -473,11 +473,14 @@ func makeTestConfig(publishInterval, reconcileInterval int) *config.Config {
 //     seeded; the dispatcher is intentionally NOT spawned).
 func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T) {
 	var capturedStates []string
+	var capturedStatesMu sync.Mutex
 	rig := setupWorkerRig(t, makeTestConfig(30, 5), func(hits *atomic.Int32) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/v2/post/publish/status/fetch/" {
 				n := hits.Add(1) - 1 // canonical atomic pre-increment sequence number
+				capturedStatesMu.Lock()
 				capturedStates = append(capturedStates, "PUBLISH_COMPLETE")
+				capturedStatesMu.Unlock()
 				_ = n
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
@@ -534,7 +537,10 @@ func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T)
 	// here AFTER pair.Shutdown (via the deferred cleanup at function
 	// return). No concurrent writes at read time, so a plain
 	// unsynchronised snapshot is race-free.
-	if len(capturedStates) < 1 {
+	capturedStatesMu.Lock()
+	capturedStateCount := len(capturedStates)
+	capturedStatesMu.Unlock()
+	if capturedStateCount < 1 {
 		t.Errorf("httptest.Server was not reached (no status responses captured) — the reconciler did not drive the real TikTok code path")
 	}
 }
@@ -543,32 +549,34 @@ func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T)
 // the reconciler's in-flight retry path end-to-end on a real DB:
 //
 //   - The httptest.Server returns PROCESSING_UPLOAD for the 2 initial
-//     reconciler calls (the initial runOnce at t=0 + the 2nd tick at
-//     t=~5s) and PUBLISH_COMPLETE for the 3rd call (the 3rd tick at
-//     t=~10s).
-//   - The row should stay in status='publishing' through the 2nd tick
-//     and flip to 'published' on the 3rd tick. This proves the
+//     reconciler calls (the initial runOnce at t=0 and the first
+//     adaptive retry at t=~5s) and PUBLISH_COMPLETE for the 3rd call.
+//     The second adaptive retry is due at t=~20s because the schedule
+//     is [5s, 15s, 30s, 60s, 120s].
+//   - The row should stay in status='publishing' through the 2nd call
+//     and flip to 'published' on the 3rd call. This proves the
 //     AsyncPublisher.Reconcile contract's (nil, nil) → leave-alone
 //     branch (reconcile_worker.go::reconcileTarget) is wired
 //     correctly end-to-end on a real DB.
 //
-// Canonical wall-clock map (with 5s tick interval):
+// Canonical wall-clock map (adaptive polling schedule):
 //
-//	┌─────────┬────────┬───────────────────────────────────┐
-//	│ wall t  │ tick # │ httptest.Server state             │
-//	├─────────┼────────┼───────────────────────────────────┤
-//	│  ~0s    │  init  │ call #1 → PROCESSING_UPLOAD      │
-//	│  ~5s    │  tick  │ call #2 → PROCESSING_UPLOAD      │
-//	│ ~10s    │  tick  │ call #3 → PUBLISH_COMPLETE       │
-//	│         │        │ row → status='published'         │
-//	└─────────┴────────┴───────────────────────────────────┘
+//	┌─────────┬──────────────┬───────────────────────────────────┐
+//	│ wall t  │ reconcile #  │ httptest.Server state             │
+//	├─────────┼──────────────┼───────────────────────────────────┤
+//	│  ~0s    │ initial       │ call #1 → PROCESSING_UPLOAD      │
+//	│  ~5s    │ retry + 5s    │ call #2 → PROCESSING_UPLOAD      │
+//	│ ~20s    │ retry + 15s   │ call #3 → PUBLISH_COMPLETE       │
+//	│         │               │ row → status='published'         │
+//	└─────────┴──────────────┴───────────────────────────────────┘
 //
 // Assertions on the timing:
-//   - lastSeenAsPublishingAt is at or after tickInterval (proves at
-//     least one reconciler tick fired and saw in-flight — the row
-//     was STILL 'publishing' AFTER the 1st tick).
-//   - transitionedToPublishedAt is at or after 2*tickInterval - 1s
-//     (proves the 3rd tick flipped the row, not the 2nd). The 1s
+//   - lastSeenAsPublishingAt is at or after the first adaptive retry
+//     (5s, with slack), proving the row was still 'publishing' after
+//     the first PROCESSING_UPLOAD response.
+//   - transitionedToPublishedAt is at or after the first plus second
+//     adaptive retry delays (5s + 15s, with slack), proving the 3rd
+//     provider call flipped the row, not the 2nd. The 1s
 //     slack absorbs ticker jitter + poll cadence + DB write latency.
 //
 // Hard assertions on the state machine:
@@ -587,6 +595,7 @@ func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T)
 func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 	cfg := makeTestConfig(30, 5) // driver's interval is immaterial here (no queued rows); 30s kept consistent with happy-path
 	var capturedStates []string
+	var capturedStatesMu sync.Mutex
 	rig := setupWorkerRig(t, cfg, func(hits *atomic.Int32) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/v2/post/publish/status/fetch/" {
@@ -602,7 +611,9 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 			default:
 				state = "PUBLISH_COMPLETE"
 			}
+			capturedStatesMu.Lock()
 			capturedStates = append(capturedStates, state)
+			capturedStatesMu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, `{"data":{"status":"%s"}}`, state)
@@ -612,14 +623,18 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 	pair := runWorkerPair(rig)
 	defer pair.Shutdown()
 
-	// Wall-clock budget: 2 in-flight ticks (initial + tick #2) + 1
-	// terminal tick (tick #3) + a 2s epsilon for ticker jitter + DB
-	// write latency + httptest.Server roundtrip on a slow CI host.
-	// Tighten the epsilon if you want stricter bounds; the 2s slack
-	// just protects against flakes on shared CI runners.
-	tickInterval := time.Duration(rig.CFG.Worker.ReconcileWorkerIntervalSeconds) * time.Second
-	epsilon := 2 * time.Second
-	budget := 3*tickInterval + epsilon
+	// Wall-clock budget: the initial reconcile plus the first two
+	// adaptive retry delays (5s + 15s) and a 3s epsilon for ticker
+	// scheduling, DB latency, provider roundtrips, and a slow CI host.
+	// The reconciler's adaptive schedule is deliberately independent of
+	// its fixed worker tick interval.
+	firstRetryDelay := reconcileBackoffSchedule[0]
+	secondRetryDelay := reconcileBackoffSchedule[1]
+	// Include startup/dirty-aggregate repair and ticker alignment. The
+	// first provider call happens after the initial repair pass, so the
+	// third call can land a few seconds after 5s+15s on a shared CI host.
+	epsilon := 8 * time.Second
+	budget := firstRetryDelay + secondRetryDelay + epsilon
 	startTime := time.Now()
 
 	// Continuous poll loop. Records:
@@ -668,51 +683,35 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 
 	// === Assertion 1: the row eventually transitions to 'published' within budget ===
 	if transitionedToPublishedAt.IsZero() {
-		t.Errorf("post_target did not transition to 'published' within %v — the 3rd reconciler tick (which returns PUBLISH_COMPLETE) should have flipped it", budget)
+		t.Errorf("post_target did not transition to 'published' within %v — the 3rd provider call should have flipped it", budget)
 	}
 
-	// === Assertion 2: the row was still 'publishing' AFTER at least one reconciler tick ===
+	// === Assertion 2: the row was still 'publishing' after the first retry ===
 	//
 	// lastSeenAsPublishingAt tracks the latest sample where status
-	// was 'publishing'. The first reconciler call (initial runOnce)
-	// fires at t=0; the polling loop starts immediately so we'll
-	// have many samples flagged as 'publishing' from t≈100ms through
-	// t≈10s. The LAST such sample must be AFTER tickInterval (=5s),
-	// otherwise the row would have transitioned on the 2nd tick
-	// instead of the 3rd — meaning the state machine was mis-wired.
-	//
-	// Slack of 500ms absorbs the very worst case where the 2nd tick
-	// fires at t=4.5s (ticker jitter) and transitions the row BEFORE
-	// we sample at t=4.6s. In practice the jitter is sub-millisecond
-	// on Go's runtime.NewTicker so 500ms is wildly conservative.
+	// was 'publishing'. The first provider call fires at t=0 and the
+	// first adaptive retry is due at t≈5s. The latest publishing sample
+	// must therefore be after the first retry delay, proving that the
+	// first PROCESSING_UPLOAD result left the row alone.
 	if !lastSeenAsPublishingAt.IsZero() && !transitionedToPublishedAt.IsZero() {
-		minInFlightWallClock := tickInterval - 500*time.Millisecond
+		minInFlightWallClock := firstRetryDelay - 500*time.Millisecond
 		if lastPublishingSinceStart < minInFlightWallClock {
-			t.Errorf("last sample of status='publishing' was at wall-clock %v after worker start; should be >= %v (= tickInterval - 500ms) so we know at least 1 reconciler tick fired with PROCESSING_UPLOAD and left the row alone",
+			t.Errorf("last sample of status='publishing' was at wall-clock %v after worker start; should be >= %v (= first adaptive retry - 500ms) so we know the first PROCESSING_UPLOAD left the row alone",
 				lastPublishingSinceStart.Round(100*time.Millisecond), minInFlightWallClock)
 		}
 	}
 
-	// === Assertion 3: the transition happened around the 3rd tick ===
+	// === Assertion 3: the transition happened around the 3rd provider call ===
 	//
-	// The 3rd tick fires at t≈2*tickInterval (=10s). transitionedToPublishedAt
-	// captures the first poll that sees status='published'; the actual
-	// DB write happened ~100ms earlier (one poll interval at most
-	// before). Slack of 1s absorbs:
-	//   - ticker jitter (sub-ms in practice)
-	//   - the gap between the tick fire and the in-flight tickReconcile
-	//     (sub-second on healthy paths)
-	//   - the DB UpdateStatus roundtrip
-	//   - our 100ms poll cadence rounding
-	// Together these are << 1s on a healthy testcontainer. If the
-	// bound ever fires, the row is transitioning on the WRONG tick
-	// (e.g., the 2nd tick instead of the 3rd — meaning the state
-	// machine's first PROCESSING_UPLOAD returned terminal, or the
-	// second one did).
+	// The third call is due after the first and second adaptive retry
+	// delays (5s + 15s). transitionedToPublishedAt captures the first
+	// poll that sees status='published'; the actual DB write happened
+	// at most one 100ms poll interval earlier. Slack of 1s absorbs
+	// ticker jitter, DB/provider latency, and poll cadence rounding.
 	if !transitionedToPublishedAt.IsZero() {
-		minTransitionWallClock := 2*tickInterval - 1*time.Second
+		minTransitionWallClock := firstRetryDelay + secondRetryDelay - 1*time.Second
 		if transitionedSinceStart < minTransitionWallClock {
-			t.Errorf("transition to 'published' happened at wall-clock %v after worker start; should be >= %v (= 2*tickInterval - 1s) so we know the 3rd reconciler tick flipped it (not the 2nd)",
+			t.Errorf("transition to 'published' happened at wall-clock %v after worker start; should be >= %v (= first + second adaptive retry delays - 1s) so we know the 3rd provider call flipped it (not the 2nd)",
 				transitionedSinceStart.Round(100*time.Millisecond), minTransitionWallClock)
 		}
 	}
@@ -757,17 +756,20 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 	// accidentally swapped the PROCESSING_UPLOAD / PUBLISH_COMPLETE
 	// branches).
 	expectedStates := []string{"PROCESSING_UPLOAD", "PROCESSING_UPLOAD", "PUBLISH_COMPLETE"}
-	if len(capturedStates) != 3 {
+	capturedStatesMu.Lock()
+	capturedStatesSnapshot := append([]string(nil), capturedStates...)
+	capturedStatesMu.Unlock()
+	if len(capturedStatesSnapshot) != 3 {
 		t.Errorf("httptest.Server status hits: want 3, got %d (states: %v) — a drift here means the reconciler made an unexpected extra call (e.g., a wake-loop bug), or the 2 PROCESSING_UPLOADs didn't both fire before the terminal tick",
-			len(capturedStates), capturedStates)
+			len(capturedStatesSnapshot), capturedStatesSnapshot)
 	}
 	for i := range expectedStates {
-		if i >= len(capturedStates) {
+		if i >= len(capturedStatesSnapshot) {
 			break
 		}
-		if capturedStates[i] != expectedStates[i] {
+		if capturedStatesSnapshot[i] != expectedStates[i] {
 			t.Errorf("httptest.Server response order idx %d: want %q, got %q (full captured sequence: %v)",
-				i, expectedStates[i], capturedStates[i], capturedStates)
+				i, expectedStates[i], capturedStatesSnapshot[i], capturedStatesSnapshot)
 		}
 	}
 
@@ -776,9 +778,8 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 	// transition wall-clock vs the bounds.
 	if !transitionedToPublishedAt.IsZero() {
 		t.Logf("in-flight timing: last publishing sample at %v (>= %v expected); transitioned to 'published' at %v (>= %v expected)",
-			lastPublishingSinceStart.Round(100*time.Millisecond),
-			(tickInterval - 500*time.Millisecond),
+			lastPublishingSinceStart.Round(100*time.Millisecond), (firstRetryDelay - 500*time.Millisecond),
 			transitionedSinceStart.Round(100*time.Millisecond),
-			(2*tickInterval - 1*time.Second))
+			(firstRetryDelay + secondRetryDelay - 1*time.Second))
 	}
 }

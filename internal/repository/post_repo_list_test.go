@@ -111,16 +111,28 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 	cutoff := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
 
 	mock.ExpectQuery(
-		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
-		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
-		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
-		        pt.provider_idempotency_key, pt.completed_at
-		 FROM post_targets pt
-		 JOIN posts p ON p.id = pt.post_id
-		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')
-		   AND (p.publish_at IS NULL OR p.publish_at <= $1)
-		   AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= NOW())
-		 ORDER BY p.publish_at ASC NULLS FIRST`,
+		`WITH pending AS (
+	SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
+	       COALESCE(pt.platform_post_id, '') AS platform_post_id,
+	       COALESCE(pt.error_message, '') AS error_message,
+	       pt.published_at,
+	       COALESCE(pt.provider_state, '') AS provider_state,
+	       COALESCE(pt.container_id, '') AS container_id,
+	       pt.provider_idempotency_key, pt.completed_at,
+	       p.publish_at,
+	       ROW_NUMBER() OVER (PARTITION BY pt.post_id ORDER BY pt.id ASC) AS child_position
+	FROM post_targets pt
+	JOIN posts p ON p.id = pt.post_id
+	WHERE pt.status IN ('queued', 'waiting_provider', 'retrying')
+	  AND (p.publish_at IS NULL OR p.publish_at <= $1)
+	  AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= NOW())
+)
+SELECT id, post_id, platform_account_id, status,
+       platform_post_id, error_message, published_at,
+       provider_state, container_id, provider_idempotency_key, completed_at
+FROM pending
+ORDER BY child_position ASC, publish_at ASC NULLS FIRST, post_id ASC, id ASC
+LIMIT 100`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key", "completed_at"},

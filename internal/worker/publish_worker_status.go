@@ -142,7 +142,7 @@ func (w *PublishWorker) publishDriveExport(ctx context.Context, target *models.P
 	target.Status = models.PostStatusPublished
 	now := time.Now()
 	target.PublishedAt = &now
-	if err := w.postRepo.UpdateStatus(target); err != nil {
+	if err := w.updateTargetStatus(ctx, target); err != nil {
 		return fmt.Errorf("mark Drive export target published: %w", err)
 	}
 	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, deliveryURL)
@@ -365,7 +365,7 @@ func (w *PublishWorker) ensureProviderIdempotencyKey(target *models.PostTarget, 
 				"platform_account_id", account.ID, "key", key, "error", err)
 			target.Status = models.PostStatusFailed
 			target.ErrorMessage = "provider idempotency key conflict: " + err.Error()
-			if updateErr := w.postRepo.UpdateStatus(target); updateErr != nil {
+			if updateErr := w.updateTargetStatus(context.Background(), target); updateErr != nil {
 				// Surface both errors so the tick counter increments
 				// AND the operator sees the underlying failure mode.
 				return "", fmt.Errorf("provider idempotency key conflict (also failed to mark failed: %v): %w",

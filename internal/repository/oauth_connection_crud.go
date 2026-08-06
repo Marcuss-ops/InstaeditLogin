@@ -43,5 +43,6 @@ func (r *UserRepository) FindOAuthConnectionByID(ctx context.Context, id int64) 
 	if err != nil {
 		return nil, fmt.Errorf("find OAuth connection %d: %w", id, err)
 	}
+	grant.Provider = models.NormalizePlatformIdentifier(grant.Provider)
 	return grant, nil
 }
