@@ -25,7 +25,16 @@ export type PlatformAccount = {
 
 export type FetchState =
   | { kind: "loading" }
-  | { kind: "ready"; groups: Group[]; accounts: PlatformAccount[]; workspaceId: number; accountsByGroup: Map<number, PlatformAccount[]> }
+  | {
+      kind: "ready";
+      groups: Group[];
+      accounts: PlatformAccount[];
+      workspaceId: number;
+      /** Resolved publishable accounts per group (drives the tree). */
+      accountsByGroup: Map<number, PlatformAccount[]>;
+      /** Raw account_ids per group from the aggregate — includes non-publishable members that accountsByGroup filters out. */
+      groupAccountIDs: Map<number, number[]>;
+    }
   | { kind: "error"; message: string };
 
 export type TreeNode = Group & { children: TreeNode[]; accounts: PlatformAccount[] };

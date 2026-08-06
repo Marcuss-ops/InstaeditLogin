@@ -25,12 +25,15 @@ export function useGroupsData() {
     const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
     const [newGroupName, setNewGroupName] = useState("");
     const [creatingGroup, setCreatingGroup] = useState(false);
+    const [busyAccountId, setBusyAccountId] = useState<number | null>(null);
   
-    const load = useCallback(async () => {
+    // `silent` skips the intermediate loading state so assignment drops
+    // reconcile smoothly without flashing the whole page to a skeleton.
+    const load = useCallback(async (silent = false) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
-      setState({ kind: "loading" });
+      if (!silent) setState({ kind: "loading" });
   
       try {
         const session = await fetchSession();
@@ -60,6 +63,16 @@ export function useGroupsData() {
         // one workspace-scoped response. Resolve account IDs locally so the
         // tree never fans out into one request per group.
         const accountIndex = new Map(activeAccounts.map((account) => [account.id, account]));
+        // Raw account_ids per group (kept alongside the resolved map): the
+        // PUT /groups/{id}/accounts endpoint has wipe+re-insert semantics,
+        // so membership writes must be built from the FULL id list — not
+        // just the publishable accounts resolved above.
+        const groupAccountIDs = new Map(
+          (groupsData.groups ?? []).map((group) => [
+            group.id,
+            group.account_ids ?? [],
+          ] as const),
+        );
         const accountsByGroup = new Map(
           (groupsData.groups ?? []).map((group) => [
             group.id,
@@ -75,6 +88,7 @@ export function useGroupsData() {
           accounts: activeAccounts,
           workspaceId,
           accountsByGroup,
+          groupAccountIDs,
         });
         const requestedGroupId = Number(routeGroupId);
         const storedGroupId = typeof window === "undefined" ? NaN : Number(window.localStorage.getItem(LAST_GROUP_KEY));
@@ -89,8 +103,13 @@ export function useGroupsData() {
           navigate("/login", { replace: true });
           return;
         }
-        const message = err instanceof ApiError ? err.message : "Unable to load groups.";
-        setState({ kind: "error", message });
+        // Silent reloads (background reconcile after an assignment) must not
+        // blow away the ready UI on a transient failure — only full loads
+        // transition to the error state.
+        if (!silent) {
+          const message = err instanceof ApiError ? err.message : "Unable to load groups.";
+          setState({ kind: "error", message });
+        }
       }
   }, [navigate, routeGroupId]);
 
@@ -131,6 +150,63 @@ export function useGroupsData() {
       return state.accounts.find((a) => a.id === selectedAccountId) ?? null;
     }, [state, selectedAccountId]);
   
+    // Publishable accounts that are not members of ANY group. Derived from
+    // the raw membership ids so a non-publishable member still counts as
+    // "grouped" (and keeps its group out of the ungrouped pool).
+    const ungroupedAccounts = useMemo(() => {
+      if (state.kind !== "ready") return [];
+      const grouped = new Set<number>();
+      for (const ids of state.groupAccountIDs.values()) {
+        for (const id of ids) grouped.add(id);
+      }
+      return state.accounts.filter((account) => !grouped.has(account.id));
+    }, [state]);
+
+    // Assigns a channel to a group. Optimistically moves the account into
+    // the group's resolved map so the UI updates instantly, then persists
+    // via PUT (wipe+re-insert with the FULL raw id list) and finally
+    // reconciles against the server with a silent reload.
+    const assignAccountToGroup = useCallback(async (accountId: number, groupId: number) => {
+      if (state.kind !== "ready") return;
+      const account = state.accounts.find((a) => a.id === accountId);
+      if (!account) return;
+      setBusyAccountId(accountId);
+      // Compute the merged raw id list inside the functional update so the
+      // optimistic UI and the PUT body always agree — even for rapid
+      // successive assignments to the same group. The endpoint has
+      // wipe+re-insert semantics, so a stale body would silently drop a
+      // just-added member.
+      let nextIDs: number[] | null = null;
+      setState((prev) => {
+        if (prev.kind !== "ready") return prev;
+        const current = prev.groupAccountIDs.get(groupId) ?? [];
+        if (current.includes(accountId)) return prev;
+        nextIDs = [...current, accountId];
+        const accountsByGroup = new Map(prev.accountsByGroup);
+        accountsByGroup.set(groupId, [...(accountsByGroup.get(groupId) ?? []), account]);
+        const groupAccountIDs = new Map(prev.groupAccountIDs);
+        groupAccountIDs.set(groupId, nextIDs);
+        return { ...prev, accountsByGroup, groupAccountIDs };
+      });
+      if (!nextIDs) {
+        setBusyAccountId(null);
+        return;
+      }
+      let persisted = false;
+      try {
+        const response = await authedFetch(`/api/v1/groups/${groupId}/accounts`, {
+          method: "PUT",
+          body: JSON.stringify({ account_ids: nextIDs }),
+        });
+        persisted = response.ok;
+      } finally {
+        // Successful write → silent reconcile; failure → non-silent reload
+        // to revert the optimistic move and surface the error state.
+        await load(!persisted);
+        setBusyAccountId(null);
+      }
+    }, [state, load]);
+
     const handleCreateGroup = useCallback(async (parentId?: number) => {
       if (!newGroupName.trim() || state.kind !== "ready") return;
       setCreatingGroup(true);
@@ -161,8 +237,11 @@ export function useGroupsData() {
     newGroupName,
     setNewGroupName,
     creatingGroup,
+    busyAccountId,
     load,
     handleCreateGroup,
+    assignAccountToGroup,
+    ungroupedAccounts,
     tree,
     selectedGroup,
     selectedAccount,

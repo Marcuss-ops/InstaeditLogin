@@ -43,6 +43,15 @@ export const demoAccounts = [
     is_publishable: true,
     created_at: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
   },
+  {
+    id: 3,
+    platform: "tiktok" as const,
+    platform_user_id: "TTdemo",
+    username: "tok_demo",
+    status: "connected",
+    is_publishable: true,
+    created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+  },
 ];
 
 const demoPrivateVideos = [
@@ -225,6 +234,26 @@ export function handleDemoRequest(
       group.account_ids = group.account_ids.filter((id) => id !== accountID);
     }
     return json({ ok: true }, 204);
+  }
+
+  // Assign accounts to a group (wipe + re-insert semantics, mirrors
+  // PUT /api/v1/groups/{id}/accounts). Used by the Groups page drag & drop
+  // of ungrouped channels onto folders.
+  const setGroupAccountsMatch =
+    /^\/api\/v1\/groups\/(\d+)\/accounts$/.exec(path);
+  if (setGroupAccountsMatch && method === "PUT") {
+    const groupID = Number(setGroupAccountsMatch[1]);
+    const group = demoGroupMemberships.find((item) => item.id === groupID);
+    if (!group) return json({ error: "demo: group not found" }, 404);
+    try {
+      const body = JSON.parse((init.body as string) ?? "{}") as {
+        account_ids?: number[];
+      };
+      group.account_ids = Array.isArray(body.account_ids) ? body.account_ids : [];
+      return json({ account_ids: group.account_ids });
+    } catch {
+      return json({ error: "demo: invalid accounts body" }, 400);
+    }
   }
 
   // Groups aggregate (group → member account_ids) for the Link-to-video
