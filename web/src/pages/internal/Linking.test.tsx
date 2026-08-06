@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { InternalLinking } from "./Linking";
 
@@ -97,5 +97,68 @@ describe("InternalLinking", () => {
 
     const notConnected = screen.getAllByText("Not connected");
     expect(notConnected.length).toBe(6);
+  });
+
+  it("renders accounts from the list with avatar placeholders and ZERO per-account detail fan-out", async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        requestedUrls.push(url);
+        if (url.endsWith("/api/v1/auth/me")) {
+          return mockJsonResponse({ user_id: 1 });
+        }
+        if (url.endsWith("/api/v1/accounts")) {
+          return mockJsonResponse({
+            accounts: [
+              {
+                id: 1,
+                platform: "youtube",
+                platform_user_id: "UC-1",
+                username: "NoAvatarChannel",
+                status: "active",
+                account_state: "valid",
+                is_publishable: true,
+                created_at: "2026-08-05T10:00:00Z",
+              },
+              {
+                id: 2,
+                platform: "youtube",
+                platform_user_id: "UC-2",
+                username: "AvatarChannel",
+                avatar_url: "https://avatars/2",
+                status: "active",
+                account_state: "valid",
+                is_publishable: true,
+                created_at: "2026-08-05T10:00:00Z",
+              },
+            ],
+          });
+        }
+        return mockJsonResponse({}, false, 404);
+      }),
+    );
+
+    renderLinking();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Linking/i })).toBeInTheDocument();
+    });
+
+    // Expand the YouTube card so its accounts render.
+    fireEvent.click(screen.getByRole("button", { name: /YouTube/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("@NoAvatarChannel")).toBeInTheDocument();
+    });
+    expect(screen.getByText("@AvatarChannel")).toBeInTheDocument();
+
+    // The avatar-less channel renders the account-initial placeholder...
+    expect(screen.getByText("N")).toBeInTheDocument();
+
+    // ...and the page fired NO /accounts/{id} detail requests (N+1 fixed).
+    const detailCalls = requestedUrls.filter((u) => /\/api\/v1\/accounts\/\d+$/.test(u));
+    expect(detailCalls.length).toBe(0);
   });
 });

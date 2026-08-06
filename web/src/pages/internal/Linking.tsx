@@ -84,33 +84,13 @@ export function InternalLinking() {
       if (controller.signal.aborted) return;
       const data = (await response.json()) as { accounts: PlatformAccount[] };
       const accounts = data.accounts ?? [];
-      // The list endpoint intentionally stays lightweight. Enrich YouTube
-      // accounts from the detail endpoint so the linking page can render the
-      // channel avatar cached by the provider without exposing OAuth data in
-      // the list contract. A stale/missing provider snapshot only falls back
-      // to the account initial; it must not make the whole linking page fail.
-      const enriched = await Promise.all(
-        accounts.map(async (account) => {
-          if (account.platform !== "youtube" || account.avatar_url) return account;
-          try {
-            const detailResponse = await authedFetch(`/api/v1/accounts/${account.id}`, {
-              signal: controller.signal,
-            });
-            const detail = (await detailResponse.json()) as {
-              resource?: { avatar_url?: string };
-            };
-            return {
-              ...account,
-              avatar_url: detail.resource?.avatar_url,
-            };
-          } catch (err) {
-            if (err instanceof AuthError) throw err;
-            return account;
-          }
-        }),
-      );
+      // The list endpoint is the single source of truth for the cards: it
+      // already returns avatar_url (cached snapshot fallback) and
+      // snapshot_stale per account via the aggregated backend query. Missing
+      // avatars render as the account-initial placeholder below; the page
+      // NEVER fires per-account /accounts/{id} requests (N+1 fan-out gone).
       if (controller.signal.aborted) return;
-      setState({ kind: "ready", accounts: enriched });
+      setState({ kind: "ready", accounts });
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) {
