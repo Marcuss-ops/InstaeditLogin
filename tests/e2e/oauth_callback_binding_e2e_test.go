@@ -46,6 +46,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
@@ -167,6 +168,9 @@ func (s *mockUserStore) AttachPlatformAccount(userID int64, profile *models.Plat
 	panic("mockUserStore.AttachPlatformAccount MUST NOT be called on negative-bind path")
 }
 func (s *mockUserStore) ListPlatformAccountsByUser(int64, string) ([]*models.PlatformAccount, error) {
+	return nil, nil
+}
+func (s *mockUserStore) ListPlatformAccountsWithSnapshotsByUser(int64, string) ([]*repository.AccountWithSnapshot, error) {
 	return nil, nil
 }
 func (s *mockUserStore) FindOAuthConnectionByID(context.Context, int64) (*models.OAuthConnection, error) {

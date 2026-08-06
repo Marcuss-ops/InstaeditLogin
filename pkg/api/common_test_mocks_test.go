@@ -291,6 +291,7 @@ var _ services.ChannelAuthorizer = (*fakeChannelAuthorizer)(nil)
 type mockUserStore struct {
 	attachFn                      func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
 	listFn                        func(userID int64, platform string) ([]*models.PlatformAccount, error)
+	listWithSnapshotsFn           func(userID int64, platform string) ([]*repository.AccountWithSnapshot, error)
 	listFilteredYouTubeAccountsFn func(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error)
 	findPlatformAccountFn         func(id int64) (*models.PlatformAccount, error)
 	findPlatformAccountByTupleFn  func(platform, platformUserID string) (*models.PlatformAccount, error)
@@ -336,6 +337,25 @@ func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string
 		return nil, nil
 	}
 	return m.listFn(userID, platform)
+}
+func (m *mockUserStore) ListPlatformAccountsWithSnapshotsByUser(userID int64, platform string) ([]*repository.AccountWithSnapshot, error) {
+	if m.listWithSnapshotsFn != nil {
+		return m.listWithSnapshotsFn(userID, platform)
+	}
+	// Default: wrap the plain list with nil snapshots so existing tests
+	// keep working without wiring the joined surface.
+	if m.listFn == nil {
+		return nil, nil
+	}
+	accounts, err := m.listFn(userID, platform)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*repository.AccountWithSnapshot, 0, len(accounts))
+	for _, a := range accounts {
+		out = append(out, &repository.AccountWithSnapshot{Account: a})
+	}
+	return out, nil
 }
 func (m *mockUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error) {
 	if m.listFilteredYouTubeAccountsFn != nil {
@@ -665,7 +685,6 @@ type mockSnapshotStore struct {
 	getFn    func(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
 	upsertFn func(snap *repository.AccountResourceSnapshot) error
 	staleFn  func(platformAccountID int64, maxAge time.Duration) (bool, error)
-	listFn   func(ids []int64) (map[int64]*repository.AccountResourceSnapshot, error)
 }
 
 func (m *mockSnapshotStore) GetSnapshot(platformAccountID int64) (*repository.AccountResourceSnapshot, error) {
@@ -685,12 +704,6 @@ func (m *mockSnapshotStore) IsSnapshotStale(platformAccountID int64, maxAge time
 		return m.staleFn(platformAccountID, maxAge)
 	}
 	return true, nil
-}
-func (m *mockSnapshotStore) ListSnapshotsByAccountIDs(ids []int64) (map[int64]*repository.AccountResourceSnapshot, error) {
-	if m.listFn != nil {
-		return m.listFn(ids)
-	}
-	return map[int64]*repository.AccountResourceSnapshot{}, nil
 }
 
 // mockDetailProvider extends mockProvider with AccountDetailsProvider + AccountContentProvider.

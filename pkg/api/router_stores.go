@@ -60,6 +60,13 @@ type UserStore interface {
 	// already linked to a different user.
 	AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
 	ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error)
+	// ListPlatformAccountsWithSnapshotsByUser returns a user's platform
+	// accounts joined with their cached resource snapshots in ONE query
+	// (repository.AccountWithSnapshot; Snapshot is nil when no row
+	// exists). Backs the aggregated GET /api/v1/accounts list so a page
+	// load needs exactly one SQL round-trip — no per-account snapshot
+	// reads, Vault access, or provider (YouTube) calls.
+	ListPlatformAccountsWithSnapshotsByUser(userID int64, platform string) ([]*repository.AccountWithSnapshot, error)
 	// ListFilteredYouTubeAccounts returns the YouTube platform accounts for a user,
 	// optionally filtered by workspace, group_name (from workspace_channels), and
 	// language/manager values stored in the account metadata JSONB.
@@ -335,12 +342,6 @@ type SnapshotStore interface {
 	GetSnapshot(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
 	UpsertSnapshot(snap *repository.AccountResourceSnapshot) error
 	IsSnapshotStale(platformAccountID int64, maxAge time.Duration) (bool, error)
-	// ListSnapshotsByAccountIDs returns the cached snapshots for many
-	// accounts in ONE batched query, keyed by platform_account_id
-	// (accounts without a snapshot are absent from the map). Backs the
-	// aggregated GET /api/v1/accounts list so opening the channels page
-	// never issues one snapshot read per account.
-	ListSnapshotsByAccountIDs(platformAccountIDs []int64) (map[int64]*repository.AccountResourceSnapshot, error)
 }
 
 // MetricHistoryStore is the persistence contract for daily account

@@ -61,6 +61,86 @@ func (r *UserRepository) ListFilteredYouTubeAccounts(userID int64, workspaceID *
 	return scanPlatformAccountRows(rows)
 }
 
+// AccountWithSnapshot pairs a platform account with its cached remote
+// resource snapshot. Snapshot is nil when the LEFT JOIN found no row.
+// The aggregated account-list surface consumes this so a page load
+// needs exactly ONE SQL query — the N+1 snapshot fan-out is gone.
+type AccountWithSnapshot struct {
+	Account  *models.PlatformAccount
+	Snapshot *AccountResourceSnapshot
+}
+
+// ListPlatformAccountsWithSnapshotsByUser returns a user's platform
+// accounts joined with their cached resource snapshots in ONE query.
+// Same user/platform scoping as ListPlatformAccountsByUser; accounts
+// without a snapshot row come back with Snapshot == nil. This is the
+// repository half of the aggregated GET /api/v1/accounts list: no
+// per-account snapshot reads, no Vault access, no provider calls.
+func (r *UserRepository) ListPlatformAccountsWithSnapshotsByUser(userID int64, platform string) ([]*AccountWithSnapshot, error) {
+	const joinedSelect = `SELECT pa.id, pa.user_id, pa.platform, pa.platform_user_id, pa.username, pa.status, pa.connected_at,
+	        pa.last_validated_at, pa.last_refresh_at, pa.reauth_required_at,
+	        COALESCE(pa.last_error_code, '') AS last_error_code,
+	        COALESCE(pa.last_error_message, '') AS last_error_message,
+	        pa.metadata, pa.created_at, pa.updated_at,
+	        ars.platform_account_id, ars.resource_type, ars.profile, ars.statistics, ars.status, ars.content,
+	        ars.provider_etag, ars.fetched_at, ars.updated_at
+	 FROM platform_accounts pa
+	 LEFT JOIN account_resource_snapshots ars ON ars.platform_account_id = pa.id`
+
+	var rows *sql.Rows
+	var err error
+	if platform == "" {
+		rows, err = r.db.Query(joinedSelect+` WHERE pa.user_id = $1 ORDER BY pa.created_at DESC`, userID)
+	} else {
+		rows, err = r.db.Query(joinedSelect+` WHERE pa.user_id = $1 AND pa.platform = $2 ORDER BY pa.created_at DESC`, userID, platform)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to list platform accounts with snapshots: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*AccountWithSnapshot
+	for rows.Next() {
+		a := &models.PlatformAccount{}
+		var metadata []byte
+		var (
+			arsID           sql.NullInt64
+			arsResourceType sql.NullString
+			arsProfile      []byte
+			arsStatistics   []byte
+			arsStatus       []byte
+			arsContent      []byte
+			arsETag         sql.NullString
+			arsFetchedAt    sql.NullTime
+			arsUpdatedAt    sql.NullTime
+		)
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Platform, &a.PlatformUserID, &a.Username, &a.Status, &a.ConnectedAt,
+			&a.LastValidatedAt, &a.LastRefreshAt, &a.ReauthRequiredAt, &a.LastErrorCode,
+			&a.LastErrorMessage, &metadata, &a.CreatedAt, &a.UpdatedAt,
+			&arsID, &arsResourceType, &arsProfile, &arsStatistics, &arsStatus, &arsContent,
+			&arsETag, &arsFetchedAt, &arsUpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan platform account with snapshot: %w", err)
+		}
+		a.Metadata = scanMetadata(metadata)
+		row := &AccountWithSnapshot{Account: a}
+		if arsID.Valid {
+			snap := &AccountResourceSnapshot{
+				PlatformAccountID: arsID.Int64,
+				ResourceType:      arsResourceType.String,
+				ProviderETag:      arsETag.String,
+				FetchedAt:         arsFetchedAt.Time,
+				UpdatedAt:         arsUpdatedAt.Time,
+			}
+			if err := decodeSnapshotJSON(snap, arsProfile, arsStatistics, arsStatus, arsContent); err != nil {
+				return nil, err
+			}
+			row.Snapshot = snap
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // ListPlatformAccountsByUser returns all platform accounts for a user, optionally filtered by platform.
 func (r *UserRepository) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
 	var rows *sql.Rows

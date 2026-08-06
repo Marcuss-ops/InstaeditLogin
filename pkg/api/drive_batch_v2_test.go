@@ -41,6 +41,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // --------------------------------------------------------------------
@@ -115,6 +116,9 @@ func (m *stubUserStoreV2) AttachPlatformAccount(int64, *models.PlatformProfile, 
 	return nil, errors.New("stubUserStoreV2: not used by handleDriveBatchImportV2")
 }
 func (m *stubUserStoreV2) ListPlatformAccountsByUser(int64, string) ([]*models.PlatformAccount, error) {
+	return nil, nil
+}
+func (m *stubUserStoreV2) ListPlatformAccountsWithSnapshotsByUser(int64, string) ([]*repository.AccountWithSnapshot, error) {
 	return nil, nil
 }
 func (m *stubUserStoreV2) FindOAuthConnectionByID(context.Context, int64) (*models.OAuthConnection, error) {

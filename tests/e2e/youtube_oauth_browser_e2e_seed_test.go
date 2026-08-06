@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 type browserSmokeUserStore struct{}
@@ -19,6 +20,9 @@ func (*browserSmokeUserStore) AttachPlatformAccount(int64, *models.PlatformProfi
 	return nil, fmt.Errorf("browserSmokeUserStore.AttachPlatformAccount not used (production path delegates to ChannelAuthorizationService)")
 }
 func (*browserSmokeUserStore) ListPlatformAccountsByUser(int64, string) ([]*models.PlatformAccount, error) {
+	return nil, nil
+}
+func (*browserSmokeUserStore) ListPlatformAccountsWithSnapshotsByUser(int64, string) ([]*repository.AccountWithSnapshot, error) {
 	return nil, nil
 }
 func (*browserSmokeUserStore) FindOAuthConnectionByID(context.Context, int64) (*models.OAuthConnection, error) {

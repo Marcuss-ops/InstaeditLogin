@@ -150,7 +150,7 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 	}
 	_ = id.WorkspaceID() // tenancy captured for audit; not used as SQL filter (see godoc)
 
-	accounts, err := r.userRepo.ListPlatformAccountsByUser(id.UserID(), "")
+	accountRows, err := r.userRepo.ListPlatformAccountsWithSnapshotsByUser(id.UserID(), "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list accounts: "+err.Error())
 		return
@@ -160,50 +160,29 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 	case "true", "1", "yes":
 		includeDeleted = true
 	}
-	items := make([]accountListItem, 0, len(accounts))
-	for _, a := range accounts {
-		item := accountListItemFromAccount(a)
+	items := make([]accountListItem, 0, len(accountRows))
+	for _, row := range accountRows {
+		item := accountListItemFromAccount(row.Account)
 		if item.AccountState == AccountStateDeleted && !includeDeleted {
 			continue
 		}
-		items = append(items, item)
-	}
-
-	// Aggregated snapshot enrichment (N+1 fix): ONE batched read covers
-	// every listed account. No per-account SQL, no Vault access, no
-	// provider (YouTube) calls on page load. avatar_url falls back to the
-	// cached snapshot profile when the account metadata has none;
-	// snapshot_stale is stamped from the same batch.
-	if r.snapshotStore != nil && len(items) > 0 {
-		ids := make([]int64, 0, len(items))
-		for _, it := range items {
-			ids = append(ids, it.ID)
-		}
-		snaps, err := r.snapshotStore.ListSnapshotsByAccountIDs(ids)
-		if err != nil {
-			// Best-effort: a single corrupt snapshot row or a transient DB
-			// error must not take down the whole page-critical accounts
-			// list. Log and serve the base list with every item marked
-			// stale; the per-account detail endpoint still surfaces the
-			// real error on its own path.
-			slog.Warn("accounts list: snapshot batch enrichment failed", "error", err.Error())
-		} else {
-			for i := range items {
-				snap, ok := snaps[items[i].ID]
-				if !ok {
-					// No cached snapshot yet → the detail page would have
-					// to refresh it; surface the staleness to the UI.
-					items[i].SnapshotStale = true
-					continue
+		// Aggregated N+1 fix: the snapshot data arrived in the SAME
+		// LEFT JOIN query (repository.AccountWithSnapshot). avatar_url
+		// falls back to the cached snapshot profile when the account
+		// metadata has none; snapshot_stale is stamped here. The page
+		// load runs exactly ONE SQL query — no per-account reads, no
+		// Vault access, no provider (YouTube) calls.
+		if row.Snapshot != nil {
+			if item.AvatarURL == "" {
+				if v, ok := row.Snapshot.Profile["avatar_url"].(string); ok {
+					item.AvatarURL = v
 				}
-				if items[i].AvatarURL == "" {
-					if v, ok := snap.Profile["avatar_url"].(string); ok {
-						items[i].AvatarURL = v
-					}
-				}
-				items[i].SnapshotStale = time.Since(snap.FetchedAt) > accountSnapshotMaxAge
 			}
+			item.SnapshotStale = time.Since(row.Snapshot.FetchedAt) > accountSnapshotMaxAge
+		} else {
+			item.SnapshotStale = true
 		}
+		items = append(items, item)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": items})
