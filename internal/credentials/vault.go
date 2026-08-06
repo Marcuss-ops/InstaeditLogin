@@ -29,6 +29,8 @@ import (
 	"log/slog"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -193,6 +195,32 @@ type VaultAPI interface {
 // error, not a runtime panic.
 var _ VaultAPI = (*CredentialVault)(nil)
 
+// RefreshEarlyWindow is the minimum lead time used to refresh an access
+// token before its provider expiry. The jitter added by RefreshWindow
+// spreads grants that were issued together across a wider interval.
+const RefreshEarlyWindow = 5 * time.Minute
+
+// RefreshEarlyJitter is the maximum deterministic per-grant offset added
+// to RefreshEarlyWindow. It is derived from oauth_connection_id, so every
+// process makes the same decision without persisting another timestamp.
+const RefreshEarlyJitter = 5 * time.Minute
+
+// RefreshWindow returns the early-refresh threshold for one OAuth grant.
+// The result is deterministic and bounded in [RefreshEarlyWindow,
+// RefreshEarlyWindow+RefreshEarlyJitter]. Invalid IDs use the base window.
+func RefreshWindow(oauthConnectionID int64) time.Duration {
+	if oauthConnectionID <= 0 {
+		return RefreshEarlyWindow
+	}
+	// SplitMix64 provides a stable spread even when database IDs are
+	// sequential; no process-local random seed is involved.
+	x := uint64(oauthConnectionID) + 0x9e3779b97f4a7c15
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+	x ^= x >> 31
+	return RefreshEarlyWindow + time.Duration(x%uint64(RefreshEarlyJitter+1))
+}
+
 // CredentialVault is the single implementation of VaultAPI. It owns
 // the AES-256-GCM encryption key, the *sql.DB handle used for advisory
 // locks and the oauth_connection_id lookup, and the TokenStore used for
@@ -221,6 +249,13 @@ type CredentialVault struct {
 	// (e.g. the refresh-grant near-expiry warning in Renew). Production
 	// defaults to slog.Default(); tests may substitute a buffer logger.
 	logger *slog.Logger
+
+	// renewFlight collapses refresh work before any PostgreSQL advisory
+	// lock is acquired. The key combines the canonical
+	// oauth_connection_id with token type, so multiple platform accounts
+	// sharing one grant do not queue independently while distinct token
+	// representations cannot share an unsafe result.
+	renewFlight singleflight.Group
 }
 
 // NewCredentialVault constructs a vault. All three dependencies are

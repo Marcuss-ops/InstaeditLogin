@@ -8,6 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,9 +38,12 @@ type mockTokenStore struct {
 	// connection 10 only removes connection 10's tokens, never
 	// connection 1's.
 	state map[int64]map[string]*models.Token
+	mu    sync.RWMutex
 }
 
 func (m *mockTokenStore) seedToken(t *models.Token) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if t.ID == 0 {
 		t.ID = 1000 + int64(m.seedCalls.Add(1))
 	}
@@ -94,6 +98,8 @@ func (m *mockTokenStore) FindLatestToken(oauthConnectionID int64, tokenType stri
 	if m.findLatestFn != nil {
 		return m.findLatestFn(oauthConnectionID, tokenType)
 	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if bucket, ok := m.state[oauthConnectionID]; ok {
 		if t, ok := bucket[tokenType]; ok {
 			return t, nil
@@ -111,6 +117,8 @@ func (m *mockTokenStore) DeleteAllTokensForOAuthConnection(oauthConnectionID int
 	// `DELETE FROM tokens WHERE oauth_connection_id = $1`. A nested
 	// map makes this trivially safe against connection-id prefix
 	// overlap (1 vs 10, 100 vs 1000, etc.).
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.state, oauthConnectionID)
 	return nil
 }
@@ -120,6 +128,8 @@ func (m *mockTokenStore) UpdateCiphertexts(tokenID int64, oldEncrypted, newEncry
 	if m.updateCiphertextsFn != nil {
 		return m.updateCiphertextsFn(tokenID, oldEncrypted, newEncrypted)
 	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for _, bucket := range m.state {
 		for _, t := range bucket {
 			if t.ID == tokenID {

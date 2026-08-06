@@ -19,13 +19,13 @@ import (
 func TestVault_Renew_FastPath_FreshToken_NoLockAcquisition(t *testing.T) {
 	v, mock, store := newTestVault(t)
 	const accountID int64 = 10
-	// ExpiresAt 5 minutes in the future — well outside the 60s grace window.
-	fresh := newEncryptedToken(t, v, accountID, 5*time.Minute, "old-refresh")
+	// ExpiresAt 20 minutes in the future — outside the maximum
+	// grant-scoped early-refresh window (5m base + up to 5m jitter).
+	fresh := newEncryptedToken(t, v, accountID, 20*time.Minute, "old-refresh")
 	store.seedToken(fresh)
-	// P0#3: vault resolves oauth_connection_id via the DB on every
-	// Renew probe (Lookup → Get fast path). The fast-path advisory
-	// lock contract is unchanged: still no BEGIN, still no
-	// pg_advisory_xact_lock — just one extra SELECT before Get.
+	// P0#3: vault resolves oauth_connection_id via the DB before
+	// the grant-keyed refresh decision. The fast-path advisory lock
+	// contract is unchanged: still no BEGIN or pg_advisory_xact_lock.
 	expectOauthConnLookup(mock, accountID, accountID)
 
 	got, err := v.Renew(context.Background(), accountID, models.TokenTypeBearer, func(ctx context.Context, refreshToken string) (*models.TokenData, error) {

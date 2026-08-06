@@ -13,6 +13,8 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
+const refreshOperationTimeout = 30 * time.Second
+
 // refreshGrantExpiryWarningWindow is the lookahead before a provider-issued
 // refresh-token expiry at which Renew emits a warning. It matches the 7-day
 // default window used by the admin token-rotation health view so operators
@@ -20,32 +22,76 @@ import (
 const refreshGrantExpiryWarningWindow = 7 * 24 * time.Hour
 
 // Renew returns a fresh token or refreshes it under the per-grant advisory
-// lock, preserving the existing error classification and status updates.
+// lock. Application-level singleflight runs before the lock so concurrent
+// requests for one oauth_connection_id do not queue duplicate transactions.
 func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, tokenType string, refresher TokenRefresher) (*models.OAuthToken, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	// Fast path: token is already fresh, no DB lock needed. Get handles
-	// the oauth_connection_id lookup internally.
-	if tok, err := v.Get(ctx, platformAccountID, tokenType); err == nil {
-		if tok.ExpiresAt == nil || tok.ExpiresAt.Sub(v.clock()) > 60*time.Second {
+	// Resolve the canonical grant before singleflight. This small lookup is
+	// required to key the process-local flight by oauth_connection_id rather
+	// than by platform account (several channels may share one grant).
+	oauthConnectionID, err := v.oauthConnectionIDForAccount(ctx, platformAccountID)
+	if err != nil {
+		return nil, err
+	}
+	window := RefreshWindow(oauthConnectionID)
+
+	if tok, err := v.getByOAuthConnection(ctx, oauthConnectionID, platformAccountID, tokenType); err == nil {
+		if tokenFreshForWindow(tok, v.clock(), window) {
 			return tok, nil
 		}
-		// Within grace window: fall through to refresh.
-	} else if !isExpiryError(err) {
-		// Non-expiry error (decrypt failure, DB unreachable, …): surface it.
+	} else if !isExpiryError(err) && !errors.Is(err, ErrModernGrantMissing) {
 		return nil, err
 	}
 
-	// Slow path: open a short-lived tx so the advisory lock is
-	// transaction-scoped. Inside the tx we (a) look up the canonical
-	// oauth_connection_id with a row-level lock on platform_accounts
-	// (so a concurrent grant swap is blocked), (b) acquire the advisory
-	// lock keyed on the resolved oid.
+	key := fmt.Sprintf("renew:%d:%s", oauthConnectionID, tokenType)
+	resultCh := v.renewFlight.DoChan(key, func() (any, error) {
+		// Detach cancellation from the leader so its disconnect does not
+		// abort work needed by concurrent waiters, while retaining any
+		// request deadline as an upper bound.
+		workCtx, cancel := contextWithoutCancelWithDeadline(ctx)
+		defer cancel()
+		return nil, v.renewUnderGrantLock(workCtx, platformAccountID, tokenType, refresher, oauthConnectionID, window)
+	})
+	select {
+	case result := <-resultCh:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		// Do not return decrypted token material from singleflight. Read the
+		// committed row after completion, keeping secret lifetime out of the
+		// flight result and honoring the caller's own cancellation. Use the
+		// public read path so lazy ciphertext re-encryption remains intact.
+		return v.Get(ctx, platformAccountID, tokenType)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func contextWithoutCancelWithDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	// WithoutCancel preserves request-scoped values while preventing the
+	// leader's cancellation from aborting work shared with waiters. Keep
+	// the caller deadline when present, but cap detached work so a provider
+	// without a response cannot leave the flight resident forever.
+	base := context.WithoutCancel(ctx)
+	maxDeadline := time.Now().Add(refreshOperationTimeout)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(maxDeadline) {
+		maxDeadline = deadline
+	}
+	return context.WithDeadline(base, maxDeadline)
+}
+
+func tokenFreshForWindow(tok *models.OAuthToken, now time.Time, window time.Duration) bool {
+	return tok != nil && (tok.ExpiresAt == nil || tok.ExpiresAt.Sub(now) > window)
+}
+
+// renewUnderGrantLock owns the transaction-scoped PostgreSQL advisory lock.
+func (v *CredentialVault) renewUnderGrantLock(ctx context.Context, platformAccountID int64, tokenType string, refresher TokenRefresher, oauthConnectionID int64, window time.Duration) error {
 	lockTx, err := v.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("vault: begin lock tx: %w", err)
+		return fmt.Errorf("vault: begin lock tx: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -53,41 +99,38 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 			_ = lockTx.Rollback()
 		}
 	}()
-	var oauthConnectionID int64
+
+	// Lock the platform row while confirming the same canonical grant. A
+	// reconnect/grant swap cannot race the refresh decision.
+	var lockedConnectionID int64
 	if err := lockTx.QueryRowContext(ctx,
 		`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`,
 		platformAccountID,
-	).Scan(&oauthConnectionID); err != nil {
-		return nil, fmt.Errorf("vault: resolve oauth_connection_id for renew: %w", err)
+	).Scan(&lockedConnectionID); err != nil {
+		return fmt.Errorf("vault: resolve oauth_connection_id for renew: %w", err)
+	}
+	if lockedConnectionID != oauthConnectionID {
+		return fmt.Errorf("vault: OAuth connection changed during refresh")
 	}
 	if _, err := lockTx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", oauthConnectionID); err != nil {
-		return nil, fmt.Errorf("vault: acquire advisory lock: %w", err)
+		return fmt.Errorf("vault: acquire advisory lock: %w", err)
 	}
 
-	// Re-read inside the lock. Another worker may have just refreshed.
-	// Reuse the resolved oid — same acq, no extra SELECT.
 	stored, err := v.store.FindLatestToken(oauthConnectionID, tokenType)
 	if err != nil {
-		return nil, fmt.Errorf("vault: find inside lock: %w", err)
+		return fmt.Errorf("vault: find inside lock: %w", err)
 	}
-	if stored != nil && (stored.ExpiresAt == nil || stored.ExpiresAt.Sub(v.clock()) > 60*time.Second) {
+	if tokenFreshForStored(stored, v.clock(), window) {
 		if err := lockTx.Commit(); err != nil {
-			return nil, fmt.Errorf("vault: commit lock tx: %w", err)
+			return fmt.Errorf("vault: commit lock tx: %w", err)
 		}
 		committed = true
-		return v.toOAuthToken(stored)
+		return nil
 	}
 	if stored == nil {
-		return nil, fmt.Errorf("vault: %w for account %d (oauth_connection=%d)", ErrModernGrantMissing, platformAccountID, oauthConnectionID)
+		return fmt.Errorf("vault: %w for account %d (oauth_connection=%d)", ErrModernGrantMissing, platformAccountID, oauthConnectionID)
 	}
 
-	// P3 observability: warn when the stored refresh grant is close to its
-	// provider-issued expiry so operators can reconnect before Google
-	// garbage-collects it. Access-token freshness is decided above; this is
-	// a pure signal that never alters the refresh path. Deliberately
-	// slow-path only: a fresh access token returns early without reading
-	// the stored row, and the refresh grant is only exercised once the
-	// access token goes stale anyway.
 	if stored.RefreshTokenExpiresAt != nil {
 		if remaining := stored.RefreshTokenExpiresAt.Sub(v.clock()); remaining <= refreshGrantExpiryWarningWindow {
 			if v.logger != nil {
@@ -100,23 +143,10 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 		}
 	}
 
-	// We own the refresh. Read the stored row is already in `stored`
-	// from the re-read above — pass it directly to extractRefreshMaterial.
-	// Re-finding would just re-pay the same lookup cost for no new info.
 	refreshToken, err := v.extractRefreshMaterial(stored, tokenType)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	// R4 — YouTube OAuth Client Pool: resolve the grant's pool client
-	// key inside the lock tx (platform_account_id → oauth_connection_id
-	// → oauth_client_key) and stamp it on the ctx handed to the
-	// refresher. The refresher (services layer) Resolves that key
-	// through the pool registry and refreshes with the SAME client_id +
-	// client_secret that issued the token — never a different one.
-	// Best-effort: a pre-migration-099 database has no oauth_client_key
-	// column and falls back to the legacy label at DEBUG without
-	// failing the refresh (mirrors recordInvalidGrantMetric).
 	clientKey := v.resolveOAuthClientKey(ctx, lockTx, oauthConnectionID)
 	refreshCtx := WithOAuthClientKey(ctx, clientKey)
 
@@ -124,44 +154,37 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 	if err != nil {
 		status, code := classifyRefreshFailure(err)
 		if errors.Is(err, ErrInvalidGrant) {
-			// Observability: bump youtube_oauth_invalid_grant_total for
-			// the pool client that issued this grant. Best-effort — on a
-			// pre-migration-099 database the oauth_client_key column is
-			// missing and the increment is skipped (DEBUG) rather than
-			// failing the propagation below.
 			v.recordInvalidGrantMetric(ctx, lockTx, oauthConnectionID)
 			statusStore, ok := v.store.(InvalidGrantTxStore)
 			if !ok {
 				_ = lockTx.Rollback()
 				committed = true
-				return nil, fmt.Errorf("vault: invalid_grant propagation unavailable: %w", err)
+				return fmt.Errorf("vault: invalid_grant propagation unavailable: %w", err)
 			}
 			if statusErr := statusStore.MarkInvalidGrantTx(ctx, lockTx, oauthConnectionID, SharedGrantReauthRequiredCode, InvalidGrantAccountErrorMessage); statusErr != nil {
-				return nil, fmt.Errorf("vault: propagate invalid_grant state: %w", statusErr)
+				return fmt.Errorf("vault: propagate invalid_grant state: %w", statusErr)
 			}
 			if err := lockTx.Commit(); err != nil {
-				return nil, fmt.Errorf("vault: commit invalid_grant state: %w", err)
+				return fmt.Errorf("vault: commit invalid_grant state: %w", err)
 			}
 			committed = true
-			return nil, fmt.Errorf("vault: refresh failed: %w", err)
+			return fmt.Errorf("vault: refresh failed: %w", err)
 		}
 		_ = lockTx.Rollback()
 		committed = true
 		if statusErr := v.updateGrantStatus(ctx, oauthConnectionID, status, code); statusErr != nil {
-			return nil, fmt.Errorf("vault: refresh failed: %w (grant status update failed: %v)", err, statusErr)
+			return fmt.Errorf("vault: refresh failed: %w (grant status update failed: %v)", err, statusErr)
 		}
-		return nil, fmt.Errorf("vault: refresh failed: %w", err)
+		return fmt.Errorf("vault: refresh failed: %w", err)
 	}
 
-	// Save via the lookup-free sibling — the resolved oid is the
-	// canonical key for this row.
 	if err := v.saveForOAuthConnectionTx(ctx, lockTx, oauthConnectionID, platformAccountID, newTokenData, false, stored); err != nil {
 		_ = lockTx.Rollback()
 		committed = true
 		if statusErr := v.updateGrantStatus(ctx, oauthConnectionID, "error", "persist_failed"); statusErr != nil {
-			return nil, fmt.Errorf("vault: persist refreshed token: %w (grant status update failed: %v)", err, statusErr)
+			return fmt.Errorf("vault: persist refreshed token: %w (grant status update failed: %v)", err, statusErr)
 		}
-		return nil, fmt.Errorf("vault: persist refreshed token: %w", err)
+		return fmt.Errorf("vault: persist refreshed token: %w", err)
 	}
 
 	statusInTx := false
@@ -169,26 +192,31 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 		if err := statusStore.UpdateOAuthConnectionStatusTx(ctx, lockTx, oauthConnectionID, models.AccountStatusActive, ""); err != nil {
 			_ = lockTx.Rollback()
 			committed = true
-			return nil, fmt.Errorf("vault: update refresh status in lock tx: %w", err)
+			return fmt.Errorf("vault: update refresh status in lock tx: %w", err)
 		}
 		statusInTx = true
 	}
 	if err := lockTx.Commit(); err != nil {
-		return nil, fmt.Errorf("vault: commit lock tx: %w", err)
+		return fmt.Errorf("vault: commit lock tx: %w", err)
 	}
 	committed = true
 	if !statusInTx {
 		if err := v.updateGrantStatus(ctx, oauthConnectionID, models.AccountStatusActive, ""); err != nil {
-			return nil, fmt.Errorf("vault: refreshed token committed but grant status update failed: %w", err)
+			return fmt.Errorf("vault: refreshed token committed but grant status update failed: %w", err)
 		}
 	}
+	return nil
+}
 
-	// Final read — fresh ciphertext was just persisted; the stored row
-	// is now the latest write by THIS transaction. Pass the just-written
-	// id via a sealed re-read through Get (which resolves the oid again
-	// — one extra SELECT, but kept simple and consistent with the read
-	// contract for callers).
-	return v.Get(ctx, platformAccountID, tokenType)
+func tokenFreshForStored(stored *models.Token, now time.Time, window time.Duration) bool {
+	if stored == nil {
+		return false
+	}
+	expiresAt := stored.AccessTokenExpiresAt
+	if expiresAt == nil {
+		expiresAt = stored.ExpiresAt
+	}
+	return expiresAt == nil || expiresAt.Sub(now) > window
 }
 
 func (v *CredentialVault) toOAuthToken(stored *models.Token) (*models.OAuthToken, error) {
@@ -244,9 +272,6 @@ func (v *CredentialVault) resolveOAuthClientKey(ctx context.Context, tx *sql.Tx,
 		oauthConnectionID,
 	).Scan(&clientKey)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Non-YouTube grant (the vault's Renew path is shared by
-		// TikTok, Instagram, X, Drive, …): not this metric's
-		// jurisdiction, no stamp, no log noise.
 		return defaultYouTubeOAuthClientKey
 	}
 	if err != nil {
@@ -263,15 +288,8 @@ func (v *CredentialVault) resolveOAuthClientKey(ctx context.Context, tx *sql.Tx,
 }
 
 // recordInvalidGrantMetric bumps youtube_oauth_invalid_grant_total for
-// the grant's (google subject, pool client). YouTube-ONLY: the vault's
-// Renew path is platform-agnostic (shared by TikTok, Instagram, X, …),
-// so the increment is gated on the connection's provider to avoid
-// polluting a YouTube metric with other platforms' invalid_grants.
-// Best-effort and never allowed to fail the refresh path: on a
-// pre-migration-099 database the oauth_client_key column does not
-// exist (DEBUG skip), and a non-YouTube connection is skipped silently.
-// A grant with an empty/NULL subject is never counted (fail-closed —
-// the label contract forbids an empty google_subject).
+// the grant's (google subject, pool client). Best-effort and never allowed
+// to fail the refresh path.
 func (v *CredentialVault) recordInvalidGrantMetric(ctx context.Context, tx *sql.Tx, oauthConnectionID int64) {
 	clientKey := "youtube_pool_a"
 	var subject sql.NullString
@@ -283,8 +301,6 @@ func (v *CredentialVault) recordInvalidGrantMetric(ctx context.Context, tx *sql.
 		oauthConnectionID,
 	).Scan(&clientKey, &subject)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Non-YouTube grant (or row already gone): not this metric's
-		// jurisdiction. No increment, no log noise.
 		return
 	}
 	if err != nil {
@@ -297,7 +313,5 @@ func (v *CredentialVault) recordInvalidGrantMetric(ctx context.Context, tx *sql.
 	if clientKey == "" {
 		clientKey = "youtube_pool_a"
 	}
-	// A NULL subject (legacy row) reaches the explicit fail-closed
-	// check below instead of a misleading scan error.
 	metrics.RecordYouTubeOAuthInvalidGrant(subject.String, clientKey)
 }
