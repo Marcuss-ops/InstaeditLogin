@@ -1,19 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import {
-  LayoutDashboard,
-  Link2,
-  Calendar,
-  FolderTree,
-  BarChart3,
-  Shield,
-  LogOut,
-  ChevronLeft,
-  ChevronRight,
-  Radio,
-  ImageIcon,
-  type LucideIcon,
-} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { FUNCTIONAL_ICON_CATALOG } from "../icons/FunctionalIcons";
 import { cn } from "../../lib/utils";
 import { fetchSession, logout } from "../../lib/auth";
 import { useActiveLiveCount } from "../../hooks/useActiveLiveCount";
@@ -27,16 +15,16 @@ type NavItem = {
 };
 
 const baseNavItems: NavItem[] = [
-  { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/app/performance", label: "Performance", icon: BarChart3 },
-  { to: "/app/calendar", label: "Calendar", icon: Calendar },
-  { to: "/app/groups", label: "Groups", icon: FolderTree },
-  { to: "/app/livestreams", label: "Live streaming", icon: Radio, liveCountBadge: true },
-  { to: "/app/covers", label: "Copertine", icon: ImageIcon },
-  { to: "/app/linking", label: "Linking", icon: Link2 },
+  { to: "/app/dashboard", label: "Dashboard", icon: FUNCTIONAL_ICON_CATALOG.product.dashboard },
+  { to: "/app/performance", label: "Performance", icon: FUNCTIONAL_ICON_CATALOG.product.analytics },
+  { to: "/app/calendar", label: "Calendar", icon: FUNCTIONAL_ICON_CATALOG.product.calendar },
+  { to: "/app/groups", label: "Groups", icon: FUNCTIONAL_ICON_CATALOG.product.folder },
+  { to: "/app/livestreams", label: "Live streaming", icon: FUNCTIONAL_ICON_CATALOG.product.live, liveCountBadge: true },
+  { to: "/app/covers", label: "Copertine", icon: FUNCTIONAL_ICON_CATALOG.product.image },
+  { to: "/app/linking", label: "Linking", icon: FUNCTIONAL_ICON_CATALOG.product.link },
 ];
 
-const adminNavItem: NavItem = { to: "/admin/dashboard", label: "Admin", icon: Shield };
+const adminNavItem: NavItem = { to: "/admin/dashboard", label: "Admin", icon: FUNCTIONAL_ICON_CATALOG.product.admin };
 
 export type SidebarProps = {
   collapsed: boolean;
@@ -105,7 +93,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           aria-label={visualCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           className="p-1.5 rounded-lg text-[#9aa0aa] hover:text-white hover:bg-white/[0.06] transition-colors"
         >
-          {visualCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          {visualCollapsed ? (
+            <FUNCTIONAL_ICON_CATALOG.navigation.next size={18} />
+          ) : (
+            <FUNCTIONAL_ICON_CATALOG.navigation.collapse size={18} />
+          )}
         </button>
       </div>
 
@@ -125,6 +117,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 visualCollapsed && "justify-center",
               )}
               title={visualCollapsed ? item.label : undefined}
+              aria-label={visualCollapsed ? item.label : undefined}
+              aria-current={active ? "page" : undefined}
             >
               <Icon size={20} className="shrink-0" />
               {!visualCollapsed && <span className="truncate">{item.label}</span>}
@@ -153,8 +147,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             visualCollapsed && "justify-center",
           )}
           title={visualCollapsed ? "Log out" : undefined}
+          aria-label={visualCollapsed ? "Log out" : undefined}
         >
-          <LogOut size={20} className="shrink-0" />
+          <FUNCTIONAL_ICON_CATALOG.actions.logout size={20} className="shrink-0" />
           {!visualCollapsed && <span className="truncate">Log out</span>}
         </button>
       </div>

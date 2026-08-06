@@ -1,5 +1,9 @@
 import type { SVGProps } from "react";
 
+/**
+ * Props for provider trademark artwork. Functional UI symbols belong to the
+ * Lucide catalog in `../icons/FunctionalIcons` and use `LucideProps` instead.
+ */
 export type LogoProps = SVGProps<SVGSVGElement> & { className?: string };
 
 export type CanonicalProviderId =
@@ -114,6 +118,9 @@ export type ProviderRegistryEntry = {
  * The single source of truth for provider identity, brand artwork and visual
  * metadata. Consumers should derive views from this registry instead of
  * defining provider logos or colors locally.
+ *
+ * This is intentionally not a general-purpose icon catalog. Functional UI
+ * icons are catalogued separately in `../icons/FunctionalIcons`.
  */
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
@@ -238,10 +245,17 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
 ];
 
-export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
-  return PROVIDER_REGISTRY.find(
-    (entry) => entry.id === id || entry.aliases.some((alias) => alias === id),
+export function normalizeProviderIdentifier(id: string): CanonicalProviderId | string {
+  const normalized = id.trim().toLowerCase();
+  const entry = PROVIDER_REGISTRY.find(
+    (candidate) => candidate.id === normalized || candidate.aliases.some((alias) => alias === normalized),
   );
+  return entry?.id ?? normalized;
+}
+
+export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
+  const normalized = normalizeProviderIdentifier(id);
+  return PROVIDER_REGISTRY.find((entry) => entry.id === normalized);
 }
 
 /** Canonical brand-logo renderer with support for legacy aliases. */

@@ -1,3 +1,7 @@
+/**
+ * @deprecated Kept as a compatibility export for older landing consumers.
+ * Functional icons use `IconProps`; provider logos use the brand catalog.
+ */
 export type { LogoProps } from "../brand/PlatformLogos";
 
 export type RowPlatform =
