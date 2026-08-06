@@ -9,6 +9,65 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
+func TestPostRepository_ListDirtyAggregatePostIDs_UsesBoundedQueue(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	mock.ExpectQuery(`SELECT post_id
+ FROM post_aggregate_repair_queue
+ ORDER BY queued_at ASC, post_id ASC
+ LIMIT $1`).
+		WithArgs(25).
+		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(int64(100)).AddRow(int64(200)))
+
+	postIDs, err := repo.ListDirtyAggregatePostIDs(25)
+	if err != nil {
+		t.Fatalf("ListDirtyAggregatePostIDs: %v", err)
+	}
+	if len(postIDs) != 2 || postIDs[0] != 100 || postIDs[1] != 200 {
+		t.Fatalf("post IDs = %v, want [100 200]", postIDs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestPostRepository_RepairDirtyAggregatePost_DequeuesAfterRepair(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id FROM post_targets WHERE post_id = $1 ORDER BY id ASC FOR UPDATE`).
+		WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(200)))
+	mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).
+		WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(100)))
+	mock.ExpectQuery(`SELECT post_id
+ FROM post_aggregate_repair_queue
+ WHERE post_id = $1
+ FOR UPDATE`).
+		WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(int64(100)))
+	mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).
+		WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublished))
+	mock.ExpectExec(`UPDATE posts SET status = $1 WHERE id = $2`).
+		WithArgs(models.PostStatusPublished, int64(100)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM post_aggregate_repair_queue WHERE post_id = $1`).
+		WithArgs(int64(100)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	if err := repo.RepairDirtyAggregatePost(100); err != nil {
+		t.Fatalf("RepairDirtyAggregatePost: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
 func TestPostRepository_RepairAggregateStatusForPost_ResolvesQueuedParent(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)

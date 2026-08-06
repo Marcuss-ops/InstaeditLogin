@@ -22,9 +22,10 @@
 //     platform API on the reconciler tick held the publish driver
 //     hostage for the duration of the platform call.
 //
-// Per-tick body: ListPublishing → for each row → lookup account
-// → lookup AsyncPublisher capability → vault.Renew token →
-// AsyncPublisher.Reconcile (single GET + transition decision). On
+// Per-tick body: drain a bounded dirty-post repair queue, then
+// ListPublishing → for each row → lookup account → lookup AsyncPublisher
+// capability → vault.Renew token → AsyncPublisher.Reconcile (single GET +
+// transition decision). On
 // PUBLISH_COMPLETE transition to status='published'; on FAILED
 // (including transient 5xx under the Reconcile contract) transition
 // to status='failed'; on in-flight leave for next tick.
@@ -85,9 +86,12 @@ type ReconcilePostStore interface {
 	// UpdateStatus persists a target transition and recomputes its parent
 	// aggregate status in the same transaction.
 	UpdateStatus(target *models.PostTarget) error
-	// RepairAggregateStatuses is an idempotent safety net for parent rows
-	// whose stored status drifted from their target set.
-	RepairAggregateStatuses() (int, error)
+	// ListDirtyAggregatePostIDs returns a bounded snapshot of parent posts
+	// marked dirty by post-target transitions. It must never scan all posts.
+	ListDirtyAggregatePostIDs(limit int) ([]int64, error)
+	// RepairDirtyAggregatePost repairs one queued parent and removes its queue
+	// row atomically. Failures leave the row queued for a later retry.
+	RepairDirtyAggregatePost(postID int64) error
 }
 
 // ReconcileUserStore is the reconciler's narrow view of the user /
@@ -204,14 +208,17 @@ func (w *ReconcileWorker) Run(ctx context.Context) error {
 	}
 }
 
-// runOnce executes one tickReconcile pass and logs the result.
-// Per-tick errors are logged at WARN and the worker keeps ticking
-// on the next interval — same shape as PublishWorker.runOnce.
+const dirtyAggregateRepairBatchSize = 100
+
+// runOnce executes one bounded dirty-post repair pass and one reconcile pass.
+// Per-tick errors are logged at WARN and the worker keeps ticking on the next
+// interval — same shape as PublishWorker.runOnce. A dirty row is removed only
+// by RepairDirtyAggregatePost after the targeted transaction succeeds.
 func (w *ReconcileWorker) runOnce(ctx context.Context) {
-	if repaired, err := w.postRepo.RepairAggregateStatuses(); err != nil {
-		w.logger.Warn("reconcile aggregate repair failed", "error", err)
+	if repaired, err := w.repairDirtyAggregates(); err != nil {
+		w.logger.Warn("reconcile dirty aggregate repair failed", "error", err)
 	} else if repaired > 0 {
-		w.logger.Info("reconcile aggregate repair done", "repaired", repaired)
+		w.logger.Info("reconcile dirty aggregate repair done", "repaired", repaired)
 	}
 	if reconciled, failed, err := w.tickReconcile(ctx); err != nil {
 		w.logger.Warn("reconcile worker tick failed", "error", err)
@@ -219,6 +226,21 @@ func (w *ReconcileWorker) runOnce(ctx context.Context) {
 		w.logger.Info("reconcile worker tick done",
 			"reconciled", reconciled, "failed", failed)
 	}
+}
+
+func (w *ReconcileWorker) repairDirtyAggregates() (int, error) {
+	postIDs, err := w.postRepo.ListDirtyAggregatePostIDs(dirtyAggregateRepairBatchSize)
+	if err != nil {
+		return 0, fmt.Errorf("list dirty aggregate posts: %w", err)
+	}
+	repaired := 0
+	for _, postID := range postIDs {
+		if err := w.postRepo.RepairDirtyAggregatePost(postID); err != nil {
+			return repaired, fmt.Errorf("repair dirty aggregate post %d: %w", postID, err)
+		}
+		repaired++
+	}
+	return repaired, nil
 }
 
 // tickReconcile processes all targets in status='publishing'

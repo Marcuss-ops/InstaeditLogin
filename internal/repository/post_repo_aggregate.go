@@ -289,6 +289,80 @@ func (r *PostRepository) updateStatusWithAggregate(target *models.PostTarget) (e
 	return nil
 }
 
+// ListDirtyAggregatePostIDs returns the oldest deduplicated parent IDs that
+// were marked dirty by the post_targets transition trigger. It is deliberately
+// bounded so repair work is proportional to changed targets, not database age.
+func (r *PostRepository) ListDirtyAggregatePostIDs(limit int) ([]int64, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("list dirty aggregate posts: limit must be positive (got %d)", limit)
+	}
+	rows, err := r.db.Query(qSelectDirtyAggregatePostIDs, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list dirty aggregate posts: %w", err)
+	}
+	defer rows.Close()
+
+	var postIDs []int64
+	for rows.Next() {
+		var postID int64
+		if err := rows.Scan(&postID); err != nil {
+			return nil, fmt.Errorf("scan dirty aggregate post: %w", err)
+		}
+		postIDs = append(postIDs, postID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read dirty aggregate posts: %w", err)
+	}
+	return postIDs, nil
+}
+
+// RepairDirtyAggregatePost resolves one queued parent and removes its queue
+// row in the same transaction. If repair fails, the transaction rolls back
+// and the queue row remains for a later retry.
+func (r *PostRepository) RepairDirtyAggregatePost(postID int64) error {
+	if postID <= 0 {
+		return fmt.Errorf("repair dirty aggregate post: postID must be positive (got %d)", postID)
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin dirty aggregate repair for post %d: %w", postID, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Match every target transition's lock order: target(s) → parent →
+	// queue row. This avoids a transition holding a target/parent lock while
+	// waiting for a queue row that the repair worker already holds.
+	if _, err = lockTargetsForPostTx(tx, postID); err != nil {
+		return fmt.Errorf("lock dirty aggregate targets for post %d: %w", postID, err)
+	}
+	if err = lockPostTx(tx, postID); err != nil {
+		return fmt.Errorf("lock dirty aggregate parent %d: %w", postID, err)
+	}
+	var queuedPostID int64
+	if err = tx.QueryRow(qLockDirtyAggregatePost, postID).Scan(&queuedPostID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return nil
+		}
+		return fmt.Errorf("lock dirty aggregate post %d: %w", postID, err)
+	}
+	if err = persistAggregatePostStatusLockedTx(tx, postID); err != nil {
+		return fmt.Errorf("repair dirty aggregate post %d: %w", postID, err)
+	}
+	if _, err = tx.Exec(qDeleteDirtyAggregatePost, postID); err != nil {
+		return fmt.Errorf("dequeue dirty aggregate post %d: %w", postID, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit dirty aggregate repair for post %d: %w", postID, err)
+	}
+	return nil
+}
+
 // RepairAggregateStatusForPost repairs one parent aggregate in a transaction.
 // The target set is always resolved by PostAggregateStatusResolver; this
 // method never infers or assigns a target status. It is used by the targeted

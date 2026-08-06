@@ -8,8 +8,8 @@
 //
 // All tests use the mocks in mocks_test.go (mockUserStore,
 // mockAsyncProvider, mockProvider, mockCredentialVault) plus the
-// mockReconcilePostStore defined here (2-method surface: ListPublishing,
-// UpdateStatus). The fact that the reconciler cannot accidentally call
+// mockReconcilePostStore defined here (bounded dirty-queue + publishing
+// surface). The fact that the reconciler cannot accidentally call
 // SetProviderIdempotencyKey / ClaimQueuedTarget is enforced at compile
 // time by the ReconcilePostStore interface boundary.
 package worker
@@ -45,11 +45,15 @@ type mockReconcilePostStore struct {
 	updateCalls          int
 
 	// Function fields — each test overrides only what it exercises.
-	listPublishingFn          func() ([]models.PostTarget, error)
-	claimPublishingFn         func(id int64) (bool, error)
-	updateStatusFn            func(*models.PostTarget) error
-	repairAggregateStatusesFn func() (int, error)
-	repairCalls               int
+	listPublishingFn     func() ([]models.PostTarget, error)
+	claimPublishingFn    func(id int64) (bool, error)
+	updateStatusFn       func(*models.PostTarget) error
+	dirtyPostIDsFn       func(limit int) ([]int64, error)
+	repairDirtyPostFn    func(postID int64) error
+	dirtyPostIDsCalls    int
+	repairDirtyPostCalls int
+	dirtyPostIDsLimit    int
+	repairedPostIDs      []int64
 
 	// Captured targets from UpdateStatus — lets tests inspect the
 	// final status (published vs failed) and assert on the worker
@@ -90,14 +94,26 @@ func (m *mockReconcilePostStore) UpdateStatus(target *models.PostTarget) error {
 	return m.updateStatusFn(target)
 }
 
-func (m *mockReconcilePostStore) RepairAggregateStatuses() (int, error) {
+func (m *mockReconcilePostStore) ListDirtyAggregatePostIDs(limit int) ([]int64, error) {
 	m.mu.Lock()
-	m.repairCalls++
+	m.dirtyPostIDsCalls++
+	m.dirtyPostIDsLimit = limit
 	m.mu.Unlock()
-	if m.repairAggregateStatusesFn == nil {
-		return 0, nil
+	if m.dirtyPostIDsFn == nil {
+		return nil, nil
 	}
-	return m.repairAggregateStatusesFn()
+	return m.dirtyPostIDsFn(limit)
+}
+
+func (m *mockReconcilePostStore) RepairDirtyAggregatePost(postID int64) error {
+	m.mu.Lock()
+	m.repairDirtyPostCalls++
+	m.repairedPostIDs = append(m.repairedPostIDs, postID)
+	m.mu.Unlock()
+	if m.repairDirtyPostFn == nil {
+		return nil
+	}
+	return m.repairDirtyPostFn(postID)
 }
 
 // ------------------------------------------------------------------
@@ -714,10 +730,10 @@ func TestReconcileWorker_Run_GracefulShutdown_DrainsInFlight(t *testing.T) {
 	}
 }
 
-func TestReconcileWorker_RunOnce_RepairsAggregateStatuses(t *testing.T) {
+func TestReconcileWorker_RunOnce_RepairsOnlyDirtyAggregatePosts(t *testing.T) {
 	posts := &mockReconcilePostStore{
-		repairAggregateStatusesFn: func() (int, error) {
-			return 1, nil
+		dirtyPostIDsFn: func(limit int) ([]int64, error) {
+			return []int64{101, 202}, nil
 		},
 	}
 	w := NewReconcileWorker(
@@ -734,10 +750,46 @@ func TestReconcileWorker_RunOnce_RepairsAggregateStatuses(t *testing.T) {
 	w.runOnce(context.Background())
 
 	posts.mu.Lock()
-	repairCalls := posts.repairCalls
+	listCalls := posts.dirtyPostIDsCalls
+	limit := posts.dirtyPostIDsLimit
+	repairCalls := posts.repairDirtyPostCalls
+	repairedIDs := append([]int64(nil), posts.repairedPostIDs...)
 	posts.mu.Unlock()
-	if repairCalls != 1 {
-		t.Fatalf("RepairAggregateStatuses calls = %d, want 1", repairCalls)
+	if listCalls != 1 {
+		t.Fatalf("ListDirtyAggregatePostIDs calls = %d, want 1", listCalls)
+	}
+	if limit != dirtyAggregateRepairBatchSize {
+		t.Fatalf("dirty queue limit = %d, want %d", limit, dirtyAggregateRepairBatchSize)
+	}
+	if repairCalls != 2 {
+		t.Fatalf("RepairDirtyAggregatePost calls = %d, want 2", repairCalls)
+	}
+	if len(repairedIDs) != 2 || repairedIDs[0] != 101 || repairedIDs[1] != 202 {
+		t.Fatalf("repaired post IDs = %v, want [101 202]", repairedIDs)
+	}
+}
+
+func TestReconcileWorker_RunOnce_DoesNotScanPostsForAggregateRepair(t *testing.T) {
+	posts := &mockReconcilePostStore{}
+	w := NewReconcileWorker(
+		posts,
+		nil,
+		services.NewCapabilityRouter(),
+		nil,
+		"test-worker-id",
+		nil,
+		time.Hour,
+		nil,
+	)
+
+	w.runOnce(context.Background())
+
+	posts.mu.Lock()
+	listCalls := posts.dirtyPostIDsCalls
+	repairCalls := posts.repairDirtyPostCalls
+	posts.mu.Unlock()
+	if listCalls != 1 || repairCalls != 0 {
+		t.Fatalf("dirty repair calls = list:%d repair:%d, want list:1 repair:0", listCalls, repairCalls)
 	}
 }
 

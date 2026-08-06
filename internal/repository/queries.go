@@ -164,6 +164,18 @@ const qSelectTargetStatusByID = `SELECT status FROM post_targets WHERE id = $1`
 
 const qSelectTargetIDsByPost = `SELECT id FROM post_targets WHERE post_id = $1 ORDER BY id ASC FOR UPDATE`
 
+const qSelectDirtyAggregatePostIDs = `SELECT post_id
+ FROM post_aggregate_repair_queue
+ ORDER BY queued_at ASC, post_id ASC
+ LIMIT $1`
+
+const qLockDirtyAggregatePost = `SELECT post_id
+ FROM post_aggregate_repair_queue
+ WHERE post_id = $1
+ FOR UPDATE`
+
+const qDeleteDirtyAggregatePost = `DELETE FROM post_aggregate_repair_queue WHERE post_id = $1`
+
 const qSelectExpiredLeaseTargets = `SELECT id, post_id FROM post_targets
  WHERE leased_until IS NOT NULL
    AND leased_until <= NOW()
