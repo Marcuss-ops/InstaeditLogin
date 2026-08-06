@@ -79,9 +79,9 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 
 	// Read body bytes once for idempotency hashing, then decode from
 	// the bytes slice so the original payload can be replayed exactly.
-	bodyBytes, bodyErr := idempotencyReadBody(req)
+	bodyBytes, bodyErr := idempotencyReadBody(w, req)
 	if bodyErr != nil {
-		writeError(w, http.StatusBadRequest, "request body unreadable: "+bodyErr.Error())
+		writeRequestBodyError(w, bodyErr)
 		return
 	}
 	hash := idempotencyHash(bodyBytes)
@@ -361,8 +361,10 @@ func (r *Router) importDriveFileToAsset(
 		writeError(w, http.StatusBadGateway, "failed to download drive file: "+err.Error())
 		return nil, false
 	}
-	defer downloadResp.Body.Close()
-
+	// The verification reader becomes the sole owner of the Drive
+	// response body once it is constructed; its idempotent Close is
+	// deferred below and covers success and every later error path.
+	//
 	// Task 4/10: wrap the Drive download body in the GENERIC
 	// ArtifactVerificationPolicy reader so the API path enforces
 	// the same size + SHA + MIME invariants as the worker pull-path.
@@ -376,10 +378,12 @@ func (r *Router) importDriveFileToAsset(
 	}
 	verifyReader, err := worker.NewArtifactVerifyReader(downloadResp.Body, policy)
 	if err != nil {
+		_ = downloadResp.Body.Close()
 		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
 		writeError(w, http.StatusInternalServerError, "failed to wrap drive body for verification: "+err.Error())
 		return nil, false
 	}
+	defer verifyReader.Close()
 
 	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPut, grant.UploadURL, verifyReader)
 	if err != nil {
@@ -400,10 +404,11 @@ func (r *Router) importDriveFileToAsset(
 		return nil, false
 	}
 	uploadResp.Body.Close()
-	// verifyReader.Close() is covered by `defer downloadResp.Body.Close()`
-	// (the wrapped readcloser's Close chains through to the underlying).
-	// We dropped the redundant explicit Close call to keep the defer as
-	// the single source of truth.
+	if err := verifyReader.Close(); err != nil {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		writeError(w, http.StatusBadGateway, "failed to close drive stream: "+err.Error())
+		return nil, false
+	}
 	if uploadResp.StatusCode >= 300 {
 		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
 		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, reason, errors.New(reason))

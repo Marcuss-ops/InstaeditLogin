@@ -37,10 +37,8 @@ package api
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -73,46 +71,6 @@ const (
 // the DB column doesn't need a VARCHAR hint and so a buggy client
 // doesn't blow up the cache by writing a multi-MB key.
 const idempotencyKeyMaxLen = 255
-
-// idempotencyReadBody reads the request body bytes and rewinds
-// req.Body so downstream readers (json.NewDecoder, etc.) see the
-// same payload. Always returns the bytes — callers compute the
-// hash themselves with idempotencyHash below.
-//
-// Errors are wrapped so the handler can map "client sent a body we
-// can't read" to 400 (network read failures during request parsing
-// are almost always client-side: truncated upload, broken chunked
-// transfer).
-func idempotencyReadBody(req *http.Request) ([]byte, error) {
-	if req.Body == nil {
-		return nil, nil
-	}
-	bodyBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read request body: %w", err)
-	}
-	_ = req.Body.Close()
-	// Hand the body back to the handler via NopCloser so json.NewDecoder
-	// (or any other Reader-based parser) can read it again. We do NOT
-	// re-attach to req.Body using the original implementation because
-	// net/http expects Body to be closed; NopCloser + bytes.NewReader
-	// is the canonical pattern.
-	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	return bodyBytes, nil
-}
-
-// idempotencyHash computes the SHA-256 of bodyBytes and returns
-// the fixed 32-byte digest. Stable across processes (no salt) so
-// the lookup equality check works. An empty body yields the SHA-256
-// of "" — a sane value, but the handler should normally have
-// produced a non-empty body before reaching the cache layer.
-func idempotencyHash(bodyBytes []byte) []byte {
-	if len(bodyBytes) == 0 {
-		return nil
-	}
-	hash := sha256.Sum256(bodyBytes)
-	return hash[:]
-}
 
 // idempotencyLookup consults the cache for (workspaceID, key). On
 // hit+match it returns idempotencyReplay + the cached record; on

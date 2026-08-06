@@ -71,9 +71,9 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	if err != nil {
 		return fmt.Errorf("open source: %w", err)
 	}
-	defer srcBody.Close()
 
 	if sizeBytes <= 0 {
+		_ = srcBody.Close()
 		return fmt.Errorf("source returned unknown or zero size for job %d; cannot import", job.ID)
 	}
 
@@ -122,8 +122,10 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	}
 	verifyReader, err := NewArtifactVerifyReader(srcBody, policy)
 	if err != nil {
+		_ = srcBody.Close()
 		return fmt.Errorf("wrap body for verification: %w", err)
 	}
+	defer verifyReader.Close()
 	srcBody = verifyReader // S3 PUT now reads via the verify wrapper
 
 	// Build S3 key and create pending media asset.
@@ -174,13 +176,20 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 		return fmt.Errorf("upload to s3: %w", err)
 	}
 	uploadResp.Body.Close()
+	// The HTTP client has drained the verifier. Close it before Verify
+	// so the reader's documented lifecycle is explicit rather than
+	// relying only on the deferred cleanup.
+	if err := verifyReader.Close(); err != nil {
+		w.markAssetFailed(job.ID, asset.ID, err.Error(), err)
+		return fmt.Errorf("close source stream: %w", err)
+	}
 
 	// POST-stream artifact verification (Task 4/10). MUST run AFTER
 	// s3Client.Do has fully drained srcBody + BEFORE MarkReady /
 	// MarkIngested so a SHA or size mismatch fails loud before the
 	// row transitions to ready_to_publish. Both Velox and Drive
-	// paths share this single gate. The defer srcBody.Close() above
-	// covers verifyReader.Close() since `srcBody = verifyReader`.
+	// paths share this single gate. verifyReader owns and closes the
+	// source body for the remainder of this function.
 	if vErr := verifyReader.Verify(); vErr != nil {
 		w.markAssetFailed(job.ID, asset.ID, vErr.Error(), vErr)
 		return fmt.Errorf("artifact verification: %w", vErr)

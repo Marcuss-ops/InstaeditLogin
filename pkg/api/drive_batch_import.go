@@ -109,9 +109,9 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 
 	// Read body bytes once + hash before json.Decode. Rewinds req.Body
 	// so any downstream json.NewDecoder sees the same payload.
-	bodyBytes, bodyErr := idempotencyReadBody(req)
+	bodyBytes, bodyErr := idempotencyReadBody(w, req)
 	if bodyErr != nil {
-		writeError(w, http.StatusBadRequest, "request body unreadable: "+bodyErr.Error())
+		writeRequestBodyError(w, bodyErr)
 		return
 	}
 	hash := idempotencyHash(bodyBytes)

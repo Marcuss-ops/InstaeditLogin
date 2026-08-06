@@ -51,8 +51,13 @@ func (r *Router) handleDriveImportAsync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
+	bodyBytes, bodyErr := idempotencyReadBody(w, req)
+	if bodyErr != nil {
+		writeRequestBodyError(w, bodyErr)
+		return
+	}
 	var body DriveImportAsyncRequest
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}

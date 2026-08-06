@@ -257,9 +257,9 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 	// spans the operator-relevant fields (matches the existing
 	// endpoint's contract — accidental double-paste of
 	// page_token should produce the SAME batch).
-	bodyBytes, bodyErr := idempotencyReadBody(req)
+	bodyBytes, bodyErr := idempotencyReadBody(w, req)
 	if bodyErr != nil {
-		writeError(w, http.StatusBadRequest, "request body unreadable: "+bodyErr.Error())
+		writeRequestBodyError(w, bodyErr)
 		return
 	}
 	hash := idempotencyHash(bodyBytes)

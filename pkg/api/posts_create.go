@@ -23,9 +23,9 @@ import (
 func decodeCreatePostRequest(w http.ResponseWriter, req *http.Request) (CreatePostRequest, []byte, bool) {
 	// Read body bytes once + compute hash. Rewinds req.Body so any
 	// downstream json.NewDecoder(req.Body) sees the same payload.
-	bodyBytes, bodyErr := idempotencyReadBody(req)
+	bodyBytes, bodyErr := idempotencyReadBody(w, req)
 	if bodyErr != nil {
-		writeError(w, http.StatusBadRequest, "request body unreadable: "+bodyErr.Error())
+		writeRequestBodyError(w, bodyErr)
 		return CreatePostRequest{}, nil, true
 	}
 
@@ -35,10 +35,6 @@ func decodeCreatePostRequest(w http.ResponseWriter, req *http.Request) (CreatePo
 	// concerns are moot.
 	var body CreatePostRequest
 	if err := json.Unmarshal(bodyBytes, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return CreatePostRequest{}, nil, true
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return CreatePostRequest{}, nil, true
 	}
