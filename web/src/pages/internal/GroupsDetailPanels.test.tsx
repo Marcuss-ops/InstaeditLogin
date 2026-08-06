@@ -49,6 +49,7 @@ describe("GroupDetailPanel batch settings", () => {
           onCreateSubgroup={() => {}}
           onDeleteGroup={() => {}}
           onSaved={() => {}}
+          onRename={() => {}}
         />
       </MemoryRouter>,
     );
@@ -78,6 +79,7 @@ describe("GroupDetailPanel batch settings", () => {
           onCreateSubgroup={() => {}}
           onDeleteGroup={() => {}}
           onSaved={onSaved}
+          onRename={() => {}}
         />
       </MemoryRouter>,
     );
@@ -94,6 +96,30 @@ describe("GroupDetailPanel batch settings", () => {
     expect(screen.queryByRole("button", { name: /Rimuovi channel-two dalla cartella/i })).not.toBeInTheDocument();
   });
 
+  it("renames the group inline", async () => {
+    const onRename = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <MemoryRouter>
+        <GroupDetailPanel
+          group={group}
+          onPickAccount={() => {}}
+          onCreateSubgroup={() => {}}
+          onDeleteGroup={() => {}}
+          onSaved={() => {}}
+          onRename={onRename}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    const input = screen.getByRole("textbox", { name: "Nome del gruppo" });
+    fireEvent.change(input, { target: { value: "YouTube WWE" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salva" }));
+
+    await waitFor(() => expect(onRename).toHaveBeenCalledWith("YouTube WWE"));
+  });
+
   it("saves language and remaining membership settings", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
@@ -107,6 +133,7 @@ describe("GroupDetailPanel batch settings", () => {
           onCreateSubgroup={() => {}}
           onDeleteGroup={() => {}}
           onSaved={onSaved}
+          onRename={() => {}}
         />
       </MemoryRouter>,
     );

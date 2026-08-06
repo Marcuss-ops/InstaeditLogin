@@ -16,7 +16,10 @@ export function useGroupsData() {
     const navigate = useNavigate();
     const { groupId: routeGroupId } = useParams<{ groupId?: string }>();
     const abortRef = useRef<AbortController | null>(null);
+    const assignmentQueueRef = useRef(Promise.resolve());
+    const stateRef = useRef<FetchState>({ kind: "loading" });
     const [state, setState] = useState<FetchState>({ kind: "loading" });
+    stateRef.current = state;
     const [selectedGroupId, setSelectedGroupIdState] = useState<number | null>(() => {
       if (typeof window === "undefined") return null;
       const stored = Number(window.localStorage.getItem(LAST_GROUP_KEY));
@@ -150,62 +153,90 @@ export function useGroupsData() {
       return state.accounts.find((a) => a.id === selectedAccountId) ?? null;
     }, [state, selectedAccountId]);
   
-    // Publishable accounts that are not members of ANY group. Derived from
-    // the raw membership ids so a non-publishable member still counts as
-    // "grouped" (and keeps its group out of the ungrouped pool).
-    const ungroupedAccounts = useMemo(() => {
+    // The Groups page is specifically used to organize YouTube publishing
+    // destinations. Keep every active YouTube channel in the source tray,
+    // including channels already assigned to a group: a channel may belong to
+    // more than one group and users need to be able to add it to another one
+    // without first removing it from its current group.
+    const availableYouTubeAccounts = useMemo(() => {
       if (state.kind !== "ready") return [];
-      const grouped = new Set<number>();
-      for (const ids of state.groupAccountIDs.values()) {
-        for (const id of ids) grouped.add(id);
-      }
-      return state.accounts.filter((account) => !grouped.has(account.id));
+      return state.accounts.filter((account) => account.platform === "youtube");
     }, [state]);
 
-    // Assigns a channel to a group. Optimistically moves the account into
-    // the group's resolved map so the UI updates instantly, then persists
-    // via PUT (wipe+re-insert with the FULL raw id list) and finally
-    // reconciles against the server with a silent reload.
-    const assignAccountToGroup = useCallback(async (accountId: number, groupId: number) => {
-      if (state.kind !== "ready") return;
-      const account = state.accounts.find((a) => a.id === accountId);
-      if (!account) return;
-      setBusyAccountId(accountId);
-      // Compute the merged raw id list inside the functional update so the
-      // optimistic UI and the PUT body always agree — even for rapid
-      // successive assignments to the same group. The endpoint has
-      // wipe+re-insert semantics, so a stale body would silently drop a
-      // just-added member.
-      let nextIDs: number[] | null = null;
-      setState((prev) => {
-        if (prev.kind !== "ready") return prev;
-        const current = prev.groupAccountIDs.get(groupId) ?? [];
-        if (current.includes(accountId)) return prev;
-        nextIDs = [...current, accountId];
-        const accountsByGroup = new Map(prev.accountsByGroup);
-        accountsByGroup.set(groupId, [...(accountsByGroup.get(groupId) ?? []), account]);
-        const groupAccountIDs = new Map(prev.groupAccountIDs);
-        groupAccountIDs.set(groupId, nextIDs);
-        return { ...prev, accountsByGroup, groupAccountIDs };
-      });
-      if (!nextIDs) {
-        setBusyAccountId(null);
-        return;
-      }
-      let persisted = false;
-      try {
-        const response = await authedFetch(`/api/v1/groups/${groupId}/accounts`, {
-          method: "PUT",
-          body: JSON.stringify({ account_ids: nextIDs }),
+    // Membership writes use replace-all semantics, so every operation is
+    // serialized and always sends the complete raw ID list. This prevents a
+    // fast second action from erasing the first one while keeping hidden,
+    // non-publishable memberships intact.
+    const updateGroupMembership = useCallback((
+      groupId: number,
+      accountIDsOrUpdater: number[] | ((currentIDs: number[]) => number[]),
+      busyAccountId?: number,
+    ) => {
+      const operation = assignmentQueueRef.current.then(async () => {
+        abortRef.current?.abort();
+        const currentState = stateRef.current;
+        if (currentState.kind !== "ready") return;
+        if (busyAccountId != null && !currentState.accounts.some((account) => account.id === busyAccountId)) return;
+
+        const currentIDs = currentState.groupAccountIDs.get(groupId) ?? [];
+        const requestedIDs = typeof accountIDsOrUpdater === "function"
+          ? accountIDsOrUpdater(currentIDs)
+          : accountIDsOrUpdater;
+        const nextIDs = Array.from(new Set(requestedIDs.filter((id) => Number.isInteger(id) && id > 0)));
+        if (busyAccountId != null && currentIDs.includes(busyAccountId) && nextIDs.length === currentIDs.length && nextIDs.every((id, index) => id === currentIDs[index])) return;
+        if (busyAccountId != null) setBusyAccountId(busyAccountId);
+
+        const accountIndex = new Map(currentState.accounts.map((account) => [account.id, account]));
+        const resolvedAccounts = nextIDs
+          .map((accountID) => accountIndex.get(accountID))
+          .filter((account): account is PlatformAccount => account != null);
+        setState((prev) => {
+          if (prev.kind !== "ready") return prev;
+          const accountsByGroup = new Map(prev.accountsByGroup);
+          accountsByGroup.set(groupId, resolvedAccounts);
+          const groupAccountIDs = new Map(prev.groupAccountIDs);
+          groupAccountIDs.set(groupId, nextIDs);
+          return { ...prev, accountsByGroup, groupAccountIDs };
         });
-        persisted = response.ok;
-      } finally {
-        // Successful write → silent reconcile; failure → non-silent reload
-        // to revert the optimistic move and surface the error state.
-        await load(!persisted);
-        setBusyAccountId(null);
-      }
-    }, [state, load]);
+
+        let persisted = false;
+        try {
+          const response = await authedFetch(`/api/v1/groups/${groupId}/accounts`, {
+            method: "PUT",
+            body: JSON.stringify({ account_ids: nextIDs }),
+          });
+          persisted = response.ok;
+        } finally {
+          // Successful write → silent reconcile; failure → full reload to
+          // revert the optimistic membership and surface the error state.
+          await load(!persisted);
+          if (busyAccountId != null) setBusyAccountId(null);
+        }
+      });
+      assignmentQueueRef.current = operation.catch(() => undefined);
+      return operation;
+    }, [load]);
+
+    const assignAccountToGroup = useCallback((accountId: number, groupId: number) => (
+      updateGroupMembership(groupId, (currentIDs) => (
+        currentIDs.includes(accountId) ? currentIDs : [...currentIDs, accountId]
+      ), accountId)
+    ), [updateGroupMembership]);
+
+    const setGroupAccounts = useCallback((
+      groupId: number,
+      accountIDsOrUpdater: number[] | ((currentIDs: number[]) => number[]),
+    ) => updateGroupMembership(groupId, accountIDsOrUpdater), [updateGroupMembership]);
+
+    const renameGroup = useCallback(async (groupId: number, name: string) => {
+      const trimmedName = name.trim();
+      if (!trimmedName) return;
+      await authedFetch(`/api/v1/groups/${groupId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: trimmedName }),
+      });
+      await load();
+    }, [load]);
 
     const handleCreateGroup = useCallback(async (parentId?: number) => {
       if (!newGroupName.trim() || state.kind !== "ready") return;
@@ -241,7 +272,9 @@ export function useGroupsData() {
     load,
     handleCreateGroup,
     assignAccountToGroup,
-    ungroupedAccounts,
+    setGroupAccounts,
+    renameGroup,
+    availableYouTubeAccounts,
     tree,
     selectedGroup,
     selectedAccount,

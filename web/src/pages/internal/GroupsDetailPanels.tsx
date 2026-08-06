@@ -40,14 +40,19 @@ export function GroupDetailPanel({
   onCreateSubgroup,
   onDeleteGroup,
   onSaved,
+  onRename,
 }: {
   group: TreeNode;
   onPickAccount: (id: number) => void;
   onCreateSubgroup: (name: string) => void;
   onDeleteGroup: () => void;
   onSaved: () => void | Promise<void>;
+  onRename?: (name: string) => void | Promise<void>;
 }) {
   const [subName, setSubName] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [groupName, setGroupName] = useState(group.name);
+  const [savingName, setSavingName] = useState(false);
   const [languages, setLanguages] = useState<Record<number, string>>(() => Object.fromEntries(group.accounts.map((account) => [account.id, account.language ?? ""])));
   const [savingLanguageId, setSavingLanguageId] = useState<number | null>(null);
   const [languageError, setLanguageError] = useState<Record<number, string>>({});
@@ -55,6 +60,8 @@ export function GroupDetailPanel({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   useEffect(() => {
+    setGroupName(group.name);
+    setEditingName(false);
     setLanguages((current) => {
       const next = { ...current };
       for (const account of group.accounts) {
@@ -152,11 +159,50 @@ export function GroupDetailPanel({
   return (
     <div>
       <div className="flex items-start justify-between gap-3 mb-5">
-        <div>
-          <h2 className="text-[18px] font-bold text-white flex items-center gap-2">
-            <Folder size={20} className="text-amber-300/80" />
-            {group.name}
-          </h2>
+        <div className="min-w-0 flex-1">
+          {editingName ? (
+            <form
+              className="flex max-w-xl items-center gap-2"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                const nextName = groupName.trim();
+                if (!nextName || nextName === group.name || savingName) {
+                  setEditingName(false);
+                  setGroupName(group.name);
+                  return;
+                }
+                setSavingName(true);
+                try {
+                  await onRename?.(nextName);
+                  setEditingName(false);
+                } catch {
+                  // authedFetch already surfaces the error via the global toast.
+                  setGroupName(group.name);
+                } finally {
+                  setSavingName(false);
+                }
+              }}
+            >
+              <Folder size={20} className="shrink-0 text-amber-300/80" />
+              <input
+                autoFocus
+                value={groupName}
+                onChange={(event) => setGroupName(event.target.value)}
+                aria-label="Nome del gruppo"
+                className="min-w-0 flex-1 rounded-lg border border-violet-400/50 bg-black/30 px-2.5 py-1.5 text-[16px] font-bold text-white outline-none focus:ring-2 focus:ring-violet-500/30"
+              />
+              <button type="submit" disabled={savingName || !groupName.trim()} className="rounded-lg bg-white px-2.5 py-1.5 text-[11px] font-bold text-black disabled:opacity-50">{savingName ? "Salvo…" : "Salva"}</button>
+              <button type="button" onClick={() => { setEditingName(false); setGroupName(group.name); }} disabled={savingName} className="rounded-lg p-1.5 text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Annulla rinomina"><XIcon /></button>
+            </form>
+          ) : (
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-[18px] font-bold text-white flex items-center gap-2">
+                <Folder size={20} className="shrink-0 text-amber-300/80" />
+                {group.name}
+              </h2>
+              {onRename ? <button type="button" onClick={() => setEditingName(true)} className="rounded-md p-1.5 text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Rinomina gruppo" title="Rinomina gruppo"><Pencil size={14} /></button> : null}
+            </div>
+          )}
           <p className="text-[12px] text-[#9aa0aa] mt-0.5">
             {visibleAccounts.length} accounts · {group.children.length} sub-folders
           </p>
@@ -365,6 +411,10 @@ export function AccountDetailPanel({
       </div>
     </div>
   );
+}
+
+function XIcon() {
+  return <span aria-hidden="true" className="text-[16px] leading-none">×</span>;
 }
 
 function StatMini({

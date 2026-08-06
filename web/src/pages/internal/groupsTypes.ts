@@ -14,6 +14,8 @@ export type PlatformAccount = {
   workspace_id?: number;
   platform: string;
   username: string;
+  /** Cached channel avatar returned by GET /api/v1/accounts. */
+  avatar_url?: string;
   platform_user_id: string;
   language?: string;
   status: string;

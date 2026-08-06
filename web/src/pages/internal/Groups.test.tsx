@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 const { groupsDataMock } = vi.hoisted(() => ({
@@ -21,16 +21,27 @@ const groupedAccount: PlatformAccount = {
   id: 1,
   platform: "youtube",
   username: "channel-grouped",
+  avatar_url: "https://cdn.example.test/grouped.png",
   platform_user_id: "UC-one",
   status: "active",
   created_at: "2026-01-01T00:00:00Z",
 };
 
-const ungroupedAccount: PlatformAccount = {
+const secondYouTubeAccount: PlatformAccount = {
   id: 2,
+  platform: "youtube",
+  username: "channel-available",
+  avatar_url: "https://cdn.example.test/available.png",
+  platform_user_id: "UC-two",
+  status: "active",
+  created_at: "2026-01-01T00:00:00Z",
+};
+
+const nonYouTubeAccount: PlatformAccount = {
+  id: 3,
   platform: "tiktok",
-  username: "channel-ungrouped",
-  platform_user_id: "TT-two",
+  username: "channel-tiktok",
+  platform_user_id: "TT-three",
   status: "active",
   created_at: "2026-01-01T00:00:00Z",
 };
@@ -49,7 +60,7 @@ function makeReadyState() {
   return {
     kind: "ready" as const,
     groups: [{ id: 7, workspace_id: 9, name: "WWE" }],
-    accounts: [groupedAccount, ungroupedAccount],
+    accounts: [groupedAccount, secondYouTubeAccount, nonYouTubeAccount],
     workspaceId: 9,
     accountsByGroup: new Map([[7, [groupedAccount]]]),
     groupAccountIDs: new Map([[7, [groupedAccount.id]]]),
@@ -69,7 +80,9 @@ function makeMock(overrides: Record<string, unknown> = {}) {
     load: vi.fn(),
     handleCreateGroup: vi.fn(),
     assignAccountToGroup: vi.fn(),
-    ungroupedAccounts: [ungroupedAccount],
+    setGroupAccounts: vi.fn().mockResolvedValue(undefined),
+    renameGroup: vi.fn().mockResolvedValue(undefined),
+    availableYouTubeAccounts: [groupedAccount, secondYouTubeAccount],
     tree,
     selectedGroup: null,
     selectedAccount: null,
@@ -96,20 +109,26 @@ describe("GroupsPage", () => {
     expect(screen.queryByTestId("groups-home-link")).not.toBeInTheDocument();
   });
 
-  it("renders ungrouped channels and hides channels already assigned to a group", () => {
+  it("renders every available YouTube channel and excludes other platforms", () => {
     renderPage();
 
-    expect(screen.getByTestId("ungrouped-section")).toBeInTheDocument();
-    expect(screen.getByText("channel-ungrouped")).toBeInTheDocument();
-    expect(screen.queryByText("channel-grouped")).not.toBeInTheDocument();
+    expect(screen.getByTestId("youtube-channels-tray")).toBeInTheDocument();
+    expect(screen.getByText("channel-grouped")).toBeInTheDocument();
+    expect(screen.getByText("channel-available")).toBeInTheDocument();
+    expect(screen.queryByText("channel-tiktok")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "channel-available avatar" })).toHaveAttribute(
+      "src",
+      "https://cdn.example.test/available.png",
+    );
   });
 
-  it("omits the ungrouped section when every channel is assigned", () => {
-    makeMock({ ungroupedAccounts: [] });
+  it("keeps the tray visible with an empty-state when no YouTube channels exist", () => {
+    makeMock({ availableYouTubeAccounts: [] });
 
     renderPage();
 
-    expect(screen.queryByTestId("ungrouped-section")).not.toBeInTheDocument();
+    expect(screen.getByTestId("youtube-channels-tray")).toBeInTheDocument();
+    expect(screen.getByText("Nessun canale YouTube disponibile")).toBeInTheDocument();
   });
 
   it("assigns a channel to a group when dropped onto a group chip", () => {
@@ -118,12 +137,12 @@ describe("GroupsPage", () => {
 
     renderPage();
 
-    const card = screen.getByText("channel-ungrouped").closest("[data-account-id]");
+    const card = screen.getByText("channel-available").closest("[data-account-id]");
     expect(card).not.toBeNull();
 
     const dataTransfer = {
       setData: vi.fn(),
-      getData: vi.fn(() => String(ungroupedAccount.id)),
+      getData: vi.fn(() => String(secondYouTubeAccount.id)),
       effectAllowed: "",
     };
     fireEvent.dragStart(card!, { dataTransfer });
@@ -132,21 +151,63 @@ describe("GroupsPage", () => {
     fireEvent.drop(screen.getByRole("button", { name: /WWE1 canali/ }), { dataTransfer });
 
     expect(assignAccountToGroup).toHaveBeenCalledTimes(1);
-    expect(assignAccountToGroup).toHaveBeenCalledWith(ungroupedAccount.id, 7);
+    expect(assignAccountToGroup).toHaveBeenCalledWith(secondYouTubeAccount.id, 7);
   });
 
-  it("assigns a channel to a group via the select fallback", () => {
-    const assignAccountToGroup = vi.fn();
-    makeMock({ assignAccountToGroup });
+  it("filters channels by search and selects visible channels for batch actions", () => {
+    const setGroupAccounts = vi.fn().mockResolvedValue(undefined);
+    makeMock({
+      selectedGroupId: 7,
+      selectedGroup: tree[0],
+      setGroupAccounts,
+    });
 
     renderPage();
 
-    fireEvent.change(
-      screen.getByLabelText("Assegna channel-ungrouped a una cartella"),
-      { target: { value: String(7) } },
-    );
+    const tray = screen.getByTestId("youtube-channels-tray");
+    fireEvent.change(within(tray).getByRole("textbox", { name: "Cerca canali" }), { target: { value: "UC-two" } });
+    expect(within(tray).getByText("channel-available")).toBeInTheDocument();
+    expect(within(tray).queryByText("channel-grouped")).not.toBeInTheDocument();
 
-    expect(assignAccountToGroup).toHaveBeenCalledTimes(1);
-    expect(assignAccountToGroup).toHaveBeenCalledWith(ungroupedAccount.id, 7);
+    fireEvent.change(within(tray).getByRole("textbox", { name: "Cerca canali" }), { target: { value: "available" } });
+    expect(within(tray).getByText("channel-available")).toBeInTheDocument();
+    expect(within(tray).queryByText("channel-grouped")).not.toBeInTheDocument();
+
+    fireEvent.click(within(tray).getByRole("button", { name: "Seleziona channel-available" }));
+    expect(within(tray).getByText(/1 canali selezionati/)).toBeInTheDocument();
+    fireEvent.click(within(tray).getByRole("button", { name: "Aggiungi al gruppo" }));
+    expect(setGroupAccounts).toHaveBeenCalledWith(7, expect.any(Function));
+    const membershipUpdater = setGroupAccounts.mock.calls[0]?.[1] as (currentIDs: number[]) => number[];
+    expect(membershipUpdater([groupedAccount.id])).toEqual([groupedAccount.id, secondYouTubeAccount.id]);
+  });
+
+  it("filters channels assigned to any group versus unassigned channels", () => {
+    makeMock({
+      selectedGroupId: 7,
+      state: {
+        ...makeReadyState(),
+        groupAccountIDs: new Map([[7, [groupedAccount.id]]]),
+      },
+      selectedGroup: tree[0],
+    });
+
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+    const filter = within(tray).getByRole("combobox", { name: "Filtra canali" });
+
+    fireEvent.change(filter, { target: { value: "assigned" } });
+    expect(within(tray).getByText("channel-grouped")).toBeInTheDocument();
+    expect(within(tray).queryByText("channel-available")).not.toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: "unassigned" } });
+    expect(within(tray).getByText("channel-available")).toBeInTheDocument();
+    expect(within(tray).queryByText("channel-grouped")).not.toBeInTheDocument();
+  });
+
+  it("removes the folder selector so assignment uses drag and drop", () => {
+    renderPage();
+
+    expect(screen.queryByText("Cartella…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Cartella" })).not.toBeInTheDocument();
   });
 });
