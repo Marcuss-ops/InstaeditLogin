@@ -87,8 +87,14 @@ func (r *Router) handleCreateVeloxProjectBridge(w http.ResponseWriter, req *http
 		return
 	}
 	var body createVeloxProjectBridgeRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1<<20)).Decode(&body); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid Velox project bridge body")
+		return
+	}
+	if body.ContractVersion != models.ProjectBridgeContractVersion {
+		writeError(w, http.StatusUnprocessableEntity, "unsupported project bridge contract_version")
 		return
 	}
 	if body.WorkspaceID <= 0 {
@@ -107,6 +113,7 @@ func (r *Router) handleCreateVeloxProjectBridge(w http.ResponseWriter, req *http
 		ChannelID:         body.ChannelID,
 		VideoID:           body.VideoID,
 		Language:          body.Language,
+		ContractVersion:   models.ProjectBridgeContractVersion,
 	}
 	if err := bridge.NormalizeAndValidate(); err != nil {
 		mapVeloxProjectBridgeError(w, errors.Join(repository.ErrVeloxProjectBridgeInvalid, err))
@@ -117,7 +124,7 @@ func (r *Router) handleCreateVeloxProjectBridge(w http.ResponseWriter, req *http
 		return
 	} else if existing != nil {
 		if bridgeContextMatches(existing, bridge) {
-			writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{Bridge: *existing, EditorURL: r.editorURLForProject(existing.VeloxProjectID)})
+			writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *existing, EditorURL: r.editorURLForProject(existing.VeloxProjectID)})
 			return
 		}
 		mapVeloxProjectBridgeError(w, repository.ErrVeloxProjectBridgeConflict)
@@ -129,14 +136,14 @@ func (r *Router) handleCreateVeloxProjectBridge(w http.ResponseWriter, req *http
 		// idempotent success when its context matches this request.
 		if errors.Is(err, repository.ErrVeloxProjectBridgeConflict) {
 			if existing, findErr := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID); findErr == nil && bridgeContextMatches(existing, bridge) {
-				writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{Bridge: *existing, EditorURL: r.editorURLForProject(existing.VeloxProjectID)})
+				writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *existing, EditorURL: r.editorURLForProject(existing.VeloxProjectID)})
 				return
 			}
 		}
 		mapVeloxProjectBridgeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, veloxProjectBridgeResponse{Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.VeloxProjectID)})
+	writeJSON(w, http.StatusCreated, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.VeloxProjectID)})
 }
 
 func (r *Router) handleGetVeloxProjectBridge(w http.ResponseWriter, req *http.Request) {
@@ -164,7 +171,7 @@ func (r *Router) handleGetVeloxProjectBridge(w http.ResponseWriter, req *http.Re
 		writeError(w, http.StatusNotFound, "project bridge not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.VeloxProjectID)})
+	writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.VeloxProjectID)})
 }
 
 func (r *Router) handleDeleteVeloxProjectBridge(w http.ResponseWriter, req *http.Request) {

@@ -11,12 +11,14 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		AI: AIConfig{
 			NVIDIAAPIKey: getEnv("NVIDIA_API_KEY", ""),
+			NVIDIAModel:  getEnv("NVIDIA_MODEL", ""),
 		},
 		Velox: VeloxConfig{
-			VeloxAPIToken:         getEnv("VELOX_API_TOKEN", ""),
-			VeloxControlURL:       getEnv("VELOX_CONTROL_URL", ""),
-			VeloxControlJWTSecret: getEnv("VELOX_CONTROL_JWT_SECRET", ""),
-			VeloxWebhookSecret:    getEnv("VELOX_WEBHOOK_SECRET", ""),
+			ProjectBridgeContractVersion: getEnv("VELOX_PROJECT_BRIDGE_CONTRACT_VERSION", ProjectBridgeContractVersion),
+			VeloxAPIToken:                getEnv("VELOX_API_TOKEN", ""),
+			VeloxControlURL:              getEnv("VELOX_CONTROL_URL", ""),
+			VeloxControlJWTSecret:        getEnv("VELOX_CONTROL_JWT_SECRET", ""),
+			VeloxWebhookSecret:           getEnv("VELOX_WEBHOOK_SECRET", ""),
 		},
 		Monitoring: MonitoringConfig{
 			MetricsBasicAuthUser: getEnv("METRICS_BASIC_AUTH_USER", ""),
@@ -72,7 +74,7 @@ func Load() (*Config, error) {
 			AdminInviteToken: getEnv("ADMIN_INVITE_TOKEN", ""),
 		},
 		HTTP: HTTPConfig{
-			FrontendURL:        getEnv("FRONTEND_URL", ""),
+			FrontendURL: getEnv("FRONTEND_URL", ""),
 			// INSTAEDITOR_URL is canonical; EDITOR_URL remains a
 			// backward-compatible fallback for existing deployments.
 			EditorURL:          getEnvWithFallback("INSTAEDITOR_URL", "EDITOR_URL"),
@@ -117,20 +119,21 @@ func Load() (*Config, error) {
 			// env-driven. Defaults (30 days / 7 days) match the user-facing
 			// spec; surface them via the Worker's struct fields so the HTTP
 			// layer + worker pool read the same source of truth.
-			PublishHorizonDays:              getEnvInt("PUBLISH_HORIZON_DAYS", 30),
-			VideoRetentionBufferDays:        getEnvInt("VIDEO_RETENTION_BUFFER_DAYS", 7),
-			PublishWorkerIntervalSeconds:    getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
-			ReconcileWorkerIntervalSeconds:  getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
-			WebhookWorkerIntervalSeconds:    getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
-			WebhookWorkerConcurrency:        getEnvInt("WEBHOOK_WORKER_CONCURRENCY", 4),
-			WebhookHTTPTimeoutSeconds:       getEnvInt("WEBHOOK_HTTP_TIMEOUT_SECONDS", 30),
-			WebhookLeaseTTLSeconds:          getEnvInt("WEBHOOK_LEASE_TTL_SECONDS", 60),
-			WebhookHeartbeatIntervalSeconds: getEnvInt("WEBHOOK_HEARTBEAT_INTERVAL_SECONDS", 20),
-			SessionCleanupIntervalSeconds:   getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
-			AssetCleanupIntervalSeconds:     getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
-			UploadWorkerIntervalSeconds:     getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
-			RenderMaxConcurrency:            getEnvInt("RENDER_MAX_CONCURRENCY", 1),
-			FFmpegThreads:                   getEnvInt("FFMPEG_THREADS", 1),
+			PublishHorizonDays:                      getEnvInt("PUBLISH_HORIZON_DAYS", 30),
+			VideoRetentionBufferDays:                getEnvInt("VIDEO_RETENTION_BUFFER_DAYS", 7),
+			PublishWorkerIntervalSeconds:            getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
+			MetadataGenerationWorkerIntervalSeconds: getEnvInt("METADATA_GENERATION_WORKER_INTERVAL_SECONDS", 5),
+			ReconcileWorkerIntervalSeconds:          getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
+			WebhookWorkerIntervalSeconds:            getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
+			WebhookWorkerConcurrency:                getEnvInt("WEBHOOK_WORKER_CONCURRENCY", 4),
+			WebhookHTTPTimeoutSeconds:               getEnvInt("WEBHOOK_HTTP_TIMEOUT_SECONDS", 30),
+			WebhookLeaseTTLSeconds:                  getEnvInt("WEBHOOK_LEASE_TTL_SECONDS", 60),
+			WebhookHeartbeatIntervalSeconds:         getEnvInt("WEBHOOK_HEARTBEAT_INTERVAL_SECONDS", 20),
+			SessionCleanupIntervalSeconds:           getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+			AssetCleanupIntervalSeconds:             getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
+			UploadWorkerIntervalSeconds:             getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+			RenderMaxConcurrency:                    getEnvInt("RENDER_MAX_CONCURRENCY", 1),
+			FFmpegThreads:                           getEnvInt("FFMPEG_THREADS", 1),
 			// Token refresh sweep — 15-minute cadence + 4-month inactivity
 			// horizon (2 months of margin under Google's ~6-month
 			// refresh-token inactivity GC). Access tokens are short-lived,

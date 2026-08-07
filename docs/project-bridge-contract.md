@@ -5,6 +5,7 @@
 **Owner:** InstaEdit
 **Applies to:** InstaEditLogin, the separate editor application (`VeloxFrontend` or its successor), and the VeloxEditiingg render farm
 **Last updated:** 2026-08-07
+**Canonical API entry point:** `POST|GET|DELETE /api/v1/thumbnail-projects/{id}/velox-bridge`
 
 This document defines the smallest durable bridge between an InstaEdit
 project and an editor/render project in Velox. It is intentionally separate
@@ -63,11 +64,10 @@ VeloxFrontend   → editor UI and editor-native project state
 VeloxEditiingg  → headless render/job execution
 ```
 
-The service that creates or resolves `velox_project_id` MUST be the editor
-application owner. VeloxEditiingg MUST NOT invent a second editor-project
-identity. Until a standalone editor-project API exists, the current
-YouTube compatibility path is transitional and InstaEdit may generate the
-opaque project hint locally.
+The trusted editor application that creates or resolves `velox_project_id`
+MUST be the editor-project owner. The InstaEdit bridge route only persists or
+resolves that opaque reference. VeloxEditiingg MUST NOT invent a second
+editor-project identity or make InstaEdit depend on a Velox-owned catalog.
 
 Velox MUST NOT become the owner of an InstaEdit user, workspace, group,
 channel, video, OAuth grant or application permission.
@@ -94,13 +94,11 @@ project identifier MUST NOT be attached to another InstaEdit project.
   "project_id": "thumbproj_01JABC",
   "velox_project_id": "vx_01JXYZ",
   "workspace_id": 12,
-  "channel_context": {
-    "platform": "youtube",
-    "platform_account_id": 381,
-    "channel_id": "UCxxxxxxxx",
-    "video_id": "AbCd1234",
-    "language": "en"
-  }
+  "platform": "youtube",
+  "platform_account_id": 381,
+  "channel_id": "UCxxxxxxxx",
+  "video_id": "AbCd1234",
+  "language": "en"
 }
 ```
 
@@ -194,35 +192,36 @@ replacing the bridge target, not moving editor internals into InstaEdit.
 
 A `velox_project_id` MUST NOT be shared by unrelated InstaEdit projects.
 
-### 3.2 Create-or-open semantics
+### 3.2 Persist-or-resolve semantics
 
-The endpoint names in §5.1 and §5.2 describe the target API shape; they are
-not claims that those exact routes already exist. Until they are implemented,
-the existing YouTube editor-session routes remain compatibility routes.
+The canonical route is implemented by InstaEdit and persists or resolves an
+already-created opaque `velox_project_id`. It does not create, enumerate,
+import, delete or synchronize Velox editor projects. The trusted editor
+handoff is responsible for creating/resolving the editor project before the
+InstaEdit-owned relation is written.
 
-
-The create/open operation MUST be idempotent. The idempotency record MUST be
-owned by InstaEdit (the existing `idempotency_records` pattern or a dedicated
-bridge table), scoped at minimum by `(workspace_id, project_id)` and the
-request fingerprint. The persisted record must retain the winning
-`velox_project_id`; it must not rely on an in-memory cache.
+The operation MUST be idempotent. The bridge relation is owned by InstaEdit,
+scoped at minimum by `(workspace_id, project_id)`, and protected by the
+persisted uniqueness constraints. The winning `velox_project_id` is stored
+in the bridge; the operation does not rely on an in-memory cache.
 
 The operation is:
-
 
 1. Authenticate the caller in InstaEdit.
 2. Resolve and authorize `project_id` in its `workspace_id`.
 3. If the bridge already exists, return the existing `velox_project_id`.
-4. Otherwise create one Velox project and persist the returned
-   `velox_project_id` atomically with the InstaEdit bridge.
-5. Retrying the same request MUST NOT create a second editor project.
+4. Otherwise persist the supplied opaque `velox_project_id` as the sole
+   InstaEdit bridge relation.
+5. Retrying the same equivalent request MUST NOT create a second relation;
+   attempting to rebind the project to a different editor ID returns `409`.
 
-Idempotency outcomes are normative:
+Replay outcomes are normative:
 
-- same key + same request fingerprint → return the original bridge;
-- same key + different workspace/project/context fingerprint → `409`;
-- an editor project created before bridge persistence → retry by the same
-  idempotency key or reconcile it through an explicit orphan-recovery path;
+- an equivalent persisted relation → return the original bridge;
+- a different editor ID or context for the same project → `409`;
+- an editor project handed off before bridge persistence → retry the bridge
+  write with the same opaque ID or reconcile it through an explicit
+  orphan-recovery path;
 - an orphan MUST NOT be silently rebound to a different InstaEdit project.
 
 For the existing YouTube session path, the compatibility key is the
@@ -328,31 +327,35 @@ look up or reconstruct InstaEdit groups, channels, users or permissions.
 
 ## 5. API shape
 
-The following are proposed semantic operations, not currently guaranteed
-routes. An implementation may use different REST paths, but the semantics are
-fixed:
+The canonical bridge route is implemented at
+`/api/v1/thumbnail-projects/{id}/velox-bridge`. The following examples describe
+its semantics; the route does not create a Velox editor project.
 
-### 5.1 Create or resolve
+### 5.1 Persist or resolve the bridge
+
+The API represents `channel_context` as flat optional fields in the request
+and response (`platform`, `platform_account_id`, `channel_id`, `video_id`,
+and `language`). The logical context is still narrow and provider-scoped;
+it is not a catalog.
 
 ```http
-POST /api/v1/projects/{project_id}/velox-link
+POST /api/v1/thumbnail-projects/{id}/velox-bridge
 Authorization: Bearer <InstaEdit session>
 Content-Type: application/json
-Idempotency-Key: bridge-<workspace_id>-<project_id>
 ```
 
-Request:
+Request (the version is mandatory):
 
 ```json
 {
+  "contract_version": "instaedit.velox.project-bridge.v1",
   "workspace_id": 12,
-  "channel_context": {
-    "platform": "youtube",
-    "platform_account_id": 381,
-    "channel_id": "UCxxxxxxxx",
-    "video_id": "AbCd1234",
-    "language": "en"
-  }
+  "velox_project_id": "vx_01JXYZ",
+  "platform": "youtube",
+  "platform_account_id": 381,
+  "channel_id": "UCxxxxxxxx",
+  "video_id": "AbCd1234",
+  "language": "en"
 }
 ```
 
@@ -361,10 +364,10 @@ Response:
 ```json
 {
   "contract_version": "instaedit.velox.project-bridge.v1",
-  "project_id": "thumbproj_01JABC",
-  "velox_project_id": "vx_01JXYZ",
-  "workspace_id": 12,
-  "channel_context": {
+  "bridge": {
+    "project_id": "thumbproj_01JABC",
+    "velox_project_id": "vx_01JXYZ",
+    "workspace_id": 12,
     "platform": "youtube",
     "platform_account_id": 381,
     "channel_id": "UCxxxxxxxx",
@@ -376,14 +379,13 @@ Response:
 ```
 
 The existing `/api/v1/youtube/editor-sessions` endpoint is a compatibility
-entry point. It MUST preserve the same semantics: InstaEdit validates the
-YouTube context, then returns the stable `velox_project_id` for the active
-session.
+entry point. It MUST preserve the same authorization semantics, but it is not
+itself the canonical thumbnail-project bridge route.
 
 ### 5.2 Resolve by project
 
 ```http
-GET /api/v1/projects/{project_id}/velox-link
+GET /api/v1/thumbnail-projects/{id}/velox-bridge?workspace_id=12
 ```
 
 The response is workspace-scoped and MUST return `404` when the project is
@@ -499,14 +501,15 @@ bridge mechanism.
 The InstaEdit bridge write MUST be atomic from the application's perspective:
 
 ```text
-create/resolve Velox project
+receive the trusted Velox project reference
 persist InstaEdit bridge reference
 return editor URL
 ```
 
-If Velox creation succeeds but InstaEdit persistence fails, the operation MUST
-be retryable and MUST reconcile the orphan by idempotency key or a reviewed
-operator procedure. It MUST NOT create a second project on every retry.
+If the trusted editor handoff reports a Velox project before InstaEdit
+persistence succeeds, the bridge write MUST be retryable with the same opaque
+ID or handled through a reviewed orphan procedure. It MUST NOT silently
+rebind that editor project to a different InstaEdit project.
 
 If the InstaEdit project is deleted or permanently revoked, the bridge is no
 longer usable. The editor data may follow the editor retention policy; it is
@@ -548,7 +551,29 @@ The following are compatibility gaps, not permission to weaken this contract:
 Future implementation work MUST adapt these compatibility paths to this
 contract rather than introducing Velox-owned copies of InstaEdit data.
 
-## 10. Contract acceptance checklist
+## 10. Configuration and CI enforcement
+
+The canonical deployment configuration is:
+
+```env
+VELOX_PROJECT_BRIDGE_CONTRACT_VERSION=instaedit.velox.project-bridge.v1
+```
+
+InstaEdit and Velox fail closed when this value is unknown. The control JWT
+secret (`VELOX_CONTROL_JWT_SECRET` on InstaEdit and
+`INSTAEDIT_CONTROL_JWT_SECRET` on Velox) authenticates the request but does
+not grant catalog access. It is distinct from the reverse delivery token.
+
+The contract is enforced by:
+
+- InstaEdit bridge response/model tests for version, idempotency, ownership
+  and forbidden fields;
+- Velox scope and route tests requiring `project_id` for editor operations;
+- Dark Editor tests for opaque project handles and `410 Gone` global catalog
+  retirement;
+- the vendored OpenAPI synchronization check in VeloxFrontend.
+
+## 11. Contract acceptance checklist
 
 An implementation conforms only when all of the following are true:
 

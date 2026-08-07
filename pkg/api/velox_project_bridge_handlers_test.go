@@ -30,7 +30,7 @@ func bridgeRequest(t *testing.T, method, path, body string) (*httptest.ResponseR
 func TestVeloxProjectBridge_CreateAndReplayIsIdempotent(t *testing.T) {
 	store := &thumbnailProjectTestStore{project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft}}
 	r := bridgeTestRouter(t, store, 1)
-	body := `{"workspace_id":7,"velox_project_id":"vx_1"}`
+	body := `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_1"}`
 
 	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", body)
 	r.Setup().ServeHTTP(w, req)
@@ -53,7 +53,7 @@ func TestVeloxProjectBridge_ChangedReplayIs409(t *testing.T) {
 		bridge:  &models.VeloxProjectBridge{ProjectID: "thumbproj_1", WorkspaceID: 7, VeloxProjectID: "vx_old"},
 	}
 	r := bridgeTestRouter(t, store, 1)
-	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"workspace_id":7,"velox_project_id":"vx_new"}`)
+	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_new"}`)
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("changed bridge want 409, got %d: %s", w.Code, w.Body.String())
@@ -63,7 +63,7 @@ func TestVeloxProjectBridge_ChangedReplayIs409(t *testing.T) {
 func TestVeloxProjectBridge_CrossWorkspaceIs404(t *testing.T) {
 	store := &thumbnailProjectTestStore{project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft}}
 	r := bridgeTestRouter(t, store, 99)
-	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"workspace_id":7,"velox_project_id":"vx_1"}`)
+	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_1"}`)
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("foreign workspace want 404, got %d", w.Code)
@@ -73,7 +73,7 @@ func TestVeloxProjectBridge_CrossWorkspaceIs404(t *testing.T) {
 func TestVeloxProjectBridge_InvalidContextIs422(t *testing.T) {
 	store := &thumbnailProjectTestStore{project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft}}
 	r := bridgeTestRouter(t, store, 1)
-	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"workspace_id":7,"velox_project_id":"vx_1","channel_id":"UC123"}`)
+	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_1","channel_id":"UC123"}`)
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid context want 422, got %d: %s", w.Code, w.Body.String())
@@ -109,10 +109,30 @@ func TestVeloxProjectBridge_ConcurrentEquivalentConflictReReadsExisting(t *testi
 		createBridgeErr: repository.ErrVeloxProjectBridgeConflict,
 	}
 	r := bridgeTestRouter(t, store, 1)
-	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"workspace_id":7,"velox_project_id":"vx_1"}`)
+	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_1"}`)
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("equivalent concurrent conflict want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestVeloxProjectBridge_UnknownFieldsAreRejected(t *testing.T) {
+	store := &thumbnailProjectTestStore{project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft}}
+	r := bridgeTestRouter(t, store, 1)
+	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_1","group_id":9}`)
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("forbidden group_id want 400, got %d", w.Code)
+	}
+}
+
+func TestVeloxProjectBridge_UnknownContractVersionIs422(t *testing.T) {
+	store := &thumbnailProjectTestStore{project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft}}
+	r := bridgeTestRouter(t, store, 1)
+	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"future.v9","workspace_id":7,"velox_project_id":"vx_1"}`)
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown contract version want 422, got %d", w.Code)
 	}
 }
 
@@ -122,7 +142,7 @@ func TestVeloxProjectBridge_StoreConflictMaps409(t *testing.T) {
 		createBridgeErr: fmt.Errorf("%w: duplicate", repository.ErrVeloxProjectBridgeConflict),
 	}
 	r := bridgeTestRouter(t, store, 1)
-	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"workspace_id":7,"velox_project_id":"vx_1"}`)
+	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_1"}`)
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("conflict want 409, got %d: %s", w.Code, w.Body.String())

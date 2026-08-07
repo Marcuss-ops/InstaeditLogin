@@ -10,6 +10,12 @@ import (
 // so dev setups can wire the internal Velox routes (which need
 // VELOX_API_TOKEN) without also exposing the BFF control routes.
 func (c *Config) validateVelox() error {
+	if c.Velox.ProjectBridgeContractVersion == "" {
+		c.Velox.ProjectBridgeContractVersion = ProjectBridgeContractVersion
+	}
+	if c.Velox.ProjectBridgeContractVersion != ProjectBridgeContractVersion {
+		return fmt.Errorf("VELOX_PROJECT_BRIDGE_CONTRACT_VERSION must be %q", ProjectBridgeContractVersion)
+	}
 	hasControl := c.Velox.VeloxControlURL != "" || c.Velox.VeloxControlJWTSecret != ""
 	if hasControl {
 		if c.Velox.VeloxControlURL == "" {

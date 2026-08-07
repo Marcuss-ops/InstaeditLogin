@@ -1550,11 +1550,17 @@ paths:
     post:
       tags: [YouTube]
       operationId: generateYouTubeEditorMetadata
-      summary: Generate reviewable YouTube metadata with NVIDIA AI.
+      summary: Kick off async YouTube metadata generation with NVIDIA AI.
       description: |
-        Generates title, description, tags, language and translations for
-        operator review. This endpoint never publishes and returns 503 when
-        NVIDIA AI is not configured; manual metadata entry remains available.
+        ASYNC KICK-OFF (migration 113): validates the editor session and
+        workspace access, enqueues a metadata_generation_jobs row, and
+        returns 202 + `{job_id}` immediately — the POST never blocks on
+        the 60-180s NVIDIA call. Poll
+        `GET /api/v1/youtube/editor-sessions/generate-metadata/jobs/{job_id}`
+        until `status: "completed"` — the `result` then carries title,
+        description, tags, language and translations for operator review.
+        This endpoint never publishes and returns 503 when NVIDIA AI is
+        not configured; manual metadata entry remains available.
       security:
         - ApiKeyAuth: []
         - JwtCookie: []
@@ -1570,12 +1576,12 @@ paths:
             schema:
               $ref: '#/components/schemas/YouTubeEditorMetadataGenerateRequest'
       responses:
-        '200':
-          description: Generated metadata for operator review.
+        '202':
+          description: Job accepted for background generation; poll for the result.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/YouTubeEditorMetadataGenerateResponse'
+                $ref: '#/components/schemas/YouTubeEditorMetadataGenerateJobResponse'
         '400':
           $ref: '#/components/responses/BadRequestError'
         '401':
@@ -1584,11 +1590,43 @@ paths:
           $ref: '#/components/responses/NotFoundError'
         '500':
           $ref: '#/components/responses/InternalError'
-        '502':
-          description: NVIDIA returned an invalid response or failed upstream.
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+  /api/v1/youtube/editor-sessions/generate-metadata/jobs/{job_id}:
+    get:
+      tags: [YouTube]
+      operationId: pollYouTubeEditorMetadataGeneration
+      summary: Poll an async metadata generation job.
+      description: |
+        Returns the job status. When `status` is `completed`, `result`
+        carries the full generated metadata (the same shape the old
+        synchronous POST returned); when `failed`, `error_message`
+        explains why. Ownership is verified via the job's workspace —
+        non-owners get 404 (no existence leak).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Job state.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorMetadataGenerateJobPollResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
 
@@ -1688,7 +1726,7 @@ paths:
       description: |
         Same as `POST /api/v1/youtube/editor-sessions/{id}/publish`
         but keyed by `velox_project_id`, which is the only handle the
-        Dark Editor holds.
+        InstaEditor holds.
       operationId: publishYouTubeEditorSessionByProject
       security:
         - ApiKeyAuth: []
@@ -2202,6 +2240,99 @@ paths:
         '401': { $ref: '#/components/responses/UnauthorizedError' }
         '404': { $ref: '#/components/responses/NotFoundError' }
         '409': { $ref: '#/components/responses/ConflictError' }
+
+  # ────── InstaEdit → Velox project bridge ──────────────────────
+  # InstaEdit owns the application project, workspace, groups, channels
+  # and permissions. Velox receives only this opaque project reference
+  # and owns editor state/rendering. There is no reverse sync or Velox
+  # catalog endpoint in this contract.
+  /api/v1/thumbnail-projects/{id}/velox-bridge:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectVeloxBridgeCreate
+      summary: Persist or resolve the one-way project link to Velox.
+      description: |
+        Persists or reuses the single InstaEdit-owned relation between an
+        application project and an already-created opaque Velox editor
+        project. This endpoint does not create, enumerate, import, delete,
+        or synchronize Velox editor projects; the trusted editor handoff
+        supplies `velox_project_id`. The operation is idempotent for an
+        equivalent context and returns 409 if an existing relation would be
+        rebound. `group_id`, channel lists, membership snapshots, workspace
+        copies and synchronization directives are not part of this request.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VeloxProjectBridgeCreateRequest' }
+      responses:
+        '201':
+          description: New InstaEdit-owned bridge created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VeloxProjectBridgeResponse' }
+        '200':
+          description: Existing equivalent bridge returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VeloxProjectBridgeResponse' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409': { $ref: '#/components/responses/ConflictError' }
+        '422': { $ref: '#/components/responses/UnprocessableEntityError' }
+    get:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectVeloxBridgeGet
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      summary: Resolve the project link to Velox.
+      description: |
+        Returns the authorized project-scoped bridge. Cross-workspace,
+        missing, archived or inaccessible projects return 404. This is
+        not a Velox project catalog and does not enumerate groups/channels.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Authorized project bridge.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VeloxProjectBridgeResponse' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    delete:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectVeloxBridgeDelete
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      summary: Revoke the InstaEdit-side project link.
+      description: Deletes only the InstaEdit relationship. It does not
+        import, delete or synchronize Velox editor content.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '204': { description: InstaEdit bridge relation deleted. }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
 
   # ────── Media Library (live wizard step 3) ──────────────────────
   /api/v1/media:
@@ -2940,6 +3071,56 @@ components:
       required: [revision]
       properties:
         revision: { $ref: '#/components/schemas/ThumbnailProjectRevision' }
+    VeloxProjectBridgeCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [contract_version, workspace_id, velox_project_id]
+      properties:
+        contract_version:
+          type: string
+          enum: [instaedit.velox.project-bridge.v1]
+        workspace_id: { type: integer, format: int64, minimum: 1 }
+        velox_project_id:
+          type: string
+          minLength: 1
+          maxLength: 126
+        platform: { type: string, minLength: 1 }
+        platform_account_id: { type: integer, format: int64, minimum: 1 }
+        channel_id: { type: string, minLength: 1 }
+        video_id: { type: string, minLength: 1 }
+        language: { type: string, minLength: 1 }
+      description: |
+        Minimal one-way context. Group identifiers, channel arrays,
+        membership snapshots, copied workspaces and sync directives are
+        forbidden and rejected by the server.
+    VeloxProjectBridge:
+      type: object
+      required: [project_id, velox_project_id, workspace_id]
+      additionalProperties: false
+      properties:
+        project_id: { type: string }
+        velox_project_id:
+          type: string
+          minLength: 1
+          maxLength: 126
+        workspace_id: { type: integer, format: int64, minimum: 1 }
+        platform: { type: string }
+        platform_account_id: { type: integer, format: int64, minimum: 1 }
+        channel_id: { type: string }
+        video_id: { type: string }
+        language: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    VeloxProjectBridgeResponse:
+      type: object
+      required: [contract_version, bridge, editor_url]
+      additionalProperties: false
+      properties:
+        contract_version:
+          type: string
+          enum: [instaedit.velox.project-bridge.v1]
+        bridge: { $ref: '#/components/schemas/VeloxProjectBridge' }
+        editor_url: { type: string, format: uri-reference }
 
     # ────── Media Library (live wizard step 3) ──────────────────────
     MediaLibraryItem:
@@ -3101,6 +3282,25 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/YouTubeTranslation'
+    YouTubeEditorMetadataGenerateJobResponse:
+      type: object
+      required: [job_id, status, velox_project_id]
+      properties:
+        job_id: { type: integer, format: int64 }
+        status: { type: string, enum: [queued] }
+        velox_project_id: { type: string }
+    YouTubeEditorMetadataGenerateJobPollResponse:
+      type: object
+      required: [job_id, status, velox_project_id]
+      properties:
+        job_id: { type: integer, format: int64 }
+        status: { type: string, enum: [queued, processing, completed, failed] }
+        velox_project_id: { type: string }
+        result:
+          $ref: '#/components/schemas/YouTubeEditorMetadataGenerateResponse'
+        error_message: { type: string }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
     YouTubeTranslation:
       type: object
       required: [title, description]

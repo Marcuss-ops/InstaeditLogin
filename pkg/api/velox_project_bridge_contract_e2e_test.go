@@ -39,7 +39,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 		WithEditorURL("https://instaeditor.example.test/app"),
 	)
 	h := r.Setup()
-	body := `{"workspace_id":7,"velox_project_id":"vx_contract_1"}`
+	body := `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_contract_1"}`
 
 	// The InstaEdit-owned project and workspace are the authorization and
 	// source-of-truth gates. The first request creates only the bridge.
@@ -51,6 +51,9 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	var created veloxProjectBridgeResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ContractVersion != models.ProjectBridgeContractVersion {
+		t.Fatalf("unexpected bridge contract version: %q", created.ContractVersion)
 	}
 	if created.Bridge.ProjectID != "thumbproj_contract" || created.Bridge.WorkspaceID != 7 || created.Bridge.VeloxProjectID != "vx_contract_1" {
 		t.Fatalf("bridge is not InstaEdit-scoped: %+v", created.Bridge)
@@ -88,7 +91,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	}
 
 	// A different Velox handle cannot overwrite the InstaEdit-owned relation.
-	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"workspace_id":7,"velox_project_id":"vx_other"}`)
+	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_other"}`)
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("changed replay: want 409, got %d: %s", w.Code, w.Body.String())
@@ -102,7 +105,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if unauthenticatedW.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated create: want 401, got %d", unauthenticatedW.Code)
 	}
-	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"workspace_id":8,"velox_project_id":"vx_probe"}`)
+	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":8,"velox_project_id":"vx_probe"}`)
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("cross-workspace create: want 404, got %d", w.Code)

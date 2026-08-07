@@ -6,10 +6,20 @@ import (
 	"time"
 )
 
+// ProjectBridgeContractVersion is the normative wire contract for the
+// one-way InstaEdit → Velox project reference. It must not be reused for
+// publishing/catalog contracts.
+const ProjectBridgeContractVersion = "instaedit.velox.project-bridge.v1"
+
 // VeloxProjectBridge is the minimal, InstaEdit-owned relation between an
 // application project and an opaque editor project. It intentionally carries
 // no group membership or channel catalog data.
 type VeloxProjectBridge struct {
+
+	// ContractVersion is emitted at the API boundary; it is not a persisted
+	// domain field and does not create a second ownership model.
+	ContractVersion string `json:"contract_version,omitempty"`
+
 	ProjectID         string    `json:"project_id"`
 	VeloxProjectID    string    `json:"velox_project_id"`
 	WorkspaceID       int64     `json:"workspace_id"`

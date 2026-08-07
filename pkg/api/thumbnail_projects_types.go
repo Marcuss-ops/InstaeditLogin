@@ -107,6 +107,10 @@ type thumbnailProjectAssetListResponse struct {
 }
 
 type createVeloxProjectBridgeRequest struct {
+	// Required bridge discriminator. It must match the sole supported
+	// contract; no request field may carry a group, channel list,
+	// membership snapshot, or workspace copy.
+	ContractVersion   string  `json:"contract_version"`
 	WorkspaceID       int64   `json:"workspace_id"`
 	Platform          string  `json:"platform,omitempty"`
 	PlatformAccountID *int64  `json:"platform_account_id,omitempty"`
@@ -117,6 +121,7 @@ type createVeloxProjectBridgeRequest struct {
 }
 
 type veloxProjectBridgeResponse struct {
-	Bridge    models.VeloxProjectBridge `json:"bridge"`
-	EditorURL string                    `json:"editor_url"`
+	ContractVersion string                    `json:"contract_version"`
+	Bridge          models.VeloxProjectBridge `json:"bridge"`
+	EditorURL       string                    `json:"editor_url"`
 }
