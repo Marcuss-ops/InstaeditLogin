@@ -3,7 +3,7 @@
 # scripts/verify-tiktok-app-review-config.sh
 #
 # Confirms the locally-configured TIKTOK_REDIRECT_URI matches the
-# canonical production value registered in fly.toml [env]. This is
+# canonical production value documented for the VPS deployment. This is
 # the TikTok-side mirror of scripts/verify-google-oauth-mode.sh —
 # where the YouTube/Drive versions introspect a live token, this
 # version introspects the *redirect URI* the App Review form needs.
@@ -16,17 +16,19 @@
 # rotates its subdomain on every restart. A reviewer who tested the
 # OAuth flow 2 hours after the form-submission landed on a dead URL.
 #
-# The codebase's canonical redirect URI lives in fly.toml [env]
-# (TIKTOK_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/tiktok/callback")
-# and cannot drift without a code change. This script enforces that
-# the operator's local config (env var or .env file) matches the
-# fly.toml canonical value, so an accidental `*.trycloudflare.com` /
-# `localhost` override is caught locally BEFORE the App Review form
-# is submitted.
+# The codebase's canonical redirect URI is the production VPS value
+# documented in docs/TIKTOK-APP-REVIEW.md:
+# https://api.instaedit.org/api/v1/auth/tiktok/callback
+# This script enforces that the operator's explicit environment
+# (`.env.production`, `.env.dev`, or an exported variable) matches that
+# value, so an accidental `*.trycloudflare.com` / `localhost` override
+# is caught locally BEFORE the App Review form is submitted.
 #
 # ─── USAGE ──────────────────────────────────────────────────────────────
-#   # from a .env file (any .env, .env.production, .env.dev, …):
+#   # from an explicit environment file (production first, then dev):
 #   set -a; source .env.production; set +a
+#   # or, for local development:
+#   set -a; source .env.dev; set +a
 #   ./scripts/verify-tiktok-app-review-config.sh
 #
 #   # or with the env var exported inline:
@@ -44,10 +46,10 @@
 
 set -euo pipefail
 
-# ─── Canonical value (pinned by fly.toml [env] line 185) ───────────────
+# ─── Canonical production value ────────────────────────────────────────
 # Single string, period. If the production URL ever changes (e.g. a
-# www→apex migration), both this script and fly.toml move together —
-# keep them in lockstep so the smoke check stays trustworthy.
+# www→apex migration), update this script and
+# docs/TIKTOK-APP-REVIEW.md together so the smoke check stays trustworthy.
 CANONICAL_REDIRECT_URI="https://api.instaedit.org/api/v1/auth/tiktok/callback"
 
 # ─── USAGE / --help banner ──────────────────────────────────────────────
@@ -59,10 +61,9 @@ if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
 fi
 
 # ─── Pre-flight ─────────────────────────────────────────────────────────
-# The env var must be set. Fall back to loading .env files in the
-# operator's CWD if not exported — that mirrors the godotenv.Load()
-# call in internal/config/config.go so the operator can run the
-# script against the same source the Go binary reads.
+# The env var must be set. If it is not exported, load only the
+# explicit production or development file in the operator's CWD; never
+# fall back to a generic root `.env`.
 if [[ -z "${TIKTOK_REDIRECT_URI:-}" ]]; then
   if [[ -f .env.production ]]; then
     set -a; source .env.production; set +a
@@ -85,7 +86,7 @@ echo "  canonical    : $CANONICAL_REDIRECT_URI"
 echo "  configured   : $TIKTOK_REDIRECT_URI"
 echo ""
 
-# ─── Canonical-case: matches fly.toml exactly ───────────────────────────
+# ─── Canonical-case: matches the documented production value ──────────
 # Both literals compared with = so glob chars (none in this case)
 # would be safe, but use string compare explicitly to avoid surprises.
 if [[ "$TIKTOK_REDIRECT_URI" == "$CANONICAL_REDIRECT_URI" ]]; then
@@ -133,7 +134,7 @@ fi
 
 echo "   Fix:" >&2
 echo "     export TIKTOK_REDIRECT_URI=\"$CANONICAL_REDIRECT_URI\"" >&2
-echo "     # OR update fly.toml [env] + redeploy + register the" >&2
+echo "     # OR update the VPS production secret + redeploy + register the" >&2
 echo "     # new URI with TikTok Developer Portal simultaneously." >&2
 echo "" >&2
 echo "   Reference: docs/TIKTOK-APP-REVIEW.md, §"Pre-submit checklist"." >&2

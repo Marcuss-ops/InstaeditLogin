@@ -16,7 +16,7 @@ Supporta **7 piattaforme social** con gestione unificata di token e API.
 | **LinkedIn**     | ✅    | ✅      | Post testuali e articoli via LinkedIn Posts API |
 
 Tutte le piattaforme sono **opzionali e indipendenti** (Taglio 2.4): si attivano
-singolarmente, ognuna solo se le proprie credenziali sono configurate nel `.env`.
+singolarmente, ognuna solo se le proprie credenziali sono configurate nel file ambiente esplicito (`.env.dev` in locale o il secret file VPS in produzione).
 Il server parte anche con un solo provider attivo (es. solo YouTube) o con zero
 provider (in questo caso `/api/v1/auth/{anything}` risponde 404).
 
@@ -34,7 +34,7 @@ provider (in questo caso `/api/v1/auth/{anything}` risponde 404).
 - Go 1.26+
 - PostgreSQL 15+
 - **Nessuna piattaforma social è obbligatoria** (Taglio 2.4): configura nel
-  `.env` solo le credenziali delle piattaforme che vuoi supportare. Le
+  `.env.dev` solo le credenziali delle piattaforme che vuoi supportare. Le
   sette piattaforme (Meta, TikTok, X/Twitter, YouTube, LinkedIn, Google Drive,
   Velox) sono tutte indipendenti — vedi `## Piattaforme indipendenti` più sotto.
 
@@ -77,7 +77,7 @@ instaedit-login/
 ├── cmd/server/main.go          # Legacy wrapper deprecato, solo dev/recovery
 ├── internal/
 │   ├── auth/                   # JWT + API key middleware (Taglio 1.1)
-│   ├── config/                 # Configurazioni e .env (multi-platform)
+│   ├── config/                 # Configurazione e file ambiente espliciti
 │   ├── credentials/            # CredentialVault (encrypt + refresh + advisory lock)
 │   ├── crypto/                 # AES-256-GCM encrypt/decrypt
 │   ├── database/               # Connessione PostgreSQL e migrations
@@ -137,7 +137,7 @@ con un qualsiasi sottoinsieme configurato, anche una sola.
    per quella piattaforma (es. `YOUTUBE_CLIENT_ID` e `YOUTUBE_CLIENT_SECRET`
    entrambe vuote) → la piattaforma non viene registrata, il server parte
    senza di essa, `/api/v1/auth/youtube/login` risponde 404.
-2. **Piattaforma abilitata**: credenziali complete presenti nel `.env`
+2. **Piattaforma abilitata**: credenziali complete presenti nel file ambiente esplicito
    → la piattaforma viene registrata all'avvio e i suoi endpoint
    OAuth/Publish sono attivi.
 3. **Piattaforma half-configured** (es. `YOUTUBE_CLIENT_ID` settato ma
@@ -156,7 +156,7 @@ esplicitamente che registrare un servizio zoppo.
 
 **Esempi di configurazione validi**:
 
-| `.env`                                              | Piattaforme attive              |
+| Variabili nel file ambiente esplicito                 | Piattaforme attive              |
 |-----------------------------------------------------|----------------------------------|
 | `META_APP_ID` + `META_APP_SECRET` + `FACEBOOK_REDIRECT_URI` | Facebook solo                |
 | `YOUTUBE_CLIENT_ID` + `YOUTUBE_CLIENT_SECRET`       | YouTube solo                     |
@@ -185,7 +185,7 @@ in `## Piattaforme Supportate`) e devono essere ≥32 caratteri in copia-incolla
 — un valore più corto fa fallire l'avvio. Se invece l'env var è vuota, la
 piattaforma corrispondente non viene registrata.
 
-> ⚠️ **Conserva i secret in modo sicuro**: non committare `.env`, non
+> ⚠️ **Conserva i secret in modo sicuro**: non committare `.env.dev` né il secret file production, non
 > riusare lo stesso secret su due ambienti (dev/staging/prod), ruotalo
 > immediatamente se viene esposto.
 
@@ -326,6 +326,6 @@ in [`docs/DEPLOY.md`](docs/DEPLOY.md) e [`docs/OPERATIONS.md`](docs/OPERATIONS.m
   fallback a `user_id` body/query, nessun ID sintetico (default userID=1 rimosso)
 - **X / Twitter OAuth 2.0 PKCE (Taglio 1.3)**: ogni publish usa esclusivamente il Bearer
   token utente OAuth 2.0 (PKCE) ottenuto via `/api/v1/auth/twitter/callback`.
-- `.env` escluso da git
+- `.env.dev` e i file ambiente reali esclusi da git
 - HTTPS richiesto in produzione
 - Per i dettagli sui secret minimi vedi `## Generazione dei secret` in alto
