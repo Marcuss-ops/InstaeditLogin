@@ -33,8 +33,7 @@ and worker ordering intact.
 
 ## Current inventory
 
-The current scan (`scripts/loc-report.sh -t 500 -n 60`) found **30 tracked
-runtime production files above 500 lines** (20 Go + 10 TS/TSX). One runtime
+The current scan (`scripts/loc-report.sh -t 500 -n 60`) found **30tracked runtime production files above 500 lines** (20 Go + 10 TS/TSX). One runtime
 file is above 700 lines — `web/src/pages/internal/AdminDashboard.tsx` (760)
 is the only **P0** in this snapshot. Test, E2E, and CLI files are tracked
 separately below so their size does not distort runtime priorities. Since the
@@ -45,7 +44,8 @@ last snapshot: `internal/config/config.go` (672) split in `46b6188`,
 `cabcc39`; the auth split surfaced `pkg/api/auth_oauth.go` (565), monitored
 below. **New:** `web/src/pages/internal/CoverEditor.tsx` (1240) split in
 `d83d09e9` into 12 editor files; `web/src/pages/internal/AdminDashboard.tsx`
-(760), `Covers.tsx` (587), `ScheduledByAccount.tsx` (562), `Groups.tsx` (545),
+(760, split in `aeb0fbe8` — no runtime web file above 700 remains),
+`Covers.tsx` (587), `ScheduledByAccount.tsx` (562), `Groups.tsx` (545),
 `livestreamWizardStep2.tsx` (527), `Compose.tsx` (506), and the publishing
 wizard steps (`ChannelMetadataStep.tsx` 516, `ConfirmationStep.tsx` 510) join
 `Programs.tsx` (513) as the frontend runtime inventory — the tracker now
@@ -55,7 +55,7 @@ measures TS/TSX too.
 
 | Priority | File | Lines | Current responsibility | Next action |
 |---|---|---:|---|---|
-| P0 | `web/src/pages/internal/AdminDashboard.tsx` | 760 | Admin dashboard: KPI cards, performance charts, account tables, admin actions | **Next split:** separate the dashboard sections (KPI cards / channel-performance charts / account tables / admin CSV actions) into focused presentational components; preserve the shared data-hook wiring. |
+| P0 | `web/src/pages/internal/AdminDashboard.tsx` | 760 → 151 | Admin dashboard: KPI cards, performance charts, account tables, admin actions | ✅ COMPLETED in `aeb0fbe8`: split into `adminDashboardTypes.ts` (107, API types + `FetchState`), `AdminDashboardKpis.tsx` (83, `Card`/`Section` primitives + formatters), `AdminDashboardFleetReadiness.tsx` (39, Fleet Readiness KPI grid), `AdminDashboardHealth.tsx` (152, YouTube Quota cards + Queue Counts + error-rate tables), `AdminDashboardPoolCapacity.tsx` (260, pool bars + Google manager account tables); `AdminDashboard.tsx` keeps all data hooks (loadFleet/loadHealth/loadPool/loadAll) + header/refresh/error states. Note: the requested "admin CSV actions" do not exist in this file (zero CSV references repo-wide in `pages/internal/`). |
 | P0 | `pkg/api/auth_handlers.go` | 786 → 3 | OAuth login/callback/exchange and session bootstrap | ✅ COMPLETED in `cabcc39`: split into `auth_oauth.go` (565), `auth_oauth_state.go` (224), `auth_account_attach.go` (239), `auth_session.go` (92); `auth_handlers.go` left as 3-line pointer. Dead `Router.handleMe` removed in `040fa04`. `auth_oauth.go` remains >500 → monitor below. |
 | P0 | `internal/bootstrap/workers_wiring.go` | 630 | Dependency adapters and all worker specifications | ✅ COMPLETED in `7d03153`: specs → `workers_specs.go` (409), adapters → `workers_adapters.go` (66); `workers_wiring.go` now 121 lines with one ordered registry + `TestWorkerSpecs_PreserveLifecycleContract`. |
 | P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | ✅ COMPLETED in `cabcc39`: split into `posts_mutations.go` (107), `posts_read.go` (240), `posts_types.go` (81); `posts_handlers.go` remains the thin router boundary. Idempotency and workspace authorization preserved. |
@@ -162,6 +162,7 @@ number is assigned unless an actual external ticket exists.
 | Config type domains | `internal/config/config_types.go` (616) split in `18c9aa71` by domain into `config_types_database.go` (45) / `config_types_storage.go` (29) / `config_types_auth.go` (100) / `config_types_integrations.go` (43) / `config_types_server.go` (53) / `config_types_worker.go` (122); `config_types.go` keeps only the `Config` aggregate root (230). Byte-exact struct moves — 12 types preserved, `field_specs.go` centralized validation untouched. | Config tests, full Go tests (33 pkgs), vet, build, loc-check | `18c9aa71` |
 | YouTube OAuth flow split | `internal/services/youtube_oauth.go` (586) split in `81b8117b` by flow into `youtube_oauth_login.go` (106) / `youtube_oauth_callback.go` (97) / `youtube_oauth_exchange.go` (30) / `youtube_oauth_transport.go` (47) / `youtube_oauth_revoke.go` (97) / `youtube_oauth_refresh.go` (98); boundary keeps struct + ctor + compile-time assertions (160). Token transport isolated in `postTokenRequest`; refresh fallback, pool fail-closed resolution, and revoke idempotency preserved. | Services tests, full Go tests (33 pkgs), vet, build, loc-check | `81b8117b` |
 | CoverEditor test scenario split | `web/src/pages/internal/CoverEditor.test.tsx` (865) split in `d434511a` into `CoverEditor.autosave.test.tsx` (213, 6 tests) / `CoverEditor.exportLink.test.tsx` (347, 4 tests) / `CoverEditor.mediaLoad.test.tsx` (184, 3 tests), with shared fixtures/mocks in `CoverEditor.testUtils.tsx` (239). Hoisted `ApiError` class exported by object identity so `parseProjectVersionConflict` instanceof still matches; all 13 data-testid/aria-label contract tests preserved. | vitest (13 scenario + full 81 files/664 tests), tsc -b, oxlint, vite build | `d434511a` |
+| AdminDashboard frontend split | `web/src/pages/internal/AdminDashboard.tsx` (760) split in `aeb0fbe8` into `adminDashboardTypes.ts` (107, API types + `FetchState`) / `AdminDashboardKpis.tsx` (83, `Card`/`Section` primitives + `formatNumber`/`formatPercent`/`formatDate`) / `AdminDashboardFleetReadiness.tsx` (39, Fleet Readiness KPI grid) / `AdminDashboardHealth.tsx` (152, YouTube Quota cards + Queue Counts + error-rate tables) / `AdminDashboardPoolCapacity.tsx` (260, pool capacity bars + Google manager account tables); `AdminDashboard.tsx` keeps all data hooks (`loadFleet`/`loadHealth`/`loadPool`/`loadAll`), header, Refresh button and error states (151). Pure file moves verified byte-identical vs HEAD (modulo `export` keywords and the `fleet.data`/`health.data` → `data` prop rename). No runtime web file above 700 remains. | vitest (full 80 files/656 tests), tsc -b, oxlint 0/0, vite build | `aeb0fbe8` |
 
 ## Remaining execution order
 
@@ -266,8 +267,9 @@ production behavior changes.
 ### Slice 8 — Frontend page splits (P0/P1, web)
 
 **Targets:** `web/src/pages/internal/AdminDashboard.tsx` (760, the only
-runtime >700), then `Covers.tsx` (587), `ScheduledByAccount.tsx` (562),
-`Groups.tsx` (545), `livestreamWizardStep2.tsx` (527), `Compose.tsx` (506),
+runtime >700) is now split (see `aeb0fbe8` below); next `Covers.tsx` (587),
+`ScheduledByAccount.tsx` (562), `Groups.tsx` (545),
+`livestreamWizardStep2.tsx` (527), `Compose.tsx` (506),
 and the publishing wizard steps (`ChannelMetadataStep.tsx` 516,
 `ConfirmationStep.tsx` 510).
 
