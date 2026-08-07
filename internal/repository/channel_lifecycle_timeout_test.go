@@ -18,8 +18,8 @@ func TestChannelLifecycle_InFlightDatabaseTimeoutRollsBack(t *testing.T) {
 		}
 		defer db.Close()
 		mock.ExpectBegin()
-		mock.ExpectQuery(`SELECT id FROM groups`).WillDelayFor(50 * time.Millisecond).
-			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
+		mock.ExpectQuery(`SELECT id, name FROM groups`).WillDelayFor(50 * time.Millisecond).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(7, "Editorial"))
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 		defer cancel()
 		err = repository.NewGroupRepository(db).RemoveAccountFromGroupTx(ctx, 7, 9, 101)

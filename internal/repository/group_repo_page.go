@@ -41,14 +41,9 @@ func (r *GroupRepository) ListByWorkspacePage(workspaceID int64, afterTime *time
 	defer rows.Close()
 	groups := make([]models.Group, 0, limit+1)
 	for rows.Next() {
-		var group models.Group
-		var parent sql.NullInt64
-		if err := rows.Scan(&group.ID, &group.WorkspaceID, &parent, &group.Name, &group.CreatedAt, &group.UpdatedAt); err != nil {
+		group, err := scanGroupRow(rows, nil)
+		if err != nil {
 			return nil, false, fmt.Errorf("scan paginated group: %w", err)
-		}
-		if parent.Valid {
-			value := parent.Int64
-			group.ParentGroupID = &value
 		}
 		groups = append(groups, group)
 	}
@@ -104,19 +99,14 @@ func (r *GroupRepository) ListByWorkspaceWithAccountsPage(workspaceID int64, aft
 	pageCount := 0
 	for rows.Next() {
 		var (
-			group   models.Group
-			parent  sql.NullInt64
 			account sql.NullInt64
 			count   int
 		)
-		if err := rows.Scan(&group.ID, &group.WorkspaceID, &parent, &group.Name, &group.CreatedAt, &group.UpdatedAt, &account, &count); err != nil {
+		group, err := scanGroupRow(rows, &account, &count)
+		if err != nil {
 			return nil, false, fmt.Errorf("scan paginated group with accounts: %w", err)
 		}
 		pageCount = count
-		if parent.Valid {
-			value := parent.Int64
-			group.ParentGroupID = &value
-		}
 		index, ok := indexByID[group.ID]
 		if !ok {
 			index = len(groups)

@@ -178,16 +178,9 @@ func (r *GroupRepository) ListByWorkspace(workspaceID int64) ([]models.Group, er
 
 	var out []models.Group
 	for rows.Next() {
-		var (
-			g      models.Group
-			parent sql.NullInt64
-		)
-		if err := rows.Scan(&g.ID, &g.WorkspaceID, &parent, &g.Name, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		g, err := scanGroupRow(rows, nil)
+		if err != nil {
 			return nil, fmt.Errorf("failed to scan group: %w", err)
-		}
-		if parent.Valid {
-			v := parent.Int64
-			g.ParentGroupID = &v
 		}
 		out = append(out, g)
 	}
@@ -245,20 +238,10 @@ func (r *GroupRepository) ListByWorkspaceWithAccounts(workspaceID int64) ([]mode
 	groups := make([]models.GroupWithAccounts, 0)
 	indexByID := make(map[int64]int)
 	for rows.Next() {
-		var (
-			group   models.Group
-			parent  sql.NullInt64
-			account sql.NullInt64
-		)
-		if err := rows.Scan(
-			&group.ID, &group.WorkspaceID, &parent, &group.Name,
-			&group.CreatedAt, &group.UpdatedAt, &account,
-		); err != nil {
+		var account sql.NullInt64
+		group, err := scanGroupRow(rows, &account)
+		if err != nil {
 			return nil, fmt.Errorf("failed to scan group with accounts: %w", err)
-		}
-		if parent.Valid {
-			value := parent.Int64
-			group.ParentGroupID = &value
 		}
 		index, ok := indexByID[group.ID]
 		if !ok {
@@ -294,14 +277,8 @@ func (r *GroupRepository) UpdateSettings(ctx context.Context, groupID, workspace
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var (
-		lockedGroupID int64
-		groupName     string
-	)
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id, name FROM groups WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
-		groupID, workspaceID,
-	).Scan(&lockedGroupID, &groupName); err != nil {
+	groupName, err := lockGroupForUpdate(ctx, tx, groupID, workspaceID)
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("%w: id=%d", ErrGroupNotFound, groupID)
 		}
@@ -425,24 +402,8 @@ func (r *GroupRepository) UpdateSettings(ctx context.Context, groupID, workspace
 	// while group_accounts allows membership in multiple groups. Recompute
 	// the binding from the memberships that remain after this replacement,
 	// preferring the group being edited and then a deterministic fallback.
-	if len(affectedIDs) > 0 {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE workspace_channels AS wc
-			 SET group_name = (
-			     SELECT g.name
-			       FROM group_accounts AS ga
-			       JOIN groups AS g ON g.id = ga.group_id
-			      WHERE ga.account_id = wc.platform_account_id
-			        AND g.workspace_id = $1
-			      ORDER BY CASE WHEN g.id = $2 THEN 0 ELSE 1 END, g.name, g.id
-			      LIMIT 1
-			 )
-			 WHERE wc.workspace_id = $1
-			   AND wc.platform_account_id = ANY($3)`,
-			workspaceID, groupID, pq.Array(affectedIDs),
-		); err != nil {
-			return fmt.Errorf("update group settings: resync workspace channels: %w", err)
-		}
+	if err := resyncWorkspaceChannels(ctx, tx, workspaceID, groupID, affectedIDs); err != nil {
+		return fmt.Errorf("update group settings: resync workspace channels: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("update group settings: commit: %w", err)
@@ -487,11 +448,7 @@ func (r *GroupRepository) RemoveAccountFromGroupTx(ctx context.Context, groupID,
 	// Lock the group row so a concurrent settings write cannot interleave
 	// with the membership deletion + resync (same discipline as
 	// UpdateSettings). Missing row / foreign workspace → ErrGroupNotFound.
-	var lockedGroupID int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM groups WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
-		groupID, workspaceID,
-	).Scan(&lockedGroupID); err != nil {
+	if _, err := lockGroupForUpdate(ctx, tx, groupID, workspaceID); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("%w: id=%d", ErrGroupNotFound, groupID)
 		}
@@ -509,20 +466,7 @@ func (r *GroupRepository) RemoveAccountFromGroupTx(ctx context.Context, groupID,
 	// the memberships that remain after the removal (NULL when the account
 	// is no longer in any group of the workspace). Mirrors the resync step
 	// in UpdateSettings.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE workspace_channels AS wc
-		 SET group_name = (
-		     SELECT g.name
-		       FROM group_accounts AS ga
-		       JOIN groups AS g ON g.id = ga.group_id
-		      WHERE ga.account_id = wc.platform_account_id
-		        AND g.workspace_id = $1
-		      ORDER BY CASE WHEN g.id = $2 THEN 0 ELSE 1 END, g.name, g.id
-		      LIMIT 1
-		 )
-		 WHERE wc.workspace_id = $1 AND wc.platform_account_id = $3`,
-		workspaceID, groupID, accountID,
-	); err != nil {
+	if err := resyncWorkspaceChannels(ctx, tx, workspaceID, groupID, []int64{accountID}); err != nil {
 		return fmt.Errorf("remove account from group: resync workspace channel: %w", err)
 	}
 
