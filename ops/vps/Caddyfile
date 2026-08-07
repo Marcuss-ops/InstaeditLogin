@@ -4,7 +4,9 @@
 # The Go API listens on 127.0.0.1:8080. The frontend is served EXCLUSIVELY
 # by Vercel (app.instaedit.org) — this Caddy never serves the SPA and no
 # longer carries the legacy dev.instaedit.org compatibility host (removed
-# 2026-08-07: Dark Editor (now InstaEditor), MinIO proxy, and SPA redirects are gone).
+# 2026-08-07: the separate InstaEditor deployment, MinIO proxy, and SPA
+# redirects were removed from this API-only proxy. The editor URL remains
+# an external contract and is validated by the local Caddy/deploy checks.
 #
 # All routing lives in `handle` blocks so Caddy evaluates them in file
 # order (the `handle` directive is exempt from directive sorting).

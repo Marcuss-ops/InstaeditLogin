@@ -207,8 +207,10 @@ jobs:
       # Keep the InstaEditor env rename contract visible in CI: the focused
       # tests verify INSTAEDITOR_URL precedence and EDITOR_URL fallback without
       # requiring any deployment secrets.
-      - name: Verify InstaEditor env compatibility
-        run: go test -count=1 ./internal/config -run 'TestLoad_EditorURL_'
+      - name: Verify InstaEditor env and routing compatibility
+        run: |
+          go test -count=1 ./internal/config -run 'TestLoad_EditorURL_'
+          ./scripts/verify-instaeditor-routing.sh
 
       - name: OAuth scope canary + secrets coherence smoke
         run: go test -count=1 ./cmd/oauth-scope-canary/...

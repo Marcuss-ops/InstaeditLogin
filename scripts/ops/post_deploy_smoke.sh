@@ -25,6 +25,8 @@
 #   ./scripts/ops/post_deploy_smoke.sh              # default: read-only
 #   APPLY_PUBLISH=1 ./scripts/ops/post_deploy_smoke.sh  # actually publish+sleep
 #   BASE_URL=https://staging.instaedit.org ./scripts/ops/post_deploy_smoke.sh
+#   CHECK_INSTAEDITOR=1 INSTAEDITOR_URL=https://app.instaedit.org/dark_editor_v2 \
+#     ./scripts/ops/post_deploy_smoke.sh  # optional read-only editor-root probe
 #
 # Exit codes:
 #   0  all assertions passed
@@ -50,10 +52,15 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+
 # ─── ENV / config ──────────────────────────────────────────────────────
 BASE_URL="${BASE_URL:-https://api.instaedit.org}"
 FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-https://app.instaedit.org}"
 APPLY_PUBLISH="${APPLY_PUBLISH:-0}"
+CHECK_INSTAEDITOR="${CHECK_INSTAEDITOR:-0}"
+INSTAEDITOR_URL="${INSTAEDITOR_URL:-${EDITOR_URL:-}}"
 
 # ─── Pre-flight (tools) ───────────────────────────────────────────────
 for tool in curl jq openssl; do
@@ -62,6 +69,17 @@ for tool in curl jq openssl; do
     exit 2
   }
 done
+
+# ─── InstaEditor compatibility guard (offline by default) ─────────────
+# The deployed Next base path remains /dark_editor_v2. Do not fabricate a
+# project id here: authenticated editor-session smoke belongs to the API
+# flow. This guard validates the configured root URL and can optionally
+# perform a read-only HTTP probe.
+"$REPO_ROOT/scripts/verify-instaeditor-routing.sh"
+if [ "$CHECK_INSTAEDITOR" = "1" ]; then
+  CHECK_INSTAEDITOR=1 INSTAEDITOR_URL="$INSTAEDITOR_URL" \
+    "$REPO_ROOT/scripts/verify-instaeditor-routing.sh"
+fi
 
 # ─── Tmpdir for cookies + json / headers (always wiped on EXIT) ────────
 TMP_DIR=$(mktemp -d -t post-deploy-smoke-XXXXXX)
@@ -299,7 +317,9 @@ if [ "$HTTP" = "200" ]; then
   WORKER_METRICS=$(grep -E '^instaedit_(publish|reconcile|webhook)_worker_(started|completed|claimed|processed)_total' "$TMP_DIR/metrics.txt" | head -5)
   if [ -n "$WORKER_METRICS" ]; then
     pass "/api/v1/metrics: live; worker counters observed (first 5):"
-    echo "$WORKER_METRICS" | sed 's/^/    /'
+    while IFS= read -r metric; do
+      printf '    %s\n' "$metric"
+    done <<< "$WORKER_METRICS"
     echo "  → for full kill+restart drill on operator laptop:"
     echo "    docker compose restart worker"
     echo "    # Reconciler (default 5s tick) should pick up any orphaned publish_jobs in 'pending' state"

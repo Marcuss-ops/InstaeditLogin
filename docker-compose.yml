@@ -20,6 +20,8 @@
 # use the ignored .env.dev file created from .env.dev.example, or an external
 # secret injector. The selected env_file passes both editor URL aliases to the
 # application: INSTAEDITOR_URL is preferred and EDITOR_URL remains the fallback.
+# Both examples intentionally retain the deployed /dark_editor_v2 path; changing
+# the product name must not invalidate existing editor_url links.
 #
 # Migration ordering: db is the dependency for migrate. migrate is the
 # dependency for api + worker (depends_on with service_completed_successfully).

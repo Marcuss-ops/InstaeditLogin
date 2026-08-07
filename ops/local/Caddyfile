@@ -24,9 +24,11 @@
 #   fallback handler at the bottom of this site block). The browser
 #   enters at `/` and navigates to /groups/:groupId/videos, /login, etc.
 # * SECONDARY APP is InstaEditor (Next.js on 127.0.0.1:3001) and it
-#   is reachable EXCLUSIVELY under the Next basePath `/dark_editor_v2/*`.
+#   is reachable EXCLUSIVELY under the compatibility base path
+#   `/dark_editor_v2/*`. The path is intentionally preserved because it
+#   is emitted by existing editor_url values and deployed Next.js builds.
 #   Next emits its `_next/*` assets under the basePath automatically, so
-#   they are intercepted by `handle /dark_editor_v2/*` below. There is
+#   they are intercepted by the named `@instaeditor` handler below. There is
 #   INTENTIONALLY NO root-level `handle /_next*` handler here — adding one
 #   would leak the editor's static assets out of the /dark_editor_v2
 #   namespace and is forbidden.
@@ -94,9 +96,11 @@ https://:8443 {
         reverse_proxy 127.0.0.1:8080
     }
 
-    # InstaEditor: applicazione Next.js secondaria, accessibile solo sotto /dark_editor_v2
-    # Next.js ha basePath: '/dark_editor_v2', quindi anche gli asset /_next/* sono serviti sotto questo path
-    handle /dark_editor_v2/* {
+    # InstaEditor: secondary Next.js app under the stable compatibility path.
+    # Keep /dark_editor_v2 unchanged: it is the deployed Next basePath and
+    # the path returned by legacy-compatible editor_url responses.
+    @instaeditor path /dark_editor_v2 /dark_editor_v2/*
+    handle @instaeditor {
         reverse_proxy 127.0.0.1:3001
     }
 

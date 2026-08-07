@@ -156,6 +156,10 @@ require_command curl
 require_command grep
 require_command npx
 
+# Static guard: the InstaEditor naming is canonical, but existing
+# /dark_editor_v2 editor URLs must remain routable. This is read-only.
+./scripts/verify-instaeditor-routing.sh
+
 log "Verifica autenticazione GitHub"
 gh auth status
 

@@ -10,7 +10,7 @@
         docker-build-local-api docker-build-local-worker \
         web-dev \
         ops-smoke ops-isolation ops-isolation-dry-run \
-        verify-log-redaction loc-check
+        verify-instaeditor-routing verify-log-redaction loc-check
 
 # Start the full local development stack modeled on Blocco #2.1's
 # production-true topology: 3 services (api + worker + migrate).
@@ -286,6 +286,12 @@ verify-log-redaction:
 	fi
 	./scripts/obs/verify-log-redaction.sh --apply
 
+# Verify Caddy/Compose/env/smoke/deploy compatibility for InstaEditor.
+# This is offline and read-only; set CHECK_INSTAEDITOR=1 separately when
+# an operator explicitly wants the optional configured URL HTTP probe.
+verify-instaeditor-routing:
+	./scripts/verify-instaeditor-routing.sh
+
 # ────────────────────────────────────────────────────────────────────────
 # Blocco #5.1: Post-deploy operator runbooks.
 #
@@ -307,7 +313,7 @@ verify-log-redaction:
 # laptops without the dev Docker stack. They cross-reference docs/DEPLOY.md
 # §5 and docs/OPERATIONS.md §3.
 # ────────────────────────────────────────────────────────────────────────
-ops-smoke:
+ops-smoke: verify-instaeditor-routing
 	@if [[ ! -x ./scripts/ops/post_deploy_smoke.sh ]]; then \
 		echo "❌ scripts/ops/post_deploy_smoke.sh not found or not executable"; \
 		echo "   Run: chmod +x scripts/ops/post_deploy_smoke.sh"; \
