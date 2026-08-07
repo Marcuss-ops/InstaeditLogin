@@ -8,6 +8,14 @@ import (
 	"github.com/google/uuid"
 )
 
+// Minimum-credential thresholds used by configuration validation.
+const (
+	jwtSecretMinBytes        = 32
+	aesKeyBytes              = 32
+	secretMinChars           = 32
+	adminInviteTokenMinChars = 32
+)
+
 // metricsConfigured returns true only when both metrics basic-auth
 // credentials are non-empty. It is used for both runtime fail-closed
 // decisions and boot-time validation in production.
