@@ -196,7 +196,8 @@ func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 //
 // A PR that edits this constant without updating either the canary
 // canonicalScopes OR the docs table should be rejected.
-const youtubeOAuthScopes = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl openid email profile"
+// youtubeOAuthScopes is defined in youtube_oauth_policy.go so consent,
+// token introspection, and credential resolution share one policy source.
 
 // GetLoginURLWithOptions builds the Google authorize URL using the
 // legacy single-client config (cfg.Auth.YouTubeClientID/

@@ -15,11 +15,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-// YouTubeForceSSLScope is the canonical scope required for YouTube Live
-// operations and metadata writes. Keep this as the single resolver-side
-// scope constant; short aliases are deliberately not accepted here.
-const YouTubeForceSSLScope = "https://www.googleapis.com/auth/youtube.force-ssl"
-
 const (
 	grantCacheTTL      = 60 * time.Second
 	grantValidationTTL = 30 * time.Second
@@ -433,10 +428,5 @@ func (r *YouTubeCredentialResolver) validateChannel(ctx context.Context, oid int
 }
 
 func containsYouTubeForceSSL(scopes []string) bool {
-	for _, scope := range scopes {
-		if scope == YouTubeForceSSLScope {
-			return true
-		}
-	}
-	return false
+	return youtubeHasScope(scopes, YouTubeForceSSLScope)
 }

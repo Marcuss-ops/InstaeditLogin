@@ -213,16 +213,7 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 		ExpiresIn: time.Duration(r.ExpiresIn) * time.Second,
 		Email:     r.Email,
 	}
-	for _, sc := range strings.Fields(r.Scope) {
-		switch sc {
-		case "https://www.googleapis.com/auth/youtube.upload":
-			out.HasUpload = true
-		case "https://www.googleapis.com/auth/youtube.readonly":
-			out.HasReadonly = true
-		case "https://www.googleapis.com/auth/youtube.force-ssl":
-			out.HasForceSSL = true
-		}
-	}
+	out.HasUpload, out.HasReadonly, out.HasForceSSL = youtubeScopeFlags(r.Scope)
 	return out, nil
 }
 
