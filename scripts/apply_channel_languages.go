@@ -101,10 +101,10 @@ func detectLanguage(title string) (string, bool) {
 }
 
 type accountRow struct {
-	ID            int64
-	Name          string
-	CurrentLang   string
-	GroupName     sql.NullString
+	ID          int64
+	Name        string
+	CurrentLang string
+	GroupName   sql.NullString
 }
 
 func main() {

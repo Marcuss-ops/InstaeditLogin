@@ -100,9 +100,9 @@ type Router struct {
 	// adminInviteToken gates POST /api/v1/auth/register. When empty,
 	// the handler returns 403 regardless of the X-Admin-Token header
 	// (registration disabled). Wired by the bootstrap via
-// WithAdminInviteToken(cfg.Auth.AdminInviteToken). Production
-// deployments must set ADMIN_INVITE_TOKEN in the VPS env file; dev
-// can omit it (no public registration permitted).
+	// WithAdminInviteToken(cfg.Auth.AdminInviteToken). Production
+	// deployments must set ADMIN_INVITE_TOKEN in the VPS env file; dev
+	// can omit it (no public registration permitted).
 	adminInviteToken string
 	// SPRINT 2.2 — multi-tier rate limiter (optional). Wiring via
 	// WithRateLimitService. When nil, the per-tier middleware
