@@ -14,10 +14,8 @@
 // descriptive log line. A successful migration log line is the
 // canonical signal the deploy pipeline unblocks on.
 //
-// Note: the deprecated `cmd/server` wrapper also calls Migrate for
-// local recovery compatibility. The wrapper assumes exclusive DB access;
-// production and standard development MUST use this binary as the
-// one-shot migration step to avoid that race.
+// API and worker processes do not run migrations themselves; this binary
+// is the only migration step in both local and production Compose flows.
 package main
 
 import (
@@ -33,7 +31,7 @@ func main() {
 	// Migrations are short-lived and use a small isolated pool budget.
 	// This one-shot process owns the small maintenance pool budget.
 	_ = os.Setenv("DB_POOL_ROLE", "maintenance")
-	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin migration (Blocco #2.1: split from cmd/server)")
+	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin migration (canonical split topology)")
 
 	app, err := bootstrap.Wire(nil)
 	if err != nil {

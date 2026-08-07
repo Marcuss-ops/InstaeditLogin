@@ -19,9 +19,7 @@ import (
 // App is the wired runtime holding every dependency that the api and
 // worker binaries share. cmd/api reads App.HTTPHandler (and App.Cfg for
 // PORT); cmd/worker reads App.DB / App.Vault / App.CapRouter /
-// App.WebhookRepo to construct and supervise the registered worker set;
-// cmd/server
-// (the wrapper) reads both halves.
+// App.WebhookRepo to construct and supervise the registered worker set.
 
 // assetsAdapter bridges *repository.MediaAssetRepository to the
 // resolver's services.MediaAssetStore interface (which takes a ctx

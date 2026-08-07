@@ -9,8 +9,8 @@ import (
 )
 
 // workerID is the per-process identity for SPRINT 6.1 (Observability
-// with SLO). Set once at process startup (cmd/server/main.go calls
-// metrics.InitWorkerID()) and read by:
+// with SLO). Set once at process startup by the canonical entrypoint
+// and read by:
 //
 //   - slog.With("worker_id", metrics.WorkerID()) on every structured
 //     log line emitted from a background goroutine (workers emit
@@ -54,7 +54,7 @@ var (
 )
 
 // SetWorkerID sets the per-process worker_id. Called once at process
-// start from cmd/server/main.go. Idempotent: calling it twice with
+// start by the canonical worker entrypoint. Idempotent: calling it twice with
 // the same value is a no-op; calling it twice with different values
 // is a defensive keep-the-first pattern (the first wins — a later
 // SetWorkerID call is ignored). The keep-first rule guards against

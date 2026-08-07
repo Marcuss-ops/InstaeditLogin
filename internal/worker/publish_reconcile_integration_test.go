@@ -43,7 +43,7 @@
 // avoid duplicating Testcontainers + Postgres migrations + encryption
 // + vault + repo wiring + LIFO teardown ordering across the two
 // tests. Any drift between the helper and what the production wiring
-// in cmd/server/main.go does would surface here as a parallel-drain
+// in the canonical worker wiring does would surface here as a parallel-drain
 // shutdown regression.
 package worker
 
@@ -205,7 +205,7 @@ func setupWorkerRig(t *testing.T, cfg *config.Config, handlerBuilder func(*atomi
 }
 
 // workerPair owns the parallel goroutines spawned for PublishWorker
-// + ReconcileWorker. Mirrors the cmd/server/main.go shape — both
+// + ReconcileWorker. Mirrors the the canonical worker wiring shape — both
 // workers run as independent background goroutines with cancellable
 // contexts, and shutdown is parallel (WaitGroup-drained) so neither
 // worker forces the other to wait.
@@ -216,7 +216,7 @@ type workerPair struct {
 }
 
 // Shutdown cancels both contexts and waits for both goroutines to
-// exit. Mirrors cmd/server/main.go's parallel-drain shutdown
+// exit. Mirrors the canonical worker wiring's parallel-drain shutdown
 // (sync.WaitGroup + per-leaf 15s inner timeouts) — bounded by the
 // slowest Run drain (sub-second on healthy paths; capped at ~15s
 // on the parallel-drain hard ceiling).
@@ -243,7 +243,7 @@ func (p *workerPair) Shutdown() {
 // tests' wall-clock bounds).
 //
 // Each worker gets its own cancellable ctx with the production
-// per-goroutine shape (cmd/server/main.go creates separate ctxs so
+// per-goroutine shape (the canonical worker wiring creates separate ctxs so
 // a Cancel call on one doesn't tear down the other). The workers'
 // Run methods return on ctx.Done() with a graceful drain of their
 // in-flight tick.
@@ -264,7 +264,7 @@ func runWorkerPair(rig *rig) *workerPair {
 		"test-worker-id",
 		nil, // no MemoryLimiter needed in integration tests
 		time.Duration(rig.CFG.Worker.PublishWorkerIntervalSeconds)*time.Second,
-		nil, // inherit slog.Default() (matches cmd/server/main.go wiring)
+		nil, // inherit slog.Default() (matches the canonical worker wiring wiring)
 	)
 	recWorker := NewReconcileWorker(
 		rig.PostRepo, rig.UserRepo, rig.Router, rig.Vault,

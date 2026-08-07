@@ -67,7 +67,7 @@ type Router struct {
 	groupStore GroupStore
 	// userAndWorkspaceHelper resolves a user's active workspace during
 	// OAuth callback / exchange (and switch endpoint). Wired in
-	// cmd/server/main.go via WithUserWorkspaceHelper(); defaults to nil
+	// the canonical bootstrap via WithUserWorkspaceHelper(); defaults to nil
 	// so the explicit 501-shaped error in handleExchangeCode short-
 	// circuits dev environments that have not yet wired the helper.
 	userAndWorkspaceHelper UserWorkspaceHelper
@@ -81,11 +81,11 @@ type Router struct {
 	// SPRINT 7.4 (P0#14-blocco-1.4): sessionsSvc is exposed via the
 	// SessionsStore interface so test fixtures can supply an in-memory
 	// fake (no real *sql.DB-bound SessionRepository required). The
-	// production wiring in cmd/server/main.go passes
+	// production wiring in the canonical bootstrap passes
 	// *services.SessionsService which satisfies the interface.
 	sessionsSvc SessionsStore
 	// cookieSecure is the Secure flag for cookies. Defaults to true
-	// in production wiring (cmd/server/main.go) and to false in tests
+	// in production wiring (the canonical bootstrap) and to false in tests
 	// that exercise the cookie path with httptest's in-memory server.
 	cookieSecure bool
 	// cookieDomain (Blocco #2.4 — CSRF cross-origin read) is the
@@ -99,7 +99,7 @@ type Router struct {
 
 	// adminInviteToken gates POST /api/v1/auth/register. When empty,
 	// the handler returns 403 regardless of the X-Admin-Token header
-	// (registration disabled). Wired in cmd/server via
+	// (registration disabled). Wired by the bootstrap via
 // WithAdminInviteToken(cfg.Auth.AdminInviteToken). Production
 // deployments must set ADMIN_INVITE_TOKEN in the VPS env file; dev
 // can omit it (no public registration permitted).
@@ -183,7 +183,7 @@ type Router struct {
 	sentryHub *sentry.Hub
 	// dbForReady is the *sql.DB used by /ready for PingContext +
 	// SchemaHealthy. Nil disables both (test fixture path); the
-	// production wiring in cmd/server/main.go passes app.DB.
+	// production wiring in the canonical bootstrap passes app.DB.
 	dbForReady *sql.DB
 
 	// veloxAPIToken (P1 Velox integration) is the static shared
@@ -252,7 +252,7 @@ type Router struct {
 
 	// veloxBFFAuthMiddleware (P2 Velox BFF) mirrors veloxBFFCSRFMiddleware
 	// for the JWT identity layer on /api/v1/velox/*. nil when not wired;
-	// tests pass passthrough stubs. cmd/server/main.go wires it via
+	// tests pass passthrough stubs. the canonical bootstrap wires it via
 	// WithVeloxBFFAuthMiddleware(r.auth.Middleware).
 	veloxBFFAuthMiddleware func(http.Handler) http.Handler
 
@@ -269,7 +269,7 @@ type Router struct {
 	// csrfMiddleware (P2 Velox integration — Phase 2) wraps the
 	// user-facing /api/v1/integrations/velox/destinations route
 	// with the project's canonical CSRF check. nil when not
-	// wired; tests pass passthrough stubs. cmd/server/main.go
+	// wired; tests pass passthrough stubs. the canonical bootstrap
 	// wires it via WithCsrfMiddleware(auth.NewCSRF(r.csrfConfig(),
 	// _)). Production MUST wire this; the field exists so the
 	// route registration can reference it without a compile
@@ -279,7 +279,7 @@ type Router struct {
 	// authMiddleware (P2 Velox integration — Phase 2) mirrors
 	// csrfMiddleware for the JWT identity layer on
 	// /api/v1/integrations/velox/destinations. nil when not
-	// wired; tests pass passthrough stubs. cmd/server/main.go
+	// wired; tests pass passthrough stubs. the canonical bootstrap
 	// wires it via WithAuthMiddleware(r.auth.Middleware).
 	authMiddleware func(http.Handler) http.Handler
 
@@ -290,7 +290,7 @@ type Router struct {
 	// the handler falls back to the legacy token-freshness probe
 	// (preserves the pre-C1 cross-platform behaviour for any test or
 	// deployment that hasn't yet wired the option). Wired in
-	// cmd/server/main.go via WithYouTubeService(svc); the handler
+	// the canonical bootstrap via WithYouTubeService(svc); the handler
 	// owns the routing decision.
 	youTubeSvc YouTubeOAuthService
 	// youtubeCredentialResolver deduplicates shared-grant refresh and

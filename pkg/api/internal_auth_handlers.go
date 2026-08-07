@@ -143,8 +143,8 @@ const authHeaderAuthorization = "Authorization"
 
 // WithVeloxAPIToken wires the static shared secret for the
 // Velox service-to-service routes. The token is loaded from
-// env at boot (cmd/server/main.go reads cfg.Velox.VeloxAPIToken via
-// internal/config) and passed via this option — main.go should
+// env at boot (the canonical bootstrap reads cfg.Velox.VeloxAPIToken via
+// internal/config) and passed via this option — the composition root should
 // NOT read the env directly in main; it should pipe through
 // internal/config then this Router option so tests can inject
 // an in-memory token without touching globals.
@@ -160,8 +160,8 @@ func WithVeloxAPIToken(token string) RouterOption {
 
 // WithCsrfMiddleware wires the CSRF middleware used to wrap
 // the user-facing /api/v1/integrations/velox/destinations
-// endpoint. Production wiring in cmd/server/main.go will
-// pass auth.NewCSRF(r.csrfConfig(), http.NotFoundHandler())
+// endpoint. Canonical bootstrap wiring will pass
+// auth.NewCSRF(r.csrfConfig(), http.NotFoundHandler())
 // so the registered route gets the project's canonical CSRF
 // chain. Tests pass a passthrough func to bypass CSRF
 // verification. When empty (nil), the route is mounted
@@ -173,8 +173,8 @@ func WithCsrfMiddleware(mw func(http.Handler) http.Handler) RouterOption {
 
 // WithAuthMiddleware wires the JWT-auth middleware used to
 // wrap the user-facing /api/v1/integrations/velox/destinations
-// endpoint. Production wiring in cmd/server/main.go will
-// pass r.auth.Middleware. Tests pass a passthrough func
+// endpoint. Canonical bootstrap wiring will pass
+// r.auth.Middleware. Tests pass a passthrough func
 // to bypass JWT verification (and inject Identity directly
 // into request context via auth.IdentityToContext helper).
 // Same nil-on-not-wired semantics as WithCsrfMiddleware.

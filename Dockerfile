@@ -1,21 +1,19 @@
 # InstaEditLogin — Multi-stage Dockerfile (Blocco #2.1)
 #
 # Targets:
-#   api         — HTTP server only (cmd/api). Local-dev single-process shape.
-#   worker      — 5 background goroutines only (cmd/worker). Local-dev single-process.
+#   api         — HTTP server only (cmd/api).
+#   worker      — background workers only (cmd/worker).
 #   migrate     — one-shot pre-deploy migration (cmd/migrate).
-#   server      — legacy single-bundle wrapper (cmd/server) for local recovery.
 #
 # Build:
 #   docker build --target api         -t instaedit-api         .
 #   docker build --target worker      -t instaedit-worker      .
 #   docker build --target migrate     -t instaedit-migrate     .
-#   docker build --target server      -t instaedit-server      .   # legacy single-process
 #
 # Default target (when no --target is supplied): api.
 
 # ────────────────────────────────────────────────────────────────────────
-# Stage 1: Builder — compile all 4 binaries from a single source tree.
+# Stage 1: Builder — compile the three canonical binaries from one source tree.
 # ────────────────────────────────────────────────────────────────────────
 FROM golang:1.26-alpine AS builder
 WORKDIR /app
@@ -26,10 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux \
     go build -ldflags="-s -w" -o /out/api     ./cmd/api     && \
     CGO_ENABLED=0 GOOS=linux \
     go build -ldflags="-s -w" -o /out/worker  ./cmd/worker  && \
-    CGO_ENABLED=0 GOOS=linux \
-    go build -ldflags="-s -w" -o /out/migrate ./cmd/migrate && \
-    CGO_ENABLED=0 GOOS=linux \
-    go build -ldflags="-s -w" -o /out/server  ./cmd/server
+    go build -ldflags="-s -w" -o /out/migrate ./cmd/migrate
 
 # ────────────────────────────────────────────────────────────────────────
 # Stage 2: Base — alpine + ca-certificates + non-root user (shared by all
@@ -84,18 +79,3 @@ USER appuser
 
 CMD ["/app/migrate"]
 
-# ────────────────────────────────────────────────────────────────────────
-# Stage 6: server — legacy single-bundle wrapper (Blocco #2.1 backward
-# compatibility). Runs API + workers + migrate in one process. Use ONLY
-# for local recovery and development, never as production topology.
-# ────────────────────────────────────────────────────────────────────────
-FROM base AS server
-COPY --from=builder /out/server /app/server
-RUN chown -R appuser:appuser /app
-USER appuser
-EXPOSE 8080
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -qO- http://localhost:8080/api/v1/health || exit 1
-
-CMD ["/app/server"]

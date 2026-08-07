@@ -337,7 +337,7 @@ func (m *VeloxModule) handleValidateInternalDestination(w http.ResponseWriter, r
 // Plus WithVeloxAPIToken AND the user/workspace stores MUST
 // be wired for the validate handler's full happy path. Calling
 // only this option but not WithVeloxAPIToken leaves the route
-// un-registered. cmd/server/main.go is responsible for
+// un-registered. the canonical bootstrap is responsible for
 // wiring all three (or all four, including WithWorkspaceStore
 // + WithUserStore which are normally wired earlier).
 func WithExternalDestinationStore(s ExternalDestinationStore) RouterOption {

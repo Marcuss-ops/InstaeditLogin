@@ -65,11 +65,9 @@ migrazioni come job one-shot, `cmd/api` espone solo HTTP e `cmd/worker` esegue
 i worker in background. `make dev` avvia questa stessa topologia tramite
 Docker Compose e mantiene la parità con production.
 
-`cmd/server/main.go` è ancora disponibile esclusivamente come wrapper legacy
-per sviluppo locale e recovery. Non usarlo in production: esegue la migration
-nel processo applicativo e unisce API e worker, impedendo scaling e rollout
-indipendenti. La sua rimozione è pianificata dopo la verifica degli ultimi usi
-legacy; vedere `docs/BINARIES.md` e `make verify-entrypoint-topology`.
+La topologia supportata usa esclusivamente i tre entrypoint separati
+`cmd/migrate`, `cmd/api` e `cmd/worker`; non esiste una modalità single-process
+legacy. Per i controlli usa `make verify-entrypoint-topology`.
 
 ## Architettura
 
@@ -78,7 +76,6 @@ instaedit-login/
 ├── cmd/api/main.go             # HTTP entrypoint canonico
 ├── cmd/worker/main.go          # Background-worker entrypoint canonico
 ├── cmd/migrate/main.go         # Migration entrypoint one-shot
-├── cmd/server/main.go          # Legacy wrapper deprecato, solo dev/recovery
 ├── internal/
 │   ├── auth/                   # JWT + API key middleware (Taglio 1.1)
 │   ├── config/                 # Configurazione e file ambiente espliciti

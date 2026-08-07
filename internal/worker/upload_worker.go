@@ -262,8 +262,8 @@ func NewUploadWorker(
 // processPublishJob's per-target phase to Create / MarkYouTubeUploaded
 // / IncrementAttempt on the youtube_target_publications table.
 //
-// Called once at bootstrap (cmd/server) immediately after
-// NewUploadWorker. If never called (or called with nil), the upload
+// Called once by the worker bootstrap immediately after NewUploadWorker.
+// If never called (or called with nil), the upload
 // worker logs at its first per-target upload attempt + gracefully
 // skips the private upload phase — the legacy publish-only flow
 // remains intact. The setter pattern keeps the constructor signature

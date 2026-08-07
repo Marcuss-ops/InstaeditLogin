@@ -1,19 +1,9 @@
-// Package bootstrap owns the shared startup wiring for every InstaEditLogin
-// binary (cmd/api, cmd/worker, cmd/migrate, cmd/server).
+// Package bootstrap owns the shared startup wiring for the canonical
+// cmd/api, cmd/worker, and cmd/migrate binaries.
 //
-// Blocco #2.1 split cmd/server/main.go into:
-//   - cmd/api     — HTTP only
-//   - cmd/worker  — 13 registry-managed background workers (publish,
-//     reconcile, outbox, webhook, metrics, cleanup, ingestion, and sweeps)
-//   - cmd/migrate — Connect + Migrate + exit (one-shot pre-deploy job)
-//   - cmd/server  — wrapper: dev/local-compat single-bundle that runs
-//     migrate + api + (optionally) workers in one process.
-//
-// Migrate is NOT part of Wire() on purpose: the production deploy topology
-// runs cmd/migrate as a one-shot pre-deploy job, so api/worker MUST NOT
-// re-run Migrate() — they'd race against an in-flight migration job. The
-// dev wrapper cmd/server does call Migrate() (via internal/database.Migrate)
-// because it assumes "this is the only process touching the DB just now".
+// Migrate is NOT part of Wire() on purpose: the deployment topology runs
+// cmd/migrate as a one-shot pre-deploy job, so api/worker MUST NOT re-run
+// Migrate() — they could race against an in-flight migration job.
 package bootstrap
 
 import (
@@ -169,9 +159,9 @@ func (a *App) requireRuntime() (*RuntimeCapabilities, error) {
 // on config / database / encryption-key / provider-registry failures
 // (these are fail-fast at startup, never silent).
 //
-// Taglio 3.1: S3 storage is mandatory. Wire panics — via the returned
-// error — when S3 config is missing (the caller decides how to handle
-// it; the wrapper cmd/server treats Wire errors as fatal-exit).
+// Taglio 3.1: S3 storage is mandatory. Wire returns an error when S3
+// config is missing; each canonical entrypoint treats wiring errors as
+// fatal startup failures.
 func Wire(ctx context.Context) (*App, error) {
 	_ = ctx
 	cfg, err := config.Load()

@@ -9,7 +9,7 @@
 //   - the dep list on Router.validateRequiredDeps is today five items
 //     (CredentialVault + ChannelAuthorizer + OneTimeCodeStore +
 //     IdempotencyStore + ConnectLinkNonceStore); production already
-//     wires ALL of them via cmd/server. Tests need to wire all five
+//     wires ALL of them via the canonical bootstrap. Tests need to wire all five
 //     too — splitting each dep into its own testutil/<dep>/ package
 //     would inflate the import surface on tests without extending
 //     the contract. A single internal/testutil/stores package is

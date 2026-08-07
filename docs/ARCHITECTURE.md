@@ -23,8 +23,8 @@ Internet
 Caddy on the VPS is the only public backend entry point. PostgreSQL, MinIO,
 and the worker health listener remain private. `cmd/migrate` completes before
 `api` and `worker` are released by Compose. Vercel serves only the frontend and
-never connects directly to PostgreSQL or MinIO. The deprecated `cmd/server`
-wrapper is retained only for local recovery and compatibility testing.
+never connects directly to PostgreSQL or MinIO. The backend uses only the
+split `cmd/migrate`, `cmd/api`, and `cmd/worker` entrypoints.
 
 ## Layers
 
@@ -32,7 +32,6 @@ wrapper is retained only for local recovery and compatibility testing.
 cmd/api/main.go             # Canonical HTTP entry point, wiring, graceful shutdown
 cmd/worker/main.go          # Canonical background-worker entry point
 cmd/migrate/main.go         # One-shot migration entry point
-cmd/server/main.go          # Deprecated local/recovery wrapper
 cmd/seed/main.go            # Development seed command
 internal/config/            # Environment configuration and validation
 internal/database/          # PostgreSQL connection and migrations
@@ -115,9 +114,9 @@ When the auto-crop, hashtag generation, AI image placement, stock-footage curati
 
 ## Background workers and Async Publishing Pipeline
 
-`internal/bootstrap/workers_wiring.go::RunWorkers` registers exactly **13 supervised background workers**, mirrored by the `cmd/worker` binary and by the `cmd/server` dev wrapper (the production topology runs `cmd/api` + `cmd/worker` as separate pods, plus a one-shot `cmd/migrate` before deploy). The shared `worker.Registry` owns lifecycle, heartbeat, readiness, metrics, and the single 15-second shutdown budget. The boot log lists: `publish / reconcile / outbox / webhook / metrics / sessions_cleanup / asset_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / token_refresh_sweep / snapshot_refresh_sweep`.
+`internal/bootstrap/workers_wiring.go::RunWorkers` registers exactly **13 supervised background workers**, started by the `cmd/worker` binary (the production topology runs `cmd/api` + `cmd/worker` as separate services, plus a one-shot `cmd/migrate` before deploy). The shared `worker.Registry` owns lifecycle, heartbeat, readiness, metrics, and the single 15-second shutdown budget. The boot log lists: `publish / reconcile / outbox / webhook / metrics / sessions_cleanup / asset_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / token_refresh_sweep / snapshot_refresh_sweep`.
 
-> **Documentation drift (Taglio 5.x)**: earlier versions of this document described the runtime as a "two- / three-goroutine" pipeline because only the publish + reconcile + outbox triple was tracked in the indexed case study. The other four (`webhook`, `metrics`, `sessions_cleanup`, `upload`) have been part of the boot surface since Blocco #2.1 — readers should treat the canonical table below as authoritative and ignore the older "TWO/THREE/5" references that may still appear in commit-message archaeology or `cmd/server/main.go` comments.
+> **Documentation drift (Taglio 5.x)**: earlier versions of this document described the runtime as a "two- / three-goroutine" pipeline because only the publish + reconcile + outbox triple was tracked in the indexed case study. The other four (`webhook`, `metrics`, `sessions_cleanup`, `upload`) have been part of the boot surface since Blocco #2.1 — readers should treat the canonical table below as authoritative and ignore the older "TWO/THREE/5" references that may still appear in commit-message archaeology.
 
 ### Authoritative worker list (mirrors `internal/bootstrap/workers_wiring.go::RunWorkers`)
 
@@ -351,7 +350,7 @@ Wall-clock bounds on shutdown:
 
 ## Transactional Outbox Pipeline
 
-**Cross-reference: `internal/outbox/dispatcher.go`, `internal/outbox/processors/publishjobs.go`, `cmd/server/main.go`.**
+**Cross-reference: `internal/outbox/dispatcher.go`, `internal/outbox/processors/publishjobs.go`, `cmd/worker/main.go`.**
 
 `PostRepository.Create` writes `posts + post_targets + outbox_events` in one `BEGIN/COMMIT` tx. The supervised outbox worker (`outbox.NewDispatcher`) reads `outbox_events` via `SELECT FOR UPDATE SKIP LOCKED` + heartbeat lease, then calls `processors.NewPublishJobsMaterialiser` to insert the audit row. It runs in parallel with the publish worker under the registry's single shared 15s drain budget. The PublishJob table is the audit-only appendix; `post_targets.status` remains the source of truth for current publish state.
 

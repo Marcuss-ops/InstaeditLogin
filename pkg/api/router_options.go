@@ -59,7 +59,7 @@ func WithOneTimeCodeStore(s OneTimeCodeStore) RouterOption {
 // when an Idempotency-Key request header is present. Without this
 // option wired, Idempotency-Key headers are silently ignored — the
 // handler falls through to the no-cache path. Production wiring
-// must include this option (see cmd/server/main.go).
+// must include this option (see the canonical bootstrap).
 func WithIdempotencyStore(s IdempotencyStore) RouterOption {
 	return func(r *Router) { r.idempotencyStore = s }
 }
@@ -74,7 +74,7 @@ func WithIdempotencyStore(s IdempotencyStore) RouterOption {
 //
 // Optional in main.go today so existing dev environments without
 // per-tenant API keys keep working — production deployments always
-// set it (cmd/server/main.go constructs one via
+// set it (the canonical bootstrap constructs one via
 // auth.NewApiKeyAuthenticator(apiKeyRepo)).
 func WithApiKeyAuthenticator(a *auth.Authenticator) RouterOption {
 	return func(r *Router) { r.apiKeyAuth = a }
@@ -208,7 +208,7 @@ func WithSessionsService(svc *services.SessionsService) RouterOption {
 
 // WithCookieSecure toggles the Secure flag on session cookies.
 // Defaults to false (httptest-friendly); production wiring in
-// cmd/server/main.go MUST set this to true.
+// the canonical bootstrap MUST set this to true.
 func WithCookieSecure(secure bool) RouterOption {
 	return func(r *Router) { r.cookieSecure = secure }
 }
@@ -261,7 +261,7 @@ func WithRateLimitService(svc *services.RateLimitService) RouterOption {
 // WithWebhookStore wires the SPRINT 4.2 webhook runtime. The
 // HTTP handlers use it to CRUD endpoint configuration + manual
 // replay; the background worker (spawned separately by
-// cmd/server/main.go) uses the same repo to claim + process
+// the canonical bootstrap) uses the same repo to claim + process
 // deliveries. When not wired, /api/v1/webhooks/* return 501.
 func WithWebhookStore(s WebhookStore) RouterOption {
 	return func(r *Router) { r.webhookStore = s }

@@ -77,6 +77,14 @@ func TestValidate_DatabasePoolRoleRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestValidate_DatabasePoolRoleRejectsRemovedServerRole(t *testing.T) {
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.Database.DBPoolRole = "server"
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "DB_POOL_ROLE") {
+		t.Fatalf("validate(): want removed server role to be rejected, got %v", err)
+	}
+}
+
 func TestValidate_DatabasePoolProfileRejectsOversizedIdle(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
 	cfg.Database.DBAPI = DBPoolProfile{MaxOpenConns: 2, MaxIdleConns: 3, ConnMaxLifetimeSeconds: 60, ConnMaxIdleTimeSeconds: 60}

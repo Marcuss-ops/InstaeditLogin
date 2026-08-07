@@ -11,7 +11,7 @@
 //   - Identity injection: httptest.NewRequest + req.WithContext(
 //     auth.WithIdentity(ctx, auth.NewUserIdentity(uid, ws, sid))).
 //     Mirrors the production JWT middleware that production wiring
-//     (cmd/server/main.go → r.protected → r.auth.Middleware) calls.
+//     (canonical bootstrap → r.protected → r.auth.Middleware) calls.
 //     If identity production code drifts, this test will drift too
 //     and fail to compile at the auth import boundary.
 //   - Path-param injection: req.SetPathValue("id", "381") — the

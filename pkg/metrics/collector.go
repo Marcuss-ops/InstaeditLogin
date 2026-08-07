@@ -11,7 +11,7 @@
 //	refresh_tokens_near_expiry     (Gauge, no labels)
 //
 // Lifecycle: RunPeriodicCollector is a blocking loop driven by a
-// time.Ticker; ctx-cancellable; integrates with cmd/server/main.go's
+// time.Ticker; ctx-cancellable; integrates with the worker registry's
 // parallel-drain shutdown pattern alongside the publish worker,
 // reconcile worker, outbox dispatcher, and webhook worker.
 //

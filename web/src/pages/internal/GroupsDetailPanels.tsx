@@ -474,16 +474,12 @@ export function GroupDetailPanel({
                   </span>
                   <button type="button" onClick={() => onPickAccount(a.id)} className="truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username}`}>{a.username || a.platform_user_id}</button>
                 </div>
-                <div className={cn("flex max-w-[170px] flex-wrap justify-end gap-1 rounded-xl border bg-black/20 p-1", languageSuggestionIds.has(a.id) ? "border-amber-300/70 ring-1 ring-amber-300/30" : "border-white/[0.10]")}>
-                  <select value={languages[a.id] ?? ""} disabled={savingLanguageId === a.id || languageApplyBusy} onChange={(event) => void saveManualLanguage(a.id, event.target.value)} className="sr-only" aria-label={`Language for ${a.username}`}>
-                    <option value="">Lingua non impostata</option>
+                <div className={cn("flex max-w-[170px] items-center gap-1 rounded-lg border bg-black/20 py-0.5 pl-1 pr-1.5", languageSuggestionIds.has(a.id) ? "border-amber-300/70 ring-1 ring-amber-300/30" : "border-white/[0.10]")}>
+                  <LanguageFlag code={languages[a.id]} className="h-4 w-4 shrink-0" />
+                  <select value={languages[a.id] ?? ""} disabled={savingLanguageId === a.id || languageApplyBusy} onChange={(event) => void saveManualLanguage(a.id, event.target.value)} aria-label={`Language for ${a.username}`} className="cursor-pointer truncate bg-transparent text-[11px] font-medium text-white outline-none disabled:cursor-progress disabled:opacity-50">
+                    <option value="">Lingua</option>
                     {LANGUAGE_OPTIONS.map(({ code, name }) => <option key={code} value={code}>{name}</option>)}
                   </select>
-                  <button type="button" onClick={() => void saveManualLanguage(a.id, "")} disabled={savingLanguageId === a.id || languageApplyBusy} className={cn("flex h-6 w-6 items-center justify-center rounded-lg text-[14px] transition-all", !languages[a.id] ? "bg-white text-black shadow-sm" : "text-white/45 hover:bg-white/[0.10] hover:text-white")} aria-hidden="true" tabIndex={-1} title="Rimuovi lingua">—</button>
-                  {LANGUAGE_OPTIONS.map(({ code, name }) => {
-                    const active = languages[a.id] === code;
-                    return <button key={code} type="button" onClick={() => void saveManualLanguage(a.id, code)} disabled={savingLanguageId === a.id || languageApplyBusy} className={cn("grid h-6 w-6 place-items-center rounded-lg transition-all hover:scale-110 disabled:cursor-progress disabled:opacity-50", active ? "bg-violet-400/90 shadow-[0_0_12px_rgba(139,92,246,0.45)]" : "hover:bg-white/[0.10] opacity-70 grayscale-[.35] hover:opacity-100 hover:grayscale-0")} aria-hidden="true" tabIndex={-1} title={name}><LanguageFlag code={code} className="h-4 w-4" /></button>;
-                  })}
                 </div>
                 {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]} aria-label={languageError[a.id]}>!</span> : null}
                 {languageWarning[a.id] ? (

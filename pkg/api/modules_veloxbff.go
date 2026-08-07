@@ -48,7 +48,7 @@ func (m *VeloxBFFModule) Register(mux chi.Router) {
 // WithVeloxBFFClient wires the typed Velox client used by the
 // user-facing /api/v1/velox/* BFF routes. When omitted, the
 // VeloxBFFModule does not mount its routes (nil-guard pattern).
-// Production wiring in cmd/server/main.go passes the
+// Production wiring in the canonical bootstrap passes the
 // internal/veloxclient.Client constructed from VELOX_CONTROL_URL +
 // VELOX_CONTROL_JWT_SECRET.
 func WithVeloxBFFClient(c veloxapi.Client) RouterOption {

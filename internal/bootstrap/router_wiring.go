@@ -203,7 +203,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	// the capability interface — a silent no-op would leave
 	// r.youTubeSvc nil and the /accounts/{id}/validate 4-step
 	// pipeline would fall back to the legacy token-freshness probe.
-	// The /cmd/api and /cmd/server entrypoints both call Wire() here.
+	// The canonical /cmd/api entrypoint calls Wire() here.
 	// This is the single production router injection site.
 	rawYouTubeService, youtubeRegistered :=
 		s.capRouter.Get(models.PlatformYouTube)

@@ -1,5 +1,5 @@
 // Package worker implements background processes that run alongside the
-// HTTP server. Two goroutines are spawned by cmd/server/main.go:
+// HTTP server. The canonical worker entrypoint supervises these goroutines:
 //
 //   - PublishWorker.publishTarget  — driver: queued → publishing
 //     → published|failed. Picks up scheduled post_targets whose
@@ -11,8 +11,8 @@
 //     calls AsyncPublisher.Reconcile on each row.
 //
 // Both run as INDEPENDENT goroutines with INDEPENDENT tick intervals
-// and ctx-cancellable lifecycles. cmd/server/main.go spawns them in
-// parallel and shuts them down in parallel (independent 15s drains).
+// and ctx-cancellable lifecycles. The worker registry starts and shuts
+// them down in parallel under the shared drain budget.
 //
 // The split mirror's the outbox dispatcher's shape (commit 20ad05f,
 // internal/outbox/dispatcher.go) — each major background process is

@@ -15,13 +15,9 @@ components it owns:
 | `cmd/api` | [`cmd/api/main.go`](../cmd/api/main.go) | HTTP API and readiness endpoints; no background worker runtime. |
 | `cmd/worker` | [`cmd/worker/main.go`](../cmd/worker/main.go) | Background publishing, reconciliation, outbox, webhook, metrics, cleanup, and related worker loops; no public HTTP listener. |
 
-`cmd/server` remains a deprecated compatibility wrapper for deliberate local
-recovery only. It combines migration, HTTP, and workers in one process, uses
-the `server` database-pool role, and is not part of the supported VPS
-deployment. Critical worker failures shut the wrapper down with a non-zero
-exit after coordinated HTTP/metrics/worker draining. See the [`cmd/server`
-removal audit](CMD-SERVER-REMOVAL-AUDIT.md) before changing or removing its
-compatibility surfaces.
+There is no single-process compatibility wrapper. All local, recovery, and
+production workflows use the same split entrypoints so migrations, HTTP, and
+background workers have independent lifecycle and scaling boundaries.
 
 ## Canonical production topology
 
@@ -92,17 +88,13 @@ make run-api
 make run-worker
 ```
 
-The `server` Compose profile and the `run-server*` Makefile targets remain
-available only for explicit recovery or compatibility testing:
+The split topology is the only supported local and recovery workflow:
 
 ```bash
-docker compose --profile legacy up
-make run-server
-make run-server-api-only
+make run-migrate
+make run-api
+make run-worker
 ```
-
-Do not use those legacy paths for a new deployment. They are retained until
-the documented removal gate is satisfied.
 
 ## Dockerfile targets
 
@@ -114,7 +106,6 @@ stages:
 | `api` | `/app/api` | Canonical HTTP service. |
 | `worker` | `/app/worker` | Canonical background-worker service. |
 | `migrate` | `/app/migrate` | Canonical one-shot migration service. |
-| `server` | `/app/server` | Deprecated local recovery compatibility stage only. |
 
 Build the canonical images with:
 
@@ -124,8 +115,7 @@ docker build --target api     -t instaedit-api .
 docker build --target worker  -t instaedit-worker .
 ```
 
-The `server` target is intentionally excluded from the production Compose
-overlay. The complete service graph and migration dependency are defined in
+The complete service graph and migration dependency are defined in
 [`docker-compose.yml`](../docker-compose.yml) and hardened for the VPS by
 [`docker-compose.production.yml`](../docker-compose.production.yml).
 
@@ -175,25 +165,6 @@ failures remain visible without taking readiness down. A critical worker error
 is returned by `RunWorkers` so the process exits non-zero for orchestrator
 restart.
 
-### `cmd/server` legacy wrapper
-
-```text
-DB_POOL_ROLE=server
-bootstrap.Wire
-  -> database.Migrate(app.DB)
-  -> installation-identity verification
-  -> optional app.RunWorkers(ctx) controlled by RUN_WORKERS
-  -> HTTP listener
-  -> graceful HTTP/metrics/worker shutdown
-  -> non-zero exit on critical worker failure
-```
-
-The wrapper's in-process migration assumes exclusive database access and its
-combined lifecycle prevents independent API/worker scaling. It registers worker
-metrics before starting goroutines, drains HTTP and metrics on signal or
-critical-worker failure, and returns non-zero after a critical worker error.
-It must remain a local recovery path, not a production entrypoint.
-
 ## Environment and storage parity
 
 `cmd/api`, `cmd/worker`, and `cmd/migrate` consume the same application
@@ -224,27 +195,15 @@ go vet ./...
 go build ./...
 ```
 
-The topology check confirms that `migrate`, `api`, and `worker` remain the
-canonical production targets, that production files do not select `server`,
-and that the deliberate legacy compatibility surfaces remain explicit.
+The topology check confirms that `migrate`, `api`, and `worker` are the only
+supported targets and that no legacy single-process surface has returned.
 
-## Removal gate for `cmd/server`
+## Entrypoint removal status
 
-Do not remove `cmd/server/main.go` until all of the following are confirmed:
-
-1. No active development or recovery workflow invokes `run-server`,
-   `run-server-api-only`, the Compose `legacy` profile, or the Docker `server`
-   target.
-2. Operators confirm that no maintained environment depends on the wrapper.
-3. The compatibility window ends with no observed wrapper use.
-4. The replacement workflow is validated with `make dev`,
-   `make run-migrate`, `make run-api`, and `make run-worker`.
-5. One reviewed change removes the Go wrapper, Docker stage, Compose profile,
-   Makefile targets, and obsolete documentation together.
-6. The topology check, race-enabled tests, vet, and build pass after removal.
-
-Until then, the wrapper's deprecation warning and the
-[`removal audit`](CMD-SERVER-REMOVAL-AUDIT.md) keep intentional use visible.
+The legacy single-process wrapper, Compose profile, Docker target, Makefile
+compatibility targets, and server-specific database pool profile have been
+removed. The completed audit is recorded in
+[`CMD-SERVER-REMOVAL-AUDIT.md`](CMD-SERVER-REMOVAL-AUDIT.md).
 
 ## See also
 

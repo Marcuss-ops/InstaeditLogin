@@ -92,14 +92,14 @@ func (c *Config) validate() error {
 	}
 	if c.Database.DBPoolRole != "" {
 		switch c.Database.DBPoolRole {
-		case DBPoolRoleAPI, DBPoolRoleWorker, DBPoolRoleServer, DBPoolRoleMaintenance:
+		case DBPoolRoleAPI, DBPoolRoleWorker, DBPoolRoleMaintenance:
 		default:
-			return fmt.Errorf("DB_POOL_ROLE must be one of api|worker|server|maintenance (got %q)", c.Database.DBPoolRole)
+			return fmt.Errorf("DB_POOL_ROLE must be one of api|worker|maintenance (got %q)", c.Database.DBPoolRole)
 		}
 	}
 	for name, profile := range map[string]DBPoolProfile{
 		"DB_API": c.Database.DBAPI, "DB_WORKER": c.Database.DBWorker,
-		"DB_SERVER": c.Database.DBServer, "DB_MAINTENANCE": c.Database.DBMaintenance,
+		"DB_MAINTENANCE": c.Database.DBMaintenance,
 	} {
 		if profile.isZero() {
 			continue

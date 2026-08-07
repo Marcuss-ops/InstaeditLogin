@@ -97,7 +97,7 @@ type Encryptor struct {
 // key is not 32 bytes.
 //
 // Backward-compat with the legacy single-key ENCRYPTION_KEY env
-// var: cmd/server/main.go calls this with
+// var: the bootstrap wiring calls this with
 //
 //	NewEncryptor(1, map[uint32]string{1: <ENCRYPTION_KEY>})
 //

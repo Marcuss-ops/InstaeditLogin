@@ -69,7 +69,7 @@ func NewRateLimitServiceWithMemory(repo RateLimitRepo, mem *MemoryLimiter) *Rate
 
 // Shutdown stops the in-memory limiter's background reaper. Idempotent.
 // Production wiring should call this in the graceful-shutdown path
-// (cmd/server/main.go) so the reaper goroutine does not leak when
+// (the canonical process) so the reaper goroutine does not leak when
 // the process exits. Tests use it via `defer svc.Shutdown()` to
 // keep the reaper contained within the test process.
 func (s *RateLimitService) Shutdown() {

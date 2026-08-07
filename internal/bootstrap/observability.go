@@ -31,9 +31,9 @@ func configureSentry(opts sentry.ClientOptions) (*sentry.Hub, error) {
 
 // RegisterWorkerMetrics registers the worker registry as a Prometheus
 // collector. It is safe to call multiple times; subsequent calls are
-// no-ops. Callers that expose /metrics (cmd/worker and cmd/server)
-// should invoke this before bootstrap.StartMetricsServer so the
-// worker_state metric is available from the first scrape.
+// no-ops. Callers that expose /metrics (cmd/worker) should invoke this
+// before bootstrap.StartMetricsServer so the worker_state metric is
+// available from the first scrape.
 func (a *App) RegisterWorkerMetrics() error {
 	if a.WorkerRegistry == nil {
 		return nil

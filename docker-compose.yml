@@ -168,29 +168,6 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # Legacy dev-only convenience service for users who want the single-process
-  # shape. Not started by default; `docker compose --profile legacy up`
-  # to start it. Disables the api/worker services above so PORT 8080
-  # isn't double-bound.
-  server:
-    profiles: ["legacy"]
-    build:
-      context: .
-      target: server
-    container_name: instaedit-server
-    env_file:
-      - ${INSTAEDIT_ENV_FILE:-.env.production}
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
-      - PORT=8080
-      # NVIDIA AI metadata generation (mirrors the api + worker services).
-      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
-    ports:
-      - "0.0.0.0:8080:8080"
-    depends_on:
-      db:
-        condition: service_healthy
-
 # MinIO — local S3-compatible object store. The credentials below
   # MUST match S3_ACCESS_KEY / S3_SECRET_KEY in `.env.dev` (referenced
   # via env_file). `minio-init` is a one-shot sidecar that creates the

@@ -24,10 +24,6 @@ services:
       APP_ENV: dev
       APP_MODE: dev
 
-  server:
-    environment:
-      APP_ENV: dev
-      APP_MODE: dev
 networks:
   media-backend:
     internal: true

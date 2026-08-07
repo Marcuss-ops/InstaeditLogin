@@ -242,7 +242,7 @@ type CredentialVault struct {
 	// clock is the "now" dependency. Production wires time.Now; tests
 	// inject a fakeClock via SetClock so the TTL math (8-day refresh
 	// rule, 60-second staleness grace) is deterministic. The field is
-	// package-private on purpose: callers in cmd/server should never
+	// package-private on purpose: runtime callers should never
 	// need to swap it.
 	clock func() time.Time
 	// logger is the optional slog sink for vault observability signals

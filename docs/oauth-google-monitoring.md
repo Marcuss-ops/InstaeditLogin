@@ -145,7 +145,7 @@ APP_MODE=testing      # mirrors Google's 7-day Testing-mode TTL
 
 The flag lives in `internal/config/config.go` as
 `Config.AppMode string`. In production wiring it is read by the
-`TokenRefresher` closure built in `cmd/server/main.go`; production
+`TokenRefresher` closure built in the canonical bootstrap wiring; production
 forwards calls to Google's real `oauth2/v3/token` endpoint and
 returns the response verbatim.
 

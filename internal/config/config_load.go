@@ -88,7 +88,6 @@ func Load() (*Config, error) {
 			DBPoolRole:               getEnv("DB_POOL_ROLE", ""),
 			DBAPI:                    newDBPoolFieldSpec("DB_API", DBPoolProfile{MaxOpenConns: 15, MaxIdleConns: 7, ConnMaxLifetimeSeconds: 1800, ConnMaxIdleTimeSeconds: 300}).resolve(),
 			DBWorker:                 newDBPoolFieldSpec("DB_WORKER", DBPoolProfile{MaxOpenConns: 10, MaxIdleConns: 5, ConnMaxLifetimeSeconds: 1800, ConnMaxIdleTimeSeconds: 300}).resolve(),
-			DBServer:                 newDBPoolFieldSpec("DB_SERVER", DBPoolProfile{MaxOpenConns: 25, MaxIdleConns: 10, ConnMaxLifetimeSeconds: 1800, ConnMaxIdleTimeSeconds: 300}).resolve(),
 			DBMaintenance:            newDBPoolFieldSpec("DB_MAINTENANCE", DBPoolProfile{MaxOpenConns: 3, MaxIdleConns: 1, ConnMaxLifetimeSeconds: 1800, ConnMaxIdleTimeSeconds: 300}).resolve(),
 			DBHost:                   getEnv("DB_HOST", "localhost"),
 			DBPort:                   getEnv("DB_PORT", "5432"),

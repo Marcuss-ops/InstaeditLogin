@@ -1,6 +1,6 @@
 // Package services implements the StorageProvider abstraction used by
 // /api/v1/storage/upload-url. A single S3-compatible provider is wired
-// at startup based on environment variables (see cmd/server/main.go
+// at startup based on environment variables (see internal/bootstrap
 // and internal/config):
 //
 //	S3-compatible — requires S3_ENDPOINT + S3_BUCKET + S3_ACCESS_KEY +

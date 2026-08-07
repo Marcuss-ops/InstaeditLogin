@@ -340,7 +340,6 @@ export function GroupsPage() {
             search={channelSearch}
             filter={channelFilter}
             selectedIds={selectedChannelIds}
-            selectedGroupName={selectedGroup?.name ?? null}
             visibleSelectedCount={visibleSelectedCount}
             busyAccountId={busyAccountId}
             draggedAccountId={draggedAccountId}
@@ -372,7 +371,6 @@ function YouTubeChannelsTray({
   search,
   filter,
   selectedIds,
-  selectedGroupName,
   visibleSelectedCount,
   onDragStart,
   allVisibleSelected,
@@ -390,7 +388,6 @@ function YouTubeChannelsTray({
   search: string;
   filter: "all" | "assigned" | "unassigned";
   selectedIds: Set<number>;
-  selectedGroupName: string | null;
   visibleSelectedCount: number;
   onDragStart: (accountId: number, ids: number[]) => void;
   allVisibleSelected: boolean;
@@ -470,12 +467,13 @@ function YouTubeChannelsTray({
           </button>
         </div>
         {visibleSelectedCount > 0 ? (
-          <div className="flex flex-col gap-2 rounded-xl border border-violet-400/30 bg-violet-500/[0.10] p-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-[12px] font-semibold text-violet-100"><span>{visibleSelectedCount} canali selezionati</span>{selectedGroupName ? <> · trascina nel gruppo «{selectedGroupName}»</> : <> · trascina su un gruppo</>}</p>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="hidden text-[11px] text-violet-200/70 sm:inline">Clicca le card, poi trascinane una per assegnarle tutte</span>
-              <button type="button" onClick={onClearSelection} aria-label="Deseleziona canali" className="rounded-lg p-2 text-[#c7c9d1] transition hover:bg-white/[0.08] hover:text-white"><X size={15} /></button>
-            </div>
+          <div className="flex flex-col gap-2 rounded-xl border border-violet-400/30 bg-violet-500/[0.08] p-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[12px] font-semibold text-violet-100">
+              {dragging ? "Rilascia su un gruppo" : `${visibleSelectedCount} canali selezionati`}
+            </p>
+            <button type="button" onClick={onClearSelection} aria-label="Deseleziona canali" className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[12px] font-semibold text-white transition hover:bg-white/[0.08]">
+              <X size={14} /> Deseleziona
+            </button>
           </div>
         ) : null}
       </div>
@@ -545,7 +543,7 @@ function YouTubeChannelCard({
       data-account-id={account.id}
       className={cn(
         "group flex cursor-pointer items-center gap-2 rounded-2xl border bg-white/[0.04] p-2.5 transition-all duration-200",
-        selected ? "border-violet-300/70 bg-violet-500/[0.13] shadow-[0_0_0_1px_rgba(167,139,250,0.16),0_12px_28px_rgba(99,102,241,0.12)]" : "border-white/[0.10]",
+        selected ? "border-violet-300/70 bg-violet-500/[0.08]" : "border-white/[0.10]",
         busy && "pointer-events-none opacity-60",
         dragging && "scale-[0.98] opacity-40 ring-2 ring-amber-300/50",
         !busy && "hover:-translate-y-0.5 hover:border-violet-300/40 hover:bg-white/[0.07]",
@@ -559,7 +557,7 @@ function YouTubeChannelCard({
         }}
         aria-label={`${selected ? "Deseleziona" : "Seleziona"} ${label}`}
         aria-pressed={selected}
-        className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-lg border transition-all", selected ? "border-violet-300 bg-violet-500 text-white shadow-[0_0_12px_rgba(139,92,246,0.45)]" : "border-white/20 bg-black/20 text-transparent hover:border-white/50")}
+        className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-lg border transition-all", selected ? "border-violet-300 bg-violet-500 text-white" : "border-white/20 bg-black/20 text-transparent hover:border-white/50")}
       >
         {selected ? <Check size={13} /> : <Square size={12} />}
       </button>
@@ -593,9 +591,7 @@ function YouTubeChannelCard({
       </div>
       {busy ? (
         <RefreshCw size={13} className="animate-spin text-amber-300" aria-label="Assegnazione in corso" />
-      ) : (
-        <span className="hidden text-[10px] font-semibold text-violet-200/75 sm:inline">Trascina</span>
-      )}
+      ) : null}
     </div>
   );
 }

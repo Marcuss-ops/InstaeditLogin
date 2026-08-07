@@ -16,7 +16,7 @@ import (
 // pattern declared in handlers.go: a local interface so tests
 // can supply an in-memory fake without dragging the *sql.DB-bound
 // *repository.ExternalDestinationRepository into the test fixture.
-// The production wiring in cmd/server/main.go passes
+// The production wiring in the canonical bootstrap passes
 // repository.NewExternalDestinationRepository(db) which satisfies
 // this contract.
 //

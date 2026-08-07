@@ -69,7 +69,7 @@ func buildProviderWiring(s *wireState) error {
 	// collected at process termination there. Exposing the
 	// store on App avoids re-constructing it in RunWorkers —
 	// the same instance is shared across api + worker processes
-	// when cmd/server bundles both.
+	// when the API and worker run in separate processes.
 
 	return nil
 }

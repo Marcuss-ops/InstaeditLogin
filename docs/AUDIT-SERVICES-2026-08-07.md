@@ -162,7 +162,7 @@ VPS
 - Caddy è l'unico ingresso pubblico del backend.
 - PostgreSQL e MinIO restano privati alla VPS e alla rete Compose.
 - `cmd/migrate` completa prima dell'avvio operativo di API e worker.
-- `cmd/server` è soltanto un wrapper legacy per recovery e compatibilità locale.
+- Il backend usa esclusivamente gli entrypoint separati `cmd/migrate`, `cmd/api` e `cmd/worker`.
 - Le alternative di hosting backend e object storage non fanno parte del percorso
   operativo supportato; usare la topologia Vercel + VPS descritta nei documenti canonici.
 

@@ -12,7 +12,6 @@
 // independent of cmd/api pods.
 //
 // dev: `make dev` launches cmd/api and cmd/worker as separate services.
-// cmd/server remains only as a deprecated local recovery wrapper.
 package main
 
 import (
@@ -33,7 +32,7 @@ func main() {
 	// This binary owns the API pool budget. Enforce the role even when a
 	// shared environment file contains another process's setting.
 	_ = os.Setenv("DB_POOL_ROLE", "api")
-	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin API (Blocco #2.1: split from cmd/server)")
+	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin API (canonical split topology)")
 
 	app, err := bootstrap.Wire(context.Background())
 	if err != nil {

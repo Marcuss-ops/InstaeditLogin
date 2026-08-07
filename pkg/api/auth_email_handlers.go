@@ -35,7 +35,7 @@ type AuthEmailStore interface {
 
 // AuthEmailServiceAdapter adapts *services.AuthService to the local
 // AuthEmailStore interface used by the API handlers. Exported via
-// NewAuthEmailServiceAdapter so cmd/server/main.go can wrap the
+// NewAuthEmailServiceAdapter so the canonical bootstrap can wrap the
 // concrete service without exporting every private helper.
 type AuthEmailServiceAdapter struct {
 	svc *services.AuthService

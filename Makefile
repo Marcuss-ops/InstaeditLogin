@@ -5,7 +5,7 @@
         installation-identity-diagnostic installation-identity-diagnostic-test \
         duplicate-token-diagnostic-test oauth-migrations-diagnostic-test \
         refresh-token-eviction-diagnostic-test \
-        run-api run-worker run-migrate run-server run-server-api-only \
+        run-api run-worker run-migrate \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
         web-dev \
@@ -14,14 +14,8 @@
 
 # Start the full local development stack modeled on Blocco #2.1's
 # production-true topology: 3 services (api + worker + migrate).
-# The legacy `server` profile remains available only for recovery and
-# compatibility; see docker-compose.yml for the service definitions.
-#
-# Blocco #2.1 NOTE: `make dev` no longer starts the pre-split single-bundle
-# dev shape. The 3-service production topology IS the new dev default.
-# Do not use the legacy wrapper for production. If compatibility testing
-# is required, use `make run-server` or `docker compose --profile legacy up`
-# deliberately and plan its removal using `make verify-entrypoint-topology`.
+# The 3-service production topology is also the default local development
+# shape: migration, API, and worker run as separate processes.
 dev:
 	INSTAEDIT_ENV_FILE=.env.dev API_HOST_PORT=8081 docker compose \
 		--env-file .env.dev \
@@ -100,16 +94,6 @@ run-worker:
 # Verify the canonical split entrypoints and production references.
 verify-entrypoint-topology:
 	./scripts/verify-entrypoint-topology.sh
-
-# Legacy single-bundle wrapper (cmd/server). RUN_WORKERS=false disables
-# workers for HTTP-only debugging. Default true (matches docker-compose
-# `server` profile).
-run-server:
-	RUN_WORKERS=true go run ./cmd/server
-
-# Same wrapper, HTTP-only mode (RUN_WORKERS=false)
-run-server-api-only:
-	RUN_WORKERS=false go run ./cmd/server
 
 # Run all Go tests
 test: backend-test
@@ -255,7 +239,7 @@ loc-check:
 docker-build-migrate-only:
 	docker build --target migrate -t instaedit-migrate .
 
-# Local-dev single-process Docker builds (NOT used by Fly).
+# Local-dev Docker builds for the canonical split services.
 docker-build-local-api:
 	docker build --target api -t instaedit-api .
 
