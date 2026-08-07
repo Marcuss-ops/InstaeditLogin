@@ -11,16 +11,16 @@ import (
 // GroupsModuleDeps readable (mirrors the AuthHandlers pattern used
 // by the auth module).
 type GroupsHandlers struct {
-	ListGroups          http.HandlerFunc
+	ListGroups             http.HandlerFunc
 	ListGroupsWithAccounts http.HandlerFunc
-	CreateGroup         http.HandlerFunc
-	GetGroup            http.HandlerFunc
-	UpdateGroup         http.HandlerFunc
-	DeleteGroup         http.HandlerFunc
-	ListGroupAccounts   http.HandlerFunc
-	SetGroupAccounts    http.HandlerFunc
-	UpdateGroupSettings http.HandlerFunc
-	RemoveGroupAccount  http.HandlerFunc
+	CreateGroup            http.HandlerFunc
+	GetGroup               http.HandlerFunc
+	UpdateGroup            http.HandlerFunc
+	DeleteGroup            http.HandlerFunc
+	ListGroupAccounts      http.HandlerFunc
+	SetGroupAccounts       http.HandlerFunc
+	UpdateGroupSettings    http.HandlerFunc
+	RemoveGroupAccount     http.HandlerFunc
 }
 
 // GroupsModuleDeps is the narrow set of dependencies the groups
