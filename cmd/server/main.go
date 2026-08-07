@@ -4,7 +4,7 @@
 //  1. bootstrap.Wire (config + DB + repos + services + Router)
 //  2. database.Migrate (dev wrapper assumes exclusive DB access)
 //  3. HTTP server (same path as cmd/api)
-//  4. Optional 9 background goroutines (gated by RUN_WORKERS env)
+//  4. Optional 13 background workers (gated by RUN_WORKERS env)
 //
 // Production topology (cmd/api + cmd/worker + cmd/migrate as separate
 // pods) does NOT use this wrapper. This binary survives for two reasons:
@@ -12,7 +12,7 @@
 //   - Backward compatibility with the pre-Blocco #2.1 deploy shape
 //     (Railway / Render single-process models)
 //
-// RUN_WORKERS=false disables the 9 background goroutines but keeps the
+// RUN_WORKERS=false disables the 13 background workers but keeps the
 // HTTP server. Default true. Production-shaped binary deploys should
 // use cmd/api + cmd/worker instead so per-service scaling is correct.
 package main
@@ -34,6 +34,13 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("server: process failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// The bundled development wrapper shares one process, so use its
 	// dedicated combined pool budget rather than API or worker alone.
 	// This bundled process owns the combined API+worker pool budget.
@@ -43,8 +50,7 @@ func main() {
 
 	app, err := bootstrap.Wire(context.Background())
 	if err != nil {
-		slog.Error("server: wire failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("wire: %w", err)
 	}
 	defer func() {
 		if err := app.DB.Close(); err != nil {
@@ -55,12 +61,10 @@ func main() {
 	// Migrate: dev wrapper assumes exclusive DB access. Production
 	// deployments run cmd/migrate as a one-shot pre-deploy job.
 	if err := database.MigrateWithExpectedInstallationUUID(app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
-		slog.Error("server: database migrate failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("database migrate: %w", err)
 	}
 	if err := database.VerifyInstallationIdentity(context.Background(), app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
-		slog.Error("server: database identity verification failed", "error_class", "DATABASE_IDENTITY_MISMATCH")
-		os.Exit(1)
+		return fmt.Errorf("database identity verification (%s): %w", "DATABASE_IDENTITY_MISMATCH", err)
 	}
 
 	// RUN_WORKERS env (default true): false → API-only mode.
@@ -73,9 +77,19 @@ func main() {
 		}
 	}
 
-	var wg sync.WaitGroup
+	// Register the worker registry before starting any goroutine. A
+	// registration failure must not leave workers or HTTP serving against
+	// an App whose run() path is about to close the database.
+	if runWorkers {
+		if err := app.RegisterWorkerMetrics(); err != nil {
+			return fmt.Errorf("register worker metrics: %w", err)
+		}
+	}
 
-	// 9 background workers: only if RUN_WORKERS=true.
+	var wg sync.WaitGroup
+	workerErrCh := make(chan error, 1)
+
+	// 13 background workers: only if RUN_WORKERS=true.
 	var workersCancel context.CancelFunc = func() {} // no-op default
 	if runWorkers {
 		ctxWorkers, cancel := context.WithCancel(context.Background())
@@ -83,9 +97,9 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slog.Info("server: launching 9 background workers (RUN_WORKERS=true)")
+			slog.Info("server: launching 13 background workers (RUN_WORKERS=true)")
 			if err := app.RunWorkers(ctxWorkers); err != nil && err != context.Canceled {
-				slog.Error("server: RunWorkers exited with error", "error", err)
+				workerErrCh <- err
 			}
 		}()
 	} else {
@@ -114,16 +128,8 @@ func main() {
 		}
 	}()
 
-	// Register the worker registry as a Prometheus collector only when
-	// this wrapper actually runs workers, so /metrics exposes
-	// worker_state{} in worker-enabled mode and stays clean otherwise.
-	if runWorkers {
-		if err := app.RegisterWorkerMetrics(); err != nil {
-			slog.Error("server: worker registry metric registration failed", "error", err)
-			os.Exit(1)
-		}
-	}
-
+	// RegisterWorkerMetrics ran before any goroutine started, so the
+	// metrics server can now safely expose the registry collector.
 	metricsShutdown := bootstrap.StartMetricsServer(app.Cfg, app.Logger)
 
 	// Single-channel signal handling drives BOTH drain paths
@@ -132,8 +138,13 @@ func main() {
 	// only completes when ALL spawned goroutines return.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-quit
-	slog.Info("server: received signal, initiating parallel shutdown", "signal", sig.String())
+	var workerErr error
+	select {
+	case sig := <-quit:
+		slog.Info("server: received signal, initiating parallel shutdown", "signal", sig.String())
+	case workerErr = <-workerErrCh:
+		slog.Error("server: critical worker failed, initiating shutdown", "error", workerErr)
+	}
 
 	// Cancel workers (triggers 15s internal drain per leaf in app.RunWorkers).
 	workersCancel()
@@ -154,5 +165,19 @@ func main() {
 	}
 
 	wg.Wait()
+	// A signal and a critical worker failure may arrive concurrently. The
+	// signal branch above intentionally starts the drain immediately; once
+	// every worker goroutine has returned, collect any buffered critical
+	// error so it cannot be mistaken for a clean shutdown.
+	if workerErr == nil {
+		select {
+		case workerErr = <-workerErrCh:
+		default:
+		}
+	}
 	slog.Info("server: graceful shutdown complete")
+	if workerErr != nil {
+		return fmt.Errorf("critical worker failed: %w", workerErr)
+	}
+	return nil
 }

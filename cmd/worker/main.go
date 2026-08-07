@@ -1,14 +1,13 @@
 // cmd/worker — InstaEditLogin background workers (Blocco #2.1)
 //
-// Runs ONLY the 9 background goroutines (publish, reconcile, outbox,
-// webhook, metrics, sessions_cleanup, velox_downloader, upload and
-// drive_batch_crawler). The HTTP server is NOT started here — it lives
-// in the cmd/api binary, which runs separately in production deployments.
+// Runs ONLY the 13 registry-managed background workers (publish, reconcile,
+// outbox, webhook, metrics, cleanup, ingestion, and refresh sweeps). The
+// HTTP server is NOT started here — it lives in the cmd/api binary, which
+// runs separately in production deployments.
 //
-// All 9 goroutines share App.DB / App.Vault / App.CapRouter /
-// App.WebhookRepo from internal/bootstrap.Wire. The shutdown sequence
-// mirrors the pre-split cmd/server/main.go shape: 9 concurrent cancels,
-// single 15s drain budget, parallel execution.
+// All workers share App.DB / App.Vault / App.CapRouter / App.WebhookRepo
+// from internal/bootstrap.Wire. The registry owns concurrent cancellation
+// and the single 15-second shutdown budget.
 //
 // Signal handling: install signal.Notify BEFORE RunWorkers so that
 // SIGINT/SIGTERM can drive the ctx-cancel that RunWorkers is blocked

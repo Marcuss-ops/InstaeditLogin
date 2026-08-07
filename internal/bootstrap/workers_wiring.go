@@ -585,21 +585,38 @@ func (a *App) RunWorkers(ctx context.Context) error {
 
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 
+	var criticalErr error
 	select {
-	case err := <-criticalErrCh:
-		if err != nil {
-			slog.Error("critical worker exited unexpectedly", "error", err)
-			a.WorkerRegistry.StopAll(15 * time.Second)
-			if a.OneTimeCodes != nil {
-				a.OneTimeCodes.Stop()
-			}
-			return err
+	case criticalErr = <-criticalErrCh:
+		if criticalErr != nil {
+			slog.Error("critical worker exited unexpectedly", "error", criticalErr)
 		}
 	case <-ctx.Done():
 		slog.Info("context cancelled, broadcasting shutdown to all workers")
+		// A critical worker may report just as cancellation arrives. Give
+		// the buffered error channel one non-blocking turn before declaring
+		// this a clean cancellation, so the failure reaches the caller.
+		select {
+		case criticalErr = <-criticalErrCh:
+		default:
+		}
 	}
 
 	shutdownErr := a.WorkerRegistry.StopAll(15 * time.Second)
+	if criticalErr == nil {
+		// StopAll waits for every supervisor, so any critical failure that
+		// raced the cancellation has now had a chance to reach the buffer.
+		select {
+		case criticalErr = <-criticalErrCh:
+		default:
+		}
+	}
+	if criticalErr != nil {
+		if a.OneTimeCodes != nil {
+			a.OneTimeCodes.Stop()
+		}
+		return criticalErr
+	}
 	if shutdownErr != nil {
 		slog.Warn("worker shutdown did not complete cleanly", "error", shutdownErr)
 	} else {
