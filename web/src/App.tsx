@@ -145,8 +145,14 @@ function App() {
               element={<Navigate to="/donnetube" replace />}
             />
 
+            {/* /connections/{provider} is the post-login landing the backend
+                sends via /login?next=/connections/{provider} when an OAuth
+                connect is attempted without a session. The wildcard (not the
+                exact match) is required: with only /connections, React Router
+                drops /connections/youtube into the catch-all (* → "/") and
+                the user lands on the marketing root after login. */}
             <Route
-              path="/connections"
+              path="/connections/*"
               element={<Navigate to="/app/linking" replace />}
             />
 
