@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -24,6 +22,7 @@ import (
 	appLogging "github.com/Marcuss-ops/InstaeditLogin/internal/logging"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/sampler"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -181,7 +180,7 @@ func run() error {
 		title := aphorismFor(idx)
 		scheduledAt := cursor
 		if createdJobs > 0 {
-			gap, err := randomDuration(minSeconds, maxSeconds)
+			gap, err := sampler.RandomDurationInRange(minSeconds, maxSeconds)
 			if err != nil {
 				return fmt.Errorf("random duration: %w", err)
 			}
@@ -292,16 +291,6 @@ func openDB(cfg *config.Config) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
-}
-
-func randomDuration(minSeconds, maxSeconds int) (time.Duration, error) {
-	span := int64(maxSeconds - minSeconds)
-	n, err := rand.Int(rand.Reader, big.NewInt(span+1))
-	if err != nil {
-		return 0, err
-	}
-	secs := int64(minSeconds) + n.Int64()
-	return time.Duration(secs) * time.Second, nil
 }
 
 func fetchGoogleUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {

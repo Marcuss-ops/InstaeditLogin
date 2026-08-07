@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/sampler"
 )
 
 func TestRandomDurationInRange_InclusivelyWithinBounds(t *testing.T) {
@@ -17,7 +19,7 @@ func TestRandomDurationInRange_InclusivelyWithinBounds(t *testing.T) {
 	minDur := time.Duration(min) * time.Second
 	maxDur := time.Duration(max) * time.Second
 	for i := 0; i < iterations; i++ {
-		got, err := randomDurationInRange(min, max)
+		got, err := sampler.RandomDurationInRange(min, max)
 		if err != nil {
 			t.Fatalf("iteration %d: randomDurationInRange: %v", i, err)
 		}
@@ -31,7 +33,7 @@ func TestRandomDurationInRange_InclusivelyWithinBounds(t *testing.T) {
 }
 
 func TestRandomDurationInRange_RangeOfOne_ReturnsThatValue(t *testing.T) {
-	got, err := randomDurationInRange(3600, 3600)
+	got, err := sampler.RandomDurationInRange(3600, 3600)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -41,7 +43,7 @@ func TestRandomDurationInRange_RangeOfOne_ReturnsThatValue(t *testing.T) {
 }
 
 func TestRandomDurationInRange_ReversedBounds_ReturnsError(t *testing.T) {
-	_, err := randomDurationInRange(100, 10)
+	_, err := sampler.RandomDurationInRange(100, 10)
 	if err == nil {
 		t.Fatal("want error when min > max, got nil")
 	}
