@@ -70,10 +70,13 @@ func (r *Router) Setup() http.Handler {
 	}))
 
 	// Public / health probes are mounted before the auth module so the
-	// route table stays easy to scan top-down.
-	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
-
-	r.mux.Method(http.MethodGet, "/ready", http.HandlerFunc(r.handleReady))
+	// route table stays easy to scan top-down. Their small module owns
+	// only route registration; the existing Router handlers keep the
+	// response logic and dependencies unchanged.
+	reg.Register(NewHealthModule(HealthModuleDeps{
+		Health: r.handleHealth,
+		Ready:  r.handleReady,
+	}))
 
 	var apiKeyAuthMw func(http.Handler) http.Handler
 	if r.apiKeyAuth != nil {
