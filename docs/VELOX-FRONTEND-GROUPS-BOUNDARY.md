@@ -53,6 +53,36 @@ persistente da amministrare indipendentemente. L'unico collegamento forte è
   `/dark_editor_v2/editor/{project_id}`.
 - Nessun iframe o proxy di UI Groups/Channels Velox presente in questo repo.
 
+## Verifica Azione 2 (2026-08-07) — nessuna richiesta Velox dai flussi Groups/Channels
+
+Audit completo: **zero chiamate a `VELOX_CONTROL_URL` dai flussi operativi**
+(Groups, Channels, Group detail, YouTube videos, selezione canale, lingua
+canale).
+
+Evidenze:
+
+- `VELOX_CONTROL_URL` compare solo server-side, in `internal/config`,
+  `internal/veloxclient` (client BFF), `internal/bootstrap/router_wiring.go`
+  e `docker-compose.yml`. Il browser non lo legge mai.
+- L'unico codice Go che raggiunge Velox è `internal/veloxclient`, i cui
+  metodi coprono SOLO jobs/workers/assets/editor bridge (vedi
+  `internal/veloxcontract/contract.go` — nessun metodo Groups/Channels).
+- I handler `/api/v1/groups/*`, `/api/v1/groups/{id}/youtube/videos`,
+  `/api/v1/accounts/*` leggono esclusivamente `groupStore` /
+  `workspaceStore` / `userRepo` (InstaEdit DB).
+- Il frontend (`web/src`) non contiene riferimenti a `/api/v1/velox/*` o
+  `/integrations/velox/*`.
+
+Guardie di regressione (fail-closed):
+
+- `web/src/lib/arch/veloxBoundary.test.ts` — scansione statica di
+  `web/src`: i pattern `VELOX_CONTROL_URL`, `VELOX_CONTROL_JWT_SECRET`,
+  `VELOX_API_TOKEN`, `/api/v1/velox/`, `integrations/velox` devono restare
+  assenti dal bundle browser.
+- `internal/veloxcontract/scope_guard_test.go` — l'interfaccia `Client` e
+  la tassonomia scope non possono crescere metodi/scope di catalogo
+  (groups/channels/accounts/videos).
+
 ## Test di verifica del disaccoppiamento
 
 - **Test A — Velox spento:** login, Groups, Channels, Group Detail, YouTube
