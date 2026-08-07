@@ -335,4 +335,15 @@ describe("GroupsPage", () => {
     const membershipUpdater = setGroupAccounts.mock.calls[0]?.[1] as (currentIDs: number[]) => number[];
     expect(membershipUpdater([groupedAccount.id])).toEqual([groupedAccount.id, secondYouTubeAccount.id]);
   });
+
+  it("offers to add a YouTube channel directly from the channels tray", () => {
+    renderPage();
+
+    const addLink = screen.getByTestId("groups-add-channel");
+    expect(addLink).toHaveAttribute(
+      "href",
+      expect.stringContaining("/api/v1/auth/youtube/login?mode=add"),
+    );
+    expect(screen.getByRole("link", { name: "Aggiungi canale" })).toBeInTheDocument();
+  });
 });

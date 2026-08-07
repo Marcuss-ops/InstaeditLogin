@@ -1,93 +1,11 @@
-import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  ChevronDown,
   Clock,
   LayoutDashboard,
   Link2,
-  Plus,
 } from "lucide-react";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import { useDashboardData } from "./useDashboardData";
-import { API_BASE_URL } from "../../lib/api";
-import { PROVIDERS, type ProviderId } from "../../lib/providers";
-import { ProviderBadge } from "../../components/brand/PlatformLogos";
-import { cn } from "../../lib/utils";
-
-const LINKABLE_IDS: ProviderId[] = [
-  "youtube",
-  "tiktok",
-  "facebook",
-  "instagram",
-  "threads",
-  "google-drive",
-];
-
-// "Add channel" picker: same OAuth add flow used by the Linking page, so a
-// channel can be connected straight from the analytics dashboard.
-function AddChannelMenu() {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  const linkableProviders = PROVIDERS.filter((provider) => LINKABLE_IDS.includes(provider.id));
-
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        data-testid="dashboard-add-channel"
-        className="inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-[13px] font-semibold text-black shadow-[0_2px_8px_rgba(255,255,255,0.10)] transition-colors hover:bg-white/90"
-      >
-        <Plus size={14} aria-hidden="true" /> Aggiungi canale
-        <ChevronDown size={13} className={cn("transition-transform", open && "rotate-180")} aria-hidden="true" />
-      </button>
-      {open ? (
-        <div
-          role="menu"
-          aria-label="Aggiungi canale"
-          className="absolute right-0 top-[calc(100%+0.5rem)] z-30 min-w-[220px] overflow-hidden rounded-xl border border-white/15 bg-[#171722]/95 p-1.5 shadow-[0_18px_50px_-18px_rgba(0,0,0,0.9)] backdrop-blur-xl"
-        >
-          {linkableProviders.map((provider) => (
-            <a
-              key={provider.id}
-              role="menuitem"
-              href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login?mode=add`}
-              onClick={() => setOpen(false)}
-              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-300 no-underline transition-colors hover:bg-white/10 hover:text-white"
-            >
-              <ProviderBadge
-                platform={provider.id}
-                className="h-5 w-5 shrink-0 justify-center rounded"
-                compact
-                logoClassName="h-3.5 w-3.5"
-              />
-              {provider.name}
-            </a>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function StatCard({
   label,
@@ -142,7 +60,6 @@ export function InternalDashboard() {
               Overview of your connected accounts and publishing activity.
             </p>
           </div>
-          <AddChannelMenu />
         </div>
 
         {state.kind === "loading" && (

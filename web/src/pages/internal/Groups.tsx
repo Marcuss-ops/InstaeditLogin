@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { authedFetch } from "../../lib/auth";
+import { API_BASE_URL } from "../../lib/api";
 import { useGroupsData } from "./useGroupsData";
 import { AccountDetailPanel, GroupDetailPanel } from "./GroupsDetailPanels";
 import {
@@ -413,6 +414,14 @@ function YouTubeChannelsTray({
           <button type="button" onClick={onSelectAll} disabled={accounts.length === 0} aria-label={allVisibleSelected ? "Deseleziona tutti" : "Seleziona tutti"} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/[0.10] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-white hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40">
             {allVisibleSelected ? <X size={14} /> : <Check size={14} />} {allVisibleSelected ? "Deseleziona tutti" : "Seleziona tutti"}
           </button>
+          <a
+            href={`${API_BASE_URL}/api/v1/auth/youtube/login?mode=add`}
+            data-testid="groups-add-channel"
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/[0.10] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-white no-underline transition-colors hover:bg-white/[0.08]"
+            title="Collega un nuovo canale YouTube"
+          >
+            <Plus size={14} aria-hidden="true" /> Aggiungi canale
+          </a>
         </div>
         {visibleSelectedCount > 0 ? (
           <div className="flex flex-col gap-2 rounded-xl border border-violet-400/30 bg-violet-500/[0.08] p-3 sm:flex-row sm:items-center sm:justify-between">
