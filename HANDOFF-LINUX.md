@@ -29,41 +29,35 @@ git pull
 
 Se `psql` manca, puoi installare solo il client (bastano pochi MB) o usare lo stesso Postgres server per migration + backend.
 
-## 3. PostgreSQL — scegline uno
+## 3. PostgreSQL — usa il servizio Compose locale
 
-### Opzione A — Postgres locale (più veloce, no registrazioni)
+Il profilo Dev VPS usa PostgreSQL nel servizio `db` di Docker Compose. Non
+usare database SaaS o provider alternativi per questo percorso: la configurazione
+runtime resta in `.env.dev` e il comando canonico passa sempre `--env-file .env.dev`.
+
+### Opzione supportata — Postgres Compose
 
 ```bash
-# Ubuntu/Debian
-sudo apt install postgresql postgresql-contrib
-sudo systemctl start postgresql
+# Crea/aggiorna .env.dev dal template, senza creare un root .env.
+cp .env.dev.example .env.dev
 
-# macOS (Homebrew)
-brew install postgresql@15
-brew services start postgresql@15
-
-# Crea db + user
-sudo -u postgres psql <<'SQL'
-CREATE USER instaedit WITH PASSWORD 'instaedit_dev_pwd';
-CREATE DATABASE instaedit_login OWNER instaedit;
-GRANT ALL PRIVILEGES ON DATABASE instaedit_login TO instaedit;
-SQL
+# Avvia PostgreSQL insieme allo stack locale.
+INSTAEDIT_ENV_FILE=.env.dev docker compose \
+  --env-file .env.dev \
+  -f docker-compose.yml -f docker-compose.local.yml up -d db
 ```
 
-`DATABASE_URL` risultante: `postgresql://instaedit:instaedit_dev_pwd@localhost:5432/instaedit_login?sslmode=disable`
+Il database locale resta il servizio Compose `db`; non sostituirlo con Neon,
+Supabase o altri database SaaS. I valori runtime e le credenziali del profilo
+Dev VPS devono restare in `.env.dev` e non vanno stampati o committati.
 
-### Opzione B — Neon free tier (serverless, scale-to-zero)
-
-1. https://neon.tech → Sign up → Create project
-2. Copia la connection string: `postgresql://username:password@ep-xxx.region.aws.neon.tech/neondb?sslmode=require`
-
-## 4. Crea `.env` con i secret
+## 4. Crea `.env.dev` con i secret
 
 ```bash
 cp .env.dev.example .env.dev
 ```
 
-Poi modifica `.env` e riempi **3 campi obbligatori**:
+Poi modifica `.env.dev` e completa i valori richiesti dal profilo Dev VPS:
 
 | Campo | Valore |
 |-------|--------|
@@ -71,7 +65,7 @@ Poi modifica `.env` e riempi **3 campi obbligatori**:
 | `META_APP_ID` | (vedi punto 5) |
 | `META_APP_SECRET` | (vedi punto 5) |
 
-I due secret locali (`JWT_SECRET` ed `ENCRYPTION_KEY`) devono essere generati e scritti in `.env.dev`. Se vuoi rigenerarli su Linux (consigliato — i secret Windows non sono nel repo):
+I due secret locali (`JWT_SECRET` ed `ENCRYPTION_KEY`) appartengono a `.env.dev`. Non rigenerare `ENCRYPTION_KEY` su un profilo che contiene token persistiti senza seguire la procedura di rotazione; i token diventerebbero illeggibili. Se devi creare un profilo nuovo su Linux:
 
 ```bash
 # Genera nuovi secret
@@ -138,7 +132,7 @@ curl -sI http://localhost:8080/api/v1/auth/instagram/login
 # Atteso: HTTP/1.1 302 Found + Location: https://www.facebook.com/v18.0/dialog/oauth?...
 
 # (3) Protected route rifiuta senza JWT (401)
-curl -sI http://localhost:8080/api/v1/accounts
+curl -sI http://localhost:8081/api/v1/accounts
 # Atteso: HTTP/1.1 401 Unauthorized
 ```
 
@@ -148,7 +142,9 @@ Tutti e 3 verdi = backend OK.
 
 ```bash
 cd web
-echo "VITE_API_BASE_URL=http://localhost:8080" > .env
+cat > .env.local <<'EOF'
+VITE_API_BASE_URL=http://localhost:8081
+EOF
 npm install
 npm run dev
 ```
@@ -234,28 +230,29 @@ Un dev che lancia `TRUNCATE posts CASCADE` su un db condiviso cancella anche i p
 
 ### Come passare da dev a prod
 
-**Opzione A — file `.env` per environment (consigliata per setup locale)**:
+**Percorso supportato — file separati senza root `.env`**:
 ```bash
 cp .env.dev.example .env.dev
-# modifica .env.dev con i valori dev (Supabase dev, localhost CORS, APP_ENV=dev)
-cp .env.production.example .env.production
-# modifica .env.production con i valori prod (PostgreSQL/MinIO VPS, dominio pubblico CORS, APP_ENV=production)
+# modifica .env.dev con i valori del profilo Dev VPS già in uso
 
-# swap in base a cosa vuoi lanciare; la topologia standard resta separata:
-ln -sf .env.dev .env && make run-migrate && make run-api   # dev (worker in un altro terminale)
-ln -sf .env.production .env && make run-migrate && make run-api  # verifica locale prod-shaped
+# Per production usa esclusivamente il file esterno al checkout:
+# /opt/instaedit/secrets/.env.production (mode 0600)
+
+# Lo stack locale carica sempre .env.dev in modo esplicito:
+INSTAEDIT_ENV_FILE=.env.dev docker compose \
+  --env-file .env.dev \
+  -f docker-compose.yml -f docker-compose.local.yml up -d --build
+
+# Per i binari locali, esporta solo il file esplicito se necessario:
+set -a; source .env.dev; set +a
+make run-migrate && make run-api
 # cmd/server è solo il wrapper legacy di recovery e non è un percorso di deploy.
 ```
 
-**Opzione B — env vars sul servizio di deploy**:
-Su Railway / Render, configura due env group:
-- `env:dev` con tutti i valori dev
-- `env:prod` con tutti i valori prod
-
-Il servizio di deploy carica il gruppo giusto in base al branch che promuovi (main = prod, ogni PR = preview con env:dev).
-
-**Opzione C — secret manager**:
-1Password, AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault: ogni secret ha un ID tipo `instaedit-login/database-url/dev` e `instaedit-login/database-url/prod`. Il deploy script scarica il gruppo giusto in base a `APP_ENV`.
+Non creare symlink o copie chiamate `.env`: Docker Compose deve ricevere
+`--env-file .env.dev`, mentre production usa il secret file VPS esterno.
+Le piattaforme di deploy alternative non fanno parte del percorso supportato;
+per secret e procedure correnti usa `docs/DEPLOY.md` e `docs/OPERATIONS.md`.
 
 ### Naming convention per i secret store (`_DEV_KEY` / `_PROD_KEY`)
 

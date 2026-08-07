@@ -66,8 +66,6 @@ fi
 if [[ -z "${TIKTOK_REDIRECT_URI:-}" ]]; then
   if [[ -f .env.production ]]; then
     set -a; source .env.production; set +a
-  elif [[ -f .env ]]; then
-    set -a; source .env; set +a
   elif [[ -f .env.dev ]]; then
     set -a; source .env.dev; set +a
   fi
@@ -75,7 +73,7 @@ fi
 
 if [[ -z "${TIKTOK_REDIRECT_URI:-}" ]]; then
   echo "❌ TIKTOK_REDIRECT_URI is not set." >&2
-  echo "   Source your .env file or export it inline:" >&2
+  echo "   Source .env.production or .env.dev, or export it inline:" >&2
   echo "     set -a; source .env.production; set +a" >&2
   echo "     TIKTOK_REDIRECT_URI=$CANONICAL_REDIRECT_URI \\" >&2
   echo "       ./scripts/verify-tiktok-app-review-config.sh" >&2
