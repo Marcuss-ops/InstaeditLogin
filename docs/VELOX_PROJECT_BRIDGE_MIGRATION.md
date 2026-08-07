@@ -14,9 +14,10 @@ or canvas data.
   by the normal production configuration.
 - A human-verified mapping file is required. No match is inferred from names,
   titles, timestamps, canvas JSON, thumbnails, or render data.
-- Migrations 114 and 116 must be applied before using this command. Migration
-  114 adds the persistent `migration_run_id` marker used to scope rollback
-  safely; migration 116 removes legacy channel/video context from the bridge.
+- Migrations 112, 114, 115 and 116 must be applied before using this command.
+  Migration 112 creates the bridge, 114 adds the persistent `migration_run_id`
+  marker used to scope rollback safely, 115 adds only editor metadata, and 116
+  removes legacy channel/video context from the bridge.
 
 Mapping format:
 
@@ -99,11 +100,25 @@ InstaEdit project or any Velox editor data.
 
 ## Verification
 
+The destructive cleanup in migration 116 must be exercised against a disposable
+PostgreSQL database before production rollout. The integration test seeds a
+bridge row with populated legacy platform/account/channel/video/language values,
+applies the full chain 112 → 114 → 115 → 116, reruns the chain for idempotency,
+and verifies that only the project mapping and allowed editor metadata remain.
+It also verifies that authoritative InstaEdit channel rows are unchanged.
+
 ```sh
+go test -tags=integration -count=1 -run 'TestMigration112And114_VeloxProjectBridgeSchemaAndConstraints' ./internal/database/...
 go test ./internal/veloxmigration
 # CLI help does not connect to the database:
 go run ./cmd/migrate-velox-bridges --help
 ```
+
+After applying the migration to a real installation, run the read-only schema
+checks from `VerifyMigrationReady` and confirm that `velox_project_bridges`
+contains no group/channel columns, foreign keys or channel indexes. The
+migration never deletes InstaEdit `groups`, `workspace_channels`, memberships,
+or provider records; those remain owned by InstaEdit.
 
 The command intentionally refuses to run when `DATABASE_URL` is unset. Never
 run `--apply` against production without first saving and reviewing the

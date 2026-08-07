@@ -87,12 +87,12 @@ func VerifyMigrationReady(ctx context.Context, db *sql.DB) error {
 	if !columnExists {
 		return fmt.Errorf("%w: apply 114_velox_project_bridge_run_id.sql first", ErrMigrationNotReady)
 	}
-	var migrationRecorded bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '116_velox_project_bridge_minimal.sql')`).Scan(&migrationRecorded); err != nil {
+	var bridgeMigrationsRecorded int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE filename IN ('112_velox_project_bridges.sql', '114_velox_project_bridge_run_id.sql', '115_velox_project_bridge_editor_metadata.sql', '116_velox_project_bridge_minimal.sql')`).Scan(&bridgeMigrationsRecorded); err != nil {
 		return fmt.Errorf("%w: check schema_migrations: %v", ErrMigrationNotReady, err)
 	}
-	if !migrationRecorded {
-		return fmt.Errorf("%w: migration 116 is not recorded; apply the minimal bridge migration first", ErrMigrationNotReady)
+	if bridgeMigrationsRecorded != 4 {
+		return fmt.Errorf("%w: bridge migration chain is incomplete; apply migrations 112, 114, 115 and 116 first", ErrMigrationNotReady)
 	}
 	var legacyColumns int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'velox_project_bridges' AND column_name IN ('velox_project_id', 'platform', 'platform_account_id', 'channel_id', 'video_id', 'language')`).Scan(&legacyColumns); err != nil {

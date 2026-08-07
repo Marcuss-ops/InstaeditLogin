@@ -88,8 +88,8 @@ func TestVerifyMigrationReadyRequiresRecordedMigration(t *testing.T) {
 	defer db.Close()
 	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM information_schema.columns`).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM schema_migrations`).
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM schema_migrations`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
 	if err := VerifyMigrationReady(context.Background(), db); !errors.Is(err, ErrMigrationNotReady) {
 		t.Fatalf("expected migration ledger error, got %v", err)
 	}
@@ -106,8 +106,8 @@ func TestVerifyMigrationReadyAcceptsAppliedMigration(t *testing.T) {
 	defer db.Close()
 	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM information_schema.columns`).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM schema_migrations`).
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM schema_migrations`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema.columns`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema.columns`).
