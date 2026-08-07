@@ -98,4 +98,4 @@ afterEach(async () => {
 // and the InternalUploads test cluster (waitFor over fetch mocks).
 // Production builds set this explicitly via .env / fly secrets —
 // see scripts/verify-api-base-url.ts for the live-env contract.
-vi.stubEnv('VITE_API_BASE_URL', 'http://localhost:8080');
+vi.stubEnv('VITE_API_BASE_URL', 'http://localhost:8081');

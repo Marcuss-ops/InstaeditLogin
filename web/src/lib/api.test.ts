@@ -12,7 +12,7 @@ describe("resolveApiBaseUrl", () => {
   });
 
   it("does not rewrite local development overrides", () => {
-    expect(resolveApiBaseUrl("http://localhost:8080", "localhost")).toBe("http://localhost:8080");
+    expect(resolveApiBaseUrl("http://localhost:8081", "localhost")).toBe("http://localhost:8081");
     expect(resolveApiBaseUrl("https://dev.instaedit.org", "localhost")).toBe("https://dev.instaedit.org");
   });
 

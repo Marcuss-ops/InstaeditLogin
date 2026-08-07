@@ -6,8 +6,9 @@ import { test, expect } from "@playwright/test";
  *
  * Coverage:
  *   1. Hero CTA "Schedule Your Free Strategy Call" opens the modal.
- *   2. Modal renders 3 closed-set questions (goal / budget / ready)
- *      with each radio card accessible by accessible name.
+ *   2. Modal renders 2 closed-set questions (goal / ready); budget
+ *      remains a server-side default for low-friction booking. Each
+ *      radio card is accessible by its accessible name.
  *   3. Submit completes the qualification AND fires:
  *        a) POST /api/v1/booking_events (fire-and-forget telemetry)
  *        b) window.open(BOOKING_URL, "_blank", "noopener,noreferrer")
@@ -38,12 +39,12 @@ import { test, expect } from "@playwright/test";
  * avoid a strict-mode locator collision we dismiss the banner
  * explicitly before asserting on the booking modal.
  */
-test("Hero CTA opens modal \u2192 3 questions \u2192 Submit fires telemetry POST + window.open", async ({ page }) => {
+test("Hero CTA opens modal \u2192 2 questions \u2192 Submit fires telemetry POST + window.open", async ({ page }) => {
   let capturedBody: unknown;
   let capturedPost = 0;
 
   // ── 1. Mock the telemetry POST. The glob matches the browser-
-  //    side URL pattern (Vite dev proxies /api to :8080, but the
+  //    side URL pattern (Vite dev proxies /api to :8081, but the
   //    page.route intercept is at the browser layer so the glob
   //    sees the URL as the SPA sees it.)
   await page.route("**/api/v1/booking_events", async (route) => {
@@ -128,9 +129,11 @@ test("Hero CTA opens modal \u2192 3 questions \u2192 Submit fires telemetry POST
   //    onClick handler, and the dialog assertion below catches
   //    the resulting open modal. No real-user impact: humans
   //    don't run Playwright's strict actionability pipeline.
-  const heroCta = page.getByRole("button", {
-    name: /schedule your free strategy call/i,
-  });
+  // The landing page intentionally repeats the CTA in the final section;
+  // the first matching button is the hero CTA used by this scenario.
+  const heroCta = page
+    .getByRole("button", { name: "Schedule Your Free Strategy Call" })
+    .first();
   await expect(heroCta).toBeVisible({ timeout: 10_000 });
   await heroCta.click({ force: true });
 
@@ -143,11 +146,10 @@ test("Hero CTA opens modal \u2192 3 questions \u2192 Submit fires telemetry POST
   });
   await expect(dialog).toBeVisible();
 
-  // ── 6. Each of the 3 question sections renders the expected
+  // ── 6. Each of the 2 question sections renders the expected
   //    prompt. We use case-insensitive regex anchors so copy
   //    tweaks (a trailing "?" or em-dash) don't break the test.
   await expect(dialog).toContainText(/what is your primary goal right now\?/i);
-  await expect(dialog).toContainText(/what budget/i);
   await expect(dialog).toContainText(/ready to get started this week\?/i);
 
   // ── 7. Tier chip = "Strategy Call" because the Hero CTA opens
@@ -157,14 +159,10 @@ test("Hero CTA opens modal \u2192 3 questions \u2192 Submit fires telemetry POST
   await expect(page.getByTestId("booking-tier-chip")).toContainText(/strategy call/i);
 
   // ── 8. Pick the most-populated answers for each closed-set:
-  //    goal=launch, budget=starter, ready=yes (matches the
-  //    "high-intent visitor" journey the marketing copy walks
-  //    through).
+  //    goal=launch and ready=yes. Budget remains the hidden
+  //    server-side default of "starter".
   await dialog
     .getByRole("radio", { name: /launch my first channel/i })
-    .click();
-  await dialog
-    .getByRole("radio", { name: /under \$200/i })
     .click();
   await dialog
     .getByRole("radio", { name: /yes.*ready this week/i })
@@ -172,7 +170,7 @@ test("Hero CTA opens modal \u2192 3 questions \u2192 Submit fires telemetry POST
 
   // Submit becomes enabled. Click + assert both side effects.
   const submit = dialog.getByRole("button", {
-    name: /schedule my free call/i,
+    name: /schedule your free strategy call/i,
   });
   await expect(submit).toBeEnabled();
   await submit.click();

@@ -29,7 +29,7 @@
  *   `app.instaedit.org` reads the value that `api.instaedit.org` set.
  *   The dev default is host-only (cookie set on the API origin); the
  *   SPA must hit the API on the same browser-visible origin (e.g. via
- *   Vite proxy `localhost:5173 → localhost:8080`) for `document.cookie`
+ *   Vite proxy `localhost:5173 → localhost:8081`) for `document.cookie`
  *   to contain the value.
  *
  * ## Lookup prefix gotcha

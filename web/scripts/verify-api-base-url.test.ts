@@ -14,8 +14,8 @@ function env(
 
 describe("validateApiBaseUrl", () => {
   describe("local builds (VERCEL_ENV unset)", () => {
-    it("ok on http://localhost:8080 (the canonical dev URL)", () => {
-      const r = validateApiBaseUrl(env({ VITE_API_BASE_URL: "http://localhost:8080" }));
+    it("ok on http://localhost:8081 (the canonical dev URL)", () => {
+      const r = validateApiBaseUrl(env({ VITE_API_BASE_URL: "http://localhost:8081" }));
       expect(r.level).toBe("ok");
       expect(r.context).toBe("local");
     });
@@ -46,7 +46,7 @@ describe("validateApiBaseUrl", () => {
   describe("vercel dev (VERCEL_ENV=development)", () => {
     it("ok on localhost (vercel dev runs on the same machine)", () => {
       const r = validateApiBaseUrl(
-        env({ VITE_API_BASE_URL: "http://localhost:8080", VERCEL_ENV: "development" }),
+        env({ VITE_API_BASE_URL: "http://localhost:8081", VERCEL_ENV: "development" }),
       );
       expect(r.level).toBe("ok");
       expect(r.context).toBe("vercel_dev");
@@ -71,7 +71,7 @@ describe("validateApiBaseUrl", () => {
 
     it("error on localhost", () => {
       const r = validateApiBaseUrl(
-        env({ VITE_API_BASE_URL: "http://localhost:8080", VERCEL_ENV: "preview" }),
+        env({ VITE_API_BASE_URL: "http://localhost:8081", VERCEL_ENV: "preview" }),
       );
       expect(r.level).toBe("error");
       expect(r.messages.some((m) => m.includes("localhost"))).toBe(true);
@@ -126,7 +126,7 @@ describe("validateApiBaseUrl", () => {
 
     it("error on localhost with port", () => {
       const r = validateApiBaseUrl(
-        env({ VITE_API_BASE_URL: "http://localhost:8080", VERCEL_ENV: "production" }),
+        env({ VITE_API_BASE_URL: "http://localhost:8081", VERCEL_ENV: "production" }),
       );
       expect(r.level).toBe("error");
     });

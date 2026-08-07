@@ -3,7 +3,7 @@
  *
  * Resolved order:
  *   1. `VITE_API_BASE_URL` (set on Vercel via Project Settings → Environment Variables)
- *   2. `http://localhost:8080` (local dev fallback)
+ *   2. `http://localhost:8081` (local dev fallback)
  *
  * OAuth provider buttons under /login and /dashboard redirect to
  * `${API_BASE_URL}/api/v1/auth/{provider}/login`, so this env var MUST point
@@ -61,7 +61,7 @@ export function resolveApiBaseUrl(
   // explicit VITE value remains the deployment override; this host-aware
   // fallback keeps a manually built public bundle usable when the build
   // environment forgot to provide it.
-  return configured || (publicHost ? CANONICAL_PUBLIC_API_BASE_URL : "http://localhost:8080");
+  return configured || (publicHost ? CANONICAL_PUBLIC_API_BASE_URL : "http://localhost:8081");
 }
 
 export const API_BASE_URL: string = resolveApiBaseUrl(

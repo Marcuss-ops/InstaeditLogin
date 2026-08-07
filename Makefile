@@ -8,6 +8,7 @@
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
+        web-dev \
         ops-smoke ops-isolation ops-isolation-dry-run \
         verify-log-redaction loc-check
 
@@ -22,15 +23,19 @@
 # is required, use `make run-server` or `docker compose --profile legacy up`
 # deliberately and plan its removal using `make verify-entrypoint-topology`.
 dev:
-	docker compose \
+	INSTAEDIT_ENV_FILE=.env.dev API_HOST_PORT=8081 docker compose \
 		--env-file .env.dev \
 		-f docker-compose.yml \
 		-f docker-compose.local.yml \
 		up --build
 
+# Start the Vite frontend against the canonical local Compose API port.
+web-dev:
+	VITE_API_BASE_URL=http://localhost:8081 npm --prefix web run dev
+
 # Stop the development stack
 stop:
-	docker compose \
+	INSTAEDIT_ENV_FILE=.env.dev API_HOST_PORT=8081 docker compose \
 		--env-file .env.dev \
 		-f docker-compose.yml \
 		-f docker-compose.local.yml \
