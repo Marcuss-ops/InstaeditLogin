@@ -25,8 +25,8 @@ const defaultRateLimitBackoff = 60 * time.Second
 // attempt_count is bumped so the retry budget stays bounded.
 //
 // Same claim-ownership contract as markFailed: only legal AFTER a
-// successful ClaimQueuedTarget (the repo-side UPDATE is additionally
-// guarded by WHERE status='publishing').
+// successful ClaimQueuedTargetWithLease (the repo-side UPDATE is
+// additionally guarded by WHERE status='publishing').
 //
 // Returns nil — a rescheduled rate-limit is NOT a tick error: the
 // row will be re-picked by ListPending once the window opens, and
@@ -61,9 +61,10 @@ func (w *PublishWorker) markRateLimited(target *models.PostTarget, pubErr error)
 
 // markFailed transitions the target to status='failed' with the given
 // reason and returns a wrapped error. The caller is expected to have
-// already successfully claimed the target (via ClaimQueuedTarget) —
-// the 'failed' write is only legal AFTER the claim, otherwise two
-// workers could both redundantly update the same row.
+// already successfully claimed the target (via
+// ClaimQueuedTargetWithLease) — the 'failed' write is only legal
+// AFTER the claim, otherwise two workers could both redundantly
+// update the same row.
 //
 // The UpdateStatus error is intentionally ignored (logged at the
 // caller's warning level) so the returned error reflects the
@@ -97,7 +98,7 @@ func (w *PublishWorker) markFailed(target *models.PostTarget, reason string) err
 // reconnect — is performed by the caller (publish_target) BEFORE
 // this helper runs; this helper only stamps the per-target row.
 // Two writes total: platform_account (caller) + post_target (this
-// helper); both fire AFTER ClaimQueuedTarget succeeds so two
+// helper); both fire AFTER ClaimQueuedTargetWithLease succeeds so two
 // workers running in parallel cannot redundantly overwrite each
 // other's row.
 //

@@ -36,12 +36,16 @@ func (r *PostRepository) RetryTarget(id int64) error {
 	return tx.Commit()
 }
 
-// ClaimQueuedTarget atomically transitions a post_target from
-// status='queued' to status='publishing' using SELECT FOR UPDATE
-// SKIP LOCKED inside an explicit transaction. Returns true on claim
-// success and false if the target was already claimed by another
-// worker (row locked → SKIP LOCKED returns no rows) or the id is
-// invalid (no row matches).
+// ClaimQueuedTargetWithLease atomically transitions a post_target from
+// status='queued' (also 'waiting_provider'/'retrying') to
+// status='publishing' using SELECT FOR UPDATE SKIP LOCKED inside an
+// explicit transaction, stamping a per-replica lease so a crashed
+// worker doesn't leak the row forever. The lease is a
+// (lease_owner_id, leased_until) tuple; the heartbeat goroutine
+// (UpdatePublishProgress) extends leased_until every heartbeat tick;
+// ReclaimExpiredLeases (called by the reconciler) takes over rows
+// whose leased_until <= NOW() and whose lease_owner_id is not the
+// calling replica.
 //
 // Verdict §10 (FASE 1.1 — SKIP LOCKED): the SELECT FOR UPDATE SKIP
 // LOCKED + UPDATE pattern inside a single explicit transaction
@@ -50,71 +54,17 @@ func (r *PostRepository) RetryTarget(id int64) error {
 // the loser's SELECT returns immediately with no rows (SKIP
 // LOCKED), and the function returns (false, nil) — no row-level
 // wait, no deadlock risk, no connection-pool exhaustion under
-// multi-replica contention.
+// multi-replica contention. The lease makes the claim canonical:
+// the legacy lease-less ClaimQueuedTarget was removed.
 //
-// The explicit transaction is REQUIRED for FOR UPDATE to acquire
-// a row lock (PostgreSQL only honours FOR UPDATE inside a
-// transaction block). The tx is scoped to the claim operation
-// only — BEGIN → SELECT FOR UPDATE SKIP LOCKED → UPDATE → COMMIT.
-func (r *PostRepository) ClaimQueuedTarget(id int64) (bool, error) {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return false, fmt.Errorf("failed to begin claim tx: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	// SELECT ... FOR UPDATE SKIP LOCKED: if another tx already holds
-	// a row lock on this row, SKIP LOCKED returns immediately with
-	// zero rows instead of blocking. The caller sees (false, nil)
-	// and moves to the next target without stalling.
-	var foundID int64
-	err = tx.QueryRow(
-		qClaimQueuedTargetSelect,
-		id,
-	).Scan(&foundID)
-	if err == sql.ErrNoRows {
-		// Row either doesn't exist, isn't in 'queued' status, or is
-		// locked by another tx — in all cases we didn't win the claim.
-		_ = tx.Rollback()
-		err = nil // prevent deferred double-rollback
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("failed to select for update: %w", err)
-	}
-
-	// Row locked — we own it. Lock the parent, transition the target, and
-	// recompute the aggregate before releasing the transaction.
-	if err = claimTargetTx(tx, id, qClaimQueuedTargetUpdate, id); err != nil {
-		return false, fmt.Errorf("failed to update claimed target: %w", err)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("failed to commit claim: %w", err)
-	}
-	return true, nil
-}
-
-// ClaimQueuedTargetWithLease (SPRINT 5.2, P1#10) extends ClaimQueuedTarget
-// with a per-replica lease stamp so a crashed worker doesn't leak the
-// row forever. The lease is a (lease_owner_id, leased_until) tuple;
-// the heartbeat goroutine (UpdatePublishProgress) extends leased_until
-// every heartbeat tick; ReclaimExpiredLeases (called by the
-// reconciler) takes over rows whose leased_until <= NOW() and whose
-// lease_owner_id is not the calling replica.
-//
-// The atomic UPDATE is the SAME shape as ClaimQueuedTarget — single
-// SQL statement that flips status AND stamps the lease fields. The
-// lease TTL is supplied as a duration; the SQL converts it to an
-// INTERVAL via NOW() + $N * INTERVAL '1 second'.
+// The atomic UPDATE is a single SQL statement that flips status AND
+// stamps the lease fields. The lease TTL is supplied as a duration;
+// the SQL converts it to an INTERVAL via NOW() + $N * INTERVAL
+// '1 second'.
 //
 // Returns true on claim success and false if:
 //   - The row is locked by another tx (SKIP LOCKED).
-//   - The row's status is not 'queued' (someone else already claimed).
+//   - The row's status is not claimable (someone else already claimed).
 //   - The id is invalid (no row matches).
 //
 // On success the caller is the SOLE owner of the row for at least
@@ -269,16 +219,16 @@ func (r *PostRepository) MarkRetrying(id int64, ownerID string, lastError string
 	return r.mutateLeasedTarget(id, ownerID, qMarkRetrying, nextAttemptAt, lastError)
 }
 
-// MarkRateLimitedRetry (OPEN GAP closure) requeues a target the
-// publish driver claimed via ClaimQueuedTarget (the lease-less claim)
-// after the platform's FINAL publish call answered 429/Retry-After.
+// MarkRateLimitedRetry (legacy fallback) requeues a target the
+// publish driver claimed via ClaimQueuedTargetWithLease after the
+// platform's FINAL publish call answered 429/Retry-After.
 //
-// Distinct from MarkRateLimited (which CASes on lease_owner_id and is
-// part of the SPRINT 5.2 lease contract): the driver's claim path
-// stamps NO lease, so a lease-CAS UPDATE would match zero rows and
-// strand the row in 'publishing' forever. Here the `status =
-// 'publishing'` guard is the ownership check — only the claim winner
-// holds the row in that state.
+// Distinct from MarkRateLimitedRetryWithLease (which CASes on
+// lease_owner_id and is part of the SPRINT 5.2 lease contract): this
+// variant is retained only for the worker's legacy fallback path when
+// a store does not implement LeaseAwarePublisherPostStore (test
+// doubles). Here the `status = 'publishing'` guard is the ownership
+// check — only the claim winner holds the row in that state.
 //
 // Semantics: status → 'queued', attempt_count++ (bounded retry
 // budget), next_attempt_at = the platform's Retry-After hint (the
@@ -497,8 +447,8 @@ func (r *PostRepository) ReclaimExpiredLeases(myWorkerID string) (int64, error) 
 
 // ClaimWaitingProviderTarget atomically transitions a post_target from
 // status='waiting_provider' to status='publishing' using SELECT FOR
-// UPDATE SKIP LOCKED (same pattern as ClaimQueuedTarget — see that
-// method's docstring for the FASE 1.1 rationale).
+// UPDATE SKIP LOCKED (same pattern as ClaimQueuedTargetWithLease —
+// see that method's docstring for the FASE 1.1 rationale).
 func (r *PostRepository) ClaimWaitingProviderTarget(id int64) (bool, error) {
 	tx, err := r.db.Begin()
 	if err != nil {

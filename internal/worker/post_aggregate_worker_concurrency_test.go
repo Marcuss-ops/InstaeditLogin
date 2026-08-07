@@ -50,7 +50,7 @@ func (s *aggregateWorkerStore) FindByID(int64) (*models.Post, error) {
 	return &models.Post{ID: 100, Caption: "aggregate test", MediaURL: "https://cdn.example/video.mp4"}, nil
 }
 
-func (s *aggregateWorkerStore) ClaimQueuedTarget(id int64) (bool, error) {
+func (s *aggregateWorkerStore) ClaimQueuedTargetWithLease(id int64, _ string, _ time.Duration) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	target, ok := s.targets[id]

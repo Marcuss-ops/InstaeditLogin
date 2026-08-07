@@ -14,10 +14,11 @@ import (
 
 // publishTarget drives the per-target 3-step status transition:
 //
-//  1. ATOMIC CLAIM: queued → publishing (verdict §10). The single
-//     UPDATE in ClaimQueuedTarget uses WHERE status='queued' as a
-//     logical lock so only ONE worker wins. The loser sees a
-//     `claimed=false` return and skips — no double-publish.
+//  1. ATOMIC CLAIM: queued → publishing (verdict §10). The lease-aware
+//     ClaimQueuedTargetWithLease stamps the per-replica lease and uses
+//     SELECT FOR UPDATE SKIP LOCKED as a logical lock so only ONE
+//     worker wins. The loser sees a `claimed=false` return and skips
+//     — no double-publish.
 //  2. Load parent Post (caption/title/media_url for the publish payload)
 //     AND PlatformAccount (platform name + platform_user_id for dispatch).
 //     Safe to do AFTER the claim: if either is missing, we transition

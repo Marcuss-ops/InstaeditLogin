@@ -5,7 +5,7 @@
 // surface per goroutine stay in their respective test files:
 //
 //   - mockPostStore         (publish_worker_test.go) — driver-only
-//     surfaces (ListPending, ClaimQueuedTarget, FindByID,
+//     surfaces (ListPending, ClaimQueuedTargetWithLease, FindByID,
 //     SetProviderIdempotencyKey).
 //   - mockReconcilePostStore (reconcile_worker_test.go) —
 //     reconciler-only surfaces (ListPublishing, UpdateStatus).

@@ -88,10 +88,6 @@ type PublisherPostStore interface {
 	ListPending(before time.Time) ([]models.PostTarget, error)
 	// FindByID loads the parent post for the publish payload (caption/title/media_url).
 	FindByID(id int64) (*models.Post, error)
-	// ClaimQueuedTarget remains available for legacy callers; the worker
-	// prefers the optional lease-aware contract below when the concrete
-	// repository provides it.
-	ClaimQueuedTarget(id int64) (bool, error)
 	// UpdateStatus persists the publishing→published|failed
 	// transitions. Lease-aware terminal writes use the optional
 	// LeaseAwarePublisherPostStore contract so test doubles and legacy
@@ -100,8 +96,8 @@ type PublisherPostStore interface {
 	// SetProviderIdempotencyKey (Taglio 4.7 LEVEL 2, migration 022)
 	// writes the worker-computed deterministic per-target
 	// idempotency_key onto the post_target row. The worker calls
-	// this AFTER ClaimQueuedTarget succeeds and BEFORE the publish
-	// call so retries reuse the same key. Errors:
+	// this AFTER ClaimQueuedTargetWithLease succeeds and BEFORE the
+	// publish call so retries reuse the same key. Errors:
 	//   * ErrProviderIdempotencyConflict: another target on the same
 	//     account already has this key — degenerate/duplicate, the
 	//     worker treats as failed and lets the operator reconcile.
@@ -114,13 +110,14 @@ type PublisherPostStore interface {
 	// SetTargetCanaryVideoID (Task 7/10) — stamps canary upload video id.
 	SetTargetCanaryVideoID(targetID int64, videoID string) error
 
-	// MarkRateLimitedRetry (OPEN GAP closure — ARCHITECTURE.md §Rate
+	// MarkRateLimitedRetry (legacy fallback — ARCHITECTURE.md §Rate
 	// limiting (d)) requeues a claimed target after the platform's
 	// final publish call answered 429/Retry-After: status → 'queued',
 	// attempt_count++, next_attempt_at = the platform hint so
-	// ListPending skips the row until the window opens. Guarded by
-	// `WHERE status='publishing'` (the driver's lease-less claim
-	// ownership), NOT by the SPRINT 5.2 lease CAS.
+	// ListPending skips the row until the window opens. Only used by
+	// the worker's legacy fallback path when the store does not
+	// implement LeaseAwarePublisherPostStore (test doubles);
+	// production always takes MarkRateLimitedRetryWithLease.
 	MarkRateLimitedRetry(id int64, nextAttemptAt time.Time, lastError string) error
 }
 
@@ -130,9 +127,14 @@ type PublisherPostStore interface {
 // without dragging in the full UserRepository surface. ReconcileWorker
 // uses the same type via the ReconcileUserStore alias defined in
 // reconcile_worker.go.
+
 // LeaseAwarePublisherPostStore is implemented by the SQL repository for
-// independent child-job ownership. Keeping it separate from
-// PublisherPostStore preserves compatibility with small test doubles.
+// independent child-job ownership. The lease-aware claim
+// (ClaimQueuedTargetWithLease) is the ONLY claim path the publish
+// driver uses — the legacy lease-less ClaimQueuedTarget was removed.
+// Keeping this interface separate from PublisherPostStore preserves
+// compatibility with small test doubles that only exercise the
+// legacy fallback paths.
 type LeaseAwarePublisherPostStore interface {
 	ClaimQueuedTargetWithLease(id int64, ownerID string, leaseTTL time.Duration) (bool, error)
 	UpdateStatusWithLease(target *models.PostTarget, ownerID string) error

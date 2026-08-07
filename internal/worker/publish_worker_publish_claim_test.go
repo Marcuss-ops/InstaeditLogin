@@ -79,11 +79,12 @@ func TestPublishTarget_SetKeyConflict_PromotesToFailed(t *testing.T) {
 }
 
 // TestPublishTarget_ClaimLoss_SkipsWithoutPublish is the verdict §10
-// double-publish-prevention test: when ClaimQueuedTarget returns
-// false (another worker already won the race), the worker MUST skip
-// the target without loading the post, refreshing the token, or
-// calling Publish. Any of those side-effects on a claim-loss would
-// risk a second publish for the same target.
+// double-publish-prevention test: when the lease-aware claim
+// (ClaimQueuedTargetWithLease) returns false (another worker already
+// won the race), the worker MUST skip the target without loading the
+// post, refreshing the token, or calling Publish. Any of those
+// side-effects on a claim-loss would risk a second publish for the
+// same target.
 func TestPublishTarget_ClaimLoss_SkipsWithoutPublish(t *testing.T) {
 	posts := &mockPostStore{
 		claimFn: func(id int64) (bool, error) { return false, nil },
@@ -124,7 +125,7 @@ func TestPublishTarget_ClaimLoss_SkipsWithoutPublish(t *testing.T) {
 
 	// Hard call counts: claim fires once, NOTHING ELSE does.
 	if posts.claimCalls != 1 {
-		t.Errorf("ClaimQueuedTarget calls: want 1, got %d", posts.claimCalls)
+		t.Errorf("ClaimQueuedTargetWithLease calls: want 1, got %d", posts.claimCalls)
 	}
 	if posts.findByIDCalls != 0 {
 		t.Errorf("FindByID calls: want 0, got %d (claim-loss must short-circuit)", posts.findByIDCalls)
@@ -147,7 +148,8 @@ func TestPublishTarget_ClaimLoss_SkipsWithoutPublish(t *testing.T) {
 // claim-first ordering invariant using a call ordering tracker. A
 // regression that reordered the two steps would break the
 // double-publish guarantee if the post load also had a side-effect
-// (e.g. logging payload).
+// (e.g. logging payload). The claim under test is the lease-aware
+// ClaimQueuedTargetWithLease (the only remaining claim path).
 func TestPublishTarget_ClaimFiresBeforeFindByID(t *testing.T) {
 	var order []string
 	posts := &mockPostStore{
@@ -206,7 +208,7 @@ func TestPublishTarget_ClaimFiresBeforeFindByID(t *testing.T) {
 // TestPublishTarget_ClaimFiresBeforeAnySideEffectOnLoss combines
 // the "no side effects on claim loss" + "ordering" guarantees into
 // a single observable invariant: the FIRST repo call on every
-// claim must be ClaimQueuedTarget. This is the simplest
+// claim must be ClaimQueuedTargetWithLease. This is the simplest
 // expression of the verdict §10 contract.
 func TestPublishTarget_ClaimFiresBeforeAnySideEffectOnLoss(t *testing.T) {
 	var order []string
@@ -245,14 +247,14 @@ func TestPublishTarget_ClaimFiresBeforeAnySideEffectOnLoss(t *testing.T) {
 		t.Fatalf("publishTarget: %v", err)
 	}
 	if len(order) != 1 || order[0] != "claim" {
-		t.Errorf("on claim-loss, only ClaimQueuedTarget should run; got order=%v", order)
+		t.Errorf("on claim-loss, only ClaimQueuedTargetWithLease should run; got order=%v", order)
 	}
 }
 
 // TestPublishTarget_ClaimError_Propagates covers the path where
-// ClaimQueuedTarget itself returns an error (DB unreachable, etc.).
-// The error must surface so the tick can log + continue to the next
-// target.
+// ClaimQueuedTargetWithLease itself returns an error (DB unreachable,
+// etc.). The error must surface so the tick can log + continue to the
+// next target.
 func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 	t.Parallel()
 

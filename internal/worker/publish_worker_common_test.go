@@ -12,7 +12,7 @@ import (
 // ------------------------------------------------------------------
 // mockPostStore — driver-only repository mock. Distinct from
 // mockReconcilePostStore (reconcile_worker_test.go) because the
-// driver's surface (ListPending, ClaimQueuedTarget, FindByID,
+// driver's surface (ListPending, ClaimQueuedTargetWithLease, FindByID,
 // SetProviderIdempotencyKey) is different from the reconciler's
 // (ListPublishing, UpdateStatus). The interface split
 // (PublisherPostStore vs ReconcilePostStore) compiles-in the
@@ -103,10 +103,16 @@ func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 	return m.findByIDFn(id)
 }
 
-func (m *mockPostStore) ClaimQueuedTarget(id int64) (bool, error) {
+// ClaimQueuedTargetWithLease is the ONLY claim path the publish
+// driver uses (the legacy lease-less ClaimQueuedTarget was removed).
+// It increments claimCalls (shared counter with the historical
+// contract so existing assertions keep working) and delegates to
+// claimFn. The owner/leaseTTL args are intentionally ignored — the
+// mock simulates the winner/loser outcome the test configures.
+func (m *mockPostStore) ClaimQueuedTargetWithLease(id int64, _ string, _ time.Duration) (bool, error) {
 	m.claimCalls++
 	if m.claimFn == nil {
-		return false, errors.New("ClaimQueuedTarget not implemented in this test")
+		return false, errors.New("ClaimQueuedTargetWithLease not implemented in this test")
 	}
 	return m.claimFn(id)
 }

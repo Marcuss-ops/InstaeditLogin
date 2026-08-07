@@ -14,11 +14,12 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// TestPostClaimQueuedTarget_Success covers the FASE 1.1 SKIP LOCKED
-// atomic-claim happy path: a single row in 'queued' is locked via
-// SELECT FOR UPDATE SKIP LOCKED and then transitioned to 'publishing'
-// inside an explicit tx. The function returns (true, nil).
-func TestPostClaimQueuedTarget_Success(t *testing.T) {
+// TestPostClaimQueuedTargetWithLease_Success covers the FASE 1.1 SKIP
+// LOCKED atomic-claim happy path: a single claimable row is locked
+// via SELECT FOR UPDATE SKIP LOCKED and then transitioned to
+// 'publishing' with a lease stamp inside an explicit tx. The function
+// returns (true, nil).
+func TestPostClaimQueuedTargetWithLease_Success(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
@@ -27,7 +28,10 @@ func TestPostClaimQueuedTarget_Success(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(
 		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'queued'
+		 WHERE id = $1
+		   AND status IN ('queued', 'waiting_provider', 'retrying')
+		   AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+		   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 		 FOR UPDATE SKIP LOCKED`,
 	).WithArgs(int64(200)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
@@ -35,8 +39,14 @@ func TestPostClaimQueuedTarget_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
 	mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
-	mock.ExpectExec(`UPDATE post_targets SET status = 'publishing' WHERE id = $1`).
-		WithArgs(int64(200)).
+	mock.ExpectExec(`UPDATE post_targets
+ SET status = 'publishing',
+     lease_owner_id = $2,
+     leased_until = NOW() + ($3 || ' seconds')::INTERVAL,
+     heartbeat_at = NOW()
+ WHERE id = $1
+   AND status IN ('queued', 'waiting_provider', 'retrying')`).
+		WithArgs(int64(200), "worker-1", "60").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublishing))
@@ -44,9 +54,9 @@ func TestPostClaimQueuedTarget_Success(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	claimed, err := repo.ClaimQueuedTarget(200)
+	claimed, err := repo.ClaimQueuedTargetWithLease(200, "worker-1", time.Minute)
 	if err != nil {
-		t.Fatalf("ClaimQueuedTarget: %v", err)
+		t.Fatalf("ClaimQueuedTargetWithLease: %v", err)
 	}
 	if !claimed {
 		t.Errorf("claimed: want true, got false (SELECT returned row → claim won)")
@@ -56,27 +66,30 @@ func TestPostClaimQueuedTarget_Success(t *testing.T) {
 	}
 }
 
-// TestPostClaimQueuedTarget_AlreadyClaimed covers the FASE 1.1 SKIP
-// LOCKED loser path: when another worker/tx already holds a row lock
-// on this row, SELECT FOR UPDATE SKIP LOCKED returns zero rows
-// immediately (no blocking). The function returns (false, nil).
-func TestPostClaimQueuedTarget_AlreadyClaimed(t *testing.T) {
+// TestPostClaimQueuedTargetWithLease_AlreadyClaimed covers the FASE
+// 1.1 SKIP LOCKED loser path: when another worker/tx already holds a
+// row lock on this row, SELECT FOR UPDATE SKIP LOCKED returns zero
+// rows immediately (no blocking). The function returns (false, nil).
+func TestPostClaimQueuedTargetWithLease_AlreadyClaimed(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(
 		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'queued'
+		 WHERE id = $1
+		   AND status IN ('queued', 'waiting_provider', 'retrying')
+		   AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+		   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 		 FOR UPDATE SKIP LOCKED`,
 	).WithArgs(int64(200)).
 		WillReturnError(sql.ErrNoRows)
 	// On SKIP LOCKED miss, the tx is rolled back (deferred). No UPDATE or COMMIT.
 	mock.ExpectRollback()
 
-	claimed, err := repo.ClaimQueuedTarget(200)
+	claimed, err := repo.ClaimQueuedTargetWithLease(200, "worker-1", time.Minute)
 	if err != nil {
-		t.Fatalf("ClaimQueuedTarget: %v (must NOT error when another worker already claimed; the loser path is a normal skip)", err)
+		t.Fatalf("ClaimQueuedTargetWithLease: %v (must NOT error when another worker already claimed; the loser path is a normal skip)", err)
 	}
 	if claimed {
 		t.Errorf("claimed: want false, got true (SKIP LOCKED returned no rows → claim lost)")
@@ -86,23 +99,23 @@ func TestPostClaimQueuedTarget_AlreadyClaimed(t *testing.T) {
 	}
 }
 
-// TestPostClaimQueuedTarget_DBError covers the FASE 1.1 path where
-// Begin() itself fails (DB unreachable). The error must surface so
-// the worker can log and continue to the next target.
-func TestPostClaimQueuedTarget_DBError(t *testing.T) {
+// TestPostClaimQueuedTargetWithLease_DBError covers the FASE 1.1 path
+// where Begin() itself fails (DB unreachable). The error must surface
+// so the worker can log and continue to the next target.
+func TestPostClaimQueuedTargetWithLease_DBError(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
 	mock.ExpectBegin().WillReturnError(errors.New("connection lost"))
 
-	claimed, err := repo.ClaimQueuedTarget(200)
+	claimed, err := repo.ClaimQueuedTargetWithLease(200, "worker-1", time.Minute)
 	if err == nil {
 		t.Fatal("expected DB error to propagate, got nil")
 	}
 	if claimed {
 		t.Errorf("claimed: want false on DB error, got true")
 	}
-	if !strings.Contains(err.Error(), "failed to begin claim tx") {
+	if !strings.Contains(err.Error(), "failed to begin claim-with-lease tx") {
 		t.Errorf("error should be wrapped: %v", err)
 	}
 }
@@ -112,15 +125,18 @@ func TestPostClaimQueuedTarget_DBError(t *testing.T) {
 // between Exec and RowsAffected) no longer exists. The new
 // tx-based claim has different failure modes (Begin error, SELECT
 // error, UPDATE error, Commit error). Covered by the tests above
-// and the new TestPostClaimQueuedTarget_CommitError below.
-func TestPostClaimQueuedTarget_CommitError(t *testing.T) {
+// and the new TestPostClaimQueuedTargetWithLease_CommitError below.
+func TestPostClaimQueuedTargetWithLease_CommitError(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(
 		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'queued'
+		 WHERE id = $1
+		   AND status IN ('queued', 'waiting_provider', 'retrying')
+		   AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+		   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 		 FOR UPDATE SKIP LOCKED`,
 	).WithArgs(int64(200)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
@@ -128,8 +144,14 @@ func TestPostClaimQueuedTarget_CommitError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
 	mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
-	mock.ExpectExec(`UPDATE post_targets SET status = 'publishing' WHERE id = $1`).
-		WithArgs(int64(200)).
+	mock.ExpectExec(`UPDATE post_targets
+ SET status = 'publishing',
+     lease_owner_id = $2,
+     leased_until = NOW() + ($3 || ' seconds')::INTERVAL,
+     heartbeat_at = NOW()
+ WHERE id = $1
+   AND status IN ('queued', 'waiting_provider', 'retrying')`).
+		WithArgs(int64(200), "worker-1", "60").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublishing))
@@ -137,11 +159,11 @@ func TestPostClaimQueuedTarget_CommitError(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
 
-	_, err := repo.ClaimQueuedTarget(200)
+	_, err := repo.ClaimQueuedTargetWithLease(200, "worker-1", time.Minute)
 	if err == nil {
 		t.Fatal("expected Commit error to propagate, got nil")
 	}
-	if !strings.Contains(err.Error(), "failed to commit claim") {
+	if !strings.Contains(err.Error(), "failed to commit claim-with-lease") {
 		t.Errorf("error should preserve 'commit claim' context: %v", err)
 	}
 }
@@ -231,14 +253,14 @@ UPDATE post_targets pt
 
 // --- FASE 1.1: concurrent claim race test ---
 
-// TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner
+// TestPostClaimQueuedTargetWithLease_ConcurrentRace_TwoGoroutines_OneWinner
 // simulates two goroutines racing to claim the SAME row. The first
 // one to select locks the row; the second gets SKIP LOCKED → zero
 // rows → returns (false, nil). Only ONE claim succeeds.
 //
 // This is the FASE 1.1 end-to-end invariant: exactly one publish
 // per target, even with N worker replicas.
-func TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner(t *testing.T) {
+func TestPostClaimQueuedTargetWithLease_ConcurrentRace_TwoGoroutines_OneWinner(t *testing.T) {
 	// Worker A: will win the claim (successful SELECT).
 	dbA, mockA, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	if err != nil {
@@ -250,7 +272,10 @@ func TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner(t *testing
 	mockA.ExpectBegin()
 	mockA.ExpectQuery(
 		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'queued'
+		 WHERE id = $1
+		   AND status IN ('queued', 'waiting_provider', 'retrying')
+		   AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+		   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 		 FOR UPDATE SKIP LOCKED`,
 	).WithArgs(int64(200)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
@@ -258,8 +283,14 @@ func TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner(t *testing
 		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
 	mockA.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
-	mockA.ExpectExec(`UPDATE post_targets SET status = 'publishing' WHERE id = $1`).
-		WithArgs(int64(200)).
+	mockA.ExpectExec(`UPDATE post_targets
+ SET status = 'publishing',
+     lease_owner_id = $2,
+     leased_until = NOW() + ($3 || ' seconds')::INTERVAL,
+     heartbeat_at = NOW()
+ WHERE id = $1
+   AND status IN ('queued', 'waiting_provider', 'retrying')`).
+		WithArgs(int64(200), "worker-1", "60").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mockA.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublishing))
@@ -278,7 +309,10 @@ func TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner(t *testing
 	mockB.ExpectBegin()
 	mockB.ExpectQuery(
 		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'queued'
+		 WHERE id = $1
+		   AND status IN ('queued', 'waiting_provider', 'retrying')
+		   AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+		   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 		 FOR UPDATE SKIP LOCKED`,
 	).WithArgs(int64(200)).
 		WillReturnError(sql.ErrNoRows)
@@ -304,10 +338,10 @@ func TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner(t *testing
 		if firstCall {
 			firstCall = false
 			mu.Unlock()
-			aWon, aErr = repoA.ClaimQueuedTarget(200)
+			aWon, aErr = repoA.ClaimQueuedTargetWithLease(200, "worker-1", time.Minute)
 		} else {
 			mu.Unlock()
-			aWon, aErr = repoA.ClaimQueuedTarget(200)
+			aWon, aErr = repoA.ClaimQueuedTargetWithLease(200, "worker-1", time.Minute)
 		}
 	}()
 
@@ -318,10 +352,10 @@ func TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner(t *testing
 		if firstCall {
 			firstCall = false
 			mu.Unlock()
-			bWon, bErr = repoB.ClaimQueuedTarget(200)
+			bWon, bErr = repoB.ClaimQueuedTargetWithLease(200, "worker-1", time.Minute)
 		} else {
 			mu.Unlock()
-			bWon, bErr = repoB.ClaimQueuedTarget(200)
+			bWon, bErr = repoB.ClaimQueuedTargetWithLease(200, "worker-1", time.Minute)
 		}
 	}()
 

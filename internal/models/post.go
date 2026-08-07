@@ -23,16 +23,18 @@ import (
 //	                           → retrying ───→ (when ListPending picks
 //	                                        ───  the row again after
 //	                                        ───  next_attempt_at <= now,
-//	                                        ───  ClaimQueuedTarget flips
-//	                                        ───  it back to publishing) ─→ publishing
+//	                                        ───  the lease-aware claim
+//	                                        ───  ClaimQueuedTargetWithLease
+//	                                        ───  flips it back to
+//	                                        ───  publishing) ─→ publishing
 //	                           → failed
 //
 // The retrying → publishing step is INDIRECT: a worker tick re-checks
 // post_targets rows where status='retrying' AND next_attempt_at <= now,
-// claims them via ClaimQueuedTarget (which sets status='publishing'),
-// and resumes the publish from there. There is no direct UPDATE
-// 'retrying' → 'publishing' anywhere — the worker is the only legitimate
-// writer of that transition.
+// claims them via ClaimQueuedTargetWithLease (which sets
+// status='publishing'), and resumes the publish from there. There is no
+// direct UPDATE 'retrying' → 'publishing' anywhere — the worker is the
+// only legitimate writer of that transition.
 //
 // String-based enum pattern lets us flow PostStatus values through
 // encoding/json (default string serialization) and through database/sql

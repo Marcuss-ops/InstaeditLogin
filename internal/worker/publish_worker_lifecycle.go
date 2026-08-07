@@ -16,8 +16,9 @@ import (
 // transition is owned by ReconcileWorker.Run on its own goroutine
 // (see reconcile_worker.go). The two goroutines share the publish-
 // state at the post_targets.status column; the publish driver's
-// ClaimQueuedTarget is the only writer for queued→publishing, and
-// the reconciler is the only writer for publishing→published|failed.
+// lease-aware claim (ClaimQueuedTargetWithLease) is the only writer
+// for queued→publishing, and the reconciler is the only writer for
+// publishing→published|failed.
 func (w *PublishWorker) Run(ctx context.Context) error {
 	w.logger.Info("publish worker started",
 		"interval_seconds", w.interval.Seconds(),
