@@ -501,3 +501,80 @@ func TestReconcileTarget_TransientError_SchedulesRetry(t *testing.T) {
 		t.Errorf("transient retry scheduled too early: %v", posts.scheduleTimes[0])
 	}
 }
+
+// TestReconcileTarget_TransientErrorChain_ExhaustsBudgetToDLQ exercises the
+// full transient error lifecycle: consecutive 503-like errors at each attempt
+// level through the bounded retry budget (reconcileMaxAttempts=5). The first
+// reconcileMaxAttempts-1 calls must each schedule a retry without transitioning
+// the terminal status; the final call (at the exhausted budget) must move the
+// target to the dead-letter queue with RECONCILE_RETRY_EXHAUSTED. This catches
+// regressions where the attempt-boundary check or the budget-increment logic
+// would fail to exhaust after the configured max attempts.
+func TestReconcileTarget_TransientErrorChain_ExhaustsBudgetToDLQ(t *testing.T) {
+	posts := &mockReconcilePostStore{}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
+		},
+	}
+	svc := &mockAsyncProvider{
+		baseMockProvider: baseMockProvider{platform: "tiktok"},
+		reconcileFn: func(context.Context, string, string) (*models.PublishResult, error) {
+			return nil, errors.New("503 upstream service unavailable")
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	w := newTestReconcileWorker(posts, users, "tiktok", svc, vault)
+
+	target := publishingTarget()
+
+	// The first reconcileMaxAttempts-1 transient errors each schedule a retry
+	// without transitioning the row. scheduleRetry mutates target.ReconcileAttempt
+	// in-memory (attempt+1), so our loop overrides it to the desired level.
+	for attempt := 0; attempt < reconcileMaxAttempts-1; attempt++ {
+		target.ReconcileAttempt = attempt
+		reconciled, wasFailed, err := w.reconcileTarget(context.Background(), target)
+		if err != nil {
+			t.Fatalf("attempt %d: reconcileTarget: %v", attempt, err)
+		}
+		if reconciled || wasFailed {
+			t.Fatalf("attempt %d: reconciled=%v wasFailed=%v; want retry", attempt, reconciled, wasFailed)
+		}
+	}
+	if posts.scheduleCalls != reconcileMaxAttempts-1 {
+		t.Fatalf("schedule calls before exhaustion: want %d, got %d", reconcileMaxAttempts-1, posts.scheduleCalls)
+	}
+	if posts.updateCalls != 0 {
+		t.Fatalf("update calls before exhaustion: want 0, got %d", posts.updateCalls)
+	}
+
+	// Budget exhausted — the final transient error must move the target
+	// to the dead-letter queue, not to plain failed.
+	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), target)
+	if err != nil {
+		t.Fatalf("final attempt: reconcileTarget: %v", err)
+	}
+	if !reconciled || !wasFailed {
+		t.Fatalf("final attempt: reconciled=%v wasFailed=%v; want DLQ transition", reconciled, wasFailed)
+	}
+	if posts.updateCalls != 1 {
+		t.Fatalf("update calls after exhaustion: want 1 (the DLQ transition), got %d", posts.updateCalls)
+	}
+	if len(posts.updateTargets) == 0 {
+		t.Fatal("updateTargets is empty after the DLQ transition")
+	}
+	final := posts.updateTargets[0]
+	if final.Status != models.PostStatusDLQ {
+		t.Fatalf("final status: want %q, got %q", models.PostStatusDLQ, final.Status)
+	}
+	if final.LastErrorCode != "RECONCILE_RETRY_EXHAUSTED" {
+		t.Fatalf("error code: want RECONCILE_RETRY_EXHAUSTED, got %q", final.LastErrorCode)
+	}
+	if final.ErrorMessage == "" {
+		t.Error("ErrorMessage should describe the retry budget exhaustion")
+	}
+}
