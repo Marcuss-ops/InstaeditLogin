@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/lib/pq"
-
 )
 
 func (r *GroupRepository) ListAccountsInGroup(groupID int64) ([]int64, error) {

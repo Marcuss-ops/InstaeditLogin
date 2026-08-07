@@ -2,6 +2,8 @@ package bootstrap
 
 import (
 	"testing"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 )
 
 func TestWorkerSpecs_PreserveLifecycleContract(t *testing.T) {
@@ -45,6 +47,31 @@ func TestWorkerSpecs_PreserveLifecycleContract(t *testing.T) {
 	for _, spec := range specs {
 		if spec.Name != "asset_cleanup" && spec.Name != "token_refresh_sweep" && spec.Name != "snapshot_refresh_sweep" && !spec.Critical {
 			t.Errorf("pipeline worker %q unexpectedly became non-critical", spec.Name)
+		}
+	}
+}
+
+func TestRegisterWorkerSpecs_WiresRegistryWithoutStartingWorkers(t *testing.T) {
+	registry := worker.NewRegistry()
+	app := &App{WorkerRegistry: registry}
+
+	specs := app.registerWorkerSpecs()
+	statuses := registry.GetStatus()
+	if len(statuses) != len(specs) {
+		t.Fatalf("registered worker count = %d, want %d", len(statuses), len(specs))
+	}
+
+	byName := make(map[string]worker.WorkerStatus, len(statuses))
+	for _, status := range statuses {
+		byName[status.Name] = status
+	}
+	for _, spec := range specs {
+		status, ok := byName[spec.Name]
+		if !ok {
+			t.Fatalf("worker %q was not registered", spec.Name)
+		}
+		if status.Critical != spec.Critical {
+			t.Errorf("worker %q criticality = %v, want %v", spec.Name, status.Critical, spec.Critical)
 		}
 	}
 }
