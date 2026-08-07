@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -92,6 +93,42 @@ func TestEditorServiceCreateProjectPersistsOnlyBridgeAndIsIdempotent(t *testing.
 	}
 	if adapter.createCalls != 1 {
 		t.Fatalf("adapter create calls after idempotent retry = %d; want 1", adapter.createCalls)
+	}
+}
+
+func TestEditorServiceConcurrentCreateCallsAdapterOnce(t *testing.T) {
+	adapter := &editorAdapterFake{}
+	bridges := &editorBridgeFake{}
+	service := NewEditorService(adapter, bridges)
+	req := CreateEditorProjectRequest{UserID: 11, WorkspaceID: 7, ApplicationProjectID: "thumb_concurrent"}
+
+	const callers = 8
+	results := make(chan *EditorProject, callers)
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			project, err := service.CreateProject(context.Background(), req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- project
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent CreateProject: %v", err)
+	}
+	if adapter.createCalls != 1 {
+		t.Fatalf("adapter create calls = %d; want exactly 1", adapter.createCalls)
+	}
+	if len(results) != callers {
+		t.Fatalf("successful results = %d; want %d", len(results), callers)
 	}
 }
 

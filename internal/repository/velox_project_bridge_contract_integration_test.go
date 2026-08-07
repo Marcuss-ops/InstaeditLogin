@@ -34,7 +34,7 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 	}
 
 	var editorRowsBefore int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE external_project_id = $1`, veloxProjectID).Scan(&editorRowsBefore); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE velox_project_id = $1`, veloxProjectID).Scan(&editorRowsBefore); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.CreateVeloxProjectBridge(context.Background(), bridge); err != nil {
@@ -75,7 +75,7 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 		t.Fatalf("cross-workspace bridge leaked: bridge=%+v err=%v", foreign, err)
 	}
 	var editorRowsAfter int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE external_project_id = $1`, veloxProjectID).Scan(&editorRowsAfter); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE velox_project_id = $1`, veloxProjectID).Scan(&editorRowsAfter); err != nil {
 		t.Fatal(err)
 	}
 	if editorRowsAfter != editorRowsBefore {
@@ -86,7 +86,7 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 		t.Fatalf("delete bridge relation: %v", err)
 	}
 	var editorRowsFinal int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE external_project_id = $1`, veloxProjectID).Scan(&editorRowsFinal); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE velox_project_id = $1`, veloxProjectID).Scan(&editorRowsFinal); err != nil {
 		t.Fatal(err)
 	}
 	if editorRowsFinal != editorRowsBefore {

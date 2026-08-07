@@ -3,7 +3,7 @@ package veloxclient
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -48,11 +48,7 @@ func (a *VeloxAdapter) CreateProject(ctx context.Context, req services.CreateEdi
 	}
 	externalID := strings.TrimSpace(req.ExternalProjectID)
 	if externalID == "" {
-		var err error
-		externalID, err = newVeloxProjectID()
-		if err != nil {
-			return nil, fmt.Errorf("%w: generate external project id: %v", services.ErrEditorProjectInvalid, err)
-		}
+		externalID = newVeloxProjectID(req.WorkspaceID, req.ApplicationProjectID)
 	}
 	if err := validateVeloxProjectID(externalID); err != nil {
 		return nil, fmt.Errorf("%w: %v", services.ErrEditorProjectInvalid, err)
@@ -223,10 +219,11 @@ func validateVeloxProjectID(projectID string) error {
 	return nil
 }
 
-func newVeloxProjectID() (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	return "ve_" + hex.EncodeToString(raw[:]), nil
+// newVeloxProjectID derives the provider handle from the authoritative
+// InstaEdit identity. The Velox editor endpoint materializes projects lazily
+// on PUT /document, so the same application project must address the same
+// opaque provider path across API replicas and retries.
+func newVeloxProjectID(workspaceID int64, applicationProjectID string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("instaedit-editor:%d:%s", workspaceID, strings.TrimSpace(applicationProjectID))))
+	return "ve_" + hex.EncodeToString(sum[:16])
 }

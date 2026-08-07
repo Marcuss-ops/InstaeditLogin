@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
@@ -17,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedirect(t *testing.T) {
@@ -32,14 +34,35 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 		}
 		return &models.Workspace{ID: id, OwnerID: 1}, nil
 	}}
+	editorService := &fakeEditorService{}
+	editorService.createProjectFn = func(_ context.Context, req services.CreateEditorProjectRequest) (*services.EditorProject, error) {
+		if store.bridge != nil {
+			if store.bridge.ProjectID != req.ApplicationProjectID || store.bridge.WorkspaceID != req.WorkspaceID {
+				return nil, services.ErrEditorProjectNotFound
+			}
+			if store.bridge.ExternalProjectID != req.ExternalProjectID {
+				return nil, services.ErrEditorProjectConflict
+			}
+			return &services.EditorProject{ApplicationProjectID: req.ApplicationProjectID, WorkspaceID: req.WorkspaceID, ExternalProjectID: store.bridge.ExternalProjectID, Created: false}, nil
+		}
+		externalID := req.ExternalProjectID
+		if externalID == "" {
+			externalID = "vx_contract_1"
+		}
+		store.bridge = &models.VeloxProjectBridge{ProjectID: req.ApplicationProjectID, WorkspaceID: req.WorkspaceID, ExternalProjectID: externalID, EditorProvider: "velox"}
+		return &services.EditorProject{ApplicationProjectID: req.ApplicationProjectID, WorkspaceID: req.WorkspaceID, ExternalProjectID: externalID, Created: true}, nil
+	}
+
 	r := newTestRouter(
 		&mockProvider{platform: models.PlatformYouTube}, &mockUserStore{}, "",
 		WithWorkspaceStore(workspaceStore),
 		WithThumbnailProjectStore(store),
 		WithEditorURL("https://instaeditor.example.test/app"),
+		WithEditorService(editorService),
 	)
 	h := r.Setup()
-	body := `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"external_project_id":"vx_contract_1"}`
+	body := `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7}`
+	replayBody := `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"external_project_id":"vx_contract_1"}`
 
 	// The InstaEdit-owned project and workspace are the authorization and
 	// source-of-truth gates. The first request creates only the bridge.
@@ -71,13 +94,13 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if store.bridge == nil || store.bridge.ExternalProjectID != "vx_contract_1" {
 		t.Fatalf("InstaEdit store did not receive the opaque bridge: %+v", store.bridge)
 	}
-	if store.createBridgeCalls != 1 {
-		t.Fatalf("first request should persist exactly once, got %d create calls", store.createBridgeCalls)
+	if len(editorService.calls) != 1 || store.createBridgeCalls != 0 {
+		t.Fatalf("first request must use EditorService exactly once and bypass legacy persistence: service_calls=%d store_calls=%d", len(editorService.calls), store.createBridgeCalls)
 	}
 
 	// Replaying the same request returns the same authoritative bridge and
 	// URL instead of creating a second relation.
-	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", body)
+	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", replayBody)
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("equivalent replay: want 200, got %d: %s", w.Code, w.Body.String())
@@ -89,8 +112,8 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if replayed.Bridge.ProjectID != created.Bridge.ProjectID || replayed.Bridge.ExternalProjectID != created.Bridge.ExternalProjectID || replayed.EditorURL != created.EditorURL {
 		t.Fatalf("replay changed the authoritative bridge: created=%+v replayed=%+v", created, replayed)
 	}
-	if store.createBridgeCalls != 1 {
-		t.Fatalf("equivalent replay must not persist twice, got %d create calls", store.createBridgeCalls)
+	if len(editorService.calls) != 2 || store.createBridgeCalls != 0 {
+		t.Fatalf("equivalent replay must use service and bypass legacy persistence: service_calls=%d store_calls=%d", len(editorService.calls), store.createBridgeCalls)
 	}
 
 	// A different Velox handle cannot overwrite the InstaEdit-owned relation.
@@ -108,13 +131,14 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if unauthenticatedW.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated create: want 401, got %d", unauthenticatedW.Code)
 	}
+	serviceCallsBeforeCrossWorkspace := len(editorService.calls)
 	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":8,"external_project_id":"vx_probe"}`)
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("cross-workspace create: want 404, got %d", w.Code)
 	}
-	if store.createBridgeCalls != 1 {
-		t.Fatalf("cross-workspace probe must not persist, got %d create calls", store.createBridgeCalls)
+	if len(editorService.calls) != serviceCallsBeforeCrossWorkspace || store.createBridgeCalls != 0 {
+		t.Fatalf("cross-workspace probe must not call the editor service or persist through legacy store: service_calls=%d before=%d store_calls=%d", len(editorService.calls), serviceCallsBeforeCrossWorkspace, store.createBridgeCalls)
 	}
 }
 

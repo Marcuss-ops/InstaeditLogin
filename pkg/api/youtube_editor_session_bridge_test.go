@@ -28,6 +28,7 @@ func (f *fakeEditorService) CreateProject(ctx context.Context, req services.Crea
 		ExternalProjectID:    req.ExternalProjectID,
 		WorkspaceID:          req.WorkspaceID,
 		State:                "linked",
+		Created:              false,
 	}, nil
 }
 

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
@@ -79,6 +81,7 @@ type EditorProject struct {
 	Name                 string    `json:"name,omitempty"`
 	State                string    `json:"state,omitempty"`
 	CreatedAt            time.Time `json:"created_at,omitempty"`
+	Created              bool      `json:"-"`
 }
 
 type EditorProjectStatus struct {
@@ -108,6 +111,7 @@ var (
 type DefaultEditorService struct {
 	adapter EditorAdapter
 	bridges EditorProjectBridgeStore
+	creates singleflight.Group
 }
 
 func NewEditorService(adapter EditorAdapter, bridges EditorProjectBridgeStore) *DefaultEditorService {
@@ -123,19 +127,36 @@ func (s *DefaultEditorService) CreateProject(ctx context.Context, req CreateEdit
 	if s == nil || s.adapter == nil || s.bridges == nil {
 		return nil, ErrEditorServiceNotConfigured
 	}
+	key := fmt.Sprintf("%d:%s", req.WorkspaceID, strings.TrimSpace(req.ApplicationProjectID))
+	value, err, shared := s.creates.Do(key, func() (any, error) {
+		return s.createProjectOnce(ctx, req)
+	})
+	if err != nil {
+		return nil, err
+	}
+	project, ok := value.(*EditorProject)
+	if !ok || project == nil {
+		return nil, fmt.Errorf("%w: invalid create result", ErrEditorProjectInvalid)
+	}
+	if requestedExternalID := strings.TrimSpace(req.ExternalProjectID); requestedExternalID != "" && project.ExternalProjectID != requestedExternalID {
+		return nil, ErrEditorProjectConflict
+	}
+	if shared && project.Created {
+		copy := *project
+		copy.Created = false
+		project = &copy
+	}
+	return project, nil
+}
+
+func (s *DefaultEditorService) createProjectOnce(ctx context.Context, req CreateEditorProjectRequest) (*EditorProject, error) {
+	// Re-check inside the singleflight callback. A caller may have joined
+	// after an earlier lookup but before the first creator persisted the
+	// authoritative mapping.
 	if existing, err := s.bridges.FindVeloxProjectBridge(ctx, req.WorkspaceID, strings.TrimSpace(req.ApplicationProjectID)); err != nil {
 		return nil, fmt.Errorf("find editor project bridge: %w", err)
 	} else if existing != nil {
-		if !bridgeMatchesRequest(existing, req.WorkspaceID, req.ApplicationProjectID) || strings.TrimSpace(existing.ExternalProjectID) == "" {
-			return nil, ErrEditorProjectNotFound
-		}
-		requestedExternalID := strings.TrimSpace(req.ExternalProjectID)
-		if requestedExternalID != "" && existing.ExternalProjectID != requestedExternalID {
-			return nil, ErrEditorProjectConflict
-		}
-		project := editorProjectFromBridge(existing)
-		project.UserID = req.UserID
-		return project, nil
+		return s.projectFromExistingBridge(existing, req)
 	}
 
 	project, err := s.adapter.CreateProject(ctx, req)
@@ -156,19 +177,25 @@ func (s *DefaultEditorService) CreateProject(ctx context.Context, req CreateEdit
 	}
 	if err := s.bridges.CreateVeloxProjectBridge(ctx, bridge); err != nil {
 		if existing, findErr := s.bridges.FindVeloxProjectBridge(ctx, req.WorkspaceID, req.ApplicationProjectID); findErr == nil && existing != nil {
-			if !bridgeMatchesRequest(existing, req.WorkspaceID, req.ApplicationProjectID) || strings.TrimSpace(existing.ExternalProjectID) == "" {
-				return nil, ErrEditorProjectNotFound
-			}
-			if existing.ExternalProjectID != bridge.ExternalProjectID {
-				return nil, ErrEditorProjectConflict
-			}
-			project := editorProjectFromBridge(existing)
-			project.UserID = req.UserID
-			return project, nil
+			return s.projectFromExistingBridge(existing, req)
 		}
 		return nil, fmt.Errorf("persist editor project bridge: %w", err)
 	}
 	project = editorProjectFromBridge(bridge)
+	project.UserID = req.UserID
+	project.Created = true
+	return project, nil
+}
+
+func (s *DefaultEditorService) projectFromExistingBridge(existing *models.VeloxProjectBridge, req CreateEditorProjectRequest) (*EditorProject, error) {
+	if !bridgeMatchesRequest(existing, req.WorkspaceID, req.ApplicationProjectID) || strings.TrimSpace(existing.ExternalProjectID) == "" {
+		return nil, ErrEditorProjectNotFound
+	}
+	requestedExternalID := strings.TrimSpace(req.ExternalProjectID)
+	if requestedExternalID != "" && existing.ExternalProjectID != requestedExternalID {
+		return nil, ErrEditorProjectConflict
+	}
+	project := editorProjectFromBridge(existing)
 	project.UserID = req.UserID
 	return project, nil
 }

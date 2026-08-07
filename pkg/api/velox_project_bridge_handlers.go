@@ -22,6 +22,8 @@ func mapEditorServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, services.ErrEditorProjectConflict):
 		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, services.ErrEditorServiceNotConfigured):
+		writeError(w, http.StatusServiceUnavailable, "Editor unavailable / misconfigured")
 	default:
 		// Unknown errors are local (persistence, validation, wiring)
 		// failures, not provider errors. 500 lets operators distinguish
@@ -102,70 +104,60 @@ func (r *Router) handleCreateVeloxProjectBridge(w http.ResponseWriter, req *http
 	if _, _, ok := r.authorizeThumbnailProjectBridge(w, req, body.WorkspaceID, projectID); !ok {
 		return
 	}
-	if r.editorService != nil {
-		if existing, err := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID); err != nil {
-			mapVeloxProjectBridgeError(w, err)
-			return
-		} else if existing == nil {
-			identityUserID := auth.IdentityFromContext(req.Context()).UserID()
-			created, err := r.editorService.CreateProject(req.Context(), services.CreateEditorProjectRequest{
-				UserID:               identityUserID,
-				WorkspaceID:          body.WorkspaceID,
-				ApplicationProjectID: projectID,
-				ExternalProjectID:    strings.TrimSpace(body.ExternalProjectID),
-			})
-			if err != nil {
-				mapEditorServiceError(w, err)
-				return
-			}
-			bridge, bridgeErr := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID)
-			if bridgeErr != nil || bridge == nil || bridge.ExternalProjectID != created.ExternalProjectID {
-				if bridgeErr != nil {
-					mapVeloxProjectBridgeError(w, bridgeErr)
-				} else {
-					writeError(w, http.StatusInternalServerError, "editor project bridge was not persisted")
-				}
-				return
-			}
-			writeJSON(w, http.StatusCreated, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.ExternalProjectID)})
-			return
-		}
+	if r.editorService == nil {
+		writeError(w, http.StatusServiceUnavailable, "Editor unavailable / misconfigured")
+		return
 	}
-	bridge := &models.VeloxProjectBridge{
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+	// A browser-supplied external handle is never authoritative for a new
+	// mapping: accepting it would let a caller bind an InstaEdit project to
+	// an arbitrary provider project. It is used only as a conflict hint when
+	// an existing InstaEdit-owned bridge is being replayed. New projects get
+	// their provider handle from the adapter (deterministically, when the
+	// provider supports lazy project materialization).
+	requestedExternalID := strings.TrimSpace(body.ExternalProjectID)
+	existing, err := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID)
+	if err != nil {
+		mapVeloxProjectBridgeError(w, err)
+		return
+	}
+	if existing == nil && requestedExternalID != "" {
+		writeError(w, http.StatusUnprocessableEntity, "external_project_id is server-issued and must be omitted when creating a bridge")
+		return
+	}
+	created, err := r.editorService.CreateProject(req.Context(), services.CreateEditorProjectRequest{
+		UserID:               identity.UserID(),
+		WorkspaceID:          body.WorkspaceID,
+		ApplicationProjectID: projectID,
+		ExternalProjectID:    requestedExternalID,
+	})
+	if err != nil {
+		mapEditorServiceError(w, err)
+		return
+	}
+	bridge, bridgeErr := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID)
+	expected := &models.VeloxProjectBridge{
 		ProjectID:         projectID,
 		WorkspaceID:       body.WorkspaceID,
-		ExternalProjectID: strings.TrimSpace(body.ExternalProjectID),
-		ContractVersion:   models.ProjectBridgeContractVersion,
+		ExternalProjectID: created.ExternalProjectID,
 	}
-	if err := bridge.NormalizeAndValidate(); err != nil {
-		mapVeloxProjectBridgeError(w, errors.Join(repository.ErrVeloxProjectBridgeInvalid, err))
-		return
-	}
-	if existing, err := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID); err != nil {
-		mapVeloxProjectBridgeError(w, err)
-		return
-	} else if existing != nil {
-		if bridgeContextMatches(existing, bridge) {
-			writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *existing, EditorURL: r.editorURLForProject(existing.ExternalProjectID)})
-			return
+	if bridgeErr != nil || bridge == nil || !bridgeContextMatches(bridge, expected) {
+		if bridgeErr != nil {
+			mapVeloxProjectBridgeError(w, bridgeErr)
+		} else {
+			writeError(w, http.StatusInternalServerError, "editor project bridge was not persisted")
 		}
-		mapVeloxProjectBridgeError(w, repository.ErrVeloxProjectBridgeConflict)
 		return
 	}
-	if err := r.thumbnailProjectStore.CreateVeloxProjectBridge(req.Context(), bridge); err != nil {
-		// A concurrent identical request may win the unique constraint
-		// race. Re-read the authoritative row and return it as an
-		// idempotent success when the project mapping matches this request.
-		if errors.Is(err, repository.ErrVeloxProjectBridgeConflict) {
-			if existing, findErr := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID); findErr == nil && bridgeContextMatches(existing, bridge) {
-				writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *existing, EditorURL: r.editorURLForProject(existing.ExternalProjectID)})
-				return
-			}
-		}
-		mapVeloxProjectBridgeError(w, err)
-		return
+	status := http.StatusOK
+	if created.Created {
+		status = http.StatusCreated
 	}
-	writeJSON(w, http.StatusCreated, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.ExternalProjectID)})
+	writeJSON(w, status, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.ExternalProjectID)})
 }
 
 func (r *Router) handleGetVeloxProjectBridge(w http.ResponseWriter, req *http.Request) {

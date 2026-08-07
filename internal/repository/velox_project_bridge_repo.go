@@ -17,12 +17,16 @@ const veloxProjectBridgeColumns = `project_id, workspace_id, external_project_id
 
 func scanVeloxProjectBridge(row interface{ Scan(...any) error }) (*models.VeloxProjectBridge, error) {
 	bridge := &models.VeloxProjectBridge{}
+	var editorStatus sql.NullString
 	if err := row.Scan(
 		&bridge.ProjectID, &bridge.WorkspaceID, &bridge.ExternalProjectID,
-		&bridge.EditorProvider, &bridge.EditorStatus, &bridge.LastEditorSyncAt,
+		&bridge.EditorProvider, &editorStatus, &bridge.LastEditorSyncAt,
 		&bridge.CreatedAt, &bridge.UpdatedAt,
 	); err != nil {
 		return nil, err
+	}
+	if editorStatus.Valid {
+		bridge.EditorStatus = editorStatus.String
 	}
 	return bridge, nil
 }

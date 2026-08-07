@@ -139,6 +139,26 @@ func TestVeloxProjectBridgeRepository_FindScopesWorkspace(t *testing.T) {
 	}
 }
 
+func TestVeloxProjectBridgeRepository_FindAllowsNullOptionalEditorStatus(t *testing.T) {
+	db, mock := newVeloxBridgeMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	mock.ExpectQuery(`SELECT project_id, workspace_id, external_project_id,`).
+		WithArgs(int64(7), "thumbproj_1").
+		WillReturnRows(sqlmock.NewRows([]string{"project_id", "workspace_id", "external_project_id", "editor_provider", "editor_status", "last_editor_sync_at", "created_at", "updated_at"}).
+			AddRow("thumbproj_1", 7, "vx_1", "velox", nil, nil, time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)))
+
+	bridge, err := repo.FindVeloxProjectBridge(context.Background(), 7, "thumbproj_1")
+	if err != nil || bridge == nil {
+		t.Fatalf("FindVeloxProjectBridge with null status: bridge=%+v err=%v", bridge, err)
+	}
+	if bridge.EditorStatus != "" {
+		t.Fatalf("null editor_status should normalize to empty string, got %q", bridge.EditorStatus)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVeloxProjectBridgeRepository_FindForeignWorkspaceIsHidden(t *testing.T) {
 	db, mock := newVeloxBridgeMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)
