@@ -22,11 +22,19 @@
 # is required, use `make run-server` or `docker compose --profile legacy up`
 # deliberately and plan its removal using `make verify-entrypoint-topology`.
 dev:
-	docker compose --env-file .env.dev up --build
+	docker compose \
+		--env-file .env.dev \
+		-f docker-compose.yml \
+		-f docker-compose.local.yml \
+		up --build
 
 # Stop the development stack
 stop:
-	docker compose down
+	docker compose \
+		--env-file .env.dev \
+		-f docker-compose.yml \
+		-f docker-compose.local.yml \
+		down
 
 # Apply development seed data (requires a running database and .env.dev)
 seed:
