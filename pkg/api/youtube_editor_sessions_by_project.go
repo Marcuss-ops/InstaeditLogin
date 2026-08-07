@@ -98,7 +98,7 @@ func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSe
 // handleGetYouTubeEditorSessionByProject is the HTTP entry point for
 // GET /api/v1/youtube/editor-sessions/by-project/{velox_project_id}.
 //
-// The Dark Editor reaches this endpoint with the velox_project_id
+// The InstaEditor reaches this endpoint with the velox_project_id
 // it already has in the URL (/editor/{velox_project_id}) and
 // receives the full session row (status, desired_privacy,
 // thumbnail_media_id, youTubeVideoID) so it can render the form
@@ -176,7 +176,7 @@ func (r *Router) handleGetYouTubeEditorSessionByProject(w http.ResponseWriter, r
 // for POST /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish.
 //
 // Mirror of handlePublishYouTubeEditorSession keyed by velox_project_id
-// rather than session_id. The Dark Editor never knows the session_id
+// rather than session_id. The InstaEditor never knows the session_id
 // — the project_id is the only handle it has. The two handlers
 // converge on the same `executePublishYouTubeEditorSession` helper so
 // the publish path (idempotency / in-flight / privacy resolution /

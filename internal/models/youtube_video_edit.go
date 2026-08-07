@@ -59,7 +59,7 @@ type YouTubeVideoEdit struct {
 	LastError         string    `json:"last_error,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
-	// Draft* fields are the Dark Editor auto-save persistence
+	// Draft* fields are the InstaEditor auto-save persistence
 	// (P2 — migration 073). They hold the operator's mid-edit
 	// values for title/description/tags/default audio language /
 	// translations/desired privacy between the moment they start

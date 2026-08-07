@@ -1,7 +1,7 @@
 // Package thumbnailrender implements the canonical, deterministic
 // renderer for ThumbnailProject snapshots.
 //
-// Responsibilities (certified by the Dark Editor Definition of Done):
+// Responsibilities (certified by the InstaEditor Definition of Done):
 //   - read thumbnail_project_revisions.snapshot_json;
 //   - produce a deterministic PNG/JPEG that is byte-identical for the
 //     same snapshot (hash-verifiable preview == export);

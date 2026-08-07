@@ -98,11 +98,11 @@ type YouTubeVideoEditStore interface {
 	// under the partial UNIQUE INDEX `uniq_youtube_video_edits_open_session`
 	// (migration 071). Same YouTube video clicked twice from the
 	// dashboard card grid converges on a single velox_project_id so
-	// the SPA can re-route the operator to the same Dark Editor URL
+	// the SPA can re-route the operator to the same InstaEditor URL
 	// on every click. See YouTubeVideoEditRepository.FindOrCreateEditableSession
 	// for the race-safe sequence.
 	FindOrCreateEditableSession(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
-	// SaveDraft (P2 — Dark Editor auto-save) atomically writes the
+	// SaveDraft (P2 — InstaEditor auto-save) atomically writes the
 	// operator's mid-edit form values to youtube_video_edits.draft_*
 	// AND stamps dirty_flag=false AND draft_updated_at=NOW() in a
 	// single SQL statement. CAS predicate: status IN

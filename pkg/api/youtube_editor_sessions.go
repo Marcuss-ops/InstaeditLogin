@@ -177,7 +177,7 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	}
 	// YouTube's videos.list response is authoritative for the source
 	// thumbnail. This matters for an existing session: older rows can
-	// contain a stale/broken URL, and the Dark Editor will otherwise
+	// contain a stale/broken URL, and the InstaEditor will otherwise
 	// keep rendering its grey placeholder forever. Fall back to the
 	// browser hint only when YouTube did not return a thumbnail.
 	//

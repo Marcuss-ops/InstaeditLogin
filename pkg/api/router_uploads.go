@@ -114,7 +114,7 @@ type YouTubeVideoEditStore interface {
 	// open (non-terminal) editor session for the given (workspace,
 	// account, video) triple, or inserts a fresh one.
 	FindOrCreateEditableSession(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
-	// SaveDraft (P2 — Dark Editor auto-save) atomically writes the
+	// SaveDraft (P2 — InstaEditor auto-save) atomically writes the
 	// operator's mid-edit form values to youtube_video_edits.draft_*
 	// AND stamps dirty_flag=false AND draft_updated_at=NOW().
 	SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, publishAt *time.Time, draftUpdatedAt time.Time) error

@@ -97,7 +97,7 @@ func buildFindOrCreateRouter(
 // TestCreateEditorSession_FindOrCreate_Idempotent verifies the helper
 // returns the SAME row across two consecutive calls with the same
 // (workspace, account, video) triple. P0#3 contract: an operator
-// clicking the same dark-card twice lands on the same Dark Editor URL
+// clicking the same dark-card twice lands on the same InstaEditor URL
 // (same velox_project_id) instead of getting a fresh session per click.
 func TestCreateEditorSession_FindOrCreate_Idempotent(t *testing.T) {
 	t.Parallel()

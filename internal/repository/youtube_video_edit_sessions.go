@@ -215,7 +215,7 @@ func (r *YouTubeVideoEditRepository) MarkPublishedWithActualPrivacy(
 //  1. SELECT — lookup an existing open session for the triple.
 //     If a row in ('editing','failed','publishing') state is found,
 //     return it WITH its existing (id, velox_project_id) untouched so
-//     the SPA reuses the same Dark Editor URL across clicks.
+//     the SPA reuses the same InstaEditor URL across clicks.
 //  2. INSERT — if no row exists, mint a fresh (session_id, velox_project_id)
 //     from the hint args (or auto-generate UUIDs when the hints are
 //     empty) and pin status='editing'. Single-row INSERT; the partial
@@ -371,7 +371,7 @@ func isPQUniqueViolation(err error) bool {
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
-// SaveDraft (P2 — Dark Editor auto-save) atomically writes the operator's
+// SaveDraft (P2 — InstaEditor auto-save) atomically writes the operator's
 // mid-edit form values to youtube_video_edits.draft_* AND stamps
 // dirty_flag=false AND draft_updated_at=$11 in a single SQL statement.
 //

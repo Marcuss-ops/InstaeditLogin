@@ -64,7 +64,7 @@ type mockYouTubeVideoEditStore struct {
 	// the operator's intended visibility (or, on drift, the
 	// observed mismatch).
 	markPublishedWithActualPrivacyFn func(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error)
-	// saveDraftFn (P2 Dark Editor auto-save) is the CAS simulator
+	// saveDraftFn (P2 InstaEditor auto-save) is the CAS simulator
 	// for draft persistence. Default returns nil (success).
 	saveDraftFn func(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, publishAt *time.Time, draftUpdatedAt time.Time) error
 }
@@ -236,7 +236,7 @@ func (m *mockYouTubeVideoEditStore) MarkPublishedWithActualPrivacy(ctx context.C
 	return row, nil
 }
 
-// SaveDraft (P2 — Dark Editor auto-save) routes to saveDraftFn when
+// SaveDraft (P2 — InstaEditor auto-save) routes to saveDraftFn when
 // supplied; default returns nil (success).
 func (m *mockYouTubeVideoEditStore) SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, publishAt *time.Time, draftUpdatedAt time.Time) error {
 	if m.saveDraftFn != nil {
