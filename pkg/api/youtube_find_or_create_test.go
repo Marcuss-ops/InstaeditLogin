@@ -228,6 +228,40 @@ func TestCreateEditorSession_FindOrCreate_RepairsStaleSourceThumbnailFromYouTube
 	}
 }
 
+func TestCreateEditorSession_FindOrCreate_ClearsLocalSourceThumbnail(t *testing.T) {
+	t.Parallel()
+	const workspaceID, accountID int64 = 11, 22
+	const videoID = "yt-thumbnail-local"
+	const channelID = "channel-thumbnail-local"
+
+	row := fakeEditableRow(workspaceID, accountID, videoID, "sess-local", "vp-local")
+	row.SourceThumbnailURL = "file:///tmp/cover.jpg"
+	var updated *models.YouTubeVideoEdit
+	router := buildFindOrCreateRouter(t,
+		&models.Workspace{ID: workspaceID, OwnerID: 1}, accountID, channelID,
+		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
+			return row, nil
+		},
+	)
+	router.youtubeVideoEditStore.(*mockYouTubeVideoEditStore).update = func(_ context.Context, edit *models.YouTubeVideoEdit) error {
+		updated = edit
+		return nil
+	}
+
+	got, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+		WorkspaceID:        workspaceID,
+		PlatformAccountID:  accountID,
+		YouTubeVideoID:     videoID,
+		SourceThumbnailURL: "file:///tmp/browser-cover.jpg",
+	})
+	if err != nil {
+		t.Fatalf("CreateEditorSession: %v", err)
+	}
+	if got.SourceThumbnailURL != "" || updated == nil || updated.SourceThumbnailURL != "" {
+		t.Fatalf("local thumbnail URL must be cleared, got response=%q updated=%v", got.SourceThumbnailURL, updated)
+	}
+}
+
 // TestCreateEditorSession_FindOrCreate_ConcurrentRaceModelsPartialUnique
 // models the partial-UNIQUE race: N goroutines call FindOrCreate for the
 // same triple simultaneously. The helper must converge on a single

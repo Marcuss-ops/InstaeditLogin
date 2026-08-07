@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -54,6 +55,22 @@ var _ interface {
 // For the editor session creation flow, workspace ownership is the
 // required authorization gate; future iterations may also accept team
 // members via the team store.
+// safeEditorAssetURL accepts only browser-fetchable absolute HTTP(S) URLs.
+// Local browser URLs such as file://, blob://, and data:// must never be
+// persisted as editor thumbnails because the server-side publisher cannot
+// fetch them.
+func safeEditorAssetURL(raw string) string {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return ""
+	}
+	parsed, err := url.Parse(candidate)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	return candidate
+}
+
 func (r *Router) userCanAccessWorkspace(userID int64, workspace *models.Workspace) bool {
 	if workspace == nil {
 		return false
