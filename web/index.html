@@ -2,16 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" href="/favicon-32x32.png" sizes="32x32" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" title="InstaEditor" />
+    <link rel="icon" type="image/png" href="/favicon-32x32.png" sizes="32x32" title="InstaEditor" />
     <!-- Legacy / pre-parse fallback: a real subset of clients (older headless
          browsers, crawlers, social previews) probes /favicon.ico explicitly
          before parsing <link rel="icon"> declarations. Shipping the actual
          ICO file under public/ kills the spurious 404 in console without
          changing anything for the modern browsers that already use the SVG
          above. -->
-    <link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
-    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <link rel="alternate icon" type="image/x-icon" href="/favicon.ico" title="InstaEditor" />
+    <link rel="apple-touch-icon" href="/favicon.svg" title="InstaEditor" />
+    <link rel="manifest" href="/site.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,6 +23,7 @@
     <meta name="keywords" content="YouTube automation, passive income, YouTube monetization, AI video creation, earn money online, YouTube channel, automated income" />
     <meta name="robots" content="index, follow" />
     <meta name="author" content="InstaEdit, Inc." />
+    <meta name="application-name" content="InstaEdit" />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />

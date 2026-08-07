@@ -16,7 +16,11 @@ export function Editor() {
   useEditorState();
   return (
     <>
-      <Seo title="InstaEdit — Editor" description="One raw idea, every platform." canonical="https://app.instaedit.org/editor" />
+      <Seo
+        title="InstaEditor — AI Video Editor for Every Platform"
+        description="InstaEditor turns one raw video into platform-ready content for YouTube and every major social channel — editing, thumbnails, captions and publishing in one workflow."
+        canonical="https://app.instaedit.org/editor"
+      />
       <EditorNav />
       <main className="relative pt-16">
         <section className="relative pt-24 pb-20 overflow-hidden">
