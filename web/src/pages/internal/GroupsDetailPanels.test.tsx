@@ -95,14 +95,16 @@ describe("GroupDetailPanel", () => {
 
     renderPanel({ onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Azioni cartella" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rinomina gruppo" }));
     const input = screen.getByRole("textbox", { name: "Nome del gruppo" });
     fireEvent.change(input, { target: { value: "YouTube WWE" } });
     fireEvent.click(screen.getByRole("button", { name: "Annulla rinomina" }));
     expect(screen.queryByRole("textbox", { name: "Nome del gruppo" })).not.toBeInTheDocument();
     expect(onRename).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Azioni cartella" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rinomina gruppo" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Nome del gruppo" }), { target: { value: "YouTube WWE" } });
     fireEvent.click(screen.getByRole("button", { name: "Salva" }));
     await waitFor(() => expect(onRename).toHaveBeenCalledWith("YouTube WWE"));
@@ -113,7 +115,8 @@ describe("GroupDetailPanel", () => {
 
     renderPanel({ onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Azioni cartella" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rinomina gruppo" }));
     const input = screen.getByRole("textbox", { name: "Nome del gruppo" });
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.click(screen.getByRole("button", { name: "Salva" }));
@@ -132,7 +135,8 @@ describe("GroupDetailPanel", () => {
 
     renderPanel({ onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Azioni cartella" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rinomina gruppo" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Nome del gruppo" }), { target: { value: "YouTube WWE" } });
     fireEvent.click(screen.getByRole("button", { name: "Salva" }));
     await waitFor(() => expect(onRename).toHaveBeenCalledTimes(1));
@@ -149,7 +153,8 @@ describe("GroupDetailPanel", () => {
 
     renderPanel({ onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Azioni cartella" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rinomina gruppo" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Nome del gruppo" }), { target: { value: "YouTube WWE" } });
     fireEvent.click(screen.getByRole("button", { name: "Salva" }));
 

@@ -124,7 +124,8 @@ describe("GroupYouTubeVideos", () => {
     await waitFor(() => {
       expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/video pubblici e non in elenco non vengono mostrati/i)).toBeInTheDocument();
+    expect(screen.getByText(/non ci sono video privati negli ultimi 90 giorni/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cambia periodo" })).toBeInTheDocument();
   });
 
   it("does not render published phantom videos", async () => {

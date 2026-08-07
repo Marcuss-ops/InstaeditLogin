@@ -1,15 +1,16 @@
-import { useEffect, useState, type ElementType } from "react";
+import { useEffect, useRef, useState, type ElementType } from "react";
 import { Link } from "react-router-dom";
 import {
   CalendarClock,
   CheckCircle2,
   Folder,
+  FolderMinus,
   Link2,
+  MoreVertical,
   PauseCircle,
   Pencil,
   RefreshCw,
   Trash2,
-  FolderMinus,
 } from "lucide-react";
 import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
@@ -17,6 +18,73 @@ import { type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
 import { LanguagePicker } from "../../components/brand/LanguagePicker";
+
+function GroupActionsMenu({ onRename, onDelete }: { onRename: () => void; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-label="Azioni cartella"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Azioni cartella"
+        className="rounded-md p-1.5 text-[#9aa0aa] transition-colors hover:bg-white/[0.08] hover:text-white"
+      >
+        <MoreVertical size={16} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Azioni cartella"
+          className="absolute right-0 top-[calc(100%+0.4rem)] z-30 min-w-[190px] overflow-hidden rounded-xl border border-white/15 bg-[#171722]/95 p-1.5 shadow-[0_18px_50px_-18px_rgba(0,0,0,0.9)] backdrop-blur-xl"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onRename();
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-300 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            <Pencil size={13} aria-hidden="true" /> Rinomina gruppo
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-red-300 transition-colors hover:bg-red-500/[0.12] hover:text-red-200"
+          >
+            <Trash2 size={13} aria-hidden="true" /> Elimina cartella
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function GroupDetailPanel({
   group,
@@ -185,53 +253,54 @@ export function GroupDetailPanel({
             </form>
           ) : (
             <div className="flex items-center gap-2">
-              <h2 className="truncate text-[18px] font-bold text-white flex items-center gap-2">
+              <h2 className="flex items-center gap-2 truncate text-[18px] font-bold text-white">
                 <Folder size={20} className="shrink-0 text-amber-300/80" />
                 {group.name}
               </h2>
-              <button type="button" onClick={() => setEditingName(true)} className="rounded-md p-1.5 text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Rinomina gruppo" title="Rinomina gruppo"><Pencil size={14} /></button>
             </div>
           )}
-          <p className="text-[12px] text-[#9aa0aa] mt-0.5">
+          <p className="mt-0.5 text-[12px] text-[#9aa0aa]">
             {visibleAccounts.length} canali · {group.children.length} sottocartelle
           </p>
           {saveError ? <p className="mt-2 text-[12px] text-red-300" role="alert">{saveError}</p> : null}
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onDeleteGroup}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-[12px] font-medium text-red-300 hover:bg-red-500/[0.12] hover:border-red-500/40 transition-colors"
-            aria-label="Elimina cartella"
-            title="Elimina cartella e le relative membership"
-          >
-            <Trash2 size={13} /> Elimina cartella
-          </button>
-        </div>
+        <GroupActionsMenu onRename={() => setEditingName(true)} onDelete={onDeleteGroup} />
       </div>
 
       {/* Current accounts in this group */}
       <div className="mb-6">
-          <h3 className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa]">
-            Canali in questa cartella ({visibleAccounts.length})
-          </h3>
+        <div className="mb-2 flex items-center gap-2">
+          <h3 className="text-[13px] font-bold text-white">Canali</h3>
+          <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[11px] font-semibold text-[#cdd2da]" aria-hidden="true">{visibleAccounts.length}</span>
+        </div>
 
         {visibleAccounts.length === 0 ? (
           <p className="text-[12px] text-[#9aa0aa] italic">Nessun canale in questa cartella. Trascina un canale dal pannello qui sotto.</p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {visibleAccounts.map((a) => (
-              <div key={a.id} className="flex items-center gap-1.5 rounded-lg border border-white/[0.10] bg-white/[0.04] p-1.5">
-                <button type="button" onClick={() => onPickAccount(a.id)} className="w-44 min-w-0 truncate text-left text-[14px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username || a.platform_user_id}`}>{a.username || a.platform_user_id}</button>
-                <LanguagePicker
-                  value={languages[a.id]}
-                  label={`Language for ${a.username || a.platform_user_id}`}
-                  disabled={savingLanguageId === a.id}
-                  error={Boolean(languageError[a.id])}
-                  onChange={(language) => void saveManualLanguage(a.id, language)}
-                />
-                {languageError[a.id] ? <span className="shrink-0 text-[11px] font-bold leading-none text-red-300" title={languageError[a.id]} aria-label={`Errore lingua: ${languageError[a.id]}`}>!</span> : null}
-                <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="shrink-0 rounded-md p-1.5 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username || `canale #${a.id}`} dalla cartella`} title="Rimuovi dalla cartella — il canale resta collegato"><FolderMinus size={14} /></button>
+              <div key={a.id} className="group flex items-center gap-2.5 rounded-xl border border-white/[0.10] bg-white/[0.04] p-3 transition-colors hover:border-white/[0.20] hover:bg-white/[0.06]">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-violet-500/25 to-fuchsia-500/15 text-[13px] font-bold text-white ring-1 ring-white/15">
+                  {a.avatar_url ? (
+                    <img src={a.avatar_url} alt="" className="h-full w-full object-cover" loading="lazy" />
+                  ) : (
+                    (a.username || a.platform_user_id).charAt(0).toUpperCase()
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <button type="button" onClick={() => onPickAccount(a.id)} className="block w-full truncate text-left text-[14px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username || a.platform_user_id}`}>{a.username || a.platform_user_id}</button>
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <LanguagePicker
+                      value={languages[a.id]}
+                      label={`Language for ${a.username || a.platform_user_id}`}
+                      disabled={savingLanguageId === a.id}
+                      error={Boolean(languageError[a.id])}
+                      onChange={(language) => void saveManualLanguage(a.id, language)}
+                    />
+                    {languageError[a.id] ? <span className="shrink-0 text-[11px] font-bold leading-none text-red-300" title={languageError[a.id]} aria-label={`Errore lingua: ${languageError[a.id]}`}>!</span> : null}
+                    <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="shrink-0 rounded-md p-1.5 text-[#9aa0aa] opacity-0 transition-opacity hover:bg-amber-500/15 hover:text-amber-300 focus-visible:opacity-100 disabled:cursor-progress group-hover:opacity-100" aria-label={`Rimuovi ${a.username || `canale #${a.id}`} dalla cartella`} title="Rimuovi dalla cartella — il canale resta collegato"><FolderMinus size={14} /></button>
+                  </div>
+                </div>
               </div>
             ))}
           </div>

@@ -27,17 +27,10 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
 
   return (
     <section className="mb-6" data-testid="group-youtube-videos">
-      <div className="flex items-center justify-between gap-3 mb-2">
-        <div>
-          <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa]">
-            Video privati da pubblicare
-          </h3>
-          <p className="text-[12px] text-[#9aa0aa] mt-1">
-            Solo video privati recenti dei canali presenti nel gruppo.
-          </p>
-        </div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-[13px] font-bold text-white">Video da pubblicare</h3>
         <div className="flex items-center gap-2">
-          <label className="text-[10px] text-[#9aa0aa]" htmlFor="group-video-recency">Periodo</label>
+          <label className="text-[11px] text-[#9aa0aa]" htmlFor="group-video-recency">Periodo</label>
           <select
             id="group-video-recency"
             value={recencyDays}
@@ -88,9 +81,18 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
       {state.kind === "ready" && state.videos.length === 0 && (
         <EmptyState
           title="Nessun video privato recente"
-          description="Non ci sono video privati nei giorni selezionati. Prova ad ampliare il periodo a 90 giorni; i video pubblici e non in elenco non vengono mostrati."
-          icon={<Video size={28} />}
-          className="p-6 bg-white/[0.02] border-white/[0.08]"
+          description={`Non ci sono video privati negli ultimi ${recencyDays} giorni.`}
+          icon={<Video size={24} />}
+          className="mx-auto max-w-sm bg-white/[0.02] py-8 border-white/[0.08]"
+          cta={
+            <button
+              type="button"
+              onClick={() => document.getElementById("group-video-recency")?.focus()}
+              className="rounded-lg border border-white/[0.10] bg-white/[0.04] px-3 py-1.5 text-[12px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white"
+            >
+              Cambia periodo
+            </button>
+          }
         />
       )}
 
