@@ -8,10 +8,11 @@ changes to production behavior by itself.
 **Branch policy:** work directly on `main`; keep each validated slice in its
 own commit and push it to `origin/main`.
 **LOC threshold:** 500 lines for attention, 800 lines for an immediate review.
-**Measurement:** tracked `.go` files only; generated files, vendor content, and
-untracked worktree files are excluded from the baseline. Counts below reflect
-the working-tree snapshot at this date; refresh them before starting a slice if
-local changes have altered a candidate's size.
+**Measurement:** tracked `.go`, `.ts`, `.tsx` runtime production files; generated
+files, vendor content, test files, and untracked worktree files are excluded
+from the runtime inventory (tests are tracked in their own table below).
+Counts below reflect the working-tree snapshot at this date; refresh them
+before starting a slice if local changes have altered a candidate's size.
 
 ## Policy
 
@@ -32,27 +33,35 @@ and worker ordering intact.
 
 ## Current inventory
 
-The current scan found **22 tracked runtime production files above 500 lines**.
-No runtime production file is above 800 lines in this snapshot. Test, E2E, and
-CLI files are tracked separately below so their size does not distort runtime
-priorities. Refresh this count before each new slice; it is an inventory, not a
-set of automatically generated tickets. Since the last snapshot:
-`internal/config/config.go` (672) split in `46b6188`, `internal/repository/group_repo.go`
-(625) split in `6886c37`, `internal/bootstrap/workers_wiring.go` (630) split in
-`7d03153`, and `pkg/api/auth_handlers.go` (786) + `pkg/api/posts_handlers.go`
-(547) split in `cabcc39`; the auth split surfaced `pkg/api/auth_oauth.go`
-(565), which is monitored below.
+The current scan (`scripts/loc-report.sh -t 500 -n 60`) found **30 tracked
+runtime production files above 500 lines** (20 Go + 10 TS/TSX). One runtime
+file is above 700 lines — `web/src/pages/internal/AdminDashboard.tsx` (760)
+is the only **P0** in this snapshot. Test, E2E, and CLI files are tracked
+separately below so their size does not distort runtime priorities. Since the
+last snapshot: `internal/config/config.go` (672) split in `46b6188`,
+`internal/repository/group_repo.go` (625) split in `6886c37`,
+`internal/bootstrap/workers_wiring.go` (630) split in `7d03153`, and
+`pkg/api/auth_handlers.go` (786) + `pkg/api/posts_handlers.go` (547) split in
+`cabcc39`; the auth split surfaced `pkg/api/auth_oauth.go` (565), monitored
+below. **New:** `web/src/pages/internal/CoverEditor.tsx` (1240) split in
+`d83d09e9` into 12 editor files; `web/src/pages/internal/AdminDashboard.tsx`
+(760), `Covers.tsx` (587), `ScheduledByAccount.tsx` (562), `Groups.tsx` (545),
+`livestreamWizardStep2.tsx` (527), `Compose.tsx` (506), and the publishing
+wizard steps (`ChannelMetadataStep.tsx` 516, `ConfirmationStep.tsx` 510) join
+`Programs.tsx` (513) as the frontend runtime inventory — the tracker now
+measures TS/TSX too.
 
 ### Runtime production files above 500 lines
 
 | Priority | File | Lines | Current responsibility | Next action |
 |---|---|---:|---|---|
+| P0 | `web/src/pages/internal/AdminDashboard.tsx` | 760 | Admin dashboard: KPI cards, performance charts, account tables, admin actions | **Next split:** separate the dashboard sections (KPI cards / channel-performance charts / account tables / admin CSV actions) into focused presentational components; preserve the shared data-hook wiring. |
 | P0 | `pkg/api/auth_handlers.go` | 786 → 3 | OAuth login/callback/exchange and session bootstrap | ✅ COMPLETED in `cabcc39`: split into `auth_oauth.go` (565), `auth_oauth_state.go` (224), `auth_account_attach.go` (239), `auth_session.go` (92); `auth_handlers.go` left as 3-line pointer. Dead `Router.handleMe` removed in `040fa04`. `auth_oauth.go` remains >500 → monitor below. |
 | P0 | `internal/bootstrap/workers_wiring.go` | 630 | Dependency adapters and all worker specifications | ✅ COMPLETED in `7d03153`: specs → `workers_specs.go` (409), adapters → `workers_adapters.go` (66); `workers_wiring.go` now 121 lines with one ordered registry + `TestWorkerSpecs_PreserveLifecycleContract`. |
 | P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | ✅ COMPLETED in `cabcc39`: split into `posts_mutations.go` (107), `posts_read.go` (240), `posts_types.go` (81); `posts_handlers.go` remains the thin router boundary. Idempotency and workspace authorization preserved. |
 | P1 | `internal/config/config_types.go` | 616 | Config struct types split out of `config.go` (`46b6188`) | Monitor; split only if a second domain boundary (worker vs database structs) becomes worth isolating. |
-| P1 | `pkg/api/auth_oauth.go` | 565 | OAuth login, callback, exchange, and account-attach flows (split from `auth_handlers.go` in `cabcc39`) | Monitor; split only if login vs callback families grow further or a stable test seam appears. |
 | P1 | `internal/services/youtube_oauth.go` | 586 | OAuth URL/callback, token exchange, refresh, revoke, and client pool | Isolate token transport from OAuth policy and pool selection; reuse shared HTTP/error helpers. |
+| P1 | `pkg/api/auth_oauth.go` | 565 | OAuth login, callback, exchange, and account-attach flows (split from `auth_handlers.go` in `cabcc39`) | Monitor; split only if login vs callback families grow further or a stable test seam appears. |
 | P1 | `internal/repository/thumbnail_project_repo.go` | 558 | Project CRUD, snapshots, revisions, restore, and CAS status | Extract revision/snapshot persistence behind focused helpers; retain CAS and revision-number transaction guarantees. |
 | P1 | `pkg/api/accounts_read_handlers.go` | 552 | Account listing, account detail, content, and earnings reads | Split read endpoints by query family; keep account ownership loading in one shared helper. |
 | P1 | `internal/services/provider_error.go` | 549 | Provider error types, classification, and retry/rate-limit metadata | Separate stable error contracts from classifiers only if call sites remain behaviorally identical. |
@@ -67,6 +76,14 @@ set of automatically generated tickets. Since the last snapshot:
 | P1 | `internal/repository/post_repo_post.go` | 507 | Post and target creation/update persistence | Keep aggregate transactions and idempotency boundaries intact; extract only shared scan or mutation policy. |
 | P1 | `internal/worker/reconcile_worker.go` | 525 | Async publish reconciliation and terminal state transitions | Refactor only after the `AsyncPublisher` contract is stable; keep in-flight, terminal, and retry semantics in one tested state machine. |
 | P1 | `pkg/api/accounts_write_handlers.go` | 521 | Account validation, sync, and write-side orchestration | Verify existing `accounts_validate.go`/`accounts_sync.go` seams first; remove only remaining orchestration duplication. |
+| P1 | `web/src/pages/internal/Covers.tsx` | 587 | Cover project library: list, cards, filters, create/delete dialogs | **Next split (frontend):** separate the library list/card rendering from the create/delete dialog wiring, mirroring the CoverEditor split pattern. |
+| P1 | `web/src/pages/internal/ScheduledByAccount.tsx` | 562 | Scheduled-by-account list and filters | Split list row/filter presentational components from the page's data wiring. |
+| P1 | `web/src/pages/internal/Groups.tsx` | 545 | Groups management tree/detail | Extract tree rows and detail panels into presentational components (GroupsDetailPanels already split). |
+| P1 | `web/src/pages/internal/livestreamWizardStep2.tsx` | 527 | Livestream wizard step 2 | Split step sub-forms into focused components once the step grows another responsibility. |
+| P1 | `web/src/features/publishing/wizard/ChannelMetadataStep.tsx` | 516 | Publishing wizard channel metadata step | Monitor; split only if the step's form sections grow independent validation. |
+| P1 | `web/src/pages/Programs.tsx` | 513 | Programs listing page | Monitor; split list/card rendering from page wiring if it grows. |
+| P1 | `web/src/features/publishing/wizard/ConfirmationStep.tsx` | 510 | Publishing wizard confirmation step | Monitor; split summary/confirm sections if the step grows. |
+| P1 | `web/src/pages/internal/Compose.tsx` | 506 | Compose/publish form page | Monitor; split form sections once compose grows a second concern. |
 | P2 | `internal/services/youtube_validate.go` | 503 | YouTube validation and upload contract checks | Monitor; split only if validation and transport policy continue to grow. |
 | P2 | `internal/services/youtube_live_gateway.go` | 503 | YouTube live gateway operations | Monitor; first document the gateway contract and test seam before extracting. |
 | P2 | `internal/repository/webhook_repo.go` | 502 | Webhook delivery persistence | Monitor; extract only if delivery lease/query policy is duplicated elsewhere. |
@@ -98,6 +115,7 @@ not treated as runtime architecture work:
 | T0 | `internal/worker/reconcile_worker_test.go` | 963 → 505 | ✅ COMPLETED in `9b80e102`: split by scenario into `reconcile_worker_test.go` (target state machine, 505), `reconcile_worker_tick_test.go` (tick+bounded batch+backoff, 243), `reconcile_worker_run_test.go` (Run/RunOnce+shutdown, 237); mock/helpers preserved in place. |
 | T0 | `pkg/api/livestreams_test.go` | 953 → 386 | ✅ COMPLETED in `9b80e102` + `40760ca2`: split into `livestreams_test.go` (shared policy+create, 386), `livestreams_fixtures_test.go` (mocks+fixtures, 153), `livestreams_list_test.go` (list/channels, 237), `livestreams_item_test.go` (get/patch/delete, 211); 16 tests restored in `b33def5e` after `40760ca2` dropped them. |
 | T0 | `pkg/api/account_routes_test.go` | 935 → 232 | ✅ COMPLETED in `9b80e102`: split into `account_routes_test.go` (list, 232), `account_routes_get_test.go` (get+snapshot, 237), `account_routes_disconnect_test.go` (disconnect/delete/shared-grant, 490). |
+| T1 | `web/src/pages/internal/CoverEditor.test.tsx` | 865 | CoverEditor page contract tests (13 tests: autosave, conflict, export flush, save-as-copy, link) | Now the largest test file in the repo; split by scenario (autosave/conflict / export+link / media+load) preserving the 13-test data-testid/aria-label contract. |
 | T1 | `internal/worker/publish_reconcile_integration_test.go` | 785 | Separate integration fixtures from publish/reconcile assertions. |
 | T1 | `internal/repository/upload_job_pool_test.go` | 774 | Split claim/lease, reclaim, heartbeat, and concurrency cases. |
 | T1 | `internal/worker/publish_worker_publish_youtube_test.go` | 780 | Split upload, idempotency, failure, and retry scenarios. |
@@ -140,6 +158,7 @@ number is assigned unless an actual external ticket exists.
 | Group repository seams (final) | `internal/repository/group_repo.go` split into `group_repo_helpers.go`, `group_repo_membership.go`, `group_repo_settings.go`, `group_repo_page.go`; ownership and cycle checks preserved. | Repository/API tests, full Go tests, vet, build | `6886c37` |
 | Worker wiring registry (final) | `internal/bootstrap/workers_wiring.go` split into `workers_specs.go` + `workers_adapters.go`; one ordered registry + lifecycle-contract test retained. | Wiring/runtime tests, full Go tests, vet, build | `7d03153` |
 | Auth and post HTTP handlers | `pkg/api/auth_handlers.go` (786) split into `auth_oauth.go` / `auth_oauth_state.go` / `auth_account_attach.go` / `auth_session.go` (dead `Router.handleMe` removed in `040fa04`); `pkg/api/posts_handlers.go` (547) split into `posts_mutations.go` / `posts_read.go` / `posts_types.go`. | API tests, full Go tests (33 pkgs), vet, build, loc-check | `cabcc39` |
+| CoverEditor frontend split | `web/src/pages/internal/CoverEditor.tsx` (1240) split in `d83d09e9` into `features/thumbnailProjects/editor/snapshot.ts` + `objects.ts`, `components/editor/` (CanvasStage, LayersPanel, Inspector, RevisionPanel, EditorHeader, ConflictBanner, EditorToolbar, CanvasSettingsPanel, AssignmentsPanel), and `hooks/useCoverEditorMutations.ts`; page now 497 lines. | vitest (13 tests), tsc -b, oxlint, vite build | `d83d09e9` |
 
 ## Remaining execution order
 
@@ -224,9 +243,29 @@ operational contracts remain explicit.
 
 ### Slice 7 — Test and CLI organization (T1/T2)
 
-After runtime slices are stable, split the three >800-line test files and the
-large integration fixtures by scenario. Then organize the diagnostic CLIs.
-Do not mix these changes with production behavior changes.
+The three >900-line test files (`reconcile_worker_test.go`, `livestreams_test.go`,
+`account_routes_test.go`) are now split (see Completed slices, `9b80e102`).
+Remaining: split `web/src/pages/internal/CoverEditor.test.tsx` (865, the
+largest test file) by scenario, plus the other T1 test hotspots and the large
+integration fixtures. Then organize the diagnostic CLIs. Do not mix these
+changes with production behavior changes.
+
+### Slice 8 — Frontend page splits (P0/P1, web)
+
+**Targets:** `web/src/pages/internal/AdminDashboard.tsx` (760, the only
+runtime >700), then `Covers.tsx` (587), `ScheduledByAccount.tsx` (562),
+`Groups.tsx` (545), `livestreamWizardStep2.tsx` (527), `Compose.tsx` (506),
+and the publishing wizard steps (`ChannelMetadataStep.tsx` 516,
+`ConfirmationStep.tsx` 510).
+
+- separate presentational sections (cards, tables, forms, panels) from page
+  data wiring, mirroring the CoverEditor split (`d83d09e9`);
+- preserve data-testid/aria-label contracts covered by vitest;
+- validate each slice with `npx vitest run <affected-tests>` + `npm run build`
+  + `npm run lint`.
+
+**Done when:** no runtime web file sits above 500 lines and every page's test
+suite still passes unchanged.
 
 ## Per-slice checklist
 
