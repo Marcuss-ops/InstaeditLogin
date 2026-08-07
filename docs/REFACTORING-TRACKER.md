@@ -60,7 +60,7 @@ measures TS/TSX too.
 | P0 | `internal/bootstrap/workers_wiring.go` | 630 | Dependency adapters and all worker specifications | ✅ COMPLETED in `7d03153`: specs → `workers_specs.go` (409), adapters → `workers_adapters.go` (66); `workers_wiring.go` now 121 lines with one ordered registry + `TestWorkerSpecs_PreserveLifecycleContract`. |
 | P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | ✅ COMPLETED in `cabcc39`: split into `posts_mutations.go` (107), `posts_read.go` (240), `posts_types.go` (81); `posts_handlers.go` remains the thin router boundary. Idempotency and workspace authorization preserved. |
 | P1 | `internal/config/config_types.go` | 616 → 230 | Config struct types split out of `config.go` (`46b6188`) | ✅ COMPLETED in `18c9aa71`: split by domain into `config_types_database.go` (45), `config_types_storage.go` (29), `config_types_auth.go` (100), `config_types_integrations.go` (43), `config_types_server.go` (53), `config_types_worker.go` (122); `config_types.go` keeps only the `Config` aggregate root. Centralized env-var validation in `field_specs.go` untouched; 12 structs preserved byte-identical. |
-| P1 | `internal/services/youtube_oauth.go` | 586 | OAuth URL/callback, token exchange, refresh, revoke, and client pool | Isolate token transport from OAuth policy and pool selection; reuse shared HTTP/error helpers. |
+| P1 | `internal/services/youtube_oauth.go` | 586 → 160 | OAuth URL/callback, token exchange, refresh, revoke, and client pool | ✅ COMPLETED in `81b8117b`: split by flow into `youtube_oauth_login.go` (106, URL builders), `youtube_oauth_callback.go` (97, callback + userinfo), `youtube_oauth_exchange.go` (30, code exchange), `youtube_oauth_transport.go` (47, isolated token POST transport), `youtube_oauth_revoke.go` (97, revoke + error-code whitelist), `youtube_oauth_refresh.go` (98, refresh + pool fail-closed resolution); boundary keeps struct + ctor + assertions. Refresh-token rotation, pool fail-closed semantics, revoke idempotency, and `ParseOAuthTokenError` unwrap preserved. |
 | P1 | `pkg/api/auth_oauth.go` | 565 → 45 | OAuth login, callback, exchange, and account-attach flows (split from `auth_handlers.go` in `cabcc39`) | ✅ COMPLETED in `3bd437c9`: split by flow into `auth_oauth_login.go` (189, `handleLogin`), `auth_oauth_callback.go` (176, `handleCallback` + `resolveCallbackState`), `auth_oauth_exchange.go` (176, `exchangeOAuthCode` + `callbackAttach*` + `writeCallbackSuccess`); `auth_oauth.go` keeps the pool-aware contract types + `HandleOAuthCallbackRouteForTest` as a 45-line boundary. State verification (connect-link/oauth-flow/CSRF paths, single-use nonce consumption) and pool client-cookie idempotency preserved. |
 | P1 | `internal/repository/thumbnail_project_repo.go` | 558 | Project CRUD, snapshots, revisions, restore, and CAS status | Extract revision/snapshot persistence behind focused helpers; retain CAS and revision-number transaction guarantees. |
 | P1 | `pkg/api/accounts_read_handlers.go` | 552 | Account listing, account detail, content, and earnings reads | Split read endpoints by query family; keep account ownership loading in one shared helper. |
@@ -160,6 +160,7 @@ number is assigned unless an actual external ticket exists.
 | Auth and post HTTP handlers | `pkg/api/auth_handlers.go` (786) split into `auth_oauth.go` / `auth_oauth_state.go` / `auth_account_attach.go` / `auth_session.go` (dead `Router.handleMe` removed in `040fa04`); `pkg/api/posts_handlers.go` (547) split into `posts_mutations.go` / `posts_read.go` / `posts_types.go`. | API tests, full Go tests (33 pkgs), vet, build, loc-check | `cabcc39` |
 | CoverEditor frontend split | `web/src/pages/internal/CoverEditor.tsx` (1240) split in `d83d09e9` into `features/thumbnailProjects/editor/snapshot.ts` + `objects.ts`, `components/editor/` (CanvasStage, LayersPanel, Inspector, RevisionPanel, EditorHeader, ConflictBanner, EditorToolbar, CanvasSettingsPanel, AssignmentsPanel), and `hooks/useCoverEditorMutations.ts`; page now 497 lines. | vitest (13 tests), tsc -b, oxlint, vite build | `d83d09e9` |
 | Config type domains | `internal/config/config_types.go` (616) split in `18c9aa71` by domain into `config_types_database.go` (45) / `config_types_storage.go` (29) / `config_types_auth.go` (100) / `config_types_integrations.go` (43) / `config_types_server.go` (53) / `config_types_worker.go` (122); `config_types.go` keeps only the `Config` aggregate root (230). Byte-exact struct moves — 12 types preserved, `field_specs.go` centralized validation untouched. | Config tests, full Go tests (33 pkgs), vet, build, loc-check | `18c9aa71` |
+| YouTube OAuth flow split | `internal/services/youtube_oauth.go` (586) split in `81b8117b` by flow into `youtube_oauth_login.go` (106) / `youtube_oauth_callback.go` (97) / `youtube_oauth_exchange.go` (30) / `youtube_oauth_transport.go` (47) / `youtube_oauth_revoke.go` (97) / `youtube_oauth_refresh.go` (98); boundary keeps struct + ctor + compile-time assertions (160). Token transport isolated in `postTokenRequest`; refresh fallback, pool fail-closed resolution, and revoke idempotency preserved. | Services tests, full Go tests (33 pkgs), vet, build, loc-check | `81b8117b` |
 
 ## Remaining execution order
 
@@ -222,18 +223,19 @@ packages), `go vet`, `go build`, and `loc-check` green.
 `auth_oauth_callback.go` (176), `auth_oauth_exchange.go` (176); no auth file
 remains above 500 lines.
 
-### Slice 5 — YouTube OAuth policy/transport (P1)
+### Slice 5 — YouTube OAuth policy/transport (P1) ✅ COMPLETED
 
-**Targets:** `internal/services/youtube_oauth.go`,
-`internal/services/threads_oauth.go`, related tests.
-
-- isolate token HTTP transport, callback policy, refresh/revoke, and OAuth pool
-  selection;
-- reuse shared provider error and HTTP client abstractions;
-- preserve redirect URI, refresh-token, and client-pool contracts.
-
-**Done when:** policy tests do not need to exercise raw HTTP transport and
-refresh/revoke behavior remains covered by focused tests.
+Split in `81b8117b`: `youtube_oauth.go` (586) → boundary (160, struct +
+ctor + assertions) + `youtube_oauth_login.go` (106) +
+`youtube_oauth_callback.go` (97) + `youtube_oauth_exchange.go` (30) +
+`youtube_oauth_transport.go` (47, the isolated token POST shared by
+exchange + refresh) + `youtube_oauth_revoke.go` (97) +
+`youtube_oauth_refresh.go` (98). Redirect URI, refresh-token, and
+client-pool contracts preserved; `postTokenRequest` error semantics
+(`ParseOAuthTokenError` → `ErrInvalidGrant` unwrap) byte-identical.
+Remaining target in this slice: `internal/services/threads_oauth.go`
+(528) — apply the same transport/policy seam when it grows a second
+responsibility.
 
 ### Slice 6 — Repository and metrics cleanup (P1)
 
