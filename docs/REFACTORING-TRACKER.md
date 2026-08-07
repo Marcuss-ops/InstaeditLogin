@@ -1,318 +1,258 @@
 # Refactoring Tracker
 
-Snapshot of tracked source files above the **500-line threshold**, plus a
-**450–500 watchlist** of files about to cross it, with their current size and
-refactoring status. Kept in sync with the tooling:
+Operational backlog for reducing large Go files without creating mechanical
+file splits. This document is a planning source of truth; it does not authorize
+changes to production behavior by itself.
 
-- `scripts/loc-report.sh` — informational report: top-N largest files + files
-  above threshold (default `-t 500`).
-- `scripts/loc-check.sh` — CI gate: fails when a tracked file **grows** past
-  the threshold vs. `origin/main` (`make loc-check`; strict full-tree via
-  `make loc-check LOC_AGAINST=none`).
+**Snapshot:** 2026-08-07
+**Branch policy:** work directly on `main`; keep each validated slice in its
+own commit and push it to `origin/main`.
+**LOC threshold:** 500 lines for attention, 800 lines for an immediate review.
+**Measurement:** tracked `.go` files only; generated files, vendor content, and
+untracked worktree files are excluded from the baseline. Counts below reflect
+the working-tree snapshot at this date; refresh them before starting a slice if
+local changes have altered a candidate's size.
 
-Scan: tracked `go` / `ts` / `tsx` files only (docs, SQL, JSON, YAML excluded).
-59 files are currently above 500 lines; 44 more sit in the 450–500 watchlist.
+## Policy
 
-_Snapshot: 2026-08-02 (third update today — 9 more files split below
-threshold since the afternoon snapshot: 8 test files >800 lines split by
-scenario + DriveBatchImportDialogViews.tsx. The >800 section is now empty:
-no tracked source file is above 800 lines today. Count dropped 69 → 59)._
+A large file is not automatically a refactoring defect. Split only when the
+change does at least one of the following:
 
-## Current refactoring policy and candidates
+1. creates a stable test seam;
+2. removes duplicated policy or wiring;
+3. isolates a responsibility with a clear owner;
+4. reduces dependency direction or initialization complexity; or
+5. makes the resulting unit easier to reason about without changing its
+   public contract.
 
-The historical rankings below are evidence, not an executable backlog. The
-current rule is **split by responsibility only when the change removes a
-measured duplication, creates a useful test seam, or measurably simplifies the
-code**. Do not create placeholder issues or mechanically divide files solely
-because of line count.
+Do not split a file into arbitrary line-count fragments. Preserve exported
+APIs unless a repository-wide search and the affected tests are updated in the
+same slice. Keep SQL transactions, authorization boundaries, retry semantics,
+and worker ordering intact.
 
-The six original focus files are already reduced or organized into cohesive
-families: the former `youtube_channel.go` monolith was removed; `upload_worker.go`
-is a small orchestrator with ingest/lifecycle/publish siblings; `post_repo.go`
-is a facade over focused repository files; `router.go` delegates to modules;
-`config.go` has loader/validation/OAuth/encryption siblings; and
-`internal/bootstrap/app.go` delegates wiring to dedicated bootstrap files.
+## Current inventory
 
-### Current production candidates (snapshot 2026-08-07)
+The current scan found **24 runtime production files above 500 lines**. Three
+tracked test files are already above 800 lines and require scenario-level
+organization, but they are not production refactoring blockers. Test and CLI
+files are tracked separately below so their size does not distort runtime
+priorities.
 
-| Path | Decision |
-|---|---|
-| `pkg/api/livestreams_handlers.go` | Map routes and tests first, then separate command/query or HTTP responsibilities. |
-| `internal/repository/group_repo.go` | Distinguish membership, aggregate, and read queries while preserving transactions. |
-| `internal/config/config.go` + `config_validation.go` | Extract a shared field/default resolver only if it removes duplicated environment mapping. |
-| `pkg/api/posts_handlers.go` | Separate lifecycle/idempotency from serialization while keeping route registration cohesive. |
-| `internal/bootstrap/workers_wiring.go` | Keep the existing worker registry; extract only duplicated worker configuration with count/order tests. |
-| `internal/services/youtube_oauth.go` | Isolate HTTP/token exchange from policy while reusing shared resolvers and registries. |
-| `internal/services/provider.go` | Treat as a capability contract; change it only to remove duplicated capability lookup. |
-| `internal/repository/post_repo_{post,aggregate,retry}.go` | Prefer a shared retry/lease policy over additional facade files. |
-| `internal/worker/reconcile_worker.go` | Refactor only after the `AsyncPublisher` contract is stable; do not duplicate its state machine. |
+### Runtime production files above 500 lines
 
-The completed `internal/sampler.RandomDurationInRange` abstraction is the
-shared primitive for inclusive scheduling-duration sampling. Upload/outbox/HTTP
-backoffs and crawler jitter remain separate because they implement different
-policies and randomness semantics.
+| Priority | File | Lines | Current responsibility | Next action |
+|---|---|---:|---|---|
+| P0 | `pkg/api/auth_handlers.go` | 786 | Magic-link, password/admin auth, and related HTTP flows | Split by auth flow after mapping route registration and shared response/error helpers. |
+| P0 | `internal/config/config.go` | 672 | Configuration structs, environment loading, and shared defaults | Separate config domain types from loading/resolution; keep validation in existing validation files and add table-driven coverage. |
+| P0 | `internal/repository/group_repo.go` | 625 | Group CRUD, tree invariants, memberships, ownership, and channel resync | Extract membership/settings transaction helpers only after preserving workspace ownership and cycle checks. |
+| P0 | `internal/bootstrap/workers_wiring.go` | 615 | Dependency adapters and all worker specifications | Move one worker specification per cohesive file or group; retain a single ordered registry and count/order tests. |
+| P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | Separate lifecycle commands from query/list handlers and serialization; preserve idempotency and workspace authorization. |
+| P1 | `internal/services/youtube_oauth.go` | 586 | OAuth URL/callback, token exchange, refresh, revoke, and client pool | Isolate token transport from OAuth policy and pool selection; reuse shared HTTP/error helpers. |
+| P1 | `internal/repository/thumbnail_project_repo.go` | 558 | Project CRUD, snapshots, revisions, restore, and CAS status | Extract revision/snapshot persistence behind focused helpers; retain CAS and revision-number transaction guarantees. |
+| P1 | `pkg/api/accounts_read_handlers.go` | 552 | Account listing, account detail, content, and earnings reads | Split read endpoints by query family; keep account ownership loading in one shared helper. |
+| P1 | `internal/services/provider_error.go` | 549 | Provider error types, classification, and retry/rate-limit metadata | Separate stable error contracts from classifiers only if call sites remain behaviorally identical. |
+| P1 | `internal/models/external_delivery.go` | 549 | External delivery domain model and delivery state data | Review whether model declarations and conversion helpers can be isolated without duplicating the contract. |
+| P1 | `pkg/metrics/collector.go` | 546 | Periodic DB-backed metric collection and gauge updates | Extract query-specific collectors while preserving advisory-lock single-flight and zero-fill semantics. |
+| P1 | `internal/repository/asset_repo.go` | 545 | Media assets, visibility, probe state, expiration, and cleanup | Separate lifecycle/probe operations from retention cleanup; preserve workspace predicates and deletion eligibility. |
+| P1 | `internal/repository/post_repo_retry.go` | 535 | Claims, leases, retries, rate limits, DLQ, and reclamation | Consolidate retry/lease policy helpers; do not create another facade layer over the existing post repository split. |
+| P1 | `internal/services/provider.go` | 534 | Capability interfaces and provider routing contracts | Treat as a public internal contract; refactor only to remove duplicated capability lookup or clarify interfaces with compile-time assertions. |
+| P1 | `internal/services/threads_oauth.go` | 528 | Threads OAuth and publishing integration | Compare with the shared Meta OAuth seams before extracting provider-specific policy. |
+| P1 | `internal/repository/post_repo_aggregate.go` | 527 | Post aggregate/list queries and scans | Extract scan/projection helpers only when they are reused; keep query ordering and pagination contracts unchanged. |
+| P1 | `pkg/api/router.go` | 528 | Central router state, dependency validation, and route assembly | Keep registration thin; extract only remaining dependency-validation or route-family seams without duplicating module wiring. |
+| P1 | `internal/repository/post_repo_post.go` | 507 | Post and target creation/update persistence | Keep aggregate transactions and idempotency boundaries intact; extract only shared scan or mutation policy. |
+| P1 | `internal/worker/reconcile_worker.go` | 525 | Async publish reconciliation and terminal state transitions | Refactor only after the `AsyncPublisher` contract is stable; keep in-flight, terminal, and retry semantics in one tested state machine. |
+| P1 | `pkg/api/accounts_write_handlers.go` | 521 | Account validation, sync, and write-side orchestration | Verify existing `accounts_validate.go`/`accounts_sync.go` seams first; remove only remaining orchestration duplication. |
+| P2 | `internal/services/youtube_validate.go` | 503 | YouTube validation and upload contract checks | Monitor; split only if validation and transport policy continue to grow. |
+| P2 | `internal/services/youtube_live_gateway.go` | 503 | YouTube live gateway operations | Monitor; first document the gateway contract and test seam before extracting. |
+| P2 | `internal/repository/webhook_repo.go` | 502 | Webhook delivery persistence | Monitor; extract only if delivery lease/query policy is duplicated elsewhere. |
+| P2 | `internal/repository/delivery_session_repo.go` | 502 | Delivery session persistence | Monitor; prioritize only when a clear session lifecycle seam appears. |
 
-## Legend
+> The table intentionally prioritizes responsibility and operational risk over
+> raw size. `internal/services/provider.go`, the post-repository family, and
+> worker state machines should not be split merely to get below 500 lines.
 
-| Status | Meaning |
-|--------|---------|
-| `da fare` | Still above 500 lines; candidate for a split (see the split-by-concern pattern used in the "Completati" section). |
-| `fatto` | Refactored this session; now below the threshold (see Completati). |
-| `#NNN` | Placeholder for the GitHub issue tracking the refactor (labeled `refactor`). Replace with the real issue number once the issue is created. |
+### Tooling files above 500 lines
 
-## GitHub issue convention
+These commands are not part of the runtime production path. Refactor them only
+when their operator workflows need a clearer seam; do not mix their changes
+with API, worker, or repository behavior changes.
 
-Every `da fare` row maps 1:1 to a GitHub issue labeled `refactor`. The `Issue`
-column currently holds the placeholder `#NNN`; no issues have been created yet.
-When creating one for a file, use a title like
-`refactor: split <file> below 500 lines` and apply the `refactor` label, then
-replace the placeholder in this tracker with the real number (e.g. `#201`).
+| Priority | File | Lines | Planned organization |
+|---|---|---:|---|
+| T2 | `cmd/batch-import-drive-folder/main.go` | 531 | Separate CLI parsing from import execution and output formatting; keep command behavior stable. |
+| T2 | `cmd/yttest/main.go` | 588 | Separate command setup from diagnostic probes; keep this lower priority than runtime paths. |
+| T2 | `cmd/test-youtube-upload/main.go` | 550 | Extract safe output and probe helpers only after runtime refactors stabilize. |
 
-```bash
-gh issue create \
-  --label refactor \
-  --title "refactor: split pkg/api/youtube_publish_pipeline_test.go (1157 lines)" \
-  --body "See docs/REFACTORING-TRACKER.md — split by concern, keep test coverage, run go test, update this tracker."
-```
+### Test and support hotspots
 
----
+These files are large but should be organized by scenario or fixture reuse,
+not treated as runtime architecture work:
 
-## Historical LOC snapshot
+| Priority | File | Lines | Planned organization |
+|---|---|---:|---|
+| T0 | `internal/worker/reconcile_worker_test.go` | 963 | Split by in-flight, terminal success/failure, lease/retry, and shutdown scenarios. |
+| T0 | `pkg/api/livestreams_test.go` | 953 | Separate route validation, lifecycle commands, and provider error cases. |
+| T0 | `pkg/api/account_routes_test.go` | 935 | Split read, write, OAuth, authorization, and regression scenarios. |
+| T1 | `internal/worker/publish_reconcile_integration_test.go` | 785 | Separate integration fixtures from publish/reconcile assertions. |
+| T1 | `internal/repository/upload_job_pool_test.go` | 774 | Split claim/lease, reclaim, heartbeat, and concurrency cases. |
+| T1 | `internal/worker/publish_worker_publish_youtube_test.go` | 780 | Split upload, idempotency, failure, and retry scenarios. |
+| T1 | `pkg/api/posts_test.go` | 708 | Align test files with post lifecycle/query handler boundaries. |
+| T1 | `internal/repository/post_repo_test.go` | 705 | Split aggregate, target, retry, and idempotency coverage. |
+| T1 | `pkg/api/accounts_performance_assembler_test.go` | 683 | Split aggregation, pagination, and missing-data cases. |
+| T1 | `tests/e2e/oauth_callback_binding_e2e_test.go` | 685 | Separate callback binding, re-auth, and failure-path scenarios. |
+| T2 | Other `*_test.go` files above 500 | current scan | Split only when a scenario boundary is already clear or a test fixture is reusable. |
 
-The threshold tables below are historical evidence from the 2026-08-02 scan,
-not a promise that every listed size is current and not an instruction to
-create placeholder issues automatically. Refresh them with `scripts/loc-report.sh`
-before planning a new slice.
+Test splits must preserve package-level helpers, avoid duplicate fixtures, and
+run the narrow package suite before the full Go suite.
 
-The 8 test files that previously sat here (nvidia_metadata_publish_e2e 928,
-youtube_oauth_browser_e2e 926, internal_velox_get_delivery 923,
-migrations_integration 901, internal_velox_validate 898,
-channel_authorization 883, auth_routes_callback 865,
-publish_worker_publish 834) were all split by scenario on 2026-08-02
-(commit `5132462`). No tracked source file is above 800 lines today — the
-`loc-check` strict offenders list is empty.
+### Watchlist
 
-## 600–800 lines (25 files)
-
-| File | Righe | Stato | Issue |
-|------|------:|-------|-------|
-| `internal/worker/publish_reconcile_integration_test.go` | 766 | da fare | #NNN |
-| `internal/repository/upload_job_pool_test.go` | 765 | da fare | #NNN |
-| `internal/worker/reconcile_worker_test.go` | 751 | da fare | #NNN |
-| `internal/services/instagram_oauth_test.go` | 719 | da fare | #NNN |
-| `internal/services/youtube_oauth_binding_test.go` | 712 | da fare | #NNN |
-| `internal/deliveries/group_expand_test.go` | 711 | da fare | #NNN |
-| `internal/services/provider_error_test.go` | 710 | da fare | #NNN |
-| `pkg/api/posts_test.go` | 708 | da fare | #NNN |
-| `pkg/api/internal_velox_resolve_target_test.go` | 708 | da fare | #NNN |
-| `pkg/api/internal_velox_deliveries_test.go` | 707 | da fare | #NNN |
-| `internal/repository/post_repo_test.go` | 705 | da fare | #NNN |
-| `internal/auth/jwt_test.go` | 700 | da fare | #NNN |
-| `pkg/api/internal_velox_thumbnail_session_test.go` | 694 | da fare | #NNN |
-| `pkg/api/internal_velox_deliver_test.go` | 694 | da fare | #NNN |
-| `pkg/api/accounts_performance_assembler_test.go` | 683 | da fare | #NNN |
-| `tests/e2e/oauth_callback_binding_e2e_test.go` | 675 | da fare | #NNN |
-| `internal/worker/publish_worker_publish_youtube_test.go` | 666 | da fare | #NNN |
-| `internal/deliveries/state_test.go` | 646 | da fare | #NNN |
-| `pkg/api/internal_velox_callback_dispatcher_test.go` | 641 | da fare | #NNN |
-| `pkg/api/accounts_performance_handlers_test.go` | 639 | da fare | #NNN |
-| `cmd/batch-import-drive-folder/main_test.go` | 629 | da fare | #NNN |
-| `tests/e2e/validate_account_e2e_test.go` | 628 | da fare | #NNN |
-| `internal/testutil/runtime/runtime_test.go` | 609 | da fare | #NNN |
-| `internal/worker/mocks_test.go` | 608 | da fare | #NNN |
-| `tests/e2e/e2e_harness_fakes.go` | 601 | da fare | #NNN |
-
-## 500–600 lines (34 files)
-
-| File | Righe | Stato | Issue |
-|------|------:|-------|-------|
-| `pkg/api/youtube_group_videos_phantom_test.go` | 597 | da fare | #NNN |
-| `pkg/api/internal_velox_e2e_helpers_test.go` | 590 | da fare | #NNN |
-| `pkg/api/account_routes_test.go` | 589 | da fare | #NNN |
-| `cmd/yttest/main.go` | 586 | da fare | #NNN |
-| `internal/models/external_delivery_test.go` | 578 | da fare | #NNN |
-| `pkg/api/common_test_mocks_test.go` | 573 | da fare | #NNN |
-| `internal/providers/registry_test.go` | 553 | da fare | #NNN |
-| `internal/models/external_delivery.go` | 549 | da fare | #NNN |
-| `internal/worker/process_ingest_verify_integration_test.go` | 547 | da fare | #NNN |
-| `web/src/pages/internal/ScheduledByAccount.tsx` | 546 | da fare | #NNN |
-| `tests/e2e/e2e_harness_helpers.go` | 542 | da fare | #NNN |
-| `pkg/api/drive_batch_uploads_test.go` | 541 | da fare | #NNN |
-| `internal/services/provider_error.go` | 540 | da fare | #NNN |
-| `cmd/test-youtube-upload/main.go` | 540 | da fare | #NNN |
-| `internal/repository/post_repo_retry.go` | 537 | da fare | #NNN |
-| `pkg/api/auth_handlers.go` | 532 | da fare | #NNN |
-| `internal/repository/group_repo.go` | 531 | da fare | #NNN |
-| `internal/services/threads_oauth.go` | 528 | da fare | #NNN |
-| `internal/config/config.go` | 528 | da fare | #NNN |
-| `cmd/batch-import-drive-folder/main.go` | 527 | da fare | #NNN |
-| `internal/services/facebook_oauth_test.go` | 526 | da fare | #NNN |
-| `pkg/api/youtube_group_videos_list_test.go` | 517 | da fare | #NNN |
-| `internal/services/youtube_oauth_validate_test.go` | 515 | da fare | #NNN |
-| `internal/services/http_client_test.go` | 513 | da fare | #NNN |
-| `web/src/pages/Programs.tsx` | 512 | da fare | #NNN |
-| `web/src/features/publishing/wizard/ConfirmationStep.tsx` | 510 | da fare | #NNN |
-| `pkg/api/youtube_editor_sessions_publish_inflight_test.go` | 509 | da fare | #NNN |
-| `pkg/api/internal_velox_e2e_test.go` | 507 | da fare | #NNN |
-| `internal/repository/post_repo_post.go` | 507 | da fare | #NNN |
-| `web/src/pages/internal/Compose.tsx` | 506 | da fare | #NNN |
-| `web/src/features/publishing/wizard/ChannelMetadataStep.tsx` | 506 | da fare | #NNN |
-| `internal/database/multi_tenancy_test.go` | 504 | da fare | #NNN |
-| `scripts/distribute_channels_to_managers/main_test.go` | 502 | da fare | #NNN |
-| `internal/repository/delivery_session_repo.go` | 502 | da fare | #NNN |
-
-## 450–500 lines (44 files) — watchlist (prossimi alla soglia)
-
-Not yet above 500 but within 50 lines of the threshold. Not gated by
-`loc-check` and not `da fare` yet — monitor them, since a single growth event
-can push them over. No GitHub issues planned for these yet.
-
-| File | Righe |
-|------|------:|
-| `pkg/api/oauth_session_redirect_test.go` | 499 |
-| `internal/bootstrap/workers_wiring.go` | 499 |
-| `internal/services/youtube_oauth_resume_test.go` | 498 |
-| `internal/repository/import_batch_repo.go` | 497 |
-| `internal/repository/outbox_repo_test.go` | 495 |
-| `pkg/api/youtube_editor_sessions_update_test.go` | 493 |
-| `internal/repository/youtube_video_edit_sessions.go` | 493 |
-| `internal/analytics/period_resolver_test.go` | 493 |
-| `internal/models/post.go` | 492 |
-| `internal/services/tiktok_publish_test.go` | 491 |
-| `pkg/api/csrf_test.go` | 489 |
-| `pkg/api/drive_batch_common_test.go` | 488 |
-| `internal/repository/external_delivery_repo_test.go` | 488 |
-| `web/src/features/channels/hooks/useChannelContent.test.tsx` | 487 |
-| `internal/outbox/dispatcher.go` | 487 |
-| `internal/deliveries/state.go` | 486 |
-| `pkg/api/accounts_performance_assembler.go` | 484 |
-| `pkg/api/account_sync_oauth_test.go` | 484 |
-| `internal/services/provider.go` | 483 |
-| `internal/services/delivery_drive_destination_test.go` | 483 |
-| `pkg/api/velox_types.go` | 481 |
-| `pkg/api/drive_batch_v2_test.go` | 481 |
-| `pkg/api/accounts_read_handlers.go` | 480 |
-| `internal/credentials/vault_integration_test.go` | 479 |
-| `internal/services/youtube_validate.go` | 478 |
-| `pkg/api/youtube_editor_sessions_metadata_test.go` | 476 |
-| `pkg/api/drive_import_handlers.go` | 475 |
-| `pkg/api/router.go` | 473 |
-| `pkg/api/drive_batch_v2_handlers.go` | 472 |
-| `internal/repository/outbox_repo.go` | 472 |
-| `web/src/pages/internal/AccountPerformance.tsx` | 471 |
-| `internal/services/google_drive_oauth_test.go` | 471 |
-| `internal/repository/post_repo_idempotency_test.go` | 469 |
-| `internal/worker/reconcile_worker.go` | 467 |
-| `web/src/pages/internal/Dashboard.tsx` | 464 |
-| `internal/services/youtube_channel_content.go` | 463 |
-| `pkg/api/youtube_editor_sessions_publish_test.go` | 461 |
-| `internal/worker/drive_batch_crawler_test_helpers_test.go` | 461 |
-| `pkg/api/workspace_channels_test.go` | 460 |
-| `pkg/api/channel_analytics_service_test.go` | 456 |
-| `tests/e2e/youtube_oauth_browser_e2e_test.go` | 454 |
-| `pkg/api/media_test.go` | 454 |
-| `internal/repository/post_repo_aggregate.go` | 453 |
-| `internal/veloxclient/client_test.go` | 451 |
-
-**Nota:** `web/src/pages/internal/GroupYouTubeVideos.tsx` e
-`web/src/pages/internal/DriveBatchImportDialogViews.tsx` sono stati splitati
-oggi (159 e 16 righe) e non compaiono più in nessuna tabella — vedi
-Completati. `tests/e2e/youtube_oauth_browser_e2e_test.go` (454) è il nuovo
-ingresso watchlist dopo lo split da 926. I file splitati oggi
-(`internal/outbox/dispatcher.go` 487, `pkg/api/router.go` 473) restano in
-watchlist — monitorarli per non farli risalire.
-`internal/services/tiktok_publish_test.go` (491) resta sotto soglia —
-monitorarlo per non farlo risalire.
-`internal/worker/drive_batch_crawler_test_helpers_test.go` (461) è l'helper
-file dello split del crawler, anch'esso sotto soglia ma in watchlist.
-
----
-
-## Historical suggested execution order
-
-The execution order retained below is planning history, not an active
-instruction list. Before starting any item, refresh the LOC report, apply the
-current policy and candidate table above, and verify that the responsibility
-still exists and is not already split.
-
-## Completati in questa sessione (stato: `fatto`)
-
-Files split below the threshold during this session's refactoring campaign
-(ongoing on `main`). All follow the split-by-concern pattern:
-extract helpers/types into `*_helpers` / `*_types` files, then split tests per
-feature/scenario.
-
-| File | Prima | Dopo | Split in |
-|------|------:|-----:|----------|
-| `pkg/api/youtube_publish_pipeline_test.go` | 1157 | 139 | `youtube_publish_pipeline_test.go` (139) + `_shared_test.go` (132) + `_thumbnail_test.go` (264) + `_assetsize_test.go` (144) + `_localization_test.go` (166) + `_cas_test.go` (418) |
-| `internal/services/tiktok_publish_test.go` | 937 | 491 | `tiktok_publish_test.go` + `tiktok_publish_mock_test.go` (197) + `tiktok_publish_pullfromfile_test.go` (280) |
-| `internal/worker/drive_batch_crawler_test.go` | 1014 | 326 | `drive_batch_crawler_test.go` (326) + `drive_batch_crawler_test_helpers_test.go` (465) + `drive_batch_crawler_e2e_test.go` (260) |
-| `pkg/api/drive_batch_import_test.go` | 1142 | 159 | `drive_batch_import_test.go` + `_errors_test.go` (139) + `_pagination_test.go` (246) + `_shareddrive_test.go` (151) + `_idempotency_test.go` (340) + `_e2e_test.go` (177) |
-| `tests/e2e/pipeline_e2e_test.go` | 954 | 104 | per scenario + helper in `e2e_harness` |
-| `internal/outbox/dispatcher_test.go` | 976 | 174 | `dispatcher_{dispatch,retry,errors,concurrency}_test.go` |
-| `docs/OAUTH-PRODUCTION.md` | 979 | 321 | `oauth-google-{setup,limits,rollout,monitoring,troubleshooting}.md` |
-| `docs/OPERATIONS.md` | 827 | 115 | `operations-{deploy,monitoring,runbook,email}.md` |
-| `pkg/api/common_test.go` | 892 | 83 | `common_test_helpers_test.go` + `common_test_mocks_test.go` |
-| `pkg/api/youtube_group_videos.go` | 767 | 304 | `youtube_group_videos_{types,helpers,cache,fetch}.go` + (second pass) `resolveGroupYouTubeAccounts` + `writeGroupVideosOK` → `_helpers.go` |
-| `web/src/pages/internal/YouTubeStudio.tsx` | 709 | 149 | `useYouTubeStudio{Data,Actions,PrivateVideos}.ts` + sezioni |
-| `web/src/components/booking/BookingProvider.tsx` | 694 | 8 | context + `BookingModal.tsx` + moduli dedicati |
-| `web/src/pages/internal/ContentPublish.test.tsx` | 676 | — (eliminato) | `ContentPublish.{retryGating,retryFlow,states,crossTab}.test.tsx` + `testUtils.tsx` |
-| `pkg/api/modules.go` | 649 | 40 | un file per modulo |
-| `internal/auth/jwt.go` | 605 | 175 | `jwt_{issue,verify,middleware,random,connectlink}.go` |
-| `pkg/api/uploads_handlers.go` | 604 | 106 | `uploads_{filters,counts,list,schedule}_handlers.go` |
-| `pkg/api/admin_channels_handlers.go` | 592 | 139 | `admin_channels_{connectlink,fleet,import}.go` |
-| `pkg/api/youtube_editor_sessions_by_project.go` | 551 | 220 | `youtube_editor_sessions_by_project_publish.go` (341) |
-| `internal/services/youtube_oauth.go` | 575 | 389 | `youtube_types.go` (184) |
-| `web/src/pages/internal/ContentPublish.tsx` | 622 | 213 | `contentPublishStatusVisual.ts` (131) + `useContentPublishRetry.ts` (67) + `ContentPublish{AggregateBanner,TargetRow,SuccessCard}.tsx` |
-| `web/src/components/booking/BookingModal.tsx` | 600 | 279 | `bookingModalSteps.tsx` (192) + `bookingModalPrimitives.tsx` (140) |
-| `pkg/api/posts_handlers.go` | 583 | 434 | `posts_create.go` (247) — 5 phase helpers di `handleCreatePost` |
-| `pkg/api/internal_velox_callback_dispatcher.go` | 577 | 321 | `internal_velox_callback_dispatcher_{types,helpers}.go` |
-| `internal/outbox/dispatcher.go` | 571 | 487 | `dispatcher_backoff.go` (66) + `dispatcher_mark.go` (70) |
-| `pkg/api/youtube_editor_sessions.go` | 560 | 409 | `youtube_editor_sessions_{thumbnail,inflight}.go` |
-| `pkg/api/accounts_write_handlers.go` | 544 | 90 | `accounts_validate.go` (332) + `accounts_sync.go` (152) |
-| `pkg/api/groups_handlers.go` | 541 | 351 | `groups_accounts.go` (132) + `groups_settings.go` (89) |
-| `internal/deliveries/group_expand.go` | 537 | 366 | `group_expand_status.go` (181) |
-| `pkg/api/router.go` | 535 | 473 | 13 wrapper velox/integrations → `modules_velox.go` + `modules_integrations.go` |
-| `internal/repository/platform_account_repo.go` | 534 | 135 | `platform_account_{attach,reauth,crud}.go` |
-| `web/src/pages/internal/GroupYouTubeVideos.tsx` | 576 | 159 | `useGroupYouTubeVideos.ts` (246) + `groupYouTubeVideos{Types,Visual}.ts` + `GroupYouTubeVideo{Card,PreviewModal}.tsx` |
-| `web/src/pages/internal/DriveBatchImportDialogViews.tsx` | 575 | 16 | barrel: `driveBatchImport{Form,Views,Primitives,Format}` |
-| `pkg/api/nvidia_metadata_publish_e2e_test.go` | 928 | 383 | `_negative_test.go` (426) + `_helpers_test.go` (149) |
-| `tests/e2e/youtube_oauth_browser_e2e_test.go` | 926 | 454 | `_fakes_test.go` (357) + `_seed_test.go` (145) |
-| `pkg/api/internal_velox_get_delivery_test.go` | 923 | 226 | `_helpers_test.go` (381) + `_spec8_test.go` (336) |
-| `internal/database/migrations_integration_test.go` | 901 | 444 | `_oauth_backfill_test.go` (254) + `_upload_jobs_test.go` (225) |
-| `pkg/api/internal_velox_validate_test.go` | 898 | 249 | `_helpers_test.go` (208) + `_diag_test.go` (129) + `_ratelimit_test.go` (346) |
-| `internal/services/channel_authorization_test.go` | 883 | 245 | `_helpers_test.go` (171) + `_status_test.go` (229) + `_atomic_test.go` (273) |
-| `pkg/api/auth_routes_callback_test.go` | 865 | 279 | `_reauth_test.go` (268) + `_youtube_test.go` (344) |
-| `internal/worker/publish_worker_publish_test.go` | 834 | 345 | `_claim_test.go` (386) + `_error_test.go` (125) |
-
-**Nota `pkg/api/youtube_group_videos.go`:** lo split originale lo portò a 500
-righe (sotto la soglia), poi è RISALITO a 570 (secondo pass di oggi: estrazione
-di `resolveGroupYouTubeAccounts` + `writeGroupVideosOK` in `_helpers.go`) e ora
-è a **304** — definitivamente `fatto`. I suoi file di test collegati
-(`youtube_group_videos_phantom_test.go` 597, `_list_test.go` 517) restano sopra
-— inclusi nelle tabelle sopra.
-
-**Nota sezione >800:** tutti gli 8 file precedentemente sopra 800 sono stati
-splitati per scenario il 2026-08-02 (commit `5132462`); la sezione è ora vuota
-e il count complessivo è sceso da 69 a 59.
-
----
-
-## Come aggiornare questo file
+Files between 450 and 500 lines are monitored but do not receive an automatic
+issue or refactoring slice. Refresh the count before starting work; several
+files previously listed in the watchlist have since crossed 500 or moved below
+it. Use:
 
 ```bash
-# Lista aggiornata dei file sopra 500 righe (ordinati per dimensione):
-git ls-files | grep -E '\.(go|ts|tsx)$' | while IFS= read -r f; do \
-  [ -f "$f" ] || continue; lines=$(wc -l < "$f"); \
-  [ "$lines" -gt 500 ] && printf '%6d  %s\n' "$lines" "$f"; \
-done | sort -rn
-
-# Watchlist 450–500 (file prossimi alla soglia):
-git ls-files | grep -E '\.(go|ts|tsx)$' | while IFS= read -r f; do \
-  [ -f "$f" ] || continue; lines=$(wc -l < "$f"); \
-  [ "$lines" -ge 450 ] && [ "$lines" -le 500 ] && printf '%6d  %s\n' "$lines" "$f"; \
-done | sort -rn
-
-# Oppure, con il report ufficiale:
-./scripts/loc-report.sh -t 500 -n 20
+./scripts/loc-report.sh -t 500 -n 100
 ```
+
+## Next execution order
+
+### Slice 1 — Configuration boundaries (P0)
+
+**Target:** `internal/config/config.go` and its existing loader/validation
+siblings.
+
+- inventory every exported config type and environment key;
+- extract environment resolution/defaults without changing `Load()` output;
+- keep validation and secret-redaction behavior unchanged;
+- add round-trip/default/invalid-input tests for each extracted group;
+- verify `go test ./internal/config/...` and `go test ./...`.
+
+**Done when:** `Config` consumers need no new ad-hoc environment reads and the
+full config package has a clear loader → resolver → validator flow.
+
+### Slice 2 — Group repository transaction seams (P0)
+
+**Target:** `internal/repository/group_repo.go`.
+
+- separate tree CRUD/cycle checks from membership/settings transactions;
+- retain workspace ownership checks and `workspace_channels` resync semantics;
+- use existing repository error sentinels and transaction helpers;
+- expand repository tests around concurrent settings/removal and cross-tenant
+  rejection.
+
+**Done when:** membership replacement/removal can be tested independently while
+all transaction and authorization invariants remain covered.
+
+### Slice 3 — Worker wiring registry (P0)
+
+**Target:** `internal/bootstrap/workers_wiring.go`.
+
+- keep adapters in bootstrap and move worker specs into cohesive files;
+- retain one canonical worker name/order/count registry;
+- add a test that fails on duplicate names, missing critical workers, or changed
+  shutdown semantics;
+- validate API/worker/migrate entrypoints independently.
+
+**Done when:** adding a worker touches one focused spec file plus the explicit
+registry, without duplicating dependency construction.
+
+### Slice 4 — Auth and post HTTP handlers (P0)
+
+**Targets:** `pkg/api/auth_handlers.go`, `pkg/api/posts_handlers.go`.
+
+- map each route to its handler and shared response helper;
+- split by behavior, not by arbitrary function count;
+- keep auth/session/cookie/CSRF contracts and post idempotency/workspace
+  authorization unchanged;
+- run targeted handler tests plus API integration tests.
+
+**Done when:** each flow has a focused implementation and the router remains a
+thin registration boundary.
+
+### Slice 5 — YouTube OAuth policy/transport (P1)
+
+**Targets:** `internal/services/youtube_oauth.go`,
+`internal/services/threads_oauth.go`, related tests.
+
+- isolate token HTTP transport, callback policy, refresh/revoke, and OAuth pool
+  selection;
+- reuse shared provider error and HTTP client abstractions;
+- preserve redirect URI, refresh-token, and client-pool contracts.
+
+**Done when:** policy tests do not need to exercise raw HTTP transport and
+refresh/revoke behavior remains covered by focused tests.
+
+### Slice 6 — Repository and metrics cleanup (P1)
+
+**Targets:** thumbnail/asset/post retry/aggregate repositories and
+`pkg/metrics/collector.go`.
+
+- extract only shared scan, lease, retry, or query-policy helpers;
+- preserve tenant predicates, SQL ordering, advisory locks, and zero-filled
+  metric labels;
+- update repository/metrics tests with each extraction.
+
+**Done when:** no new facade or duplicate SQL policy is introduced and the
+operational contracts remain explicit.
+
+### Slice 7 — Test and CLI organization (T1/T2)
+
+After runtime slices are stable, split the three >800-line test files and the
+large integration fixtures by scenario. Then organize the diagnostic CLIs.
+Do not mix these changes with production behavior changes.
+
+## Per-slice checklist
+
+Before editing:
+
+- refresh `scripts/loc-report.sh`;
+- inspect all references to exported symbols being moved;
+- confirm the working tree is clean or explicitly preserve unrelated changes;
+- write the intended responsibility boundary in the commit description.
+
+After editing:
+
+```bash
+gofmt -w <changed-go-files>
+go test ./<affected-packages>/...
+go test ./...
+go vet ./...
+go build ./...
+./scripts/loc-check.sh -t 500 -a origin/main
+```
+
+For routing or runtime wiring changes also run:
+
+```bash
+make verify-entrypoint-topology
+go test -race ./...
+```
+
+Commit only the intended slice, push directly to `main`, and verify:
+
+```bash
+git diff --cached --check
+git show --stat --oneline HEAD
+git status --short --branch
+git ls-remote origin refs/heads/main
+```
+
+## Completed work and historical context
+
+Previously completed splits remain useful examples, but are not active tasks.
+Notable patterns include:
+
+- `pkg/api/modules.go` split into focused module files;
+- `pkg/api/uploads_handlers.go` split into lifecycle/list/schedule handlers;
+- `internal/auth/jwt.go` split into issue/verify/middleware helpers;
+- `internal/services/youtube_oauth.go` partially split with shared YouTube
+  types;
+- `internal/outbox/dispatcher.go` split for backoff/mark policy;
+- large E2E and integration files split by scenario.
+
+Use the current code, not historical line counts, to decide whether another
+split is still needed. When a slice is completed, update this tracker with the
+new line counts, tests run, commit SHA, and any new seam that future work should
+reuse.
