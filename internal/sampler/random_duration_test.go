@@ -40,3 +40,43 @@ func TestRandomDurationInRange_ReversedBounds(t *testing.T) {
 		t.Fatalf("error = %q, want min/max details", err)
 	}
 }
+
+func TestRandomDurationInRange_NegativeBounds(t *testing.T) {
+	got, err := RandomDurationInRange(-10, -5)
+	if err != nil {
+		t.Fatalf("RandomDurationInRange: %v", err)
+	}
+	if got < -10*time.Second || got > -5*time.Second {
+		t.Fatalf("got %v outside [-10s, -5s]", got)
+	}
+}
+
+func TestRandomDurationInRange_RejectsDurationOverflow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		min  int
+		max  int
+	}{
+		{name: "below minimum", min: int(minRandomDurationSeconds) - 1, max: int(minRandomDurationSeconds) - 1},
+		{name: "above maximum", min: int(maxRandomDurationSeconds) + 1, max: int(maxRandomDurationSeconds) + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := RandomDurationInRange(tc.min, tc.max); err == nil {
+				t.Fatalf("RandomDurationInRange(%d, %d) returned nil error", tc.min, tc.max)
+			}
+		})
+	}
+}
+
+func TestRandomDurationInRange_AcceptsDurationLimits(t *testing.T) {
+	for _, seconds := range []int{int(minRandomDurationSeconds), int(maxRandomDurationSeconds)} {
+		got, err := RandomDurationInRange(seconds, seconds)
+		if err != nil {
+			t.Fatalf("RandomDurationInRange(%d, %d): %v", seconds, seconds, err)
+		}
+		want := time.Duration(seconds) * time.Second
+		if got != want {
+			t.Fatalf("got %d, want %d", got, want)
+		}
+	}
+}
