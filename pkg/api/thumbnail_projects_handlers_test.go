@@ -52,6 +52,8 @@ type thumbnailProjectTestStore struct {
 	bridgeErr          error
 	createBridgeErr    error
 	deleteBridgeErr    error
+	findByIDCalls      int
+	createBridgeCalls  int
 }
 
 func (s *thumbnailProjectTestStore) Create(_ context.Context, project *models.ThumbnailProject) error {
@@ -65,7 +67,11 @@ func (s *thumbnailProjectTestStore) Create(_ context.Context, project *models.Th
 	s.created = project
 	return nil
 }
-func (s *thumbnailProjectTestStore) FindByID(_ context.Context, _ int64, _ string) (*models.ThumbnailProject, error) {
+func (s *thumbnailProjectTestStore) FindByID(_ context.Context, workspaceID int64, projectID string) (*models.ThumbnailProject, error) {
+	s.findByIDCalls++
+	if s.project == nil || s.project.WorkspaceID != workspaceID || s.project.ID != projectID {
+		return nil, nil
+	}
 	return s.project, nil
 }
 func (s *thumbnailProjectTestStore) ListByWorkspace(_ context.Context, _ int64) ([]models.ThumbnailProject, error) {
@@ -151,6 +157,7 @@ func (s *thumbnailProjectTestStore) ListAssignments(_ context.Context, _ int64, 
 	return s.assignments, s.listAssignmentsErr
 }
 func (s *thumbnailProjectTestStore) CreateVeloxProjectBridge(_ context.Context, bridge *models.VeloxProjectBridge) error {
+	s.createBridgeCalls++
 	if s.createBridgeErr != nil {
 		return s.createBridgeErr
 	}

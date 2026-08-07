@@ -3,6 +3,9 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -142,15 +145,56 @@ func TestVeloxProjectBridge_ContractHasOnlyMinimalContextAndSeparateSPA(t *testi
 			}
 		}
 	}
-	if strings.Contains(strings.ToLower(handler), "database/sql") || strings.Contains(strings.ToLower(handler), "sql.open") {
-		t.Fatal("bridge handler must use the InstaEdit store boundary, not open a shared database")
-	}
-	if strings.Contains(strings.ToLower(handler), "sync") || strings.Contains(strings.ToLower(module), "sync") {
-		t.Fatal("bridge boundary must not implement bidirectional synchronization")
+	assertBoundaryGoFile(t, filepath.Join(root, "pkg", "api", "velox_project_bridge_handlers.go"), map[string]bool{
+		"database/sql":            false,
+		"github.com/lib/pq":       false,
+		"github.com/jackc/pgx/v5": false,
+	}, []string{"handleCreateVeloxProjectBridge", "handleGetVeloxProjectBridge", "handleDeleteVeloxProjectBridge"})
+	assertBoundaryGoFile(t, filepath.Join(root, "pkg", "api", "modules_thumbnail_projects.go"), map[string]bool{
+		"database/sql":            false,
+		"github.com/lib/pq":       false,
+		"github.com/jackc/pgx/v5": false,
+	}, []string{"Register"})
+	for _, forbidden := range []string{"CREATE DATABASE", "dblink", "postgres_fdw", "CREATE TRIGGER", "sync_groups", "sync_channels", "bidirectional"} {
+		if strings.Contains(strings.ToLower(migration), strings.ToLower(forbidden)) || strings.Contains(strings.ToLower(handler), strings.ToLower(forbidden)) || strings.Contains(strings.ToLower(module), strings.ToLower(forbidden)) {
+			t.Fatalf("bridge boundary contains forbidden shared/synchronization construct %q", forbidden)
+		}
 	}
 	for _, localTable := range []string{"thumbnail_projects", "workspace_channels", "platform_accounts", "workspaces"} {
 		if !strings.Contains(strings.ToLower(migration), localTable) {
 			t.Fatalf("bridge migration no longer declares expected InstaEdit-local relation %q", localTable)
+		}
+	}
+}
+
+func assertBoundaryGoFile(t *testing.T, path string, allowedImports map[string]bool, requiredFunctions []string) {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse boundary file %s: %v", path, err)
+	}
+	imports := make(map[string]bool, len(file.Imports))
+	for _, spec := range file.Imports {
+		name := strings.Trim(spec.Path.Value, "\"")
+		imports[name] = true
+		if allowed, known := allowedImports[name]; known && !allowed {
+			t.Fatalf("boundary file %s imports forbidden database driver %q", path, name)
+		}
+	}
+	for name, allowed := range allowedImports {
+		if allowed && !imports[name] {
+			t.Fatalf("boundary file %s lost required import %q", path, name)
+		}
+	}
+	functions := make(map[string]bool)
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			functions[fn.Name.Name] = true
+		}
+	}
+	for _, name := range requiredFunctions {
+		if !functions[name] {
+			t.Fatalf("boundary file %s lost required function %q", path, name)
 		}
 	}
 }
