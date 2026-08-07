@@ -37,6 +37,8 @@ describe("CoversPage", () => {
     expect(redirectToInstaEditorMock).toHaveBeenCalledWith("/dark_editor_v2/");
     expect(screen.queryByTestId("dark-editor-frame")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /apertura instaeditor/i })).toBeInTheDocument();
+    expect(screen.getByText(/aprire instaeditor in una pagina separata/i)).toBeInTheDocument();
+    expect(screen.queryByText(/dark editor/i)).not.toBeInTheDocument();
   });
 
   it("redirects to the selected Velox project", () => {

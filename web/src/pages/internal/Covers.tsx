@@ -28,7 +28,7 @@ export function CoversPage() {
         </div>
         <h1 className="text-lg font-bold text-white">Apertura InstaEditor</h1>
         <p className="mt-2 text-sm leading-6 text-[#9aa0aa]">
-          Stai per lasciare InstaEdit e aprire la SPA Dark Editor in una pagina separata.
+          Stai per lasciare InstaEdit e aprire InstaEditor in una pagina separata.
         </p>
         <Loader2 className="mx-auto mt-5 h-5 w-5 animate-spin text-violet-300" aria-label="Reindirizzamento" />
         <div className="mt-6 flex items-center justify-center gap-2">
