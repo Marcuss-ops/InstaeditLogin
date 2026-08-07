@@ -336,6 +336,22 @@ describe("GroupsPage", () => {
     expect(membershipUpdater([groupedAccount.id])).toEqual([groupedAccount.id, secondYouTubeAccount.id]);
   });
 
+  it("shows the group name on grouped channel cards and nothing on unassigned ones", () => {
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+
+    // channel-grouped belongs to the "WWE" folder: its card shows a badge.
+    const groupedCard = within(tray).getByText("channel-grouped").closest("[data-account-id]");
+    expect(groupedCard).not.toBeNull();
+    expect(within(groupedCard!).getByText("WWE")).toBeInTheDocument();
+
+    // channel-available is not in any group: its card must show no badge
+    // (so an operator can tell at a glance it is unassigned).
+    const freeCard = within(tray).getByText("channel-available").closest("[data-account-id]");
+    expect(freeCard).not.toBeNull();
+    expect(within(freeCard!).queryByText("WWE")).not.toBeInTheDocument();
+  });
+
   it("offers to add a YouTube channel directly from the channels tray", () => {
     renderPage();
 

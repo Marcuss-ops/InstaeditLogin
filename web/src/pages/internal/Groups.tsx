@@ -56,6 +56,17 @@ export function GroupsPage() {
   const assignedToAnyGroup = state.kind === "ready"
     ? new Set(Array.from(state.groupAccountIDs.values()).flat())
     : new Set<number>();
+  // accountId -> group names the channel belongs to. Shown as small badges
+  // on the tray cards so an operator can see at a glance which folder(s)
+  // each channel lives in (a card without badges is not in any group).
+  const groupNamesByAccountId = new Map<number, string[]>();
+  for (const node of allGroups) {
+    for (const account of node.accounts) {
+      const names = groupNamesByAccountId.get(account.id) ?? [];
+      if (!names.includes(node.name)) names.push(node.name);
+      groupNamesByAccountId.set(account.id, names);
+    }
+  }
   const filteredYouTubeAccounts = availableYouTubeAccounts.filter((account) => (
     matchesChannelView(account, channelSearch, channelFilter, assignedToAnyGroup)
   ));
@@ -293,6 +304,7 @@ export function GroupsPage() {
             busyAccountId={busyAccountId}
             draggedAccountId={draggedAccountId}
             allVisibleSelected={allVisibleSelected}
+            groupNamesByAccountId={groupNamesByAccountId}
             onSearchChange={handleSearchChange}
             onFilterChange={handleFilterChange}
             onToggleSelection={toggleChannelSelection}
@@ -325,6 +337,7 @@ function YouTubeChannelsTray({
   allVisibleSelected,
   busyAccountId,
   draggedAccountId,
+  groupNamesByAccountId,
   onSearchChange,
   onFilterChange,
   onToggleSelection,
@@ -342,6 +355,7 @@ function YouTubeChannelsTray({
   allVisibleSelected: boolean;
   busyAccountId: number | null;
   draggedAccountId: number | null;
+  groupNamesByAccountId: Map<number, string[]>;
   onSearchChange: (value: string) => void;
   onFilterChange: (value: "all" | "assigned" | "unassigned") => void;
   onToggleSelection: (accountId: number) => void;
@@ -452,6 +466,7 @@ function YouTubeChannelsTray({
             selected={selectedIds.has(account.id)}
             selectedIds={selectedIds}
             dragging={draggedAccountId === account.id}
+            groupNames={groupNamesByAccountId.get(account.id) ?? []}
             onToggleSelect={() => onToggleSelection(account.id)}
             onDragStart={(ids) => onDragStart(account.id, ids)}
             onDragEnd={onDragEnd}
@@ -468,6 +483,7 @@ function YouTubeChannelCard({
   selected,
   selectedIds,
   dragging,
+  groupNames,
   onToggleSelect,
   onDragStart,
   onDragEnd,
@@ -477,6 +493,7 @@ function YouTubeChannelCard({
   selected: boolean;
   selectedIds: Set<number>;
   dragging: boolean;
+  groupNames: string[];
   onToggleSelect: () => void;
   onDragStart: (ids: number[]) => void;
   onDragEnd: () => void;
@@ -545,6 +562,21 @@ function YouTubeChannelCard({
       <div className="min-w-0 flex-1">
         <p className="truncate text-[14px] font-semibold text-white">{label}</p>
         <p className="truncate text-[10px] uppercase tracking-wider text-[#9aa0aa]">{account.platform === "youtube" ? "YouTube" : account.platform}</p>
+        {groupNames.length > 0 ? (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {groupNames.slice(0, 2).map((name) => (
+              <span
+                key={name}
+                title={name}
+                className="inline-flex max-w-[96px] items-center gap-1 rounded-[5px] bg-amber-300/[0.12] px-1.5 py-[1px] text-[10px] font-semibold text-amber-200/90"
+              >
+                <Folder size={9} className="shrink-0" />
+                <span className="truncate">{name}</span>
+              </span>
+            ))}
+            {groupNames.length > 2 ? <span className="text-[10px] font-semibold text-[#9aa0aa]">+{groupNames.length - 2}</span> : null}
+          </div>
+        ) : null}
       </div>
       {busy ? (
         <RefreshCw size={13} className="animate-spin text-amber-300" aria-label="Assegnazione in corso" />
