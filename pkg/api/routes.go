@@ -86,7 +86,6 @@ func (r *Router) Setup() http.Handler {
 	reg.Register(NewAuthModule(AuthModuleDeps{
 		AuthEmailSvc:            r.authEmailSvc,
 		TeamStore:               r.teamStore,
-		GroupStore:              r.groupStore,
 		WebhookStore:            r.webhookStore,
 		RateLimitSvc:            r.rateLimitSvc,
 		AuthMiddleware:          authMiddleware,
@@ -130,21 +129,34 @@ func (r *Router) Setup() http.Handler {
 			ListWorkspaceChannels:         r.handleListWorkspaceChannels,
 			UpdateWorkspaceChannel:        r.handleUpdateWorkspaceChannel,
 			DetachWorkspaceChannel:        r.handleDetachWorkspaceChannel,
-			ListGroups:                    r.handleListGroups,
-			ListGroupsWithAccounts:        r.handleListGroupsWithAccounts,
-			CreateGroup:                   r.handleCreateGroup,
-			GetGroup:                      r.handleGetGroup,
-			UpdateGroup:                   r.handleUpdateGroup,
-			DeleteGroup:                   r.handleDeleteGroup,
-			ListGroupAccounts:             r.handleListGroupAccounts,
-			SetGroupAccounts:              r.handleSetGroupAccounts,
-			UpdateGroupSettings:           r.handleUpdateGroupSettings,
-			RemoveGroupAccount:            r.handleRemoveGroupAccount,
 			CreateApiKey:                  r.handleCreateApiKey,
 			ListApiKeys:                   r.handleListApiKeys,
 			GetApiKey:                     r.handleGetApiKey,
 			DeleteApiKey:                  r.handleDeleteApiKey,
 			RotateApiKey:                  r.handleRotateApiKey,
+		},
+	}))
+	// Hierarchical-groups bounded context (/api/v1/groups/*). Owns
+	// its own GroupStore dependency + route table; extracted from
+	// AuthModule so the identity module stops depending on the
+	// groups store. When GroupStore is nil the module registers no
+	// routes (404 at the chi level), preserving the pre-module
+	// WithGroupStore mount contract (see
+	// TestWithGroupStore_RouteMounting).
+	reg.Register(NewGroupsModule(GroupsModuleDeps{
+		GroupStore: r.groupStore,
+		Protected:  r.protected,
+		Handlers: GroupsHandlers{
+			ListGroups:            r.handleListGroups,
+			ListGroupsWithAccounts: r.handleListGroupsWithAccounts,
+			CreateGroup:           r.handleCreateGroup,
+			GetGroup:              r.handleGetGroup,
+			UpdateGroup:           r.handleUpdateGroup,
+			DeleteGroup:           r.handleDeleteGroup,
+			ListGroupAccounts:     r.handleListGroupAccounts,
+			SetGroupAccounts:      r.handleSetGroupAccounts,
+			UpdateGroupSettings:   r.handleUpdateGroupSettings,
+			RemoveGroupAccount:    r.handleRemoveGroupAccount,
 		},
 	}))
 	reg.Register(NewThumbnailProjectsModule(

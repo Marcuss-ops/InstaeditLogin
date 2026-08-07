@@ -44,16 +44,6 @@ type AuthHandlers struct {
 	ListWorkspaceChannels         http.HandlerFunc
 	UpdateWorkspaceChannel        http.HandlerFunc
 	DetachWorkspaceChannel        http.HandlerFunc
-	ListGroups                    http.HandlerFunc
-	ListGroupsWithAccounts        http.HandlerFunc
-	CreateGroup                   http.HandlerFunc
-	GetGroup                      http.HandlerFunc
-	UpdateGroup                   http.HandlerFunc
-	DeleteGroup                   http.HandlerFunc
-	ListGroupAccounts             http.HandlerFunc
-	SetGroupAccounts              http.HandlerFunc
-	UpdateGroupSettings           http.HandlerFunc
-	RemoveGroupAccount            http.HandlerFunc
 	CreateApiKey                  http.HandlerFunc
 	ListApiKeys                   http.HandlerFunc
 	GetApiKey                     http.HandlerFunc
@@ -66,7 +56,6 @@ type AuthHandlers struct {
 type AuthModuleDeps struct {
 	AuthEmailSvc            AuthEmailStore
 	TeamStore               TeamStore
-	GroupStore              GroupStore
 	WebhookStore            WebhookStore
 	RateLimitSvc            *services.RateLimitService
 	AuthMiddleware          func(http.Handler) http.Handler
@@ -82,9 +71,11 @@ type AuthModuleDeps struct {
 }
 
 // AuthModule mounts authentication, sessions, accounts, workspaces,
-// groups, API keys, team and webhook routes.  It is the broadest module
+// API keys, team and webhook routes. It is the broadest module
 // because all of these surfaces are part of the user/workspace identity
-// context.
+// context. The hierarchical-groups routes (/api/v1/groups/*) were
+// extracted into GroupsModule (modules_groups.go) so the identity
+// module does not depend on the groups store.
 type AuthModule struct {
 	deps AuthModuleDeps
 }
@@ -181,21 +172,6 @@ func (m *AuthModule) Register(mux chi.Router) {
 		sr.Patch("/{id}/channels/{accountId}", m.deps.Protected(m.deps.Handlers.UpdateWorkspaceChannel))
 		sr.Delete("/{id}/channels/{accountId}", m.deps.Protected(m.deps.Handlers.DetachWorkspaceChannel))
 	})
-
-	if m.deps.GroupStore != nil {
-		mux.Route("/api/v1/groups", func(sr chi.Router) {
-			sr.Get("/", m.deps.Protected(m.deps.Handlers.ListGroups))
-			sr.Get("/aggregate", m.deps.Protected(m.deps.Handlers.ListGroupsWithAccounts))
-			sr.Post("/", m.deps.Protected(m.deps.Handlers.CreateGroup))
-			sr.Get("/{id:[0-9]+}", m.deps.Protected(m.deps.Handlers.GetGroup))
-			sr.Patch("/{id:[0-9]+}", m.deps.Protected(m.deps.Handlers.UpdateGroup))
-			sr.Delete("/{id:[0-9]+}", m.deps.Protected(m.deps.Handlers.DeleteGroup))
-			sr.Get("/{id:[0-9]+}/accounts", m.deps.Protected(m.deps.Handlers.ListGroupAccounts))
-			sr.Put("/{id:[0-9]+}/accounts", m.deps.Protected(m.deps.Handlers.SetGroupAccounts))
-			sr.Delete("/{id:[0-9]+}/accounts/{accountId:[0-9]+}", m.deps.Protected(m.deps.Handlers.RemoveGroupAccount))
-			sr.Patch("/{id:[0-9]+}/settings", m.deps.Protected(m.deps.Handlers.UpdateGroupSettings))
-		})
-	}
 
 	mux.Route("/api/v1/api-keys", func(sr chi.Router) {
 		sr.Use(func(next http.Handler) http.Handler {

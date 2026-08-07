@@ -23,15 +23,15 @@ import (
 //     (typically 401 without a session,
 //     or 200/400 once a JWT is wired)
 //
-// Why this matters: AuthModule.Register in pkg/api/modules.go gates
-// the /api/v1/groups route on `if m.deps.GroupStore != nil`. A future
-// refactor that moves the gate, deletes the WithGroupStore wire-up in
-// internal/bootstrap/app.go, or accidentally adds an AND-clause
-// (e.g. `&& someOtherStore != nil`) would silently disable the
-// groups endpoint. Without this test the regression only shows up at
-// the SPA layer as "Impossibile caricare i gruppi. Riprova più
-// tardi." — the exact failure that took two hours to triage the day
-// the wire-up was forgotten.
+// Why this matters: GroupsModule.Register in pkg/api/modules_groups.go
+// gates the /api/v1/groups route on `if m.deps.GroupStore != nil`.
+// A future refactor that moves the gate, deletes the WithGroupStore
+// wire-up in internal/bootstrap/app.go, or accidentally adds an
+// AND-clause (e.g. `&& someOtherStore != nil`) would silently
+// disable the groups endpoint. Without this test the regression only
+// shows up at the SPA layer as "Impossibile caricare i gruppi.
+// Riprova più tardi." — the exact failure that took two hours to
+// triage the day the wire-up was forgotten.
 //
 // The mock GroupStore is reused from groups_handlers_test.go
 // (mockGroupStore is declared in that file; it is accessible from
