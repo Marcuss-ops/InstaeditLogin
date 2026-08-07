@@ -32,21 +32,24 @@ and worker ordering intact.
 
 ## Current inventory
 
-The current scan found **24 tracked runtime production files above 500 lines**.
+The current scan found **23 tracked runtime production files above 500 lines**.
 No runtime production file is above 800 lines in this snapshot. Test, E2E, and
 CLI files are tracked separately below so their size does not distort runtime
 priorities. Refresh this count before each new slice; it is an inventory, not a
-set of automatically generated tickets.
+set of automatically generated tickets. Two previous candidates were split and
+removed from this table since the last snapshot: `internal/config/config.go`
+(672, split in `46b6188`) and `internal/repository/group_repo.go` (625, split
+in `6886c37`); the config split surfaced `internal/config/config_types.go`
+(616), which is monitored below.
 
 ### Runtime production files above 500 lines
 
 | Priority | File | Lines | Current responsibility | Next action |
 |---|---|---:|---|---|
-| P0 | `pkg/api/auth_handlers.go` | 786 | Magic-link, password/admin auth, and related HTTP flows | Split by auth flow after mapping route registration and shared response/error helpers. |
-| P0 | `internal/config/config.go` | 672 | Configuration structs, environment loading, and shared defaults | Separate config domain types from loading/resolution; keep validation in existing validation files and add table-driven coverage. |
-| P0 | `internal/repository/group_repo.go` | 625 | Group CRUD, tree invariants, memberships, ownership, and channel resync | Extract membership/settings transaction helpers only after preserving workspace ownership and cycle checks. |
-| P0 | `internal/bootstrap/workers_wiring.go` | 615 | Dependency adapters and all worker specifications | Move one worker specification per cohesive file or group; retain a single ordered registry and count/order tests. |
+| P0 | `pkg/api/auth_handlers.go` | 786 | Magic-link, password/admin auth, and related HTTP flows | **Next split:** separate OAuth login, callback, exchange, and `/auth/me` flows by flow; see Slice 4 below. |
+| P0 | `internal/bootstrap/workers_wiring.go` | 630 | Dependency adapters and all worker specifications | ✅ COMPLETED in `7d03153`: specs → `workers_specs.go` (409), adapters → `workers_adapters.go` (66); `workers_wiring.go` now 121 lines with one ordered registry + `TestWorkerSpecs_PreserveLifecycleContract`. |
 | P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | Separate lifecycle commands from query/list handlers and serialization; preserve idempotency and workspace authorization. |
+| P1 | `internal/config/config_types.go` | 616 | Config struct types split out of `config.go` (`46b6188`) | Monitor; split only if a second domain boundary (worker vs database structs) becomes worth isolating. |
 | P1 | `internal/services/youtube_oauth.go` | 586 | OAuth URL/callback, token exchange, refresh, revoke, and client pool | Isolate token transport from OAuth policy and pool selection; reuse shared HTTP/error helpers. |
 | P1 | `internal/repository/thumbnail_project_repo.go` | 558 | Project CRUD, snapshots, revisions, restore, and CAS status | Extract revision/snapshot persistence behind focused helpers; retain CAS and revision-number transaction guarantees. |
 | P1 | `pkg/api/accounts_read_handlers.go` | 552 | Account listing, account detail, content, and earnings reads | Split read endpoints by query family; keep account ownership loading in one shared helper. |
@@ -131,6 +134,8 @@ number is assigned unless an actual external ticket exists.
 | Post handler policies | Shared cursor, route-ID, and workspace-ownership policies remove handler duplication without changing HTTP shapes or idempotency order. | Contract tests, full Go tests, vet, build | `315bd6e` |
 | YouTube OAuth policy | Shared OAuth scope/policy seam separates repeated policy from transport and credential resolution. | OAuth contract tests, full Go tests, vet, build | `218a84b` |
 | Retry/sampler primitives | Uniform semi-open duration sampling is shared only where RNG ownership and interval semantics are identical; distinct backoff policies remain separate. | Range/distribution tests, full Go tests, vet, build | `3148d94` |
+| Configuration boundaries (final) | `internal/config/config.go` split into `config_types.go` (structs), `config_load.go` (resolution), `config_validation.go`, `config_database.go`; `Load()` output unchanged. | Config tests, full Go tests, vet, build | `46b6188` |
+| Group repository seams (final) | `internal/repository/group_repo.go` split into `group_repo_helpers.go`, `group_repo_membership.go`, `group_repo_settings.go`, `group_repo_page.go`; ownership and cycle checks preserved. | Repository/API tests, full Go tests, vet, build | `6886c37` |
 
 ## Remaining execution order
 
@@ -140,58 +145,61 @@ finding an actual duplicated policy or stable test seam.
 
 ### Next execution order
 
-### Slice 1 — Configuration boundaries (P0)
+### Slice 1 — Configuration boundaries (P0) ✅ COMPLETED
 
-**Target:** `internal/config/config.go` and its existing loader/validation
-siblings.
+Split in `46b6188` (final) after the earlier `a78484c` seam: `config.go` →
+`config_types.go` (structs) + `config_load.go` (resolution) +
+`config_validation.go` + `config_database.go` + `field_specs.go`. `Load()`
+output unchanged; config tests, full Go tests, vet, build all green. The
+remaining `config_types.go` (616) is a types-only file under monitoring.
 
-- inventory every exported config type and environment key;
-- extract environment resolution/defaults without changing `Load()` output;
-- keep validation and secret-redaction behavior unchanged;
-- add round-trip/default/invalid-input tests for each extracted group;
-- verify `go test ./internal/config/...` and `go test ./...`.
+### Slice 2 — Group repository transaction seams (P0) ✅ COMPLETED
 
-**Done when:** `Config` consumers need no new ad-hoc environment reads and the
-full config package has a clear loader → resolver → validator flow.
+Split in `6886c37` (final) after the earlier `2bbaa66` seam: `group_repo.go` →
+`group_repo_helpers.go` + `group_repo_membership.go` + `group_repo_settings.go`
++ `group_repo_page.go`. Ownership checks, cycle checks, and `workspace_channels`
+resync semantics preserved; repository/API tests, full Go tests, vet, build all
+green.
 
-### Slice 2 — Group repository transaction seams (P0)
+### Slice 3 — Worker wiring registry (P0) ✅ COMPLETED
 
-**Target:** `internal/repository/group_repo.go`.
-
-- separate tree CRUD/cycle checks from membership/settings transactions;
-- retain workspace ownership checks and `workspace_channels` resync semantics;
-- use existing repository error sentinels and transaction helpers;
-- expand repository tests around concurrent settings/removal and cross-tenant
-  rejection.
-
-**Done when:** membership replacement/removal can be tested independently while
-all transaction and authorization invariants remain covered.
-
-### Slice 3 — Worker wiring registry (P0)
-
-**Target:** `internal/bootstrap/workers_wiring.go`.
-
-- keep adapters in bootstrap and move worker specs into cohesive files;
-- retain one canonical worker name/order/count registry;
-- add a test that fails on duplicate names, missing critical workers, or changed
-  shutdown semantics;
-- validate API/worker/migrate entrypoints independently.
-
-**Done when:** adding a worker touches one focused spec file plus the explicit
-registry, without duplicating dependency construction.
+Split in `7d03153`: `workers_wiring.go` (630) → `workers_specs.go` (409, one
+spec per cohesive grouping) + `workers_adapters.go` (66, shared adapters);
+`workers_wiring.go` now 121 lines with one canonical ordered registry and
+`TestWorkerSpecs_PreserveLifecycleContract` retained. Wiring/runtime tests,
+full Go tests, vet, build green.
 
 ### Slice 4 — Auth and post HTTP handlers (P0)
 
-**Targets:** `pkg/api/auth_handlers.go`, `pkg/api/posts_handlers.go`.
+**Targets:** `pkg/api/auth_handlers.go` (786), `pkg/api/posts_handlers.go` (547).
 
-- map each route to its handler and shared response helper;
-- split by behavior, not by arbitrary function count;
-- keep auth/session/cookie/CSRF contracts and post idempotency/workspace
-  authorization unchanged;
-- run targeted handler tests plus API integration tests.
+**First file to split: `pkg/api/auth_handlers.go`** — the largest remaining
+runtime production file and the next unclaimed P0. Proposed pure file moves in
+the same package (no logic change, no signature change; mounts in
+`routes.go`/`AuthHandlers` resolve to the same method values):
 
-**Done when:** each flow has a focused implementation and the router remains a
-thin registration boundary.
+- `auth_login.go` — `YouTubePoolAwareLogin`, `exchangeOAuthCode`, `handleLogin`
+  (~lines 27–252);
+- `auth_callback.go` — `handleCallback`, `resolveCallbackState`,
+  `callbackAttachDiscovered`, `callbackAttachSingle`, `writeCallbackSuccess`,
+  `HandleOAuthCallbackRouteForTest` (~lines 253–669);
+- `auth_exchange.go` — `handleExchangeCode` (~lines 670–714);
+- `auth_me.go` — `handleMe`, `resolveActiveWorkspace` (~lines 715–785).
+
+**Opportunistic cleanup (flagged, do in the same slice):** `Router.handleMe`
+(line 720) is dead code — `/api/v1/auth/me` is mounted from
+`AuthModule.handleMe` (`modules_auth.go`), and no production call site
+references the `Router` variant. Removing it with the move keeps the slice
+behavior-neutral; verify with a repo-wide search before deleting.
+
+Keep auth/session/cookie/CSRF contracts and the YouTube client-pool state
+semantics unchanged; run `go test ./pkg/api/...` targeted auth tests plus the
+full Go suite. Then `pkg/api/posts_handlers.go` follows the same
+lifecycle-vs-query split.
+
+**Done when:** each auth flow has a focused file, the router stays a thin
+registration boundary, and post idempotency/workspace authorization is
+unchanged.
 
 ### Slice 5 — YouTube OAuth policy/transport (P1)
 
