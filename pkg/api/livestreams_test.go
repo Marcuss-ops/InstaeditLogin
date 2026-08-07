@@ -158,6 +158,62 @@ func doLivestreamRequest(t *testing.T, r *Router, method, path string, payload a
 }
 
 // ---------------------------------------------------------------------------
+// Shared command policy
+// ---------------------------------------------------------------------------
+
+func TestApplyLivestreamFields_CreateAndPatchSharePolicy(t *testing.T) {
+	payload := validLivestreamPayload()
+	payload["title"] = "  Shared title  "
+	payload["category"] = "24"
+	payload["language"] = "it"
+	payload["latency_preference"] = "low"
+	payload["auto_start"] = true
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	var create createLivestreamRequest
+	if err := json.Unmarshal(raw, &create); err != nil {
+		t.Fatalf("decode create payload: %v", err)
+	}
+	created := &models.Livestream{
+		ScheduleType:      models.LivestreamScheduleManual,
+		Resolution:        models.LivestreamResolution1080p,
+		FrameRate:         models.LivestreamFrameRate,
+		AutoRestart:       true,
+		LatencyPreference: models.LivestreamLatencyNormal,
+	}
+	if err := applyLivestreamFields(created, livestreamCreateFields(create)); err != nil {
+		t.Fatalf("apply create fields: %v", err)
+	}
+	if created.Title != "Shared title" || created.Category != "24" || created.Language != "it" || !created.AutoStart {
+		t.Fatalf("create policy did not normalize fields: %+v", created)
+	}
+
+	title := "  Shared title  "
+	patch := patchLivestreamRequest{Title: &title}
+	updated := &models.Livestream{Title: "old", ScheduleType: models.LivestreamScheduleManual}
+	if err := applyLivestreamFields(updated, livestreamPatchFields(patch)); err != nil {
+		t.Fatalf("apply patch fields: %v", err)
+	}
+	if updated.Title != created.Title {
+		t.Fatalf("create and patch normalization diverged: create=%q patch=%q", created.Title, updated.Title)
+	}
+	if updated.Category != "" || updated.AutoStart {
+		t.Fatalf("patch changed fields that were not supplied: %+v", updated)
+	}
+}
+
+func TestApplyLivestreamFields_RejectsScheduledWithoutStart(t *testing.T) {
+	schedule := models.LivestreamScheduleScheduled
+	ls := &models.Livestream{ScheduleType: models.LivestreamScheduleManual}
+	if err := applyLivestreamFields(ls, livestreamFieldInput{ScheduleType: &schedule}); err == nil || !strings.Contains(err.Error(), "scheduled_start_at") {
+		t.Fatalf("expected scheduled start invariant error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/v1/livestreams
 // ---------------------------------------------------------------------------
 
@@ -426,6 +482,32 @@ func TestCreateLivestream_RejectsUnavailableGrant(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "grant") {
 		t.Errorf("body should mention the grant, got %s", w.Body.String())
+	}
+}
+
+func TestLivestreamRoutes_Contract(t *testing.T) {
+	r := livestreamTestRouter(&mockLivestreamStore{}, livestreamTestAccount(), 1)
+	patterns := make(map[string]map[string]bool)
+	r.Setup()
+	for _, route := range r.mux.Routes() {
+		if patterns[route.Pattern] == nil {
+			patterns[route.Pattern] = make(map[string]bool)
+		}
+		for method := range route.Handlers {
+			patterns[route.Pattern][method] = true
+		}
+	}
+	want := map[string]string{
+		"/api/v1/livestreams":          "GET,POST",
+		"/api/v1/livestreams/channels": "GET",
+		"/api/v1/livestreams/{id}":     "DELETE,GET,PATCH",
+	}
+	for pattern, methods := range want {
+		for _, method := range strings.Split(methods, ",") {
+			if !patterns[pattern][method] {
+				t.Errorf("missing livestream route %s %s", method, pattern)
+			}
+		}
 	}
 }
 

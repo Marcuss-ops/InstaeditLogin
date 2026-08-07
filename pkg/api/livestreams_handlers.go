@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -18,154 +16,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
-
-// ---------------------------------------------------------------------------
-// Validation helpers
-// ---------------------------------------------------------------------------
-
-func normalizeLivestreamTitle(s string) (string, error) {
-	title := strings.TrimSpace(s)
-	if title == "" {
-		return "", errors.New("title is required")
-	}
-	if utf8.RuneCountInString(title) > models.LivestreamTitleMaxRunes {
-		return "", fmt.Errorf("title must be at most %d characters", models.LivestreamTitleMaxRunes)
-	}
-	return title, nil
-}
-
-func normalizeLivestreamDescription(s string) (string, error) {
-	if utf8.RuneCountInString(s) > models.LivestreamDescriptionMaxRunes {
-		return "", fmt.Errorf("description must be at most %d characters", models.LivestreamDescriptionMaxRunes)
-	}
-	return s, nil
-}
-
-func validateLivestreamPrivacy(s string) (string, error) {
-	switch strings.TrimSpace(s) {
-	case models.LivestreamPrivacyPrivate, models.LivestreamPrivacyUnlisted, models.LivestreamPrivacyPublic:
-		return strings.TrimSpace(s), nil
-	default:
-		return "", fmt.Errorf("privacy_status must be one of private, unlisted, public")
-	}
-}
-
-func validateLivestreamPlaybackMode(s string) (string, error) {
-	switch strings.TrimSpace(s) {
-	case models.LivestreamPlaybackLoopContinuous, models.LivestreamPlaybackPlayOnce:
-		return strings.TrimSpace(s), nil
-	default:
-		return "", fmt.Errorf("playback_mode must be one of loop_continuous, play_once")
-	}
-}
-
-func validateLivestreamScheduleType(s string) (string, error) {
-	switch strings.TrimSpace(s) {
-	case models.LivestreamScheduleManual, models.LivestreamScheduleNow,
-		models.LivestreamScheduleScheduled, models.LivestreamScheduleRecurring:
-		return strings.TrimSpace(s), nil
-	default:
-		return "", fmt.Errorf("schedule_type must be one of manual, now, scheduled, recurring")
-	}
-}
-
-func validateLivestreamResolution(s string) (string, error) {
-	switch strings.TrimSpace(s) {
-	case "":
-		return models.LivestreamResolution1080p, nil
-	case models.LivestreamResolution720p, models.LivestreamResolution1080p:
-		return strings.TrimSpace(s), nil
-	default:
-		return "", fmt.Errorf("resolution must be one of 720p30, 1080p30")
-	}
-}
-
-// validateLivestreamFrameRate accepts 0 (→ default 30) or exactly 30.
-func validateLivestreamFrameRate(n int) (int, error) {
-	if n == 0 {
-		return models.LivestreamFrameRate, nil
-	}
-	if n != models.LivestreamFrameRate {
-		return 0, fmt.Errorf("frame_rate must be %d", models.LivestreamFrameRate)
-	}
-	return n, nil
-}
-
-func parseOptionalRFC3339(s *string) (*time.Time, error) {
-	if s == nil || strings.TrimSpace(*s) == "" {
-		return nil, nil
-	}
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(*s))
-	if err != nil {
-		return nil, fmt.Errorf("scheduled_start_at must be an RFC3339 timestamp: %w", err)
-	}
-	return &t, nil
-}
-
-// validateLivestreamCategory accepts an empty value (no category) or
-// a known YouTube numeric category id (e.g. "24" = Entertainment).
-// YouTube remains the authority at broadcast creation time; this is a
-// local sanity gate so the wizard's select never round-trips a bogus id.
-func validateLivestreamCategory(s string) (string, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", nil
-	}
-	if !models.ValidLivestreamCategory(s) {
-		return "", fmt.Errorf("category must be a known YouTube category id (or empty)")
-	}
-	return s, nil
-}
-
-// validateLivestreamLanguage accepts an empty value or an ISO 639-1 /
-// BCP-47 language code (light sanity gate; YouTube validates fully).
-func validateLivestreamLanguage(s string) (string, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", nil
-	}
-	if utf8.RuneCountInString(s) > models.LivestreamLanguageMaxRunes {
-		return "", fmt.Errorf("language must be at most %d characters", models.LivestreamLanguageMaxRunes)
-	}
-	if err := models.CheckBCP47Like("language", s); err != nil {
-		return "", err
-	}
-	return s, nil
-}
-
-// validateLivestreamLatency accepts an empty value (→ default normal)
-// or one of normal / low / ultraLow.
-func validateLivestreamLatency(s string) (string, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return models.LivestreamLatencyNormal, nil
-	}
-	if !models.ValidLivestreamLatency(s) {
-		return "", fmt.Errorf("latency_preference must be one of normal, low, ultraLow")
-	}
-	return s, nil
-}
-
-// normalizeLivestreamThumbnail trims and bounds the optional cover
-// asset id. An empty/absent value yields nil (no cover). The
-// authoritative existence / readiness / ownership check happens at
-// prepare time in the worker; here we only run a length sanity gate.
-// TODO(livestream-worker): validate the referenced media_assets row
-// (exists, status=ready, owned by the workspace user) like
-// resolveMediaAssets does, before mapping it onto the broadcast.
-func normalizeLivestreamThumbnail(s *string) (*string, error) {
-	if s == nil {
-		return nil, nil
-	}
-	trimmed := strings.TrimSpace(*s)
-	if trimmed == "" {
-		return nil, nil
-	}
-	if utf8.RuneCountInString(trimmed) > 64 {
-		return nil, errors.New("thumbnail_media_id is too long")
-	}
-	return &trimmed, nil
-}
 
 // livestreamLiveScopes are the OAuth scopes that unlock the YouTube
 // Live Streaming API. New grants always include youtube.force-ssl;
@@ -424,118 +274,24 @@ func (r *Router) handleCreateLivestream(w http.ResponseWriter, req *http.Request
 		}
 	}
 
-	title, err := normalizeLivestreamTitle(payload.Title)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	description, err := normalizeLivestreamDescription(payload.Description)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	privacy, err := validateLivestreamPrivacy(payload.PrivacyStatus)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	playback, err := validateLivestreamPlaybackMode(payload.PlaybackMode)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	schedule, err := validateLivestreamScheduleType(payload.ScheduleType)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	resolution, err := validateLivestreamResolution(payload.Resolution)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	frameRate, err := validateLivestreamFrameRate(payload.FrameRate)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	scheduledAt, err := parseOptionalRFC3339(payload.ScheduledStartAt)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if schedule == models.LivestreamScheduleScheduled && scheduledAt == nil {
-		writeError(w, http.StatusBadRequest, "scheduled_start_at is required when schedule_type is scheduled")
-		return
-	}
-	autoRestart := true
-	if payload.AutoRestart != nil {
-		autoRestart = *payload.AutoRestart
-	}
-	category, err := validateLivestreamCategory(payload.Category)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	language, err := validateLivestreamLanguage(payload.Language)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	latency, err := validateLivestreamLatency(payload.LatencyPreference)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	thumbnail, err := normalizeLivestreamThumbnail(payload.ThumbnailMediaID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	madeForKids := false
-	if payload.MadeForKids != nil {
-		madeForKids = *payload.MadeForKids
-	}
-	dvrEnabled := false
-	if payload.DVREnabled != nil {
-		dvrEnabled = *payload.DVREnabled
-	}
-	autoStart := false
-	if payload.AutoStart != nil {
-		autoStart = *payload.AutoStart
-	}
-	autoStop := false
-	if payload.AutoStop != nil {
-		autoStop = *payload.AutoStop
-	}
-
 	now := time.Now().UTC()
 	ls := &models.Livestream{
 		ID:                "ls_" + uuid.NewString(),
 		WorkspaceID:       payload.WorkspaceID,
 		PlatformAccountID: payload.PlatformAccountID,
 		CreatedBy:         identity.UserID(),
-		Title:             title,
-		Description:       description,
-		PrivacyStatus:     privacy,
-		PlaybackMode:      playback,
-		ScheduleType:      schedule,
-		ScheduledStartAt:  scheduledAt,
 		DesiredState:      models.LivestreamStateDraft,
 		ActualState:       models.LivestreamStateDraft,
-		Resolution:        resolution,
-		FrameRate:         frameRate,
-		AutoRestart:       autoRestart,
-		Category:          category,
-		MadeForKids:       madeForKids,
-		Language:          language,
-		ThumbnailMediaID:  thumbnail,
-		DVREnabled:        dvrEnabled,
-		AutoStart:         autoStart,
-		AutoStop:          autoStop,
-		LatencyPreference: latency,
+		Resolution:        models.LivestreamResolution1080p,
+		FrameRate:         models.LivestreamFrameRate,
+		AutoRestart:       true,
+		LatencyPreference: models.LivestreamLatencyNormal,
 		CreatedAt:         now,
 		UpdatedAt:         now,
+	}
+	if err := applyLivestreamFields(ls, livestreamCreateFields(payload)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if err := r.livestreamStore.Create(req.Context(), ls); err != nil {
 		writeError(w, http.StatusInternalServerError, "create livestream: "+err.Error())
@@ -599,119 +355,8 @@ func (r *Router) handlePatchLivestream(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	if payload.Title != nil {
-		title, err := normalizeLivestreamTitle(*payload.Title)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.Title = title
-	}
-	if payload.Description != nil {
-		description, err := normalizeLivestreamDescription(*payload.Description)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.Description = description
-	}
-	if payload.PrivacyStatus != nil {
-		privacy, err := validateLivestreamPrivacy(*payload.PrivacyStatus)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.PrivacyStatus = privacy
-	}
-	if payload.PlaybackMode != nil {
-		playback, err := validateLivestreamPlaybackMode(*payload.PlaybackMode)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.PlaybackMode = playback
-	}
-	if payload.ScheduleType != nil {
-		schedule, err := validateLivestreamScheduleType(*payload.ScheduleType)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.ScheduleType = schedule
-	}
-	if payload.ScheduledStartAt != nil {
-		scheduledAt, err := parseOptionalRFC3339(payload.ScheduledStartAt)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.ScheduledStartAt = scheduledAt
-	}
-	if payload.Resolution != nil {
-		resolution, err := validateLivestreamResolution(*payload.Resolution)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.Resolution = resolution
-	}
-	if payload.FrameRate != nil {
-		frameRate, err := validateLivestreamFrameRate(*payload.FrameRate)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.FrameRate = frameRate
-	}
-	if payload.AutoRestart != nil {
-		ls.AutoRestart = *payload.AutoRestart
-	}
-	if payload.Category != nil {
-		category, err := validateLivestreamCategory(*payload.Category)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.Category = category
-	}
-	if payload.MadeForKids != nil {
-		ls.MadeForKids = *payload.MadeForKids
-	}
-	if payload.Language != nil {
-		language, err := validateLivestreamLanguage(*payload.Language)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.Language = language
-	}
-	if payload.ThumbnailMediaID != nil {
-		thumbnail, err := normalizeLivestreamThumbnail(payload.ThumbnailMediaID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.ThumbnailMediaID = thumbnail
-	}
-	if payload.DVREnabled != nil {
-		ls.DVREnabled = *payload.DVREnabled
-	}
-	if payload.AutoStart != nil {
-		ls.AutoStart = *payload.AutoStart
-	}
-	if payload.AutoStop != nil {
-		ls.AutoStop = *payload.AutoStop
-	}
-	if payload.LatencyPreference != nil {
-		latency, err := validateLivestreamLatency(*payload.LatencyPreference)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ls.LatencyPreference = latency
-	}
-	if ls.ScheduleType == models.LivestreamScheduleScheduled && ls.ScheduledStartAt == nil {
-		writeError(w, http.StatusBadRequest, "scheduled_start_at is required when schedule_type is scheduled")
+	if err := applyLivestreamFields(ls, livestreamPatchFields(payload)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
