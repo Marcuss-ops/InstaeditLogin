@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/sampler"
 )
 
 // EventType names the canonical event types. Adding a new event
@@ -209,12 +210,7 @@ func (d *WebhookDispatcher) NextAttempt(attempt int, now time.Time) time.Time {
 	if temp > float64(capDelay) {
 		temp = float64(capDelay)
 	}
-	span := int64(temp) - int64(base)
-	if span <= 0 {
-		return now.Add(base)
-	}
-	delta := d.rand.Int63n(span)
-	return now.Add(time.Duration(int64(base) + delta))
+	return now.Add(sampler.UniformDuration(base, time.Duration(temp), d.rand.Int63n))
 }
 
 // IsTerminalStatus is the classifier used by the worker. 2xx

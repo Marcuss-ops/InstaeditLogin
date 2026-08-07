@@ -1,6 +1,10 @@
 package outbox
 
-import "time"
+import (
+	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/sampler"
+)
 
 // computeBackoff returns the next-attempt delay using AWS-style
 // decorrelated jitter (Marcuss architecture blog "Exponential Backoff
@@ -43,12 +47,7 @@ func (d *Dispatcher) computeBackoff(attempt int) time.Duration {
 	}
 	// uniform_int63n returns [0, n). We want [base, temp]. Compute
 	// delta = uniform_int63n(temp - base) then sleep = base + delta.
-	span := int64(temp) - int64(base)
-	if span <= 0 {
-		return base
-	}
-	delta := d.rand.Int63n(span)
-	return time.Duration(int64(base) + delta)
+	return sampler.UniformDuration(base, time.Duration(temp), d.rand.Int63n)
 }
 
 // pow2 returns 2^n as a float64. Inlined helper to avoid pulling

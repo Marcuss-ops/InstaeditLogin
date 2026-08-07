@@ -14,6 +14,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/sampler"
 )
 
 // youTubeUploadOptions captures the P1#6 chunking knobs. Loaded
@@ -109,11 +110,7 @@ func computeYouTubeBackoff(base, cap time.Duration) func(int) time.Duration {
 		// Full jitter: rand in [base, prev]. rand.Int63n(n) returns
 		// [0, n) so the upper bound is exclusive; widen by 1 to keep
 		// prev as a possible outcome when prev > base.
-		span := int64(prev) - int64(base)
-		if span < 1 {
-			return base
-		}
-		return base + time.Duration(rand.Int63n(span))
+		return sampler.UniformDuration(base, prev, rand.Int63n)
 	}
 }
 
