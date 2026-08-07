@@ -103,7 +103,7 @@ the frontend at the VPS.
 
 Vercel terminates TLS for the apex, `app.`, and `www.` frontend hosts. Caddy
 on the VPS obtains and renews the LE certificate for `api.instaedit.org`
-(and the compatibility-only `dev.instaedit.org` block when it is enabled).
+only (the legacy `dev.instaedit.org` block was removed on 2026-08-07).
 Renewal windows are 30 days before expiry; Caddy auto-renews every ~60 days.
 Failure modes:
 

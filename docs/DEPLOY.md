@@ -291,10 +291,11 @@ must reverse-proxy `api.instaedit.org` to `127.0.0.1:8080` and abort public
 requests to `/internal/*`.
 
 Use the tracked `ops/vps/Caddyfile` as the production source to review.
-Its `api.instaedit.org` block is the production route; the additional
-`dev.instaedit.org` block is compatibility-only and is not required for the
-canonical production deployment. Install the file on the VPS, validate it,
-and reload Caddy without editing the live file by hand:
+It contains a single `api.instaedit.org` block: API on `127.0.0.1:8080`,
+`/internal/*` aborted. The legacy `dev.instaedit.org` compatibility host
+(Dark Editor, MinIO proxy, SPA redirects) was removed on 2026-08-07 — the
+frontend is served exclusively by Vercel. Install the file on the VPS,
+validate it, and reload Caddy without editing the live file by hand:
 
 ```bash
 cd /opt/instaedit/InstaeditLogin
@@ -480,6 +481,13 @@ hostname. The application bucket is created idempotently by `minio-init`.
   the frontend.
 - MinIO has persistent storage and is not recreated with `down -v`.
 - MinIO API and console ports are not published to the Internet.
+- MinIO is private: `S3_ENDPOINT=http://minio:9000` is only reachable
+  inside the Compose network; presigned URLs are used by server-side
+  flows (drive import, upload worker, media resolution). Browser uploads
+  that need a PUBLIC presigned URL are intentionally out of the canonical
+  path — to enable them, publish MinIO on the VPS loopback
+  (`127.0.0.1:19000:9000`), set `S3_ENDPOINT=https://api.instaedit.org`
+  (path-style) and uncomment the media handle in `ops/vps/Caddyfile`.
 
 Verify the service and its health without publishing a port:
 

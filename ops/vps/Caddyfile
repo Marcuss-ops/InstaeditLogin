@@ -1,71 +1,46 @@
-# Public VPS reverse proxy for dev.instaedit.org and api.instaedit.org.
-# Requires DNS A dev.instaedit.org + api.instaedit.org -> this VPS and
-# TCP ports 80/443 open. The Go API listens on 127.0.0.1:8080.
+# Public VPS reverse proxy for the InstaEdit API.
+#
+# Requires DNS A api.instaedit.org -> this VPS and TCP ports 80/443 open.
+# The Go API listens on 127.0.0.1:8080. The frontend is served EXCLUSIVELY
+# by Vercel (app.instaedit.org) — this Caddy never serves the SPA and no
+# longer carries the legacy dev.instaedit.org compatibility host (removed
+# 2026-08-07: Dark Editor, MinIO proxy, and SPA redirects are gone).
+#
+# All routing lives in `handle` blocks so Caddy evaluates them in file
+# order (the `handle` directive is exempt from directive sorting).
 
-# ── API ────────────────────────────────────────────────────────────────────
-# Dedicated public hostname for the JSON API. No SPA, no S3 fallback:
-# every request routes to the Go API on loopback; /internal/* is closed
-# at the proxy layer so probes see nothing (no Fly fingerprint, no SQL
-# hints, no Velox token-leak surface). encode gzip covers the JSON
-# responses (the Go API honours Accept-Encoding: gzip on the read side).
 api.instaedit.org {
 	encode gzip
 
+	# /internal/* is closed at the proxy layer: those routes are
+	# auth-gated service-to-service endpoints (Velox handoff) and must
+	# never be reachable from the public Internet.
 	handle /internal/* {
 		abort
 	}
 
-	reverse_proxy 127.0.0.1:8080
-}
+	# ── Public media endpoint (OPTIONAL, disabled by default) ──────────
+	# MinIO is PRIVATE in the canonical production stack: the API/worker
+	# containers reach it via Compose DNS (S3_ENDPOINT=http://minio:9000)
+	# and no host port is published (see docker-compose.production.yml).
+	#
+	# If browser uploads/previews must PUT/GET MinIO directly through
+	# presigned URLs, enable a public media endpoint on THIS host (no new
+	# subdomain) by:
+	#   1. publishing MinIO on the VPS loopback, e.g. 127.0.0.1:19000:9000;
+	#   2. setting S3_ENDPOINT=https://api.instaedit.org (S3_PATH_STYLE=true)
+	#      in the production secret file;
+	#   3. uncommenting the handle below so path-style presigned URLs
+	#      ({host}/{bucket}/{key}) resolve to MinIO.
+	#
+	# handle /instaedit-media/* {
+	# 	reverse_proxy 127.0.0.1:19000 {
+	# 		header_up Host {host}
+	# 	}
+	# }
 
-# ── Backend compatibility hostname ─────────────────────────────────────────
-# dev.instaedit.org is the legacy hostname. Backend paths (API, probes,
-# Dark Editor, S3 media proxy) keep working here; every other path is a
-# legacy SPA route and is permanently redirected (301) to the canonical
-# frontend on Vercel (app.instaedit.org) instead of hitting the API 404.
-# Path is preserved so client-side routing still works on the target.
-dev.instaedit.org {
-	encode gzip
-
-	handle /internal/* {
-		abort
-	}
-
-	# Dark Editor (Next.js) under the same base path returned by the API.
-	handle /dark_editor_v2 {
-		reverse_proxy 127.0.0.1:3001
-	}
-	handle /dark_editor_v2/* {
-		reverse_proxy 127.0.0.1:3001
-	}
-
-	# S3-compatible MinIO proxy for browser uploads and media previews.
-	# Presigned URLs are signed for this public HTTPS host, so preserve it
-	# when forwarding to the host-published MinIO port.
-	handle /instaedit-local/* {
-		reverse_proxy 127.0.0.1:19000 {
-			header_up Host {host}
-		}
-	}
-	handle /instaedit-media/* {
-		reverse_proxy 127.0.0.1:19000 {
-			header_up Host {host}
-		}
-	}
-
-	# API + probes keep working on the legacy hostname (OAuth callbacks,
-	# /ready, health). Explicit handlers are required now that the catch-all
-	# no longer proxies to the Go API.
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8080
-	}
-
-	handle /ready {
-		reverse_proxy 127.0.0.1:8080
-	}
-
-	# Everything else is a legacy SPA route → canonical frontend on Vercel.
+	# Everything else goes to the Go API.
 	handle {
-		redir https://app.instaedit.org{uri} permanent
+		reverse_proxy 127.0.0.1:8080
 	}
 }
