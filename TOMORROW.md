@@ -65,9 +65,9 @@ vedere a chiunque** (investitori, designer, amici, gatto). ✅
 | Deploy frontend | Workflow Vercel documentato in `docs/DEPLOY.md` §7 |
 | Operations | `docs/OPERATIONS.md` e i runbook collegati |
 
-Questa è l'unica topologia production supportata. I documenti sotto
-`docs/archive/legacy-fly/` sono materiale storico e non sono istruzioni
-operative.
+Questa è l'unica topologia production supportata. I materiali Fly legacy
+(`docs/archive/legacy-fly/`, parser env Fly + fixture, target `fly-*`)
+sono stati rimossi dal repo (2026-08-07).
 
 ---
 
@@ -156,8 +156,8 @@ secret, no panico.
 **1. Aggiungi `BOOKING_HASH_SECRET` al container di produzione**
 
 - Genera una stringa random ≥32 char (`openssl rand -hex 32`).
-- Iniettala come env var sul container che gira `cmd/api` /
-  `cmd/server`: `BOOKING_HASH_SECRET=<stringa>`.
+- Iniettala come env var sul container `cmd/api`/`cmd/worker`:
+  `BOOKING_HASH_SECRET=<stringa>`.
 - WITHOUT questo env var, `pkg/api/booking_events.go::computeBookingPepper()`
   logga `WARN: BOOKING_HASH_SECRET unset; booking_events uses a fresh
   per-process random pepper` e i `dedupe_hash` NON sono stabili tra

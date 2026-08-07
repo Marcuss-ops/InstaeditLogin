@@ -89,13 +89,13 @@ This is normal boot behaviour, not a deploy failure.
 ## 4. Verdict
 
 `api.instaedit.org` is currently served by **Caddy on the VPS stack**. No Fly
-runtime participates in the request path. The repository can complete the
-cutover:
+runtime participates in the request path. The repository cutover is complete
+(2026-08-07):
 
-- `fly.toml`, `Makefile` targets `fly-*`, and `scripts/*-fly-*` scripts can
-  be removed without functional impact on the live API.
-- Documentation that still cites `fly.toml` as production source of truth
-  should be rewritten as VPS-only.
+- `fly.toml`, `Makefile` targets `fly-*`, `scripts/*-fly-*` scripts, the Fly
+  env parser + fixtures, and `docs/archive/legacy-fly/` have been removed
+  without functional impact on the live API.
+- Documentation no longer cites `fly.toml` as production source of truth.
 
 ## 5. Re-run procedure
 
@@ -122,9 +122,9 @@ Failure mode to escalate on: any header containing the substring `fly`
 |---------------------|----------------|---------------|---------------|--------------------------------|
 | 2026-07-25 12:01:11 | `51.91.11.36`  | Caddy         | 503           | Workers warming; cutover alive |
 | 2026-07-25 16:09:00 | `51.91.11.36`  | Caddy         | 404           | PENDING E2E: sandbox smoke probe found /api/v1/auth/tiktok/start=404 vs /login=302 (deploy lag suspected). Source confirmed wired (pkg/api/modules.go:513). Fix on VPS: `cd /opt/instaedit/InstaeditLogin && docker compose up -d --build api`, then run `scripts/ops/verify-tiktok-oauth-e2e.sh <workspace_id>`. (c9e760d /start alias) |
-| 2026-07-25 16:45:00 | `51.91.11.36`  | Caddy         | 200           | Fly destroy PENDING Tigris disambiguation: `flyctl storage list --app instaedit-login --json` not yet run from operator laptop. Historical runbook at docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md §1; the destroy orchestrator is archived and non-operational, and sandbox cannot execute flyctl — gate remains operator-side.
-| 2026-07-25 17:15:00 | `51.91.11.36`  | Caddy         | 200           | **5-GATE CLOSURE (post-recovery).** G1 `/api/v1/health`=200, G2 `server: Caddy`, G3 `dig +short A → 51.91.11.36`, G4 `/api/v1/auth/tiktok/start`=302 (no `-L`; parallel-mount vs `/login` re-confirms `pkg/api/modules.go:513`), G5 `/ready` 3-field-ok (`{status:db:migrations}` — the actual contract; `workers_ready` is NOT in the envelope per `pkg/api/ready_handlers.go:32-39`). Gate 4 fix landed via `docker compose up -d --build api` from `/home/pierone/Projects/company/InstaeditLogin` with env-file `web/.env.production` (note: docs/DEPLOY.md §1.3 prescribes `/opt/instaedit` — actual VPS layout diverges, follow-up to fix doc). **Fly destroy remains a historical pending cutover item**: Tigris disambiguation was operator-side; the former destroy orchestrator is now archived and non-operational (sandbox cannot reach `flyctl`). |
-| 2026-07-25 17:15:00 | `t3.storage.dev` (audit) | — | — | **Tigris audit (`flyctl storage list --app instaedit-login --json`) still PENDING.** Without operator-side JSON dump we cannot establish whether the `instaedit-prod-media` bucket is Fly-attached (mandatory `mc version enable` + Path-A local mirror before destroy) or standalone (safe to skip backup). Until this gate clears, Tigris MUST NOT be deleted via the Fly dashboard. Comparison check (`grep -RIn 't3.storage.dev\|tigris\|FLY_STORAGE'` on the VPS MinIO env) returned no live references at sandbox discovery time, but that is non-authoritative. |
+| 2026-07-25 16:45:00 | `51.91.11.36`  | Caddy         | 200           | Fly destroy PENDING Tigris disambiguation: `flyctl storage list --app instaedit-login --json` not yet run from operator laptop. The historical Fly destroy orchestrator has since been removed from the repo (2026-08-07); the operator-side Tigris disambiguation gate is tracked in TOMORROW.md.
+| 2026-07-25 17:15:00 | `51.91.11.36`  | Caddy         | 200           | **5-GATE CLOSURE (post-recovery).** G1 `/api/v1/health`=200, G2 `server: Caddy`, G3 `dig +short A → 51.91.11.36`, G4 `/api/v1/auth/tiktok/start`=302 (no `-L`; parallel-mount vs `/login` re-confirms `pkg/api/modules.go:513`), G5 `/ready` 3-field-ok (`{status:db:migrations}` — the actual contract; `workers_ready` is NOT in the envelope per `pkg/api/ready_handlers.go:32-39`). Gate 4 fix landed via `docker compose up -d --build api` from `/home/pierone/Projects/company/InstaeditLogin` with env-file `web/.env.production` (note: docs/DEPLOY.md §1.3 prescribes `/opt/instaedit` — actual VPS layout diverges, follow-up to fix doc). **Fly destroy remains a historical pending cutover item**: Tigris disambiguation was operator-side; the former destroy orchestrator was removed from the repo on 2026-08-07. |
+| 2026-07-25 17:15:00 | `t3.storage.dev` (audit) | — | — | **Tigris audit (operator-side storage list) was still PENDING at this date.** Without operator-side confirmation we cannot establish whether the `instaedit-prod-media` bucket was Fly-attached (mandatory `mc version enable` + Path-A local mirror before destroy) or standalone (safe to skip backup). Until this gate clears, the Tigris bucket MUST NOT be deleted. Comparison check (`grep -RIn 't3.storage.dev\|tigris\|FLY_STORAGE'` on the VPS MinIO env) returned no live references at sandbox discovery time, but that is non-authoritative. |
 | 2026-07-25 18:00:00 | `51.91.11.36`  | Caddy         | 200           | **TikTok OAuth E2E — sandbox negative.** Smoke probe [3/8]=GREEN: `/start`↔`/login`=302 parity (`pkg/api/modules.go` · `(*AuthModule).Register`). Signals (a)=1 (one captured `tiktok.*start` log line; provenance unverified — step [3/8] uses silent curl so attribution is not from the smoke probe), (b)(c)(d)=0 (no operator-driven browser consent). `/ready` still 200 (3-field ok). Two script bugs moved to §7 Open items; full E2E requires the patched script + a real workspace_id + operator browser consent on api.instaedit.org. |
 
 ## 7. Open items
@@ -133,14 +133,14 @@ Failure mode to escalate on: any header containing the substring `fly`
   19:00:00 UTC, commit befdbae). Decision: drop the probe rather than
   mount a new handler. Canonical VPS-Caddy path is `/api/v1/health` (see
   `pkg/api/routes.go:52` and `pkg/api/middleware_handlers.go:14`); the
-  legacy worker `/health` listener remains on TCP/9090 for Fly-style
-  readinessProbe (see `cmd/worker/health_listener.go:61`), independent of
+  legacy worker `/health` listener remains on TCP/9090 for worker
+  readiness probes (see `cmd/worker/health_listener.go`), independent of
   the public proxy.
 - Workers were mid-warm-up at probe time. Re-probe after a few minutes and
   append a row to §6; expect `workers_ready: true` once `publish`,
   `metrics`, and `drive_batch_crawler` finish initialising.
-- Repo cleanup (Fly artefacts, Makefile targets, secret scripts, docs) is
-  the next step — see followups.
+- Repo cleanup (Fly artefacts, Makefile targets, secret scripts, docs) —
+  **COMPLETED 2026-08-07**.
 - `scripts/ops/verify-tiktok-oauth-e2e.sh` [6b/8] arithmetic crash — two
   issues in the SIG extraction. (a) The substitution
   `SIG=$(grep -ciE '…' 2>/dev/null || echo 0)` concatenates grep's stdout

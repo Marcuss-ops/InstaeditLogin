@@ -18,6 +18,13 @@ Fly targets dropped in commit `646146d`, `Dockerfile` Fly stage dropped,
 operator action. Tigris bucket (separate code path) is **explicitly out of
 scope** of this audit per the cutover plan (handled in §6 of TOMORROW.md).
 
+**Update 2026-08-07**: the §3 repo remediations have landed on `main` —
+`docs/archive/legacy-fly/`, `scripts/disabled-fly-secrets-prefixes.txt`,
+`scripts/_parse_envfile.py`, `scripts/test_parse_envfile.py`, and the
+`test-parse-envfile` CI job are removed; `flyctl` references in live
+scripts/comments were rewritten. GitHub UI secret/variable deletion
+remains operator-side.
+
 ---
 
 ## 1. GitHub Secrets SAFE TO REMOVE (Fly platform tokens)
@@ -105,12 +112,13 @@ do the same operations via the GitHub web UI:
 
 ---
 
-## 3. Fly references that STILL exist in the repo (follow-up commits pending)
+## 3. Fly references that existed in the repo (snapshot 2026-07-25 — ALL RESOLVED 2026-08-07)
 
-The audit grep found these files still contain Fly-coupled content. None
-are **critical blockers** for the secrets removal — they are
-documentation, comments, or one-shot orchestrators that can be cleaned
-in separate commits after §1/§2.
+The audit grep found these files still contained Fly-coupled content. None
+were **critical blockers** for the secrets removal — they are
+documentation, comments, or one-shot orchestrators. Every row below was
+resolved on 2026-08-07 (files removed / references rewritten); the table
+is retained as a historical snapshot.
 
 | File                                                         | Refs                                                              | Status / recommendation                                                                       |
 | ------------------------------------------------------------ | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -135,11 +143,9 @@ in separate commits after §1/§2.
 > After other commits land, refs may drift — re-run ripgrep against each
 > file (e.g. `grep -nE 'flyctl' TOMORROW.md`) to confirm current counts.
 
-The required Fly-secrets contract is now archived at
-`docs/archive/legacy-fly/required-fly-secrets.txt`. The parser and its test
-remain only as a compatibility regression until the legacy Fly contract is
-fully retired; neither is an operational deployment path. The disabled
-prefix list and other Fly helpers remain separate follow-up cleanup items.
+The required Fly-secrets contract, its parser, and the disabled-prefix
+list were removed from the repository (2026-08-07); nothing in the repo
+still references the Fly secrets pipeline.
 
 ---
 
