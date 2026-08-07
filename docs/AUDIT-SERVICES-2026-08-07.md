@@ -1,169 +1,220 @@
-# Audit Servizi & Fix S3 — InstaEditLogin
+# Audit servizi e configurazione S3 — InstaEditLogin
 
-**Data:** 2026-08-07 06:55 UTC
-**Ambiente:** dev locale (Docker Compose, `docker-compose.yml` base, senza overlay local)
-**Branch:** `main` (`e99a043` — feat(web): SVG language flags, wider title detection, and deploy guide)
-**Tipo di intervento:** audit read-only + correzione configurazione container (nessuna modifica al codice sorgente)
+**Data dell'audit:** 2026-08-07 06:55 UTC
+**Ambito:** sviluppo locale Docker Compose
+**Classificazione:** report operativo redatto; non contiene credenziali, token, valori di environment, identificativi di sessione o dati personali.
+
+> Questo documento distingue le osservazioni effettuate durante l'audit storico dalle
+> regole operative attuali. Per la topologia supportata fare riferimento a
+> [`docs/DEPLOY.md`](DEPLOY.md), [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) e
+> [`docs/BINARIES.md`](BINARIES.md).
 
 ---
 
 ## 1. Perimetro e metodologia
 
-Audit operativo dell'intero stack di sviluppo locale di InstaEditLogin:
+L'audit ha esaminato il runtime locale e la configurazione dello stack:
 
-- **Topologia verificata:** `db` (Postgres 15) + `migrate` (one-shot) + `api` (HTTP) + `worker` (background) + `minio` + `minio-init` (sidecar one-shot), secondo il contratto canonico di `docker-compose.yml`.
-- **Frontend:** `web/` (React/Vite) — dev server e connessione SPA → API.
-- **Strumenti usati:** `docker compose ps/inspect/logs`, `curl` su health/ready, `mc` (MinIO Client) per roundtrip S3 reale, test di raggiungibilità rete dai container, `docker compose config` per il render dell'interpolazione env.
+- PostgreSQL;
+- migrazione one-shot;
+- API HTTP;
+- worker;
+- MinIO e inizializzazione del bucket;
+- frontend Vite e proxy verso l'API;
+- interpolazione delle variabili Docker Compose;
+- raggiungibilità interna e round-trip S3.
 
-Nessun file di codice è stato modificato. L'unico artefatto su filesystem è la rinomina di `.env` → `.env.old` (vedi §5).
+Sono stati usati controlli read-only o verifiche operative non distruttive, tra cui
+`docker compose ps`, `docker compose inspect`, health/readiness endpoint, rendering
+Compose della configurazione, controlli di rete tra container e un round-trip S3 di
+prova con rimozione dell'oggetto di test.
 
----
-
-## 2. Stato servizi (post-fix)
-
-| Servizio | Immagine | Stato | Note |
-|---|---|---|---|
-| `db` | `postgres:15-alpine` | ✅ **healthy** | `127.0.0.1:5432`, PostgreSQL 15.18, 115 migrazioni applicate, 63 MB |
-| `migrate` | `instaeditlogin-migrate` | ✅ **exited (0)** | one-shot ri-eseguito in modo idempotente durante la ricreazione |
-| `api` | `instaeditlogin-api` | ✅ **healthy** | `127.0.0.1:8080`, `RestartCount=0`, 0 errori nei log |
-| `worker` | `instaeditlogin-worker` | ✅ **up** | 12 worker di background registrati, `RestartCount=0`, 0 errori |
-| `minio` | `minio/minio:latest` | ✅ **healthy** | roundtrip S3 reale verificato (write→read→delete) |
-| `minio-init` | `minio/mc:latest` | ✅ **exited (0)** | bucket pronto (idempotente) |
-
-**Health endpoint:**
-```json
-GET /api/v1/health  → {"limits":{"publish_horizon_days":30,"video_retention_buffer_days":7},
-                       "platforms":["youtube"],"service":"InstaEditLogin","status":"ok","version":"2.0.0"}
-GET /ready          → 200
-```
-
-**Rete:** `media-backend` (network interna `internal: true`) collega `api` + `worker` + `minio`; `default` collega tutti. Nessun container raggiunge `localhost:9000` (endpoint stale, vedi §3) ma tutti raggiungono `minio:9000` (DNS compose).
+Nessun segreto viene riprodotto in questo report. I valori osservati durante l'audit
+sono descritti soltanto per categoria: endpoint stale, bucket errato, credenziale
+placeholder o variabile ereditata dalla shell.
 
 ---
 
-## 3. Problema trovato: configurazione S3 stale nei container
+## 2. Stato osservato durante l'audit
+
+L'audit storico ha osservato il seguente grafo di servizi:
+
+| Servizio | Ruolo | Esito osservato |
+|---|---|---|
+| `db` | PostgreSQL | healthy |
+| `migrate` | migrazione one-shot | completato con exit code 0 |
+| `api` | HTTP API | healthy |
+| `worker` | processi di background | attivo |
+| `minio` | storage S3-compatible | healthy; round-trip verificato |
+| `minio-init` | inizializzazione idempotente del bucket | completato con exit code 0 |
+
+Il report originale conteneva un conteggio di worker non più valido. La topologia
+attuale registra **13 worker supervisionati** tramite `internal/worker.Registry` e
+`internal/bootstrap/workers_wiring.go`. Il conteggio canonico è documentato in
+`docs/ARCHITECTURE.md` e non deve essere duplicato manualmente in report storici.
+
+Gli endpoint health/readiness hanno risposto correttamente durante l'audit. Questo
+non prova da solo la disponibilità dello storage: il controllo di salute applicativo
+non deve essere interpretato come un test completo di upload o presigned URL.
+
+---
+
+## 3. Problema S3 rilevato
 
 ### Sintomo
 
-I container `api` e `worker` in esecuzione erano stati creati ~11h prima dell'audit e giravano con env **stale**:
+I container API e worker erano stati avviati con una configurazione S3 diversa da
+quella attesa dal profilo dev. Le differenze riguardavano:
 
-| Variabile | Valore nei container (stale) | Valore in `.env.dev` (atteso) |
-|---|---|---|
-| `S3_ENDPOINT` | `http://localhost:9000` | `https://dev.instaedit.org` |
-| `S3_BUCKET` | `instaedit-dev-uploads` | `instaedit-media` |
-| `S3_ACCESS_KEY` | `AKIADEVPLACEHOLDER` | `instaedit-local` |
-| `S3_SECRET_KEY` | `devsecretplaceholder...` | `change-this-local-secret` |
-| `APP_ENV` | `dev` (ok) | `dev` |
+- endpoint non raggiungibile dall'interno del container;
+- nome bucket non presente nello storage locale;
+- credenziali placeholder o non corrispondenti al servizio MinIO attivo.
 
-### Perché era un problema reale
+I valori effettivi sono stati omessi intenzionalmente da questo documento.
 
-1. **`localhost:9000` irraggiungibile dal container**: `docker exec instaedit-api wget http://localhost:9000/...` → **FAIL**. All'interno del container `localhost` è il container stesso; MinIO è raggiungibile solo via DNS compose `minio:9000` (→ **OK**).
-2. **Bucket inesistente**: `instaedit-dev-uploads` non esiste in MinIO. Bucket reali: `instaedit-dev`, `instaedit-local`, `instaedit-media`. L'API/worker che scriveva su quel bucket avrebbe ricevuto `NoSuchBucket` a ogni PUT.
-3. **Credenziali placeholder**: `AKIADEVPLACEHOLDER` non corrisponde alle credenziali root reali di MinIO (`MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` da `.env.dev`) → anche l'autenticazione SigV4 sarebbe fallita.
+### Impatto
 
-**Conseguenza pratica:** il health check passava (non tocca S3) ma qualsiasi upload media, thumbnail, presigned URL o import Drive sarebbe fallito. Lo stack era "verde in superficie, rotto sotto".
+Il problema non era visibile dal solo health check. Avrebbe potuto causare errori su:
 
----
+- upload di media;
+- thumbnail e presigned URL;
+- import da Google Drive;
+- lettura o scrittura di oggetti su MinIO.
 
-## 4. Root cause: precedenza di interpolazione env di Docker Compose
-
-Il render di `docker compose --env-file .env.dev config` mostrava che `api` e `worker` ricevevano `${S3_ENDPOINT}`/`${S3_BUCKET}` interpolati da valori stale, mentre `migrate` e `minio-init` (che li prendono via `env_file`) ricevevano già i valori corretti di `.env.dev`.
-
-La precedenza di Docker Compose per l'interpolazione dei `${VAR}` in `environment:` è:
-
-```
-shell environment  >  --env-file  >  root .env  >  (env_file: per-service)
-```
-
-**Due fonti stale contribuivano:**
-
-1. **Root `.env`** (gitignored, `APP_ENV=production`, S3 `localhost:9000`/`instaedit-dev-uploads`) — file legacy che ombreggiava `.env.dev`.
-2. **Variabili esportate nella shell environment della sessione** (`env` mostrava `S3_ENDPOINT=http://localhost:9000`, `S3_BUCKET=instaedit-dev-uploads`, `APP_ENV=production`, `DATABASE_URL`, ecc.) — ereditate dalla sessione terminale/IDE, non da profili shell (`~/.bashrc`, `~/.profile`, `direnv` assenti).
-
-### Prova sperimentale
-
-```bash
-# Con le var stale in ambiente → api/worker ricevono i valori sbagliati
-$ INSTAEDIT_ENV_FILE=.env.dev docker compose --env-file .env.dev config | grep S3_ENDPOINT
-api:       S3_ENDPOINT: http://localhost:9000     # ← stale
-worker:    S3_ENDPOINT: http://localhost:9000     # ← stale
-
-# Dopo unset delle variabili stale → tutto corretto
-$ unset S3_ENDPOINT S3_BUCKET S3_ACCESS_KEY S3_SECRET_KEY S3_REGION APP_ENV APP_MODE DATABASE_URL
-$ INSTAEDIT_ENV_FILE=.env.dev docker compose --env-file .env.dev config | grep S3_ENDPOINT
-api:       S3_ENDPOINT: https://dev.instaedit.org   # ✅
-migrate:   S3_ENDPOINT: https://dev.instaedit.org   # ✅
-worker:    S3_ENDPOINT: https://dev.instaedit.org   # ✅
-```
+La causa operativa era quindi una configurazione runtime incoerente, non un problema
+di autenticazione OAuth o di raggiungibilità PostgreSQL.
 
 ---
 
-## 5. Fix applicato
+## 4. Root cause: precedenza delle variabili Compose
 
-### 5.1 Ricreazione `api` + `worker` con env corretto
+L'analisi ha confermato che le variabili usate nell'interpolazione di
+`environment:` possono provenire da una sorgente diversa da quella usata da
+`env_file:`. In generale, la precedenza applicata da Docker Compose è:
 
-Le variabili S3 sono state esportate in shell dai valori di `.env.dev` (per vincere la precedenza d'interpolazione) e i container sono stati ricreati:
-
-```bash
-export S3_ENDPOINT=$(grep -E '^S3_ENDPOINT=' .env.dev | head -1 | cut -d= -f2-)
-export S3_BUCKET=$(grep -E '^S3_BUCKET=' .env.dev | head -1 | cut -d= -f2-)
-export S3_ACCESS_KEY=$(grep -E '^S3_ACCESS_KEY=' .env.dev | head -1 | cut -d= -f2-)
-export S3_SECRET_KEY=$(grep -E '^S3_SECRET_KEY=' .env.dev | head -1 | cut -d= -f2-)
-INSTAEDIT_ENV_FILE=.env.dev docker compose --env-file .env.dev up -d --force-recreate api worker
+```text
+shell environment > --env-file > root .env > valori dichiarati nel contesto
 ```
 
-**Nota:** `--force-recreate` ha ri-eseguito anche `migrate` e `minio-init` (dipendenze) — entrambi usciti con codice 0 in modo idempotente.
+Il runtime osservato era stato influenzato da una combinazione di:
 
-### 5.2 Rinomina del root `.env` stale
+1. un vecchio file `.env` root ignorato da Git;
+2. variabili stale esportate nella sessione della shell o dell'IDE;
+3. avvio del Compose base senza l'overlay locale previsto dal percorso dev.
+
+Per evitare ambiguità, il percorso locale canonico deve usare il target `make dev`,
+che carica esplicitamente `.env.dev` e combina:
 
 ```bash
-mv .env .env.old
+docker compose \
+  --env-file .env.dev \
+  -f docker-compose.yml \
+  -f docker-compose.local.yml \
+  up --build
 ```
 
-Il file legacy (gitignored) non può più ombreggiare `.env.dev` nei prossimi `docker compose up`. `.env.old` resta consultabile come backup.
+Non creare un root `.env` generico per il percorso operativo locale e non affidarsi a
+variabili esportate accidentalmente dalla shell.
 
-### 5.3 Verifica post-fix
+---
 
-| Check | Esito |
+## 5. Correzione operativa applicata durante l'audit
+
+Durante l'audit sono stati ricreati i servizi interessati usando la configurazione
+dev corretta e sono state ripetute le dipendenze idempotenti (`migrate` e
+`minio-init`). Il report non conserva i comandi contenenti valori di environment o
+segreti.
+
+La verifica post-correzione ha confermato:
+
+| Controllo | Esito |
 |---|---|
-| Env container `api` | ✅ `S3_ENDPOINT=https://dev.instaedit.org`, `S3_BUCKET=instaedit-media`, `S3_ACCESS_KEY=instaedit-local` |
-| Env container `worker` | ✅ identico ad `api` |
-| Log startup `api` | ✅ `storage provider: S3-compatible configured ... bucket=instaedit-media` |
-| Log startup `worker` | ✅ `12 background workers registered` |
-| `/api/v1/health` + `/ready` | ✅ 200 |
-| Errori nei log (5m) | ✅ 0 `ERROR`/`wire failed` |
-| Roundtrip S3 (`mc cp/stat/rm`) | ✅ OK su `instaedit-media` |
+| Configurazione S3 coerente tra API e worker | PASS |
+| Endpoint interno MinIO raggiungibile dai container | PASS |
+| Bucket applicativo inizializzato | PASS |
+| Round-trip write/read/delete su oggetto di test | PASS |
+| Health e readiness | PASS |
+| Ricreazione idempotente di migrazione e bucket-init | PASS |
+
+Il round-trip di prova non deve essere eseguito su dati di produzione senza una
+procedura autorizzata; in produzione valgono i controlli non distruttivi del runbook.
 
 ---
 
-## 6. Frontend (Vite dev server)
+## 6. Stato della topologia attuale
 
-- Dev server avviato in sessione tmux persistente (`tui-test-1786085628910-usuu`): **http://localhost:5173**
-- **Proxy confermato** in `web/vite.config.ts`: `/api` → `http://localhost:8080` (changeOrigin)
-- `VITE_API_BASE_URL` vuoto → fallback `http://localhost:8080` in `web/src/lib/api.ts` (corretto per dev; warning atteso al boot)
-- Verifiche browser (Chrome): landing e `/login` renderizzano, **0 errori console**, nessun banner "API unreachable", `GET /api/v1/health` via proxy → 200
+La topologia supportata oggi è:
+
+```text
+Vercel
+  └── frontend React/Vite (web/)
+
+VPS
+  └── Caddy
+      └── Docker Compose
+          ├── migrate (one-shot)
+          ├── api (cmd/api, HTTP only)
+          ├── worker (cmd/worker, 13 worker supervisionati)
+          ├── PostgreSQL
+          └── MinIO
+```
+
+- Caddy è l'unico ingresso pubblico del backend.
+- PostgreSQL e MinIO restano privati alla VPS e alla rete Compose.
+- `cmd/migrate` completa prima dell'avvio operativo di API e worker.
+- `cmd/server` è soltanto un wrapper legacy per recovery e compatibilità locale.
+- Le alternative di hosting backend e object storage non fanno parte del percorso
+  operativo supportato; usare la topologia Vercel + VPS descritta nei documenti canonici.
 
 ---
 
-## 7. Raccomandazioni e nodi aperti
+## 7. Frontend locale
 
-1. **Unset delle variabili stale nella shell operatore** prima del prossimo `make dev` (o riavvio del terminale), altrimenti l'ombreggiatura ricompare:
-   ```bash
-   unset S3_ENDPOINT S3_BUCKET S3_ACCESS_KEY S3_SECRET_KEY S3_REGION APP_ENV APP_MODE DATABASE_URL
-   ```
-2. **`BOOKING_HASH_SECRET` non settato** → warning al boot (pepper random per-processo). Ok in dev; da settare in produzione per dedup stabile.
-3. **MinIO senza porte host** nel `make dev` attuale (overlay `docker-compose.local.yml` non usato) → la Caddy locale (`ops/local/Caddyfile`, porta 19000) non può raggiungere MinIO; da chiarire il percorso S3 dev previsto (via `dev.instaedit.org` o overlay locale).
-4. **Branch non mergiati**: `agent/fix-local-dev-runtime` ha 3 fix non su `main` (thumbnail URLs locali, token refresh YouTube, dev runtime).
-5. **Refactoring**: il tracker è stato riallineato al tree corrente. Il refactoring procede per slice concrete su `main`, senza ticket inventati. Le slice già verificate includono configurazione, group repository, worker wiring, post handlers, YouTube OAuth, livestream commands e sampler/backoff.
-6. **Security**: chiave Tigris leakata documentata in `TOMORROW.md` — da ruotare.
-7. **Decisione deploy** (Path A/B/C da `TOMORROW.md`): Fly vs beta-Meta vs Hetzner self-hosted.
+Durante l'audit il frontend Vite è stato verificato tramite il proxy dev verso l'API.
+Il comportamento atteso è:
+
+- `VITE_API_BASE_URL` vuoto in dev usa il fallback locale previsto dal frontend;
+- le richieste `/api` vengono inoltrate all'API locale dal proxy Vite;
+- il frontend non accede direttamente a PostgreSQL o MinIO;
+- le verifiche browser devono controllare rendering, health via proxy e assenza di
+  errori console, senza stampare environment o credenziali.
+
+Gli identificativi delle sessioni terminali/browser usate nell'audit originale sono
+stati rimossi perché non sono necessari per riprodurre la procedura.
 
 ---
 
-## 8. Riferimenti
+## 8. Follow-up operativi
 
-- `docker-compose.yml` — topologia canonica (db → migrate → api+worker, minio, reti)
-- `.env.dev` / `.env.dev.example` — configurazione dev attesa
-- `docs/TOMORROW.md` — decisioni operative e security
-- `docs/REFACTORING-TRACKER.md` — debito tecnico tracciato
-- `docs/NPLUS1_PERFORMANCE.md`, `docs/NPLUS1_INDEX_AUDIT.md` — performance già validate
+1. Usare sempre `.env.dev` con `docker-compose.local.yml` per lo sviluppo locale.
+2. Prima di `make dev`, controllare che la shell non esporti variabili S3, database o
+   ambiente che sovrascrivano il profilo esplicito.
+3. Mantenere `S3_ENDPOINT`, bucket e credenziali applicative coerenti con il servizio
+   MinIO del profilo in uso; non copiarne i valori in documentazione o log.
+4. Impostare `BOOKING_HASH_SECRET` in produzione tramite il secret manager, senza
+   inserirlo nel repository o nei report.
+5. Gestire qualsiasi precedente esposizione di credenziali tramite rotazione del
+   secret interessato e verifica dei log; questo report non contiene né conserva il
+   valore esposto.
+6. Per deploy, DNS, Caddy, MinIO e recovery seguire esclusivamente
+   [`docs/DEPLOY.md`](DEPLOY.md) e [`docs/OPERATIONS.md`](OPERATIONS.md).
+7. Per il conteggio e il lifecycle dei worker usare il codice e
+   [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), non copie storiche di questo audit.
+
+---
+
+## 9. Riferimenti canonici
+
+- [`docker-compose.yml`](../docker-compose.yml) — grafo base dei servizi;
+- [`docker-compose.local.yml`](../docker-compose.local.yml) — overlay dev locale;
+- [`docker-compose.production.yml`](../docker-compose.production.yml) — hardening VPS;
+- [`Dockerfile`](../Dockerfile) — target `migrate`, `api`, `worker` e wrapper legacy;
+- [`docs/DEPLOY.md`](DEPLOY.md) — deployment Vercel + VPS + Compose + MinIO;
+- [`docs/OPERATIONS.md`](OPERATIONS.md) — DNS, TLS, monitoring e recovery;
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — architettura applicativa e worker;
+- [`docs/BINARIES.md`](BINARIES.md) — responsabilità e contratti degli entrypoint.
+
+**Regola privacy:** audit e documentazione possono descrivere nomi di variabili,
+ruoli, errori e procedure, ma non devono contenere valori di secret, token, password,
+header Authorization, URL firmati, identificativi privati o output integrali dei
+container.
