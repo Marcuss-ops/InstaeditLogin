@@ -1,4 +1,4 @@
-.PHONY: dev stop seed lint lint-check backend-test test-integration \
+.PHONY: dev stop seed lint lint-check backend-test test verify test-integration \
         test-integration-db test-integration-db-a test-integration-db-b test-integration-db-c \
         test-integration-worker \
         verify-entrypoint-topology oauth-preflight-check oauth-preflight-test \
@@ -97,6 +97,12 @@ verify-entrypoint-topology:
 
 # Run all Go tests
 test: backend-test
+
+# Canonical local repository gate: formatting/vet, race-tested Go suite,
+# entrypoint topology, and diff-based source-size regression check.
+# Keep this aggregate aligned with the blocking CI checks while leaving
+# operational production probes (SSH, live workers, and credentials) out.
+verify: lint-check backend-test verify-entrypoint-topology loc-check
 
 # Run Go tests with race detection (unit only — no Docker required)
 backend-test:
