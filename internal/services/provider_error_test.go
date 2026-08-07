@@ -408,32 +408,9 @@ func TestParseMetaErrorBody_UnparseableBody(t *testing.T) {
 	}
 }
 
-// TestParseYouTubeErrorBody: error.errors[0].reason becomes the
-// ProviderCode (e.g. "quotaExceeded").
-func TestParseYouTubeErrorBody(t *testing.T) {
-	h := http.Header{}
-	h.Set("x-request-id", "youtube-req-123")
-	body := `{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded","domain":"youtube.quota"}]}}`
-	code, reqID, _ := parseYouTubeErrorBody(body, h)
-	if code != "quotaExceeded" {
-		t.Errorf("ProviderCode: want %q, got %q", "quotaExceeded", code)
-	}
-	if reqID != "youtube-req-123" {
-		t.Errorf("RequestID: want %q, got %q", "youtube-req-123", reqID)
-	}
-}
-
-// TestParseYouTubeErrorBody_ProcessingFailed: the YouTube
-// processingFailed reason maps to media_processing_failed upstream
-// (the worker interprets ProviderCode via the code, not the body).
-func TestParseYouTubeErrorBody_ProcessingFailed(t *testing.T) {
-	body := `{"error":{"errors":[{"reason":"processingFailed"}]}}`
-	code, _, _ := parseYouTubeErrorBody(body, http.Header{})
-	if code != "processingFailed" {
-		t.Errorf("ProviderCode: want %q, got %q", "processingFailed", code)
-	}
-}
-
+// TestParseYouTubeErrorBody lives in youtube_error_body_test.go (the
+// YouTube domain owns its error parsing).
+//
 // TestParseTwitterErrorBody: errors[0].code is the numeric Twitter
 // v2 code (89 = invalid token, 32 = not authenticated, 88 = rate limit).
 func TestParseTwitterErrorBody(t *testing.T) {

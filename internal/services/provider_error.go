@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -266,17 +267,26 @@ func NewProviderError(platform string, status int, body string, headers http.Hea
 	// Per-platform body parsers — extract ProviderCode, RequestID,
 	// any platform-specific RetryAfter, AND any platform-specific
 	// code override (Meta error_subcode 4 = rate-limited).
-	switch platform {
-	case models.PlatformTikTok:
-		providerCode, requestID, extraRetryAfter = parseTikTokErrorBody(body, headers)
-	case models.PlatformYouTube:
-		providerCode, requestID, extraRetryAfter = parseYouTubeErrorBody(body, headers)
-	case models.PlatformTwitter:
-		providerCode, requestID, extraRetryAfter = parseTwitterErrorBody(body, headers)
-	case models.PlatformLinkedIn:
-		providerCode, requestID, extraRetryAfter = parseLinkedInErrorBody(body, headers)
-	case models.PlatformInstagram, models.PlatformFacebook, models.PlatformThreads:
-		providerCode, requestID, extraRetryAfter, metaIsRateLimit = parseMetaErrorBody(body, headers)
+	//
+	// Providers that registered a body-parser hook are resolved from
+	// the registry first — the hook owns the platform-specific error
+	// shape, so this classifier never hard-codes provider internals.
+	// The fallback switch still serves platforms that have not yet
+	// migrated to the hook (YouTube already lives in
+	// youtube_error_body.go).
+	if parser, ok := lookupProviderErrorBodyParser(platform); ok {
+		providerCode, requestID, extraRetryAfter = parser(body, headers)
+	} else {
+		switch platform {
+		case models.PlatformTikTok:
+			providerCode, requestID, extraRetryAfter = parseTikTokErrorBody(body, headers)
+		case models.PlatformTwitter:
+			providerCode, requestID, extraRetryAfter = parseTwitterErrorBody(body, headers)
+		case models.PlatformLinkedIn:
+			providerCode, requestID, extraRetryAfter = parseLinkedInErrorBody(body, headers)
+		case models.PlatformInstagram, models.PlatformFacebook, models.PlatformThreads:
+			providerCode, requestID, extraRetryAfter, metaIsRateLimit = parseMetaErrorBody(body, headers)
+		}
 	}
 
 	// Meta-specific override: Meta wraps rate-limit responses in 400
@@ -348,12 +358,67 @@ func buildSafeMessage(platform string, code ProviderErrorCode, status int) strin
 }
 
 // ---------------------------------------------------------------------------
-// Per-platform body parsers.
+// Per-provider body-parser hook.
+//
+// The shared classifier does NOT own provider-specific error shapes.
+// Each provider registers its own body parser via
+// RegisterProviderErrorBodyParser (from an init() in the provider's
+// own file); NewProviderError consults the registry before its
+// fallback switch. YouTube lives in youtube_error_body.go and
+// registers itself here — the error infrastructure never mentions
+// the YouTube Data API.
+// ---------------------------------------------------------------------------
+
+// ProviderErrorBodyParser is the per-provider hook the classifier uses
+// to extract provider-specific fields from a raw error response:
+// the provider's native code, request id, and any platform-specific
+// retry-after hint. On JSON parse failure or missing fields, return
+// "" / "" / 0 — the caller still has a working *ProviderError, just
+// with less detail.
+type ProviderErrorBodyParser func(body string, h http.Header) (providerCode, requestID string, extraRetryAfter time.Duration)
+
+// providerErrorBodyParsers is the registry consulted by
+// NewProviderError. Writes happen from init()/RegisterProviderErrorBodyParser
+// and reads happen from NewProviderError, so a mutex guards the map
+// (mirrors the database/sql driver-registration pattern).
+var (
+	providerErrorBodyParsersMu sync.RWMutex
+	providerErrorBodyParsers   = map[string]ProviderErrorBodyParser{}
+)
+
+// RegisterProviderErrorBodyParser installs (or replaces) the
+// body-parser hook for a platform. Providers MUST call this from
+// their own init() (package initialization is single-threaded and
+// runs before any NewProviderError call); calling it at runtime is
+// supported but requires the caller to guarantee ordering against
+// concurrent NewProviderError calls.
+func RegisterProviderErrorBodyParser(platform string, parser ProviderErrorBodyParser) {
+	providerErrorBodyParsersMu.Lock()
+	defer providerErrorBodyParsersMu.Unlock()
+	providerErrorBodyParsers[platform] = parser
+}
+
+// lookupProviderErrorBodyParser returns the registered body-parser
+// hook for a platform, if any. Safe for concurrent use with
+// RegisterProviderErrorBodyParser.
+func lookupProviderErrorBodyParser(platform string) (ProviderErrorBodyParser, bool) {
+	providerErrorBodyParsersMu.RLock()
+	defer providerErrorBodyParsersMu.RUnlock()
+	parser, ok := providerErrorBodyParsers[platform]
+	return parser, ok
+}
+
+// ---------------------------------------------------------------------------
+// Per-platform body parsers (legacy inline forms).
 //
 // Each parser takes the raw response body + response headers, and
 // returns (providerCode, requestID, extraRetryAfter). On JSON
 // parse failure or missing fields, returns "" / "" / 0 — the
 // caller still has a working *ProviderError, just with less detail.
+//
+// Providers that migrated to the per-provider hook (YouTube, see
+// youtube_error_body.go) register their own parser and are NOT listed
+// here — see RegisterProviderErrorBodyParser above.
 // ---------------------------------------------------------------------------
 
 // parseMetaErrorBody extracts the Meta Graph API error fields:
@@ -386,30 +451,9 @@ func parseMetaErrorBody(body string, h http.Header) (string, string, time.Durati
 	return providerCode, requestID, 0, parsed.Error.ErrorSubcode == 4
 }
 
-// parseYouTubeErrorBody extracts the YouTube Data API error fields:
-//   - error.errors[0].reason (e.g. "quotaExceeded", "channelClosed",
-//     "processingFailed", "uploadLimitExceeded")
-//   - x-request-id header (the platform's request id)
-//
-// The `reason` is the actionable code; the top-level error.message
-// is human-readable but we don't surface it in SafeMessage (it can
-// contain user-supplied content from upload metadata).
-func parseYouTubeErrorBody(body string, h http.Header) (string, string, time.Duration) {
-	requestID := firstNonEmpty(h.Get("x-request-id"), h.Get("X-Request-Id"))
-	var parsed struct {
-		Error struct {
-			Errors []struct {
-				Reason string `json:"reason"`
-			} `json:"errors"`
-		} `json:"error"`
-	}
-	_ = json.Unmarshal([]byte(body), &parsed)
-	providerCode := ""
-	if len(parsed.Error.Errors) > 0 {
-		providerCode = parsed.Error.Errors[0].Reason
-	}
-	return providerCode, requestID, 0
-}
+// parseYouTubeErrorBody is defined in youtube_error_body.go (the
+// YouTube domain owns its error shape and registers itself via
+// RegisterProviderErrorBodyParser).
 
 // parseTwitterErrorBody extracts the Twitter v2 error fields:
 //   - errors[0].code (numeric — 89 = invalid token, 32 = not authenticated,
