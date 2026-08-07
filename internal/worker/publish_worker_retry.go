@@ -15,6 +15,15 @@ import (
 // and ProviderError). 60s is one publish-worker tick beyond the 30s
 // default interval — long enough to let a per-minute window reset,
 // short enough that a queued post isn't visibly delayed on dashboards.
+// markRateLimitedRetryer is the narrow capability interface the
+// markRateLimited helper needs to persist a rate-limit requeue. Using
+// a narrow interface (instead of the full LeaseAwarePublisherPostStore)
+// keeps test doubles simple — they only need the single method they
+// exercise, not all 7 methods of the lease-aware contract.
+type markRateLimitedRetryer interface {
+	MarkRateLimitedRetryWithLease(id int64, ownerID string, nextAttemptAt time.Time, lastError string) error
+}
+
 const defaultRateLimitBackoff = 60 * time.Second
 
 // markRateLimited (OPEN GAP closure — ARCHITECTURE.md §Rate limiting
@@ -40,12 +49,10 @@ func (w *PublishWorker) markRateLimited(target *models.PostTarget, pubErr error)
 		retryAfter = defaultRateLimitBackoff
 	}
 	nextAttempt := time.Now().Add(retryAfter)
-	if leaseStore, ok := w.postRepo.(LeaseAwarePublisherPostStore); ok {
+	if leaseStore, ok := w.postRepo.(markRateLimitedRetryer); ok {
 		if err := leaseStore.MarkRateLimitedRetryWithLease(target.ID, w.workerID, nextAttempt, pubErr.Error()); err != nil {
 			return errors.Join(errors.New("reschedule rate-limited target: "+err.Error()), pubErr)
 		}
-	} else if err := w.postRepo.MarkRateLimitedRetry(target.ID, nextAttempt, pubErr.Error()); err != nil {
-		return errors.Join(errors.New("reschedule rate-limited target: "+err.Error()), pubErr)
 	}
 	target.Status = models.PostStatusQueued
 	target.AttemptCount++

@@ -27,15 +27,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
-
-	"encoding/json"
 )
 
 // providerIdempotencyKeyPrefix is the namespace marker baked into the
@@ -109,16 +109,6 @@ type PublisherPostStore interface {
 	GetMetadata(id int64) (json.RawMessage, error)
 	// SetTargetCanaryVideoID (Task 7/10) — stamps canary upload video id.
 	SetTargetCanaryVideoID(targetID int64, videoID string) error
-
-	// MarkRateLimitedRetry (legacy fallback — ARCHITECTURE.md §Rate
-	// limiting (d)) requeues a claimed target after the platform's
-	// final publish call answered 429/Retry-After: status → 'queued',
-	// attempt_count++, next_attempt_at = the platform hint so
-	// ListPending skips the row until the window opens. Only used by
-	// the worker's legacy fallback path when the store does not
-	// implement LeaseAwarePublisherPostStore (test doubles);
-	// production always takes MarkRateLimitedRetryWithLease.
-	MarkRateLimitedRetry(id int64, nextAttemptAt time.Time, lastError string) error
 }
 
 // PublisherUserStore is the narrow slice of the user /
@@ -131,10 +121,11 @@ type PublisherPostStore interface {
 // LeaseAwarePublisherPostStore is implemented by the SQL repository for
 // independent child-job ownership. The lease-aware claim
 // (ClaimQueuedTargetWithLease) is the ONLY claim path the publish
-// driver uses — the legacy lease-less ClaimQueuedTarget was removed.
-// Keeping this interface separate from PublisherPostStore preserves
-// compatibility with small test doubles that only exercise the
-// legacy fallback paths.
+// driver uses. MarkRateLimitedRetryWithLease is the requeue path after
+// the platform's final publish call answered 429/Retry-After — the
+// legacy lease-less MarkRateLimitedRetry was removed (the worker
+// uses a narrow interface assertion so test doubles only need the
+// single method they exercise).
 type LeaseAwarePublisherPostStore interface {
 	ClaimQueuedTargetWithLease(id int64, ownerID string, leaseTTL time.Duration) (bool, error)
 	UpdateStatusWithLease(target *models.PostTarget, ownerID string) error
@@ -220,6 +211,17 @@ type PublishWorker struct {
 	// Nil at startup means the bypass is silently disabled — the
 	// pre-fix behaviour is preserved for callers that don't wire it.
 	ytPubLookup YouTubeTargetPublicationLookup
+
+	// nvidiaTranslator (per-channel-language posting) translates the
+	// post title/caption into each target channel's language at
+	// publish time (account.Metadata["language"]). nil = feature off
+	// (the original text is published unchanged). Wired at startup via
+	// SetNvidiaMetadataTranslator.
+	nvidiaTranslator ChannelTranslator
+	// translationCache memoizes (post, language) → localized post so
+	// sibling targets of the same post sharing a language trigger a
+	// single NVIDIA call. Bounded by posts × distinct languages.
+	translationCache sync.Map
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to

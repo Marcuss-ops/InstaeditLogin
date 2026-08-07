@@ -52,7 +52,9 @@ type mockPostStore struct {
 	// (nil) returns nil — the worker's happy path.
 	setKeyFn func(id int64, key string) error
 	// markRateLimitedRetryFn lets a test simulate a DB failure on the
-	// rate-limited requeue path. Default (nil) returns nil.
+	// rate-limited requeue path. Default (nil) returns nil. The
+	// ownerID parameter is ignored in the mock; only the mock-based
+	// rate-limit tests exercise this path.
 	markRateLimitedRetryFn func(id int64, nextAttemptAt time.Time, lastError string) error
 
 	// Captured targets from UpdateStatus — lets tests inspect the
@@ -69,15 +71,19 @@ type mockPostStore struct {
 	setKeyIDs  []int64
 	setKeyVals []string
 
-	// Captured MarkRateLimitedRetry calls — the OPEN GAP requeue
-	// path. Tests assert on the count, the scheduled next-attempt
-	// timestamp and the persisted error string.
+	// Captured MarkRateLimitedRetryWithLease calls. Tests assert on
+	// the count, the scheduled next-attempt timestamp and the
+	// persisted error string.
 	markRateLimitedRetryCalls int
 	markRateLimitedRetryAts   []time.Time
 	markRateLimitedRetryErrs  []string
 }
 
-func (m *mockPostStore) MarkRateLimitedRetry(id int64, nextAttemptAt time.Time, lastError string) error {
+// MarkRateLimitedRetryWithLease requeues a rate-limited target. The
+// ownerID parameter is ignored (the mock only verifies the retry
+// scheduling); production uses the lease-CAS variant in
+// MarkRateLimitedRetryWithLeaseImpl.
+func (m *mockPostStore) MarkRateLimitedRetryWithLease(id int64, _ string, nextAttemptAt time.Time, lastError string) error {
 	m.markRateLimitedRetryCalls++
 	m.markRateLimitedRetryAts = append(m.markRateLimitedRetryAts, nextAttemptAt)
 	m.markRateLimitedRetryErrs = append(m.markRateLimitedRetryErrs, lastError)

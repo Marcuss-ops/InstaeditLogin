@@ -219,62 +219,6 @@ func (r *PostRepository) MarkRetrying(id int64, ownerID string, lastError string
 	return r.mutateLeasedTarget(id, ownerID, qMarkRetrying, nextAttemptAt, lastError)
 }
 
-// MarkRateLimitedRetry (legacy fallback) requeues a target the
-// publish driver claimed via ClaimQueuedTargetWithLease after the
-// platform's FINAL publish call answered 429/Retry-After.
-//
-// Distinct from MarkRateLimitedRetryWithLease (which CASes on
-// lease_owner_id and is part of the SPRINT 5.2 lease contract): this
-// variant is retained only for the worker's legacy fallback path when
-// a store does not implement LeaseAwarePublisherPostStore (test
-// doubles). Here the `status = 'publishing'` guard is the ownership
-// check — only the claim winner holds the row in that state.
-//
-// Semantics: status → 'queued', attempt_count++ (bounded retry
-// budget), next_attempt_at = the platform's Retry-After hint (the
-// ListPending filter skips the row until it elapses),
-// rate_limit_reset_at mirrors it for dashboards, last_error_code =
-// 'RATE_LIMITED'. The parent post's aggregate status is recomputed in
-// the same transaction, mirroring mutateLeasedTarget.
-func (r *PostRepository) MarkRateLimitedRetry(id int64, nextAttemptAt time.Time, lastError string) (err error) {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin rate-limited retry tx: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-	postID, err := postIDForTargetTx(tx, id)
-	if err != nil {
-		return err
-	}
-	if err = lockTargetTx(tx, id); err != nil {
-		return err
-	}
-	if err = lockPostTx(tx, postID); err != nil {
-		return err
-	}
-	result, err := tx.Exec(qMarkRateLimitedRetry, id, nextAttemptAt, lastError)
-	if err != nil {
-		return fmt.Errorf("mark rate-limited retry: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read rate-limited retry rows affected: %w", err)
-	}
-	if n > 0 {
-		if err = persistAggregatePostStatusLockedTx(tx, postID); err != nil {
-			return err
-		}
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit rate-limited retry: %w", err)
-	}
-	return nil
-}
-
 // MarkRateLimited (SPRINT 5.2) handles the platform's 429/Retry-After
 // response. Stamps next_retry_at and rate_limit_reset_at to the
 // platform's hint, clears the lease, and (critically) does NOT

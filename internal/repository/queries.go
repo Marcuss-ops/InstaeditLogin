@@ -359,28 +359,6 @@ const qMarkDeadLetter = `UPDATE post_targets
      completed_at = NOW()
  WHERE id = $1 AND lease_owner_id = $2`
 
-// qMarkRateLimitedRetry (legacy fallback — see ARCHITECTURE.md §Rate
-// limiting (d)) requeues a claimed target after the platform answered
-// the FINAL publish call with 429/Retry-After. Unlike
-// qMarkRateLimitedRetryWithLease this does NOT CAS on lease_owner_id:
-// it is retained only for the worker's legacy fallback path when a
-// store does not implement LeaseAwarePublisherPostStore (test
-// doubles). The `status = 'publishing'` guard plays the same
-// ownership role — only the claim winner's row is in 'publishing'.
-//
-// status returns to 'queued' so the existing ListPending /
-// ClaimQueuedTargetWithLease pickup path re-picks it once
-// next_attempt_at elapses (ListPending filters next_attempt_at <=
-// NOW()). attempt_count is bumped so the retry budget stays bounded.
-const qMarkRateLimitedRetry = `UPDATE post_targets
- SET status = 'queued',
-     attempt_count = attempt_count + 1,
-     next_attempt_at = $2,
-     rate_limit_reset_at = $2,
-     error_message = $3,
-     last_error_code = 'RATE_LIMITED'
- WHERE id = $1 AND status = 'publishing'`
-
 const qMarkRateLimitedRetryWithLease = `UPDATE post_targets
  SET status = 'queued',
      attempt_count = attempt_count + 1,
