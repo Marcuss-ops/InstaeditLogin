@@ -248,7 +248,11 @@ export function GroupsPage() {
                     /* toasted by authedFetch */
                   }
                 }}
-                onSaved={() => load(false, true)}
+                // Silent reload: keep the panel mounted in the current group
+                // while the fresh account manifest confirms the saved language.
+                // A full (non-silent) reload flashes the group to the loading
+                // placeholder and throws the operator back to the group list.
+                onSaved={() => load(true, true)}
                 onRename={(name) => renameGroup(selectedGroup.id, name)}
               />
             ) : (
