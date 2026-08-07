@@ -311,4 +311,28 @@ describe("GroupsPage", () => {
     expect(screen.queryByText("Cartella…")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Cartella" })).not.toBeInTheDocument();
   });
+
+  it("adds a channel to the group directly from the detail panel dialog", () => {
+    const setGroupAccounts = vi.fn().mockResolvedValue(undefined);
+    makeMock({
+      selectedGroupId: 7,
+      selectedGroup: tree[0],
+      setGroupAccounts,
+    });
+
+    renderPage();
+
+    fireEvent.click(screen.getByTestId("group-add-channels"));
+
+    const dialog = screen.getByTestId("group-add-channels-dialog");
+    // The already-member channel is not offered; the free one is.
+    expect(within(dialog).queryByText("channel-grouped")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("channel-available")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: /channel-available/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Aggiungi (1)" }));
+
+    expect(setGroupAccounts).toHaveBeenCalledWith(7, expect.any(Function));
+    const membershipUpdater = setGroupAccounts.mock.calls[0]?.[1] as (currentIDs: number[]) => number[];
+    expect(membershipUpdater([groupedAccount.id])).toEqual([groupedAccount.id, secondYouTubeAccount.id]);
+  });
 });

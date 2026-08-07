@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ComponentProps } from "react";
 import { GroupDetailPanel } from "./GroupsDetailPanels";
@@ -41,6 +41,8 @@ function renderPanel(props: Partial<ComponentProps<typeof GroupDetailPanel>> = {
         onDeleteGroup={() => {}}
         onSaved={() => {}}
         onRename={() => {}}
+        availableAccounts={[]}
+        onAddAccounts={() => {}}
         {...props}
       />
     </MemoryRouter>,
@@ -219,5 +221,71 @@ describe("GroupDetailPanel", () => {
     ));
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/groups/7/settings"))).toBe(false);
+  });
+
+  it("opens the add-channels dialog and lists only channels not already in the group", () => {
+    const available = [{
+      id: 201,
+      platform: "youtube",
+      username: "channel-new",
+      platform_user_id: "UC-new",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+    }];
+    renderPanel({ availableAccounts: available });
+
+    fireEvent.click(screen.getByTestId("group-add-channels"));
+
+    const dialog = screen.getByTestId("group-add-channels-dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText("channel-new")).toBeInTheDocument();
+    // Channels already in the group are not offered again.
+    expect(within(dialog).queryByText("channel-one")).not.toBeInTheDocument();
+  });
+
+  it("adds the selected channels when confirming the dialog", () => {
+    const onAddAccounts = vi.fn();
+    const available = [{
+      id: 201,
+      platform: "youtube",
+      username: "channel-new",
+      platform_user_id: "UC-new",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+    }];
+    renderPanel({ availableAccounts: available, onAddAccounts });
+
+    fireEvent.click(screen.getByTestId("group-add-channels"));
+    const dialog = screen.getByTestId("group-add-channels-dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /channel-new/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Aggiungi (1)" }));
+
+    expect(onAddAccounts).toHaveBeenCalledTimes(1);
+    expect(onAddAccounts).toHaveBeenCalledWith([201]);
+  });
+
+  it("shows a message when every available channel is already in the group", () => {
+    renderPanel({ availableAccounts: [] });
+
+    fireEvent.click(screen.getByTestId("group-add-channels"));
+
+    const dialog = screen.getByTestId("group-add-channels-dialog");
+    expect(within(dialog).getByText("Nessun canale da aggiungere")).toBeInTheDocument();
+    expect(within(dialog).getByText(/già in questa cartella/i)).toBeInTheDocument();
+  });
+
+  it("filters the add-channels list with the search box", () => {
+    const available = [
+      { id: 201, platform: "youtube", username: "BoxeClubITA", platform_user_id: "UC-one", status: "active", created_at: "2026-01-01T00:00:00Z" },
+      { id: 202, platform: "youtube", username: "RedGloveTR", platform_user_id: "UC-two", status: "active", created_at: "2026-01-01T00:00:00Z" },
+    ];
+    renderPanel({ availableAccounts: available });
+
+    fireEvent.click(screen.getByTestId("group-add-channels"));
+    const dialog = screen.getByTestId("group-add-channels-dialog");
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Cerca canali da aggiungere" }), { target: { value: "Boxe" } });
+
+    expect(within(dialog).getByText("BoxeClubITA")).toBeInTheDocument();
+    expect(within(dialog).queryByText("RedGloveTR")).not.toBeInTheDocument();
   });
 });

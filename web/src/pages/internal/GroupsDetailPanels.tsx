@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ElementType } from "react";
 import { Link } from "react-router-dom";
 import {
   CalendarClock,
+  Check,
   CheckCircle2,
   Folder,
   FolderMinus,
@@ -9,8 +10,11 @@ import {
   MoreVertical,
   PauseCircle,
   Pencil,
+  Plus,
   RefreshCw,
+  Search,
   Trash2,
+  X,
 } from "lucide-react";
 import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
@@ -92,12 +96,18 @@ export function GroupDetailPanel({
   onDeleteGroup,
   onSaved,
   onRename,
+  availableAccounts,
+  onAddAccounts,
 }: {
   group: TreeNode;
   onPickAccount: (id: number) => void;
   onDeleteGroup: () => void;
   onSaved: () => void | Promise<void>;
   onRename: (name: string) => void | Promise<void>;
+  /** YouTube channels (publishable) that are not yet members of this group. */
+  availableAccounts: PlatformAccount[];
+  /** Add channels to this group directly (no drag & drop needed). */
+  onAddAccounts: (accountIds: number[]) => void;
 }) {
   const [editingName, setEditingName] = useState(false);
   const [groupName, setGroupName] = useState(group.name);
@@ -109,6 +119,7 @@ export function GroupDetailPanel({
   const [removedAccountIds, setRemovedAccountIds] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [addChannelsOpen, setAddChannelsOpen] = useState(false);
   useEffect(() => {
     setGroupName(group.name);
     setEditingName(false);
@@ -269,9 +280,19 @@ export function GroupDetailPanel({
 
       {/* Current accounts in this group */}
       <div className="mb-6">
-        <div className="mb-2 flex items-center gap-2">
-          <h3 className="text-[13px] font-bold text-white">Canali</h3>
-          <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[11px] font-semibold text-[#cdd2da]" aria-hidden="true">{visibleAccounts.length}</span>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h3 className="text-[13px] font-bold text-white">Canali</h3>
+            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[11px] font-semibold text-[#cdd2da]" aria-hidden="true">{visibleAccounts.length}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAddChannelsOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.10] bg-white/[0.04] px-2.5 py-1.5 text-[12px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white"
+            data-testid="group-add-channels"
+          >
+            <Plus size={13} aria-hidden="true" /> Aggiungi canali
+          </button>
         </div>
 
         {visibleAccounts.length === 0 ? (
@@ -308,6 +329,174 @@ export function GroupDetailPanel({
       </div>
 
       <GroupYouTubeVideos groupId={group.id} />
+
+      {addChannelsOpen ? (
+        <AddChannelsDialog
+          groupName={group.name}
+          available={availableAccounts}
+          onAdd={(accountIds) => {
+            setAddChannelsOpen(false);
+            onAddAccounts(accountIds);
+          }}
+          onClose={() => setAddChannelsOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AddChannelsDialog({
+  groupName,
+  available,
+  onAdd,
+  onClose,
+}: {
+  groupName: string;
+  available: PlatformAccount[];
+  onAdd: (accountIds: number[]) => void;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  const filtered = available.filter((account) => {
+    const query = search.trim().toLocaleLowerCase();
+    if (!query) return true;
+    return [account.username, account.platform_user_id]
+      .some((value) => value.toLocaleLowerCase().includes(query));
+  });
+  const allVisibleSelected = filtered.length > 0 && filtered.every((account) => selected.has(account.id));
+
+  const toggle = (accountId: number) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(accountId)) next.delete(accountId);
+      else next.add(accountId);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const account of filtered) {
+        if (allVisibleSelected) next.delete(account.id);
+        else next.add(account.id);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-channels-title"
+        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.12] bg-[#11131a] shadow-2xl"
+        data-testid="group-add-channels-dialog"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-white/[0.08] px-5 py-4">
+          <div className="min-w-0">
+            <h3 id="add-channels-title" className="truncate text-[16px] font-bold text-white">Aggiungi canali a «{groupName}»</h3>
+            <p className="mt-0.5 text-[12px] text-[#9aa0aa]">Seleziona i canali YouTube da aggiungere a questa cartella.</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Chiudi" className="rounded-lg p-1.5 text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white"><X size={16} aria-hidden="true" /></button>
+        </div>
+
+        {available.length > 0 ? (
+          <div className="border-b border-white/[0.08] px-5 py-3">
+            <label className="relative block">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9aa0aa]" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Cerca canale…"
+                aria-label="Cerca canali da aggiungere"
+                className="w-full rounded-lg border border-white/[0.10] bg-black/20 py-2 pl-9 pr-3 text-[12px] text-white outline-none transition focus:border-violet-400/60"
+              />
+            </label>
+          </div>
+        ) : null}
+
+        {available.length === 0 ? (
+          <div className="px-5 py-8 text-center">
+            <p className="text-[13px] font-semibold text-white">Nessun canale da aggiungere</p>
+            <p className="mt-1 text-[12px] text-[#9aa0aa]">Tutti i canali YouTube disponibili sono già in questa cartella.</p>
+          </div>
+        ) : (
+          <div className="max-h-72 flex-1 overflow-y-auto p-2">
+            <button
+              type="button"
+              onClick={toggleAll}
+              aria-label={allVisibleSelected ? "Deseleziona tutti i canali da aggiungere" : "Seleziona tutti i canali da aggiungere"}
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.06] hover:text-white"
+            >
+              <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded border transition-colors", allVisibleSelected ? "border-violet-300 bg-violet-500 text-white" : "border-white/25")}>
+                {allVisibleSelected ? <Check size={11} aria-hidden="true" /> : null}
+              </span>
+              {allVisibleSelected ? "Deseleziona tutti" : "Seleziona tutti"}
+            </button>
+            {filtered.map((account) => {
+              const label = account.username || account.platform_user_id || `canale #${account.id}`;
+              const isSelected = selected.has(account.id);
+              return (
+                <button
+                  key={account.id}
+                  type="button"
+                  onClick={() => toggle(account.id)}
+                  aria-pressed={isSelected}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-white/[0.06]"
+                >
+                  <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded border transition-colors", isSelected ? "border-violet-300 bg-violet-500 text-white" : "border-white/25")}>
+                    {isSelected ? <Check size={11} aria-hidden="true" /> : null}
+                  </span>
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/[0.06] text-[11px] font-bold text-white ring-1 ring-white/15">
+                    {account.avatar_url ? (
+                      <img src={account.avatar_url} alt="" className="h-full w-full object-cover" loading="lazy" />
+                    ) : (
+                      label.charAt(0).toUpperCase()
+                    )}
+                  </div>
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white">{label}</span>
+                  <span className="shrink-0 text-[10px] uppercase tracking-wider text-[#9aa0aa]">{account.platform === "youtube" ? "YouTube" : account.platform}</span>
+                </button>
+              );
+            })}
+            {filtered.length === 0 ? (
+              <p className="px-3 py-6 text-center text-[12px] text-[#9aa0aa]">Nessun canale corrisponde alla ricerca.</p>
+            ) : null}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3 border-t border-white/[0.08] px-5 py-4">
+          <p className="text-[12px] text-[#9aa0aa]">{selected.size > 0 ? `${selected.size} selezionati` : "Nessun canale selezionato"}</p>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onClose} className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-[12px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white">Annulla</button>
+            <button
+              type="button"
+              onClick={() => onAdd(Array.from(selected))}
+              disabled={selected.size === 0}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-[12px] font-bold text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Plus size={13} aria-hidden="true" /> Aggiungi{selected.size > 0 ? ` (${selected.size})` : ""}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

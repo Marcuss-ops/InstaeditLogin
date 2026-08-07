@@ -207,9 +207,10 @@ export function useGroupsData() {
           });
           persisted = response.ok;
         } finally {
-          // Successful write → silent reconcile; failure → full reload to
-          // revert the optimistic membership and surface the error state.
-          await load(!persisted);
+          // Successful write → silent reconcile (stay in the group, no
+          // loading flash); failure → full reload to revert the optimistic
+          // membership and surface the error state.
+          await load(persisted);
           if (busyAccountId != null) setBusyAccountId(null);
         }
       });

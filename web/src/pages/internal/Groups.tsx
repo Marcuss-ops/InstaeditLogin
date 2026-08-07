@@ -62,6 +62,11 @@ export function GroupsPage() {
     .filter((account) => selectedChannelIds.has(account.id))
     .map((account) => account.id);
   const visibleSelectedCount = visibleSelectedIDs.length;
+  // Channels that can be added to the open group directly from the detail
+  // panel (everything publishable that is not already a member).
+  const addableAccounts = selectedGroup
+    ? availableYouTubeAccounts.filter((account) => !selectedGroup.accounts.some((member) => member.id === account.id))
+    : [];
 
   useEffect(() => {
     const availableIDs = new Set(availableYouTubeAccounts.map((account) => account.id));
@@ -252,6 +257,13 @@ export function GroupsPage() {
                 // while the fresh account manifest confirms the saved language.
                 // A full (non-silent) reload flashes the group to the loading
                 // placeholder and throws the operator back to the group list.
+                availableAccounts={addableAccounts}
+                onAddAccounts={(accountIds) => {
+                  void setGroupAccounts(
+                    selectedGroup.id,
+                    (currentIDs) => Array.from(new Set([...currentIDs, ...accountIds])),
+                  );
+                }}
                 onSaved={() => load(true, true)}
                 onRename={(name) => renameGroup(selectedGroup.id, name)}
               />
