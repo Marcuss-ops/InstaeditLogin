@@ -115,7 +115,7 @@ not treated as runtime architecture work:
 | T0 | `internal/worker/reconcile_worker_test.go` | 963 → 505 | ✅ COMPLETED in `9b80e102`: split by scenario into `reconcile_worker_test.go` (target state machine, 505), `reconcile_worker_tick_test.go` (tick+bounded batch+backoff, 243), `reconcile_worker_run_test.go` (Run/RunOnce+shutdown, 237); mock/helpers preserved in place. |
 | T0 | `pkg/api/livestreams_test.go` | 953 → 386 | ✅ COMPLETED in `9b80e102` + `40760ca2`: split into `livestreams_test.go` (shared policy+create, 386), `livestreams_fixtures_test.go` (mocks+fixtures, 153), `livestreams_list_test.go` (list/channels, 237), `livestreams_item_test.go` (get/patch/delete, 211); 16 tests restored in `b33def5e` after `40760ca2` dropped them. |
 | T0 | `pkg/api/account_routes_test.go` | 935 → 232 | ✅ COMPLETED in `9b80e102`: split into `account_routes_test.go` (list, 232), `account_routes_get_test.go` (get+snapshot, 237), `account_routes_disconnect_test.go` (disconnect/delete/shared-grant, 490). |
-| T1 | `web/src/pages/internal/CoverEditor.test.tsx` | 865 | CoverEditor page contract tests (13 tests: autosave, conflict, export flush, save-as-copy, link) | Now the largest test file in the repo; split by scenario (autosave/conflict / export+link / media+load) preserving the 13-test data-testid/aria-label contract. |
+| T1 | `web/src/pages/internal/CoverEditor.test.tsx` | 865 → removed | CoverEditor page contract tests (13 tests: autosave, conflict, export flush, save-as-copy, link) | ✅ COMPLETED in `d434511a`: split by scenario into `CoverEditor.autosave.test.tsx` (213, 6 tests), `CoverEditor.exportLink.test.tsx` (347, 4 tests), `CoverEditor.mediaLoad.test.tsx` (184, 3 tests) with shared fixtures/mocks in `CoverEditor.testUtils.tsx` (239). Hoisted `ApiError` class identity preserved so `parseProjectVersionConflict`'s instanceof still matches. Original file deleted. |
 | T1 | `internal/worker/publish_reconcile_integration_test.go` | 785 | Separate integration fixtures from publish/reconcile assertions. |
 | T1 | `internal/repository/upload_job_pool_test.go` | 774 | Split claim/lease, reclaim, heartbeat, and concurrency cases. |
 | T1 | `internal/worker/publish_worker_publish_youtube_test.go` | 780 | Split upload, idempotency, failure, and retry scenarios. |
@@ -161,6 +161,7 @@ number is assigned unless an actual external ticket exists.
 | CoverEditor frontend split | `web/src/pages/internal/CoverEditor.tsx` (1240) split in `d83d09e9` into `features/thumbnailProjects/editor/snapshot.ts` + `objects.ts`, `components/editor/` (CanvasStage, LayersPanel, Inspector, RevisionPanel, EditorHeader, ConflictBanner, EditorToolbar, CanvasSettingsPanel, AssignmentsPanel), and `hooks/useCoverEditorMutations.ts`; page now 497 lines. | vitest (13 tests), tsc -b, oxlint, vite build | `d83d09e9` |
 | Config type domains | `internal/config/config_types.go` (616) split in `18c9aa71` by domain into `config_types_database.go` (45) / `config_types_storage.go` (29) / `config_types_auth.go` (100) / `config_types_integrations.go` (43) / `config_types_server.go` (53) / `config_types_worker.go` (122); `config_types.go` keeps only the `Config` aggregate root (230). Byte-exact struct moves — 12 types preserved, `field_specs.go` centralized validation untouched. | Config tests, full Go tests (33 pkgs), vet, build, loc-check | `18c9aa71` |
 | YouTube OAuth flow split | `internal/services/youtube_oauth.go` (586) split in `81b8117b` by flow into `youtube_oauth_login.go` (106) / `youtube_oauth_callback.go` (97) / `youtube_oauth_exchange.go` (30) / `youtube_oauth_transport.go` (47) / `youtube_oauth_revoke.go` (97) / `youtube_oauth_refresh.go` (98); boundary keeps struct + ctor + compile-time assertions (160). Token transport isolated in `postTokenRequest`; refresh fallback, pool fail-closed resolution, and revoke idempotency preserved. | Services tests, full Go tests (33 pkgs), vet, build, loc-check | `81b8117b` |
+| CoverEditor test scenario split | `web/src/pages/internal/CoverEditor.test.tsx` (865) split in `d434511a` into `CoverEditor.autosave.test.tsx` (213, 6 tests) / `CoverEditor.exportLink.test.tsx` (347, 4 tests) / `CoverEditor.mediaLoad.test.tsx` (184, 3 tests), with shared fixtures/mocks in `CoverEditor.testUtils.tsx` (239). Hoisted `ApiError` class exported by object identity so `parseProjectVersionConflict` instanceof still matches; all 13 data-testid/aria-label contract tests preserved. | vitest (13 scenario + full 81 files/664 tests), tsc -b, oxlint, vite build | `d434511a` |
 
 ## Remaining execution order
 
@@ -254,10 +255,13 @@ operational contracts remain explicit.
 
 The three >900-line test files (`reconcile_worker_test.go`, `livestreams_test.go`,
 `account_routes_test.go`) are now split (see Completed slices, `9b80e102`).
-Remaining: split `web/src/pages/internal/CoverEditor.test.tsx` (865, the
-largest test file) by scenario, plus the other T1 test hotspots and the large
-integration fixtures. Then organize the diagnostic CLIs. Do not mix these
-changes with production behavior changes.
+`web/src/pages/internal/CoverEditor.test.tsx` (865, the largest test file) was
+split in `d434511a` by scenario (see the T1 row above). Remaining: the other T1
+test hotspots (`publish_reconcile_integration_test.go` 785,
+`upload_job_pool_test.go` 774, `publish_worker_publish_youtube_test.go` 780,
+`posts_test.go` 708, `post_repo_test.go` 705) and the large integration
+fixtures. Then organize the diagnostic CLIs. Do not mix these changes with
+production behavior changes.
 
 ### Slice 8 — Frontend page splits (P0/P1, web)
 
