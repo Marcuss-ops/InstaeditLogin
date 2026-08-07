@@ -16,6 +16,7 @@ import { API_BASE_URL } from "../../lib/api";
 import { useGroupsData } from "./useGroupsData";
 import { AccountDetailPanel, GroupDetailPanel } from "./GroupsDetailPanels";
 import { GroupBadges } from "./GroupBadges";
+import { groupAccent } from "./groupAccent";
 import { type PlatformAccount } from "./groupsTypes";
 import { cn } from "../../lib/utils";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
@@ -210,7 +211,10 @@ export function GroupsPage() {
                   dragOverGroupId === node.id && "ring-2 ring-amber-300/80 bg-amber-300/10",
                 )}
               >
-                <span className={`block truncate ${selectedGroupId === node.id ? "text-[17px] font-bold" : "text-[13px] font-medium"}`}>{node.name}</span>
+                <span className={`flex items-center gap-1.5 truncate ${selectedGroupId === node.id ? "text-[17px] font-bold" : "text-[13px] font-medium"}`}>
+                  <span aria-hidden="true" className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: groupAccent(node.name).text }} />
+                  <span className="truncate">{node.name}</span>
+                </span>
                 <span className={`block text-[10px] ${selectedGroupId === node.id ? "text-black/55" : "text-white/30"}`}>{node.accounts.length} canali</span>
               </button>
             ))}

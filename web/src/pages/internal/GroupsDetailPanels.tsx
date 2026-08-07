@@ -21,6 +21,7 @@ import { cn } from "../../lib/utils";
 import { type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 import { GroupBadges } from "./GroupBadges";
+import { groupAccent } from "./groupAccent";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
 import { LanguagePicker } from "../../components/brand/LanguagePicker";
 
@@ -251,7 +252,7 @@ export function GroupDetailPanel({
                 }
               }}
             >
-              <Folder size={20} className="shrink-0 text-amber-300/80" />
+              <Folder size={20} className="shrink-0" style={{ color: groupAccent(group.name).text }} />
               <input
                 autoFocus
                 value={groupName}
@@ -270,7 +271,7 @@ export function GroupDetailPanel({
           ) : (
             <div className="flex items-center gap-2">
               <h2 className="flex items-center gap-2 truncate text-[18px] font-bold text-white">
-                <Folder size={20} className="shrink-0 text-amber-300/80" />
+                <Folder size={20} className="shrink-0" style={{ color: groupAccent(group.name).text }} />
                 {group.name}
               </h2>
             </div>

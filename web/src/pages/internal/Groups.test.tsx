@@ -21,7 +21,17 @@ vi.mock("../../lib/auth", () => ({
 }));
 
 import { GroupsPage } from "./Groups";
+import { groupAccent } from "./groupAccent";
 import type { PlatformAccount, TreeNode } from "./groupsTypes";
+
+// jsdom normalizes #rrggbbaa to rgba(r, g, b, a) and #rrggbb to rgb(r, g, b).
+function accentCss(name: string): { bg: string; text: string } {
+  const accent = groupAccent(name);
+  const channels = (hex: string) =>
+    `${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)}`;
+  const alpha = (parseInt(accent.bg.slice(7, 9), 16) / 255).toFixed(2);
+  return { bg: `rgba(${channels(accent.text)}, ${alpha})`, text: `rgb(${channels(accent.text)})` };
+}
 
 const groupedAccount: PlatformAccount = {
   id: 1,
@@ -350,6 +360,15 @@ describe("GroupsPage", () => {
     const freeCard = within(tray).getByText("channel-available").closest("[data-account-id]");
     expect(freeCard).not.toBeNull();
     expect(within(freeCard!).queryByText("WWE")).not.toBeInTheDocument();
+  });
+
+  it("colors the tray group badge with the group's stable accent", () => {
+    renderPage();
+    const tray = screen.getByTestId("youtube-channels-tray");
+    const groupedCard = within(tray).getByText("channel-grouped").closest("[data-account-id]");
+    const badge = within(groupedCard!).getByTitle("WWE");
+    expect(badge.style.backgroundColor).toBe(accentCss("WWE").bg);
+    expect(badge.style.color).toBe(accentCss("WWE").text);
   });
 
   it("offers to add a YouTube channel directly from the channels tray", () => {
