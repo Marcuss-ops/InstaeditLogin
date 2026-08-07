@@ -234,7 +234,9 @@ export function GroupsPage() {
               <AccountDetailPanel
                 account={selectedAccount}
                 onClose={() => setSelectedAccountId(null)}
-                onUpdated={() => void load()}
+                // Silent reload after Reconnect/Validate: the account panel
+                // stays mounted (no loading flash, no loss of view).
+                onUpdated={() => void load(true)}
               />
             ) : selectedGroup ? (
               <GroupDetailPanel
