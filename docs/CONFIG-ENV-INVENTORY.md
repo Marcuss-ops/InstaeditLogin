@@ -15,7 +15,11 @@ inventory names keys and behavior, but never contains credential values.
 4. JWT TTL compatibility is resolved after construction:
    `JWT_ACCESS_TTL_MINUTES` wins; otherwise `JWT_TTL_HOURS * 60`; otherwise
    access TTL defaults to 15 minutes. Refresh TTL defaults to 30 days.
-5. `Config.validate()` applies cross-field and environment-specific gates.
+5. Editor URL compatibility is resolved while constructing `HTTPConfig`:
+   non-empty `INSTAEDITOR_URL` wins; otherwise `EDITOR_URL` is used. The
+   latter remains supported so existing Compose/VPS environments continue
+   working without a secret-file migration.
+6. `Config.validate()` applies cross-field and environment-specific gates.
 
 Invalid integer/boolean text currently falls back to the declared default rather
 than failing during parsing. Domain validation then rejects values that are
@@ -79,7 +83,7 @@ YOUTUBE_OAUTH_CLIENT_B_ID YOUTUBE_OAUTH_CLIENT_B_SECRET YOUTUBE_OAUTH_CLIENT_B_R
 GOOGLE_DRIVE_CLIENT_ID GOOGLE_DRIVE_CLIENT_SECRET GOOGLE_DRIVE_REDIRECT_URI
 LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET LINKEDIN_REDIRECT_URI
 JWT_SECRET JWT_ACCESS_TTL_MINUTES JWT_REFRESH_TTL_DAYS JWT_TTL_HOURS TRUSTED_PROXIES ADMIN_INVITE_TOKEN
-FRONTEND_URL EDITOR_URL CORS_ALLOWED_ORIGINS COOKIE_DOMAIN LOG_LEVEL APP_ENV
+FRONTEND_URL INSTAEDITOR_URL EDITOR_URL CORS_ALLOWED_ORIGINS COOKIE_DOMAIN LOG_LEVEL APP_ENV
 DATABASE_URL DB_MAX_OPEN_CONNS DB_MAX_IDLE_CONNS DB_CONN_MAX_LIFETIME_SECONDS DB_CONN_MAX_IDLE_TIME_SECONDS DB_POOL_ROLE
 DB_API_MAX_OPEN_CONNS DB_API_MAX_IDLE_CONNS DB_API_CONN_MAX_LIFETIME_SECONDS DB_API_CONN_MAX_IDLE_TIME_SECONDS DB_WORKER_MAX_OPEN_CONNS DB_WORKER_MAX_IDLE_CONNS DB_WORKER_CONN_MAX_LIFETIME_SECONDS DB_WORKER_CONN_MAX_IDLE_TIME_SECONDS
 DB_MAINTENANCE_MAX_OPEN_CONNS DB_MAINTENANCE_MAX_IDLE_CONNS DB_MAINTENANCE_CONN_MAX_LIFETIME_SECONDS DB_MAINTENANCE_CONN_MAX_IDLE_TIME_SECONDS
@@ -110,7 +114,10 @@ back to `http://localhost:5173`) and append the billing success/cancel path.
 ## Example files and drift
 
 `.env.dev.example`, `.env.test.example`, and `.env.production.example` are
-operator templates, not a complete substitute for the loader. Compose/system
+operator templates, not a complete substitute for the loader. For the editor
+URL, new deployments should set `INSTAEDITOR_URL`; `EDITOR_URL` is retained as
+an explicit backward-compatible fallback and may be removed only after every
+runtime environment has migrated. Compose/system
 variables such as `POSTGRES_*`, `MINIO_*`, `PORT`, and `VELOX_*_TIMEOUT` may be
 consumed by infrastructure or entrypoints rather than `internal/config`.
 Conversely, `DB_POOL_ROLE` and `EXPECTED_DATABASE_INSTALLATION_UUID` are

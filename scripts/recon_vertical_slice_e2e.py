@@ -168,7 +168,8 @@ for v in [
     "YOUTUBE_API_KEY",
     "VELOX_API_URL",
     "VELOX_API_KEY",
-    "DARK_EDITOR_URL",
+    "INSTAEDITOR_URL",
+    "EDITOR_URL",
     "INSTAGOOGLE_CLIENT_ID",
 ]:
     val = os.environ.get(v, None)

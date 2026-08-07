@@ -487,6 +487,45 @@ func TestLoad_YouTubeOAuthClientPool_ShortSecretRejected(t *testing.T) {
 	}
 }
 
+func TestLoad_EditorURL_InstaEditorNamePreferred(t *testing.T) {
+	t.Setenv("INSTAEDITOR_URL", "https://app.instaedit.org/insta-editor")
+	t.Setenv("EDITOR_URL", "https://legacy.example.test/dark_editor_v2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with both editor URL names: want nil, got %v", err)
+	}
+	if got := cfg.HTTP.EditorURL; got != "https://app.instaedit.org/insta-editor" {
+		t.Fatalf("EditorURL: got %q, want preferred INSTAEDITOR_URL", got)
+	}
+}
+
+func TestLoad_EditorURL_LegacyFallback(t *testing.T) {
+	t.Setenv("INSTAEDITOR_URL", "")
+	t.Setenv("EDITOR_URL", "https://legacy.example.test/dark_editor_v2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with legacy editor URL: want nil, got %v", err)
+	}
+	if got := cfg.HTTP.EditorURL; got != "https://legacy.example.test/dark_editor_v2" {
+		t.Fatalf("EditorURL: got %q, want EDITOR_URL fallback", got)
+	}
+}
+
+func TestLoad_EditorURL_DefaultEmpty(t *testing.T) {
+	t.Setenv("INSTAEDITOR_URL", "")
+	t.Setenv("EDITOR_URL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() without editor URL: want nil, got %v", err)
+	}
+	if got := cfg.HTTP.EditorURL; got != "" {
+		t.Fatalf("EditorURL: got %q, want empty default", got)
+	}
+}
+
 func TestLoad_Production_RequiresMetricsBasicAuth(t *testing.T) {
 	// Provide the minimum required env vars so the only failure path
 	// under test is the production metrics-auth check.

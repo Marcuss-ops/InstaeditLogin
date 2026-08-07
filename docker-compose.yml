@@ -18,7 +18,8 @@
 #
 # Compose credentials are required at runtime. Never add them to this file;
 # use the ignored .env.dev file created from .env.dev.example, or an external
-# secret injector.
+# secret injector. The selected env_file passes both editor URL aliases to the
+# application: INSTAEDITOR_URL is preferred and EDITOR_URL remains the fallback.
 #
 # Migration ordering: db is the dependency for migrate. migrate is the
 # dependency for api + worker (depends_on with service_completed_successfully).

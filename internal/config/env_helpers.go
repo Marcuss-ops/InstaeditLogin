@@ -15,6 +15,17 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+// getEnvWithFallback returns the preferred non-empty environment value and
+// falls back to the legacy key otherwise. An explicitly empty preferred key
+// therefore does not hide a configured legacy value, which keeps deployments
+// that still provide only the legacy variable working during migration.
+func getEnvWithFallback(preferredKey, legacyKey string) string {
+	if value, ok := os.LookupEnv(preferredKey); ok && value != "" {
+		return value
+	}
+	return getEnv(legacyKey, "")
+}
+
 func getEnvBool(key string, fallback bool) bool {
 	if value, ok := os.LookupEnv(key); ok {
 		switch strings.ToLower(strings.TrimSpace(value)) {

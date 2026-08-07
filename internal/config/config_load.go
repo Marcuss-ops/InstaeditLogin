@@ -73,7 +73,9 @@ func Load() (*Config, error) {
 		},
 		HTTP: HTTPConfig{
 			FrontendURL:        getEnv("FRONTEND_URL", ""),
-			EditorURL:          getEnv("EDITOR_URL", ""),
+			// INSTAEDITOR_URL is canonical; EDITOR_URL remains a
+			// backward-compatible fallback for existing deployments.
+			EditorURL:          getEnvWithFallback("INSTAEDITOR_URL", "EDITOR_URL"),
 			AllowedCORSOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
 			CookieDomain:       getEnv("COOKIE_DOMAIN", ""),
 			LogLevel:           getEnv("LOG_LEVEL", "info"),
