@@ -59,7 +59,7 @@ measures TS/TSX too.
 | P0 | `pkg/api/auth_handlers.go` | 786 → 3 | OAuth login/callback/exchange and session bootstrap | ✅ COMPLETED in `cabcc39`: split into `auth_oauth.go` (565), `auth_oauth_state.go` (224), `auth_account_attach.go` (239), `auth_session.go` (92); `auth_handlers.go` left as 3-line pointer. Dead `Router.handleMe` removed in `040fa04`. `auth_oauth.go` remains >500 → monitor below. |
 | P0 | `internal/bootstrap/workers_wiring.go` | 630 | Dependency adapters and all worker specifications | ✅ COMPLETED in `7d03153`: specs → `workers_specs.go` (409), adapters → `workers_adapters.go` (66); `workers_wiring.go` now 121 lines with one ordered registry + `TestWorkerSpecs_PreserveLifecycleContract`. |
 | P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | ✅ COMPLETED in `cabcc39`: split into `posts_mutations.go` (107), `posts_read.go` (240), `posts_types.go` (81); `posts_handlers.go` remains the thin router boundary. Idempotency and workspace authorization preserved. |
-| P1 | `internal/config/config_types.go` | 616 | Config struct types split out of `config.go` (`46b6188`) | Monitor; split only if a second domain boundary (worker vs database structs) becomes worth isolating. |
+| P1 | `internal/config/config_types.go` | 616 → 230 | Config struct types split out of `config.go` (`46b6188`) | ✅ COMPLETED in `18c9aa71`: split by domain into `config_types_database.go` (45), `config_types_storage.go` (29), `config_types_auth.go` (100), `config_types_integrations.go` (43), `config_types_server.go` (53), `config_types_worker.go` (122); `config_types.go` keeps only the `Config` aggregate root. Centralized env-var validation in `field_specs.go` untouched; 12 structs preserved byte-identical. |
 | P1 | `internal/services/youtube_oauth.go` | 586 | OAuth URL/callback, token exchange, refresh, revoke, and client pool | Isolate token transport from OAuth policy and pool selection; reuse shared HTTP/error helpers. |
 | P1 | `pkg/api/auth_oauth.go` | 565 → 45 | OAuth login, callback, exchange, and account-attach flows (split from `auth_handlers.go` in `cabcc39`) | ✅ COMPLETED in `3bd437c9`: split by flow into `auth_oauth_login.go` (189, `handleLogin`), `auth_oauth_callback.go` (176, `handleCallback` + `resolveCallbackState`), `auth_oauth_exchange.go` (176, `exchangeOAuthCode` + `callbackAttach*` + `writeCallbackSuccess`); `auth_oauth.go` keeps the pool-aware contract types + `HandleOAuthCallbackRouteForTest` as a 45-line boundary. State verification (connect-link/oauth-flow/CSRF paths, single-use nonce consumption) and pool client-cookie idempotency preserved. |
 | P1 | `internal/repository/thumbnail_project_repo.go` | 558 | Project CRUD, snapshots, revisions, restore, and CAS status | Extract revision/snapshot persistence behind focused helpers; retain CAS and revision-number transaction guarantees. |
@@ -159,6 +159,7 @@ number is assigned unless an actual external ticket exists.
 | Worker wiring registry (final) | `internal/bootstrap/workers_wiring.go` split into `workers_specs.go` + `workers_adapters.go`; one ordered registry + lifecycle-contract test retained. | Wiring/runtime tests, full Go tests, vet, build | `7d03153` |
 | Auth and post HTTP handlers | `pkg/api/auth_handlers.go` (786) split into `auth_oauth.go` / `auth_oauth_state.go` / `auth_account_attach.go` / `auth_session.go` (dead `Router.handleMe` removed in `040fa04`); `pkg/api/posts_handlers.go` (547) split into `posts_mutations.go` / `posts_read.go` / `posts_types.go`. | API tests, full Go tests (33 pkgs), vet, build, loc-check | `cabcc39` |
 | CoverEditor frontend split | `web/src/pages/internal/CoverEditor.tsx` (1240) split in `d83d09e9` into `features/thumbnailProjects/editor/snapshot.ts` + `objects.ts`, `components/editor/` (CanvasStage, LayersPanel, Inspector, RevisionPanel, EditorHeader, ConflictBanner, EditorToolbar, CanvasSettingsPanel, AssignmentsPanel), and `hooks/useCoverEditorMutations.ts`; page now 497 lines. | vitest (13 tests), tsc -b, oxlint, vite build | `d83d09e9` |
+| Config type domains | `internal/config/config_types.go` (616) split in `18c9aa71` by domain into `config_types_database.go` (45) / `config_types_storage.go` (29) / `config_types_auth.go` (100) / `config_types_integrations.go` (43) / `config_types_server.go` (53) / `config_types_worker.go` (122); `config_types.go` keeps only the `Config` aggregate root (230). Byte-exact struct moves — 12 types preserved, `field_specs.go` centralized validation untouched. | Config tests, full Go tests (33 pkgs), vet, build, loc-check | `18c9aa71` |
 
 ## Remaining execution order
 
@@ -174,7 +175,11 @@ Split in `46b6188` (final) after the earlier `a78484c` seam: `config.go` →
 `config_types.go` (structs) + `config_load.go` (resolution) +
 `config_validation.go` + `config_database.go` + `field_specs.go`. `Load()`
 output unchanged; config tests, full Go tests, vet, build all green. The
-remaining `config_types.go` (616) is a types-only file under monitoring.
+remaining `config_types.go` (616) was a types-only file under monitoring —
+its domain boundary was confirmed in `18c9aa71` (per-domain struct blocks:
+database-pool vs storage vs auth vs integrations vs server vs worker) and
+split into six `config_types_*.go` files; `config_types.go` now holds only
+the `Config` aggregate root (230 lines).
 
 ### Slice 2 — Group repository transaction seams (P0) ✅ COMPLETED
 
