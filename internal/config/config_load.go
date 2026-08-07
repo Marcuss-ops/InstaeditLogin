@@ -150,10 +150,11 @@ func Load() (*Config, error) {
 			UploadWorkerIntervalSeconds:     getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
 			RenderMaxConcurrency:            getEnvInt("RENDER_MAX_CONCURRENCY", 1),
 			FFmpegThreads:                   getEnvInt("FFMPEG_THREADS", 1),
-			// Token refresh sweep — daily cadence + 4-month inactivity
+			// Token refresh sweep — 15-minute cadence + 4-month inactivity
 			// horizon (2 months of margin under Google's ~6-month
-			// refresh-token inactivity GC).
-			TokenRefreshSweepIntervalSeconds: getEnvInt("TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS", 86400),
+			// refresh-token inactivity GC). Access tokens are short-lived,
+			// so the worker also renews tokens nearing expiry.
+			TokenRefreshSweepIntervalSeconds: getEnvInt("TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS", 900),
 			TokenRefreshSweepHorizonDays:     getEnvInt("TOKEN_REFRESH_SWEEP_HORIZON_DAYS", 120),
 			// Snapshot refresh sweep — 60s cadence: a page load stamps
 			// refresh_pending_at and the worker refreshes the cached
