@@ -32,11 +32,11 @@ and worker ordering intact.
 
 ## Current inventory
 
-The current scan found **24 runtime production files above 500 lines**. Three
-tracked test files are already above 800 lines and require scenario-level
-organization, but they are not production refactoring blockers. Test and CLI
-files are tracked separately below so their size does not distort runtime
-priorities.
+The current scan found **24 tracked runtime production files above 500 lines**.
+No runtime production file is above 800 lines in this snapshot. Test, E2E, and
+CLI files are tracked separately below so their size does not distort runtime
+priorities. Refresh this count before each new slice; it is an inventory, not a
+set of automatically generated tickets.
 
 ### Runtime production files above 500 lines
 
@@ -116,7 +116,29 @@ it. Use:
 ./scripts/loc-report.sh -t 500 -n 100
 ```
 
-## Next execution order
+## Completed slices
+
+These slices were implemented, tested, committed, and pushed directly to
+`main`. They are recorded here as concrete architectural outcomes; no issue
+number is assigned unless an actual external ticket exists.
+
+| Slice | Architectural outcome | Verification | Commit |
+|---|---|---|---|
+| Configuration boundaries | Private field-spec resolvers centralize repeated DB pool and YouTube OAuth env mapping; domain validation remains in `config_validation.go`. | Config tests, full Go tests, vet, build | `a78484c` |
+| Group repository seams | Shared membership/aggregate helpers remove repeated workspace-aware repository policy while preserving transaction boundaries. | Repository/API tests, full Go tests, vet, build | `2bbaa66` |
+| Worker lifecycle wiring | One canonical ordered worker registry with shared lifecycle handling; no second registry introduced. | Wiring/runtime tests, full Go tests, vet, build | `d89cc25` |
+| Livestream command policy | Shared command policy/resolver seams preserve livestream HTTP contracts. | Contract tests, full Go tests, vet, build | `c71b0a4` |
+| Post handler policies | Shared cursor, route-ID, and workspace-ownership policies remove handler duplication without changing HTTP shapes or idempotency order. | Contract tests, full Go tests, vet, build | `315bd6e` |
+| YouTube OAuth policy | Shared OAuth scope/policy seam separates repeated policy from transport and credential resolution. | OAuth contract tests, full Go tests, vet, build | `218a84b` |
+| Retry/sampler primitives | Uniform semi-open duration sampling is shared only where RNG ownership and interval semantics are identical; distinct backoff policies remain separate. | Range/distribution tests, full Go tests, vet, build | `3148d94` |
+
+## Remaining execution order
+
+The remaining inventory below is a watchlist of responsibility boundaries, not
+a preassigned ticket queue. Start a slice only after refreshing line counts and
+finding an actual duplicated policy or stable test seam.
+
+### Next execution order
 
 ### Slice 1 — Configuration boundaries (P0)
 

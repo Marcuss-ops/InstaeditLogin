@@ -86,7 +86,7 @@ Regola operativa adottata per questo lavoro:
 | API types | `pkg/api/thumbnail_projects_types.go` | interfaccia indipendente `ThumbnailProjectStore`, request/response per progetto, snapshot e restore. |
 | Handler | `pkg/api/thumbnail_projects_handlers.go` | create, list, get, update, snapshot, list/get revision, restore, archive e delete. |
 | Route module | `pkg/api/modules_thumbnail_projects.go` | route protette `/api/v1/thumbnail-projects...`. |
-| Wiring | `internal/bootstrap/database_storage_wiring.go`, `internal/bootstrap/core.go`, `internal/bootstrap/router_wiring.go`, `pkg/api/router_options.go` | repository e store sono cablati nell’applicazione. |
+| Wiring | `internal/bootstrap/database_storage_wiring.go`, `internal/bootstrap/app.go`, `internal/bootstrap/router_wiring.go`, `pkg/api/router_options.go` | repository e store sono cablati nell’applicazione. |
 
 ## 4. Database e persistenza
 
@@ -387,7 +387,7 @@ pkg/api/thumbnail_projects_handlers_test.go
 pkg/api/thumbnail_projects_types.go
 pkg/api/routes.go
 pkg/api/router_options.go
-internal/bootstrap/core.go
+internal/bootstrap/app.go
 internal/bootstrap/database_storage_wiring.go
 internal/bootstrap/router_wiring.go
 ```
