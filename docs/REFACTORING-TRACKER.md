@@ -45,8 +45,9 @@ last snapshot: `internal/config/config.go` (672) split in `46b6188`,
 below. **New:** `web/src/pages/internal/CoverEditor.tsx` (1240) split in
 `d83d09e9` into 12 editor files; `web/src/pages/internal/AdminDashboard.tsx`
 (760, split in `aeb0fbe8` — no runtime web file above 700 remains),
-`Covers.tsx` (587), `ScheduledByAccount.tsx` (562), `Groups.tsx` (545),
-`livestreamWizardStep2.tsx` (527), `Compose.tsx` (506), and the publishing
+`Covers.tsx` (587), `ScheduledByAccount.tsx` (562), `Groups.tsx` (545 → 348,
+split in `d2793b54`), `livestreamWizardStep2.tsx` (527), `Compose.tsx` (506),
+and the publishing
 wizard steps (`ChannelMetadataStep.tsx` 516, `ConfirmationStep.tsx` 510) join
 `Programs.tsx` (513) as the frontend runtime inventory — the tracker now
 measures TS/TSX too.
@@ -64,21 +65,21 @@ measures TS/TSX too.
 | P1 | `pkg/api/auth_oauth.go` | 565 → 45 | OAuth login, callback, exchange, and account-attach flows (split from `auth_handlers.go` in `cabcc39`) | ✅ COMPLETED in `3bd437c9`: split by flow into `auth_oauth_login.go` (189, `handleLogin`), `auth_oauth_callback.go` (176, `handleCallback` + `resolveCallbackState`), `auth_oauth_exchange.go` (176, `exchangeOAuthCode` + `callbackAttach*` + `writeCallbackSuccess`); `auth_oauth.go` keeps the pool-aware contract types + `HandleOAuthCallbackRouteForTest` as a 45-line boundary. State verification (connect-link/oauth-flow/CSRF paths, single-use nonce consumption) and pool client-cookie idempotency preserved. |
 | P1 | `internal/repository/thumbnail_project_repo.go` | 558 | Project CRUD, snapshots, revisions, restore, and CAS status | Extract revision/snapshot persistence behind focused helpers; retain CAS and revision-number transaction guarantees. |
 | P1 | `pkg/api/accounts_read_handlers.go` | 552 | Account listing, account detail, content, and earnings reads | Split read endpoints by query family; keep account ownership loading in one shared helper. |
-| P1 | `internal/services/provider_error.go` | 549 | Provider error types, classification, and retry/rate-limit metadata | Separate stable error contracts from classifiers only if call sites remain behaviorally identical. |
+| P1 | `internal/services/provider_error.go` | 549 | Provider error types, classification, and retry/rate-limit metadata | Reconcile path now converges on this classifier (`231c9b62`); audit the remaining publish-worker fallback paths (`MarkRateLimitedRetry` legacy variants) onto the same policy. Keep error contracts stable. |
 | P1 | `internal/models/external_delivery.go` | 549 | External delivery domain model and delivery state data | Review whether model declarations and conversion helpers can be isolated without duplicating the contract. |
 | P1 | `pkg/metrics/collector.go` | 546 | Periodic DB-backed metric collection and gauge updates | Extract query-specific collectors while preserving advisory-lock single-flight and zero-fill semantics. |
 | P1 | `internal/repository/asset_repo.go` | 545 | Media assets, visibility, probe state, expiration, and cleanup | Separate lifecycle/probe operations from retention cleanup; preserve workspace predicates and deletion eligibility. |
-| P1 | `internal/repository/post_repo_retry.go` | 535 | Claims, leases, retries, rate limits, DLQ, and reclamation | Consolidate retry/lease policy helpers; do not create another facade layer over the existing post repository split. |
+| P1 | `internal/repository/post_repo_retry.go` | 535 → 485 | Claims, leases, retries, rate limits, DLQ, and reclamation | ✅ legacy lease-less `ClaimQueuedTarget` removed in `aed59e5f`; lease claim is the sole path. Below threshold — monitor, do not introduce a facade layer. |
 | P1 | `internal/services/provider.go` | 534 | Capability interfaces and provider routing contracts | Treat as a public internal contract; refactor only to remove duplicated capability lookup or clarify interfaces with compile-time assertions. |
 | P1 | `internal/services/threads_oauth.go` | 528 | Threads OAuth and publishing integration | Compare with the shared Meta OAuth seams before extracting provider-specific policy. |
 | P1 | `internal/repository/post_repo_aggregate.go` | 527 | Post aggregate/list queries and scans | Extract scan/projection helpers only when they are reused; keep query ordering and pagination contracts unchanged. |
-| P1 | `pkg/api/router.go` | 528 | Central router state, dependency validation, and route assembly | Keep registration thin; extract only remaining dependency-validation or route-family seams without duplicating module wiring. |
+| P1 | `pkg/api/router.go` | 528 → 537 | Central router state, dependency validation, and route assembly | ✅ first module-registry boundary in `54c4f6a9` + `6d0d9719`: `/api/v1/groups` moved into typed `GroupsModule` (`modules_groups.go`) owning its deps. Continue feature-by-feature: extract the next stable route family before `Router` grows further. |
 | P1 | `internal/repository/post_repo_post.go` | 507 | Post and target creation/update persistence | Keep aggregate transactions and idempotency boundaries intact; extract only shared scan or mutation policy. |
-| P1 | `internal/worker/reconcile_worker.go` | 525 | Async publish reconciliation and terminal state transitions | Refactor only after the `AsyncPublisher` contract is stable; keep in-flight, terminal, and retry semantics in one tested state machine. |
+| P1 | `internal/worker/reconcile_worker.go` | 525 → 614 | Async publish reconciliation and terminal state transitions | ✅ retry policy applied in `231c9b62`: reconciler converges on the common transient→retry / permanent→`failed` classification; `AsyncPublisher` contract stabilized; policy tests in `reconcile_worker_policy_test.go` (163). Monitor: keep in-flight/terminal/retry semantics in one tested state machine (audit: do not simplify aggressively). |
 | P1 | `pkg/api/accounts_write_handlers.go` | 521 | Account validation, sync, and write-side orchestration | Verify existing `accounts_validate.go`/`accounts_sync.go` seams first; remove only remaining orchestration duplication. |
 | P1 | `web/src/pages/internal/Covers.tsx` | 587 | Cover project library: list, cards, filters, create/delete dialogs | **Next split (frontend):** separate the library list/card rendering from the create/delete dialog wiring, mirroring the CoverEditor split pattern. |
 | P1 | `web/src/pages/internal/ScheduledByAccount.tsx` | 562 | Scheduled-by-account list and filters | Split list row/filter presentational components from the page's data wiring. |
-| P1 | `web/src/pages/internal/Groups.tsx` | 545 | Groups management tree/detail | Extract tree rows and detail panels into presentational components (GroupsDetailPanels already split). |
+| P1 | `web/src/pages/internal/Groups.tsx` | 545 → 348 | Groups management tree/detail | ✅ COMPLETED in `d2793b54`: channel tray extracted into `YouTubeChannelsTray.tsx` (261); below threshold. Remaining detail panels only if the tree grows a new concern. |
 | P1 | `web/src/pages/internal/livestreamWizardStep2.tsx` | 527 | Livestream wizard step 2 | Split step sub-forms into focused components once the step grows another responsibility. |
 | P1 | `web/src/features/publishing/wizard/ChannelMetadataStep.tsx` | 516 | Publishing wizard channel metadata step | Monitor; split only if the step's form sections grow independent validation. |
 | P1 | `web/src/pages/Programs.tsx` | 513 | Programs listing page | Monitor; split list/card rendering from page wiring if it grows. |
@@ -164,6 +165,10 @@ number is assigned unless an actual external ticket exists.
 | CoverEditor test scenario split | `web/src/pages/internal/CoverEditor.test.tsx` (865) split in `d434511a` into `CoverEditor.autosave.test.tsx` (213, 6 tests) / `CoverEditor.exportLink.test.tsx` (347, 4 tests) / `CoverEditor.mediaLoad.test.tsx` (184, 3 tests), with shared fixtures/mocks in `CoverEditor.testUtils.tsx` (239). Hoisted `ApiError` class exported by object identity so `parseProjectVersionConflict` instanceof still matches; all 13 data-testid/aria-label contract tests preserved. | vitest (13 scenario + full 81 files/664 tests), tsc -b, oxlint, vite build | `d434511a` |
 | AdminDashboard frontend split | `web/src/pages/internal/AdminDashboard.tsx` (760) split in `aeb0fbe8` into `adminDashboardTypes.ts` (107, API types + `FetchState`) / `AdminDashboardKpis.tsx` (83, `Card`/`Section` primitives + `formatNumber`/`formatPercent`/`formatDate`) / `AdminDashboardFleetReadiness.tsx` (39, Fleet Readiness KPI grid) / `AdminDashboardHealth.tsx` (152, YouTube Quota cards + Queue Counts + error-rate tables) / `AdminDashboardPoolCapacity.tsx` (260, pool capacity bars + Google manager account tables); `AdminDashboard.tsx` keeps all data hooks (`loadFleet`/`loadHealth`/`loadPool`/`loadAll`), header, Refresh button and error states (151). Pure file moves verified byte-identical vs HEAD (modulo `export` keywords and the `fleet.data`/`health.data` → `data` prop rename). No runtime web file above 700 remains. | vitest (full 80 files/656 tests), tsc -b, oxlint 0/0, vite build | `aeb0fbe8` |
 | Dashboard analytics-only rewrite (feature) | `web/src/pages/internal/Dashboard.tsx` rewritten in `d3608384` from 2 static cards to an analytics-only page: period selector 1/7/14/28/90 + KPI cards (Views totali/Revenue/Canali/Video) + "Migliori video" / Views / Revenue tables. New `useDashboardAnalytics.ts` hook replaces the removed `useDashboardData.ts`; `Dashboard.test.tsx` rewritten to 5 scenario tests. Backend: new `pkg/api/dashboard_analytics_handlers.go` (GET `/api/v1/dashboard/analytics?days=1|7|14|28|90`) aggregates metric history + real per-video views via bounded `ListAccountContent` fan-out (20/channel, top-20 ranking, 5-min per-user cache on the Router); `accounts_performance_summary_handlers.go` extended to accept `days=1|7|14|28|30|90`. Backend coverage in `d121c86d`: `dashboard_analytics_handlers_test.go` (414) — days validation (1/7/14/28/90 accepted; 30/5/0/non-numeric/absent → 28), aggregate views/revenue from metric history incl. revenue-pointer semantics, top-videos fan-out + cache (first load fetches 2 accounts, repeat load is a cache hit, different days busts the key), degradation (all-fail / per-channel-fail / lister-absent / vault-absent → empty ranking, request still 200), error paths (501/401/500); race-detector clean. `7e450851` adds the fifth KPI card "Iscritti": `dashboardAggregates.Subscribers` (latest-point snapshot sum per channel), frontend card with `Users` icon + 5-column grid (ready + skeletons), Go assertion 7000 = 5000+2000, vitest fixture subscribers + `8.0K`/`Iscritti` assertions + zero-count 3→4. | Go tests (33 pkgs ok, pkg/api race-clean), vet, build; vitest (80 files/659 tests), tsc -b, oxlint 0/0, vite build | `d3608384` + `d121c86d` + `7e450851` |
+| Reconcile transient retry (P0) | `reconcile_worker.go` converges on the common provider error classification: transient/rate-limit → requeue with backoff, explicit provider FAILED/permanent → `failed`, success-without-`PlatformMediaID` stays in-flight. `AsyncPublisher` contract stabilized in `provider_async_publisher.go`; dedicated policy tests in `reconcile_worker_policy_test.go` (163). | Worker tests incl. `reconcile_worker_policy_test.go`, full Go suite | `231c9b62` |
+| Router module registry — first boundary (P1) | `/api/v1/groups` extracted from `AuthModule` into a typed `GroupsModule` (`modules_groups.go`) owning its own deps (`GroupsModuleDeps`, `GroupsHandlers`); nil-guard and route shapes preserved; `GroupStore` removed from `AuthModuleDeps`. | `pkg/api` suite with `-race`, go vet, go build | `54c4f6a9` + `6d0d9719` |
+| Legacy claim API removal (P1) | lease-less `ClaimQueuedTarget` removed from repository + `PublisherPostStore`; `ClaimQueuedTargetWithLease` is the sole claim path (narrow `leaseClaimer` in the worker, no fallback branch); `qClaimQueuedTargetSelect` removed, `qClaimQueuedTargetUpdate` kept for `ClaimWaitingProviderTarget`; 5 repo tests converted to the lease variant preserving SKIP LOCKED coverage. | `internal/worker` + `internal/repository` with `-race`, go vet, go build | `aed59e5f` |
+| Groups channel tray extraction (P0 web) | `Groups.tsx` (545) split in `d2793b54` into `YouTubeChannelsTray.tsx` (261) + `Groups.tsx` (348); tree/tray rendering separated from page wiring. | vitest, tsc -b, oxlint | `d2793b54` |
 
 ## Remaining execution order
 
@@ -268,8 +273,9 @@ production behavior changes.
 ### Slice 8 — Frontend page splits (P0/P1, web)
 
 **Targets:** `web/src/pages/internal/AdminDashboard.tsx` (760, the only
-runtime >700) is now split (see `aeb0fbe8` below); next `Covers.tsx` (587),
-`ScheduledByAccount.tsx` (562), `Groups.tsx` (545),
+runtime >700) is now split (see `aeb0fbe8` below); `Groups.tsx` (545) split
+in `d2793b54` (348); next `Covers.tsx` (587),
+`ScheduledByAccount.tsx` (562),
 `livestreamWizardStep2.tsx` (527), `Compose.tsx` (506),
 and the publishing wizard steps (`ChannelMetadataStep.tsx` 516,
 `ConfirmationStep.tsx` 510).
@@ -282,6 +288,59 @@ and the publishing wizard steps (`ChannelMetadataStep.tsx` 516,
 
 **Done when:** no runtime web file sits above 500 lines and every page's test
 suite still passes unchanged.
+
+### Slice 9 — Reconcile transient retry policy (P0) ✅ COMPLETED
+
+Applied in `231c9b62`: the reconciler now uses the common provider error
+classification — transient/rate-limit errors requeue with backoff, explicit
+provider FAILED/permanent errors transition to `failed`, success without
+`PlatformMediaID` stays in-flight. `AsyncPublisher` contract stabilized in
+`provider_async_publisher.go`; dedicated policy tests in
+`reconcile_worker_policy_test.go` (163). This closes the audit's P1 "una
+sola policy retry/permanent/terminal" for the reconcile path.
+
+### Slice 10 — Router module registry: GroupsModule (P1) ✅ COMPLETED
+
+Extracted in `54c4f6a9` (+ gofmt `6d0d9719`): `/api/v1/groups` moved out of
+`AuthModule` into a typed `GroupsModule` (`modules_groups.go`) following the
+consolidated `RouteModule`/registry pattern; `GroupsModuleDeps` owns only the
+dependencies groups needs; nil-guard preserved. Continue feature-by-feature:
+the next stable route family should become its own module before `Router`
+grows further (currently 537 lines).
+
+### Slice 11 — Legacy claim API removal (P1) ✅ COMPLETED
+
+Removed in `aed59e5f`: lease-less `ClaimQueuedTarget` deleted from
+`post_repo_retry.go` + `PublisherPostStore`; the lease variant is the sole
+path (narrow `leaseClaimer` interface in the worker, no fallback branch);
+`qClaimQueuedTargetSelect` removed while `qClaimQueuedTargetUpdate` is kept
+for `ClaimWaitingProviderTarget`. `post_repo_retry.go` is now 485 lines
+(below threshold).
+
+### Slice 12 — Groups.tsx channel tray (P0 web) ✅ COMPLETED
+
+Split in `d2793b54`: `Groups.tsx` (545) → `YouTubeChannelsTray.tsx` (261) +
+`Groups.tsx` (348). Remaining per Slice 8: `Covers.tsx` (587),
+`ScheduledByAccount.tsx` (562), `livestreamWizardStep2.tsx` (527),
+`Compose.tsx` (506).
+
+### Slice 13 — YouTube own package? (P1) 📋 VALUTATO — non estrarre ora
+
+Audit question: "quando cambio YouTube, quanta parte di services devo
+capire?" Verdict (2026-08-07): **not "almost everything"** — a bounded,
+stable subset: 26 `youtube_*.go` files (~12.5k LOC, 35% of the package) +
+the shared provider contract (~12 files, used by all 7 providers) + a few
+YouTube seams. Extraction today would require breaking a real import cycle
+(3 reverse edges: `oauth_token_capacity.go` → `YouTubeOAuthClientRegistry`,
+`upload_channel_uploader.go` assertion, `nvidia_metadata.go` →
+`ValidateYouTubeSnippet`) and the boundary stays fuzzy in shared infra
+(`parseYouTubeErrorBody` in `provider_error.go`, `YouTubeChannelBinder` in
+`provider_channel_binder.go`). Preconditions before extracting: move
+`oauth_token_capacity.go` into the YouTube domain, move the
+`UploadChannelUploader` assertion into a youtube file, relocate
+`ValidateYouTubeSnippet` to a neutral shared spot, and encapsulate
+`parseYouTubeErrorBody` behind a per-provider hook. When those are done the
+extraction becomes a mechanical `git mv`.
 
 ## Per-slice checklist
 
