@@ -15,7 +15,9 @@
  * page once: the fresh `index.html` references the current chunks and
  * the app boots normally. `sessionStorage` guards against reload loops.
  */
-const RELOAD_FLAG = "instaedit:chunk-reload-attempted";
+import { STORAGE_KEYS } from "./storageKeys";
+
+const RELOAD_FLAG = STORAGE_KEYS.chunkReloadAttempted;
 
 const MODULE_LOAD_ERROR_PATTERNS: RegExp[] = [
   /failed to fetch dynamically imported module/i,

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { authedFetch, AuthError, ApiError, fetchSession } from "../../lib/auth";
 import { isPublishableAccount } from "../../types/uploads";
 import { listAllAccounts } from "../../features/channels/api/channelsApi";
+import { STORAGE_KEYS } from "../../lib/storageKeys";
 import {
   buildTree,
   type FetchState,
@@ -12,7 +13,7 @@ import {
 } from "./groupsTypes";
 
 export function useGroupsData() {
-    const LAST_GROUP_KEY = "instaedit:last-group-id";
+    const LAST_GROUP_KEY = STORAGE_KEYS.lastGroupId;
     const navigate = useNavigate();
     const { groupId: routeGroupId } = useParams<{ groupId?: string }>();
     const abortRef = useRef<AbortController | null>(null);

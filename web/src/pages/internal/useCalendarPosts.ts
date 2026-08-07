@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authedFetch, ApiError, AuthError } from "../../lib/auth";
 import type { CalendarGroup, FetchState, Post, Workspace } from "./calendarTypes";
+import { STORAGE_KEYS } from "../../lib/storageKeys";
 
 export function useCalendarPosts() {
   const navigate = useNavigate();
@@ -106,8 +107,8 @@ export function useCalendarPosts() {
 
   const setGroupFilter = (value: string) => {
     if (typeof window !== "undefined") {
-      if (value === "all") window.localStorage.removeItem("instaedit:last-calendar-group-id");
-      else window.localStorage.setItem("instaedit:last-calendar-group-id", value);
+      if (value === "all") window.localStorage.removeItem(STORAGE_KEYS.lastCalendarGroupId);
+      else window.localStorage.setItem(STORAGE_KEYS.lastCalendarGroupId, value);
     }
     setSearchParams(
       (prev) => {

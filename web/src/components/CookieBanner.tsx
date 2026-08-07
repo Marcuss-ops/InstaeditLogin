@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Cookie } from "lucide-react";
+import { STORAGE_KEYS } from "../lib/storageKeys";
 
-const STORAGE_KEY = "instaedit.cookie-consent.v1";
+const STORAGE_KEY = STORAGE_KEYS.cookieConsent;
 
 type Consent = "accepted" | "essential" | null;
 
