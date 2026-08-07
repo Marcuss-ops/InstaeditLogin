@@ -30,7 +30,7 @@ Object.defineProperty(window, "IntersectionObserver", {
 // Global ResizeObserver stub (jsdom does not implement it). The canvas
 // stage in CoverEditor uses it to size the scaled canvas; the stub keeps
 // the component mountable in tests. Tests that need the stage to actually
-// layout override this with a callback-firing mock (see CoverEditor.test).
+// layout override this with a callback-firing mock (see CoverEditor.testUtils).
 class ResizeObserverMock {
   observe = vi.fn();
   disconnect = vi.fn();
