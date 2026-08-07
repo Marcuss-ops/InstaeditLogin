@@ -27,7 +27,7 @@ async function resolveGroupWorkspace(groupId: number): Promise<number> {
   return workspaceID;
 }
 
-export function useGroupYouTubeVideos(groupId: number, enabled = false) {
+export function useGroupYouTubeVideos(groupId: number, enabled = true) {
   const navigate = useNavigate();
   const abortRef = useRef<AbortController | null>(null);
   const pollingAttemptsRef = useRef(0);

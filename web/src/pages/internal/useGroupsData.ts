@@ -239,13 +239,13 @@ export function useGroupsData() {
       await load();
     }, [load]);
 
-    const handleCreateGroup = useCallback(async (parentId?: number) => {
+    const handleCreateGroup = useCallback(async () => {
       if (!newGroupName.trim() || state.kind !== "ready") return;
       setCreatingGroup(true);
       try {
         const body = {
           workspace_id: state.workspaceId,
-          parent_group_id: parentId ?? null,
+          parent_group_id: null,
           name: newGroupName.trim(),
         };
         await authedFetch("/api/v1/groups/", {

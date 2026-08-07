@@ -2,7 +2,6 @@ import { useEffect, useState, type DragEvent } from "react";
 import {
   Check,
   Folder,
-  FolderPlus,
   GripVertical,
   Inbox,
   Plus,
@@ -13,9 +12,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { authedFetch } from "../../lib/auth";
-import { ErrorState, EmptyState, Skeleton } from "../../components/feedback";
 import { useGroupsData } from "./useGroupsData";
-import { TreeView } from "./GroupsTreeView";
 import { AccountDetailPanel, GroupDetailPanel } from "./GroupsDetailPanels";
 import {
   type PlatformAccount,
@@ -209,68 +206,6 @@ export function GroupsPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-6">
-          <div className="hidden">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[14px] font-bold text-white uppercase tracking-wider">Folders</h2>
-            </div>
-
-            <div className="flex items-center gap-2 mb-4">
-              <input
-                type="text"
-                value={newGroupName}
-                onChange={(e) => setNewGroupName(e.target.value)}
-                placeholder="New folder name..."
-                className="flex-1 px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-[13px] text-white placeholder:text-[#9aa0aa] focus:outline-none focus:ring-2 focus:ring-violet-500/40"
-                aria-label="New group name"
-              />
-              <button
-                type="button"
-                onClick={() => void handleCreateGroup()}
-                disabled={!newGroupName.trim() || creatingGroup}
-                className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white text-black text-[12px] font-semibold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-zinc-100 transition-colors"
-              >
-                <Plus size={14} /> Add
-              </button>
-            </div>
-
-            {state.kind === "loading" && (
-              <div className="space-y-2">
-                <Skeleton variant="card" height={28} />
-                <Skeleton variant="card" height={28} />
-                <Skeleton variant="card" height={28} />
-              </div>
-            )}
-
-            {state.kind === "error" && (
-              <ErrorState
-                title="Couldn't load groups"
-                message={state.message}
-                onRetry={() => void load()}
-                className="bg-transparent border-0 p-0"
-              />
-            )}
-
-            {state.kind === "ready" && tree.length === 0 && (
-              <EmptyState
-                title="No folders yet"
-                description="Add your first folder to start organizing your accounts."
-                icon={<FolderPlus size={28} />}
-                className="bg-transparent border-0 p-0"
-              />
-            )}
-
-            {state.kind === "ready" && tree.length > 0 && (
-              <TreeView
-                nodes={tree}
-                selectedGroupId={selectedGroupId}
-                onSelect={(id) => {
-                  setSelectedGroupId(id);
-                  setSelectedAccountId(null);
-                }}
-              />
-            )}
-          </div>
-
           <div
             className="w-full min-w-0 rounded-2xl border border-white/[0.08] bg-[#0b0c12] p-5 shadow-[0_18px_60px_rgba(0,0,0,0.18)] min-h-[300px] transition-colors"
             onDragOver={selectedGroup && draggedAccountId != null ? (event) => {
@@ -302,11 +237,6 @@ export function GroupsPage() {
                 onPickAccount={(id) => {
                   setSelectedAccountId(id);
                   navigate(`/app/dashboard-channels/${id}`);
-                }}
-                onCreateSubgroup={(name) => {
-                  if (!name.trim()) return;
-                  setNewGroupName(name);
-                  void handleCreateGroup(selectedGroup.id);
                 }}
                 onDeleteGroup={async () => {
                   if (!window.confirm(`Delete folder "${selectedGroup.name}"? Sub-folders and account links will be removed.`)) return;

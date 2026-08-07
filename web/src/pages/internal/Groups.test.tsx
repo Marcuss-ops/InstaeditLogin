@@ -11,7 +11,13 @@ vi.mock("./useGroupsData", () => ({
 }));
 
 vi.mock("../../lib/auth", () => ({
-  authedFetch: vi.fn(),
+  authedFetch: vi.fn(async () => ({ ok: true, json: async () => ({ videos: [] }) })),
+  AuthError: class AuthError extends Error {
+    override name = "AuthError";
+  },
+  ApiError: class ApiError extends Error {
+    override name = "ApiError";
+  },
 }));
 
 import { GroupsPage } from "./Groups";
@@ -147,8 +153,7 @@ describe("GroupsPage", () => {
       effectAllowed: "",
     };
     fireEvent.dragStart(card!, { dataTransfer });
-    // The chip in the top bar includes the member count in its accessible
-    // name, unlike the (hidden) TreeView button.
+    // The chip in the top bar includes the member count in its accessible name.
     fireEvent.drop(screen.getByRole("button", { name: /WWE1 canali/ }), { dataTransfer });
 
     expect(assignAccountToGroup).toHaveBeenCalledTimes(1);

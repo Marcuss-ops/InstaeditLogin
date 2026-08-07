@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import type { ComponentProps } from "react";
 import { GroupDetailPanel } from "./GroupsDetailPanels";
 import type { TreeNode } from "./groupsTypes";
 
@@ -31,7 +32,22 @@ const group: TreeNode = {
   ],
 };
 
-describe("GroupDetailPanel batch settings", () => {
+function renderPanel(props: Partial<ComponentProps<typeof GroupDetailPanel>> = {}) {
+  return render(
+    <MemoryRouter>
+      <GroupDetailPanel
+        group={group}
+        onPickAccount={() => {}}
+        onDeleteGroup={() => {}}
+        onSaved={() => {}}
+        onRename={() => {}}
+        {...props}
+      />
+    </MemoryRouter>,
+  );
+}
+
+describe("GroupDetailPanel", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -41,18 +57,7 @@ describe("GroupDetailPanel batch settings", () => {
     vi.stubGlobal("fetch", fetchMock);
     const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(false);
 
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={group}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
+    renderPanel();
 
     fireEvent.click(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i }));
 
@@ -71,18 +76,7 @@ describe("GroupDetailPanel batch settings", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     const onSaved = vi.fn();
 
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={group}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={onSaved}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
+    renderPanel({ onSaved });
 
     fireEvent.click(screen.getByRole("button", { name: /Rimuovi channel-two dalla cartella/i }));
 
@@ -99,18 +93,7 @@ describe("GroupDetailPanel batch settings", () => {
   it("renames the group inline and supports cancel", async () => {
     const onRename = vi.fn().mockResolvedValue(undefined);
 
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={group}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={onRename}
-        />
-      </MemoryRouter>,
-    );
+    renderPanel({ onRename });
 
     fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
     const input = screen.getByRole("textbox", { name: "Nome del gruppo" });
@@ -128,18 +111,7 @@ describe("GroupDetailPanel batch settings", () => {
   it("validates rename input and keeps the editor open", async () => {
     const onRename = vi.fn().mockResolvedValue(undefined);
 
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={group}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={onRename}
-        />
-      </MemoryRouter>,
-    );
+    renderPanel({ onRename });
 
     fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
     const input = screen.getByRole("textbox", { name: "Nome del gruppo" });
@@ -158,18 +130,7 @@ describe("GroupDetailPanel batch settings", () => {
     let resolveRename: (() => void) | undefined;
     const onRename = vi.fn(() => new Promise<void>((resolve) => { resolveRename = resolve; }));
 
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={group}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={onRename}
-        />
-      </MemoryRouter>,
-    );
+    renderPanel({ onRename });
 
     fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Nome del gruppo" }), { target: { value: "YouTube WWE" } });
@@ -186,18 +147,7 @@ describe("GroupDetailPanel batch settings", () => {
   it("shows a backend rename error without closing the editor", async () => {
     const onRename = vi.fn().mockRejectedValue(new Error("Nome già utilizzato"));
 
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={group}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={onRename}
-        />
-      </MemoryRouter>,
-    );
+    renderPanel({ onRename });
 
     fireEvent.click(screen.getByRole("button", { name: "Rinomina gruppo" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Nome del gruppo" }), { target: { value: "YouTube WWE" } });
@@ -205,7 +155,9 @@ describe("GroupDetailPanel batch settings", () => {
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Nome già utilizzato"));
     expect(screen.getByRole("textbox", { name: "Nome del gruppo" })).toBeInTheDocument();
-  });  it("syncs a server language into an initially empty panel after refresh", async () => {
+  });
+
+  it("syncs a server language into an initially empty panel after refresh", async () => {
     const staleGroup: TreeNode = {
       ...group,
       accounts: [{ ...group.accounts[0], username: "BoxeClubITA", language: "" }],
@@ -220,7 +172,6 @@ describe("GroupDetailPanel batch settings", () => {
         <GroupDetailPanel
           group={staleGroup}
           onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
           onDeleteGroup={() => {}}
           onSaved={() => {}}
           onRename={() => {}}
@@ -234,7 +185,6 @@ describe("GroupDetailPanel batch settings", () => {
         <GroupDetailPanel
           group={refreshedGroup}
           onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
           onDeleteGroup={() => {}}
           onSaved={() => {}}
           onRename={() => {}}
@@ -245,300 +195,15 @@ describe("GroupDetailPanel batch settings", () => {
     await waitFor(() => expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveAttribute("title", "Italiano · clicca per cambiare"));
   });
 
-  it("auto-saves uniquely detected title languages and flags generic titles for manual review", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchMock);
-    const onSaved = vi.fn();
-    const sampleGroup: TreeNode = {
-      ...group,
-      accounts: [
-        { ...group.accounts[0], username: "BoxeClubITA", language: "" },
-        { ...group.accounts[1], username: "BoxeClubFr", language: "" },
-        { ...group.accounts[0], id: 103, username: "BoxeClubEs", language: "" },
-        { ...group.accounts[1], id: 104, username: "BoxeClubPt", language: "" },
-        { ...group.accounts[0], id: 105, username: "RedGloveTR", language: "" },
-        { ...group.accounts[1], id: 106, username: "RedGloveRU", language: "" },
-        { ...group.accounts[0], id: 107, username: "BoxeClubDE", language: "" },
-        { ...group.accounts[1], id: 108, username: "Boxing Prime", language: "" },
-        { ...group.accounts[0], id: 109, username: "Boxing Zone", language: "" },
-      ],
-    };
-
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={sampleGroup}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={onSaved}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    // The seven uniquely-detectable channels are persisted immediately with
-    // a single click — no second confirmation step is needed.
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(7));
-    expect(onSaved).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/accounts/101"),
-      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ metadata: { language: "it" } }) }),
-    );
-    expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveAttribute("title", "Italiano · clicca per cambiare");
-    expect(screen.getByLabelText("Language for BoxeClubFr")).toHaveAttribute("title", "Français · clicca per cambiare");
-    expect(screen.getByLabelText("Language for BoxeClubEs")).toHaveAttribute("title", "Español · clicca per cambiare");
-    expect(screen.getByLabelText("Language for BoxeClubPt")).toHaveAttribute("title", "Português · clicca per cambiare");
-    expect(screen.getByLabelText("Language for RedGloveTR")).toHaveAttribute("title", "Türkçe · clicca per cambiare");
-    expect(screen.getByLabelText("Language for RedGloveRU")).toHaveAttribute("title", "Русский · clicca per cambiare");
-    expect(screen.getByLabelText("Language for BoxeClubDE")).toHaveAttribute("title", "Deutsch · clicca per cambiare");
-    expect(screen.getByLabelText("Avviso lingua: Lingua non determinabile per «Boxing Prime»: revisione manuale necessaria.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Avviso lingua: Lingua non determinabile per «Boxing Zone»: revisione manuale necessaria.")).toBeInTheDocument();
-    expect(screen.getByText(/2 da verificare/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Applica suggerimenti/ })).not.toBeInTheDocument();
-  });
-
-  it("auto-saves unique title languages and flags ambiguous titles for manual review", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchMock);
-    const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(false);
-    const detectionGroup: TreeNode = {
-      ...group,
-      accounts: [
-        { ...group.accounts[0], username: "WWE Italia", language: "" },
-        { ...group.accounts[1], username: "Italia English Wrestling", language: "" },
-      ],
-    };
-
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={detectionGroup}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    // "WWE Italia" has no configured language → its unique detection is
-    // persisted immediately, without any overwrite confirmation.
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/accounts/101"),
-      expect.objectContaining({
-        method: "PATCH",
-        body: JSON.stringify({ metadata: { language: "it" } }),
-      }),
-    ));
-    expect(confirmMock).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Language for WWE Italia")).toHaveAttribute("title", "Italiano · clicca per cambiare");
-    expect(screen.getByLabelText("Avviso lingua: Titolo ambiguo: possibili lingue it, en.")).toBeInTheDocument();
-    expect(screen.getByText(/1 da verificare/)).toBeInTheDocument();
-    // The ambiguous title is never converted into a suggestion.
-    expect(screen.queryByRole("button", { name: /Applica suggerimenti/ })).not.toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/groups/7/settings"))).toBe(false);
-  });
-
-  it("flags an ambiguous title even when a language is already configured", () => {
-    const reviewGroup: TreeNode = {
-      ...group,
-      accounts: [{ ...group.accounts[0], username: "Italia English Wrestling", language: "fr" }],
-    };
-
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={reviewGroup}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    expect(screen.getByLabelText(/Avviso lingua: Titolo ambiguo/)).toBeInTheDocument();
-    expect(screen.getByLabelText("Language for Italia English Wrestling")).toHaveAttribute("title", "Français · clicca per cambiare");
-  });
-
-  it("flags a title without a reliable marker for manual review", () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const reviewGroup: TreeNode = {
-      ...group,
-      accounts: [{ ...group.accounts[0], username: "Wrestling Discovery", language: "" }],
-    };
-
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={reviewGroup}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    expect(screen.getByLabelText(/Avviso lingua:.*non determinabile/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Applica suggerimenti/ })).not.toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("asks before overwriting an existing language detected from the title", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchMock);
-    const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(false);
-    const detectionGroup: TreeNode = {
-      ...group,
-      accounts: [{ ...group.accounts[0], username: "WWE Italia", language: "en" }],
-    };
-
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={detectionGroup}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    fireEvent.click(screen.getByRole("button", { name: /Applica suggerimenti/ }));
-    expect(confirmMock).toHaveBeenCalledWith(expect.stringContaining("sovrascritta"));
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("updates an existing language only after overwrite confirmation", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    const detectionGroup: TreeNode = {
-      ...group,
-      accounts: [{ ...group.accounts[0], username: "WWE Italia", language: "en" }],
-    };
-
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={detectionGroup}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    fireEvent.click(screen.getByRole("button", { name: /Applica suggerimenti/ }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/accounts/101"),
-      expect.objectContaining({
-        method: "PATCH",
-        body: JSON.stringify({ metadata: { language: "it" } }),
-      }),
-    ));
-  });
-
-  it("keeps the auto-saved suggestion pending when the PATCH fails", async () => {
-    const fetchMock = vi.fn().mockRejectedValue(new Error("salvataggio lingua non riuscito"));
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    const detectionGroup: TreeNode = {
-      ...group,
-      accounts: [{ ...group.accounts[0], username: "WWE Italia", language: "" }],
-    };
-
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={detectionGroup}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    // The failed auto-save restores the detected suggestion ("it") and keeps
-    // it pending so the operator can retry without re-running detection.
-    await waitFor(() => expect(screen.getByLabelText("Language for WWE Italia")).toHaveAttribute("title", "Italiano · clicca per cambiare"));
-    expect(screen.getByRole("button", { name: /Applica suggerimenti \(1\)/ })).toBeInTheDocument();
-    expect(screen.getByLabelText(/salvataggio lingua non riuscito/)).toBeInTheDocument();
-  });
-
-  it("restores a manually edited suggestion and keeps it pending when PATCH fails", async () => {
-    const fetchMock = vi.fn().mockRejectedValue(new Error("modifica lingua non riuscita"));
-    vi.stubGlobal("fetch", fetchMock);
-    const detectionGroup: TreeNode = {
-      ...group,
-      accounts: [{ ...group.accounts[0], username: "WWE Italia", language: "" }],
-    };
-
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={detectionGroup}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={() => {}}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
-    // Wait for the auto-save attempt to settle (it fails) before editing the
-    // dropdown — the select is disabled while a save is in flight.
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByLabelText(/modifica lingua non riuscita/)).toBeInTheDocument());
-    fireEvent.click(screen.getByLabelText("Language for WWE Italia"));
-    fireEvent.click(screen.getByRole("menuitem", { name: "English" }));
-    await waitFor(() => expect(screen.getByLabelText("Language for WWE Italia")).toHaveAttribute("title", "Italiano · clicca per cambiare"));
-    expect(screen.getByRole("button", { name: /Applica suggerimenti \(1\)/ })).toBeInTheDocument();
-    expect(screen.getByLabelText(/modifica lingua non riuscita/)).toBeInTheDocument();
-  });
-
-  it("saves language and remaining membership settings", async () => {
+  it("saves a language immediately when the operator picks one", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
     const onSaved = vi.fn();
 
-    render(
-      <MemoryRouter>
-        <GroupDetailPanel
-          group={group}
-          onPickAccount={() => {}}
-          onCreateSubgroup={() => {}}
-          onDeleteGroup={() => {}}
-          onSaved={onSaved}
-          onRename={() => {}}
-        />
-      </MemoryRouter>,
-    );
+    renderPanel({ onSaved });
 
     fireEvent.click(screen.getByLabelText("Language for channel-one"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Italiano" }));
-    fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/accounts/101"),
@@ -547,18 +212,7 @@ describe("GroupDetailPanel batch settings", () => {
         body: JSON.stringify({ metadata: { language: "it" } }),
       }),
     ));
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/groups/7/settings"),
-      expect.objectContaining({
-        method: "PATCH",
-        body: JSON.stringify({
-          accounts: [
-            { account_id: 101, language: "it" },
-            { account_id: 102, language: "fr" },
-          ],
-        }),
-      }),
-    );
-    expect(onSaved).toHaveBeenCalledTimes(2);
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/groups/7/settings"))).toBe(false);
   });
 });

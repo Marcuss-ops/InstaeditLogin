@@ -6,7 +6,6 @@ import {
   Folder,
   Link2,
   PauseCircle,
-  Plus,
   Pencil,
   RefreshCw,
   Trash2,
@@ -18,24 +17,20 @@ import { type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
 import { LanguagePicker } from "../../components/brand/LanguagePicker";
-import { detectChannelLanguage } from "./groupChannelLanguage";
 
 export function GroupDetailPanel({
   group,
   onPickAccount,
-  onCreateSubgroup,
   onDeleteGroup,
   onSaved,
   onRename,
 }: {
   group: TreeNode;
   onPickAccount: (id: number) => void;
-  onCreateSubgroup: (name: string) => void;
   onDeleteGroup: () => void;
   onSaved: () => void | Promise<void>;
   onRename: (name: string) => void | Promise<void>;
 }) {
-  const [subName, setSubName] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [groupName, setGroupName] = useState(group.name);
   const [savingName, setSavingName] = useState(false);
@@ -43,11 +38,6 @@ export function GroupDetailPanel({
   const [languages, setLanguages] = useState<Record<number, string>>(() => Object.fromEntries(group.accounts.map((account) => [account.id, account.language ?? ""])));
   const [savingLanguageId, setSavingLanguageId] = useState<number | null>(null);
   const [languageError, setLanguageError] = useState<Record<number, string>>({});
-  const [languageWarning, setLanguageWarning] = useState<Record<number, string>>({});
-  const [languageSuggestionIds, setLanguageSuggestionIds] = useState<Set<number>>(new Set());
-  const [languageOverwriteIds, setLanguageOverwriteIds] = useState<Set<number>>(new Set());
-  const [languageDetectionBusy, setLanguageDetectionBusy] = useState(false);
-  const [languageApplyBusy, setLanguageApplyBusy] = useState(false);
   const [removedAccountIds, setRemovedAccountIds] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -55,7 +45,6 @@ export function GroupDetailPanel({
     setGroupName(group.name);
     setEditingName(false);
     setRenameError(null);
-    setLanguageWarning({});
     setLanguages((current) => {
       const next = { ...current };
       for (const account of group.accounts) {
@@ -69,22 +58,13 @@ export function GroupDetailPanel({
       return next;
     });
     setRemovedAccountIds(new Set());
-    setLanguageSuggestionIds(new Set());
-    setLanguageOverwriteIds(new Set());
-    setLanguageDetectionBusy(false);
-    setLanguageApplyBusy(false);
     setSaveError(null);
   }, [group.id, group.accounts]);
 
-  const saveLanguage = async (accountId: number, language: string, preserveSuggestionOnFailure = false): Promise<boolean> => {
+  const saveLanguage = async (accountId: number, language: string): Promise<boolean> => {
     const previous = languages[accountId] ?? "";
     setLanguages((current) => ({ ...current, [accountId]: language }));
     setLanguageError((current) => {
-      const next = { ...current };
-      delete next[accountId];
-      return next;
-    });
-    setLanguageWarning((current) => {
       const next = { ...current };
       delete next[accountId];
       return next;
@@ -97,18 +77,9 @@ export function GroupDetailPanel({
       });
       return true;
     } catch (error) {
-      // On failure, restore the previous value. When the save was an
-      // auto-save of a detected suggestion (no language configured before),
-      // `previous` is empty and the pending suggestion must stay visible so
-      // the operator can retry it — otherwise the dropdown would silently
-      // drop the detection result.
-      setLanguages((current) => ({
-        ...current,
-        [accountId]: preserveSuggestionOnFailure && previous.trim() === "" ? language : previous,
-      }));
-      if (preserveSuggestionOnFailure) {
-        setLanguageSuggestionIds((current) => new Set(current).add(accountId));
-      }
+      // On failure, restore the previous value and surface the error so the
+      // operator can retry from the per-channel dropdown.
+      setLanguages((current) => ({ ...current, [accountId]: previous }));
       setLanguageError((current) => ({
         ...current,
         [accountId]: error instanceof Error ? error.message : "Unable to save language",
@@ -121,143 +92,9 @@ export function GroupDetailPanel({
 
   const visibleAccounts = group.accounts.filter((account) => !removedAccountIds.has(account.id));
 
-  const detectLanguages = async () => {
-    if (languageDetectionBusy || languageApplyBusy) return;
-    setLanguageDetectionBusy(true);
-    setLanguageError((current) => {
-      const next = { ...current };
-      for (const account of visibleAccounts) delete next[account.id];
-      return next;
-    });
-    setLanguageWarning((current) => {
-      const next = { ...current };
-      for (const account of visibleAccounts) delete next[account.id];
-      return next;
-    });
-    const suggestions = new Map<number, string>();
-    const overwriteIds = new Set<number>();
-    const autoSaveIds: number[] = [];
-    const reviewWarnings = new Map<number, string>();
-    for (const account of visibleAccounts) {
-      const currentLanguage = (languages[account.id] ?? "").trim();
-      const result = detectChannelLanguage(account.username || account.platform_user_id);
-      if (result.language && result.language !== currentLanguage) {
-        suggestions.set(account.id, result.language);
-        if (currentLanguage) {
-          // A language is already configured: never overwrite it silently.
-          // Keep the explicit confirm-and-apply flow for these channels.
-          overwriteIds.add(account.id);
-        } else {
-          // No language configured yet: persist the unique detection
-          // immediately — one click saves every channel that can be
-          // resolved from its title.
-          autoSaveIds.push(account.id);
-        }
-      } else if (result.reason === "ambiguous-markers") {
-        // Ambiguous titles are never converted into a suggestion. The current
-        // language remains untouched until the operator decides manually,
-        // even when an older language value is already configured.
-        reviewWarnings.set(account.id, `Titolo ambiguo: possibili lingue ${result.candidates.join(", ")}.`);
-      } else if (!currentLanguage && result.reason === "insufficient-signal") {
-        // The channel name makes the warning label unique per row and tells
-        // the operator exactly which channel needs a manual language pick.
-        reviewWarnings.set(account.id, `Lingua non determinabile per «${account.username || account.platform_user_id}»: revisione manuale necessaria.`);
-      }
-    }
-    setLanguages((current) => ({ ...current, ...Object.fromEntries(suggestions) }));
-    setLanguageSuggestionIds(new Set(suggestions.keys()));
-    setLanguageOverwriteIds(overwriteIds);
-    setLanguageWarning(Object.fromEntries(reviewWarnings));
-    // Auto-save: channels without a configured language get the unique
-    // detection persisted right away (a failed PATCH keeps the channel as a
-    // pending suggestion so the operator can retry or adjust manually).
-    if (autoSaveIds.length > 0) {
-      setLanguageApplyBusy(true);
-      let savedAny = false;
-      for (const accountId of autoSaveIds) {
-        const language = suggestions.get(accountId) ?? "";
-        if (!language) continue;
-        const saved = await saveLanguage(accountId, language, true);
-        if (saved) {
-          savedAny = true;
-          setLanguageSuggestionIds((current) => {
-            const next = new Set(current);
-            next.delete(accountId);
-            return next;
-          });
-          setLanguageOverwriteIds((current) => {
-            const next = new Set(current);
-            next.delete(accountId);
-            return next;
-          });
-          setLanguageWarning((current) => {
-            const next = { ...current };
-            delete next[accountId];
-            return next;
-          });
-        }
-      }
-      setLanguageApplyBusy(false);
-      if (savedAny) await onSaved();
-    }
-    setLanguageDetectionBusy(false);
-  };
-
-  const confirmLanguageOverwrite = () => {
-    if (languageOverwriteIds.size === 0) return true;
-    const names = visibleAccounts
-      .filter((account) => languageOverwriteIds.has(account.id))
-      .map((account) => account.username || account.platform_user_id)
-      .join(", ");
-    return window.confirm(`Rilevamento: la lingua configurata verrà sovrascritta per ${names}. Continuare?`);
-  };
-
   const saveManualLanguage = async (accountId: number, language: string) => {
-    const saved = await saveLanguage(accountId, language, languageSuggestionIds.has(accountId));
-    if (saved) {
-      setLanguageSuggestionIds((current) => {
-        const next = new Set(current);
-        next.delete(accountId);
-        return next;
-      });
-      setLanguageOverwriteIds((current) => {
-        const next = new Set(current);
-        next.delete(accountId);
-        return next;
-      });
-      await onSaved();
-    }
-  };
-
-  const applyLanguageSuggestions = async () => {
-    const suggestedAccounts = visibleAccounts.filter((account) => languageSuggestionIds.has(account.id));
-    if (suggestedAccounts.length === 0 || !confirmLanguageOverwrite() || languageApplyBusy) return;
-    setLanguageApplyBusy(true);
-    let savedAny = false;
-    for (const account of suggestedAccounts) {
-      const language = languages[account.id] ?? "";
-      const saved = await saveLanguage(account.id, language);
-      if (saved) {
-        savedAny = true;
-        setLanguageWarning((current) => {
-          const next = { ...current };
-          delete next[account.id];
-          return next;
-        });
-        setLanguageSuggestionIds((current) => {
-          const next = new Set(current);
-          next.delete(account.id);
-          return next;
-        });
-        setLanguageOverwriteIds((current) => {
-          const next = new Set(current);
-          next.delete(account.id);
-          return next;
-        });
-      }
-    }
-    setLanguageApplyBusy(false);
-    if (savedAny) await onSaved();
+    const saved = await saveLanguage(accountId, language);
+    if (saved) await onSaved();
   };
   // "Rimuovi dalla cartella": dedicated endpoint that only deletes the
   // group_accounts membership and resyncs workspace_channels — it never
@@ -295,27 +132,6 @@ export function GroupDetailPanel({
     }
   };
 
-  const saveSettings = async () => {
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const response = await authedFetch(`/api/v1/groups/${group.id}/settings`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          accounts: visibleAccounts.map((account) => ({
-            account_id: account.id,
-            language: languages[account.id] ?? "",
-          })),
-        }),
-      });
-      if (!response.ok) throw new Error("Unable to save group settings");
-      await onSaved();
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "Unable to save group settings");
-    } finally {
-      setSaving(false);
-    }
-  };
   return (
     <div>
       <div className="flex items-start justify-between gap-3 mb-5">
@@ -377,21 +193,11 @@ export function GroupDetailPanel({
             </div>
           )}
           <p className="text-[12px] text-[#9aa0aa] mt-0.5">
-            {visibleAccounts.length} accounts · {group.children.length} sub-folders
+            {visibleAccounts.length} canali · {group.children.length} sottocartelle
           </p>
-          {languageSuggestionIds.size > 0 ? <p className="mt-2 text-[12px] text-amber-200" role="status">Applica o modifica manualmente i suggerimenti rilevati prima di salvare le impostazioni.</p> : null}
           {saveError ? <p className="mt-2 text-[12px] text-red-300" role="alert">{saveError}</p> : null}
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void saveSettings()}
-            disabled={saving || languageApplyBusy || languageSuggestionIds.size > 0}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-black text-[12px] font-semibold disabled:opacity-50 disabled:cursor-progress hover:bg-zinc-100 transition-colors"
-          >
-            {saving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-            {saving ? "Saving..." : "Save changes"}
-          </button>
           <button
             type="button"
             onClick={onDeleteGroup}
@@ -404,87 +210,28 @@ export function GroupDetailPanel({
         </div>
       </div>
 
-      {/* Add sub-group */}
-      <div className="flex items-center gap-2 mb-5">
-        <input
-          type="text"
-          value={subName}
-          onChange={(e) => setSubName(e.target.value)}
-          placeholder="New sub-folder name..."
-          className="flex-1 px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-[13px] text-white placeholder:text-[#9aa0aa] focus:outline-none focus:ring-2 focus:ring-violet-500/40"
-          aria-label="New sub-group name"
-        />
-        <button
-          type="button"
-          onClick={() => {
-            onCreateSubgroup(subName);
-            setSubName("");
-          }}
-          disabled={!subName.trim()}
-          className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white text-black text-[12px] font-semibold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-zinc-100 transition-colors"
-        >
-          <Plus size={14} /> Add
-        </button>
-      </div>
-
       {/* Current accounts in this group */}
       <div className="mb-6">
-          <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa]">
-              Accounts in this folder ({visibleAccounts.length})
-            </h3>
-            <div className="flex flex-wrap items-center gap-2 self-start">
-              <button
-                type="button"
-                onClick={() => void detectLanguages()}
-                disabled={languageDetectionBusy || languageApplyBusy || visibleAccounts.length === 0}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-violet-300/30 bg-violet-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-500/20 disabled:cursor-progress disabled:opacity-50"
-              >
-                <RefreshCw size={12} className={languageDetectionBusy ? "animate-spin" : ""} />
-                {languageDetectionBusy ? "Analisi…" : "Analizza lingue dai titoli"}
-              </button>
-              {Object.keys(languageWarning).length > 0 ? (
-                <span className="text-[11px] font-medium text-amber-200" title="Alcuni titoli richiedono una revisione manuale">
-                  {Object.keys(languageWarning).length} da verificare
-                </span>
-              ) : null}
-              {languageSuggestionIds.size > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => void applyLanguageSuggestions()}
-                  disabled={languageApplyBusy || languageDetectionBusy}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-amber-300 px-2.5 py-1.5 text-[11px] font-bold text-black hover:bg-amber-200 disabled:cursor-progress disabled:opacity-50"
-                >
-                  <CheckCircle2 size={12} />
-                  {languageApplyBusy ? "Aggiornamento…" : `Applica suggerimenti (${languageSuggestionIds.size})`}
-                </button>
-              ) : null}
-            </div>
-          </div>
+          <h3 className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa]">
+            Canali in questa cartella ({visibleAccounts.length})
+          </h3>
 
         {visibleAccounts.length === 0 ? (
-          <p className="text-[12px] text-[#9aa0aa] italic">No accounts yet. Drag one in from below.</p>
+          <p className="text-[12px] text-[#9aa0aa] italic">Nessun canale in questa cartella. Trascina un canale dal pannello qui sotto.</p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {visibleAccounts.map((a) => (
-              <div key={a.id} className="flex items-center gap-1 rounded-lg border border-white/[0.10] bg-white/[0.04] p-1.5">
-                <div className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1">
-                  <button type="button" onClick={() => onPickAccount(a.id)} className="truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username}`}>{a.username || a.platform_user_id}</button>
-                </div>
+              <div key={a.id} className="flex items-center gap-1.5 rounded-lg border border-white/[0.10] bg-white/[0.04] p-1.5">
+                <button type="button" onClick={() => onPickAccount(a.id)} className="min-w-0 truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username || a.platform_user_id}`}>{a.username || a.platform_user_id}</button>
                 <LanguagePicker
                   value={languages[a.id]}
                   label={`Language for ${a.username || a.platform_user_id}`}
-                  disabled={savingLanguageId === a.id || languageApplyBusy}
+                  disabled={savingLanguageId === a.id}
                   error={Boolean(languageError[a.id])}
                   onChange={(language) => void saveManualLanguage(a.id, language)}
                 />
-                {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]} aria-label={languageError[a.id]}>!</span> : null}
-                {languageWarning[a.id] ? (
-                  <span className="max-w-[180px] text-[10px] leading-tight text-amber-200" title={languageWarning[a.id]} aria-label={`Avviso lingua: ${languageWarning[a.id]}`}>
-                    {languageWarning[a.id]}
-                  </span>
-                ) : null}
-                <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username || `canale #${a.id}`} dalla cartella`} title="Rimuovi dalla cartella — il canale resta collegato"><FolderMinus size={14} /></button>
+                {languageError[a.id] ? <span className="shrink-0 text-[11px] font-bold leading-none text-red-300" title={languageError[a.id]} aria-label={`Errore lingua: ${languageError[a.id]}`}>!</span> : null}
+                <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="shrink-0 rounded-md p-1.5 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username || `canale #${a.id}`} dalla cartella`} title="Rimuovi dalla cartella — il canale resta collegato"><FolderMinus size={14} /></button>
               </div>
             ))}
           </div>
