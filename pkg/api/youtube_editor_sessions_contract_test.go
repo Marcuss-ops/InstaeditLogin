@@ -8,12 +8,12 @@ package api
 // This file is the Go half of a cross-repo contract lock. The corresponding
 // TS halves live in VeloxFrontend at:
 //
-//	web/dark_editor/__tests__/publishResponseContract.test.ts   (response)
-//	web/dark_editor/__tests__/publishRequestContract.test.ts    (request)
+//	web/instaeditor/__tests__/publishResponseContract.test.ts   (response)
+//	web/instaeditor/__tests__/publishRequestContract.test.ts    (request)
 //
 // All three halves read the SAME OpenAPI schema (in api/openapi.yaml;
 // the TS halves read from a vendored copy at
-// web/dark_editor/api/openapi.yaml, locked by the same drift CI check
+// web/instaeditor/api/openapi.yaml, locked by the same drift CI check
 // the response lock uses) and assert that their local type never
 // drifts away from it.
 //
@@ -203,7 +203,7 @@ func TestPublishResponseContract_OpenAPI_Matches_DTO(t *testing.T) {
 	//    OpenAPI NOT in `[required]`  ↔  Go `,omitempty`  ↔  TS `?`
 	// All three sides MUST agree per field. This is the Go half of
 	// the lock; the TS half lives at
-	// VeloxFrontend/web/dark_editor/__tests__/publishResponseContract.test.ts
+	// VeloxFrontend/web/instaeditor/__tests__/publishResponseContract.test.ts
 	// (the "every TS field optionality matches the OpenAPI required
 	// array" it() block). Drift between the two halves surfaces
 	// here (Go) and there (TS) independently — the CI workflow gates
