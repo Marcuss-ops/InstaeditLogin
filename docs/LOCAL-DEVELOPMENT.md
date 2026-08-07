@@ -180,8 +180,11 @@ container, AND the worker container (5 background goroutines:
 
 The Compose overlay (`docker-compose.local.yml`) is committed; the
 base `docker-compose.yml` is committed; the `Dockerfile` is
-committed. **No host port mapping on MinIO** — `api` reaches MinIO
-via Compose service DNS (`http://minio:9000`).
+committed. The overlay publishes MinIO on the host at
+`127.0.0.1:19000:9000` (so `ops/local/Caddyfile` can reverse-proxy
+path-style presigned uploads from `/instaedit-local/*`), while
+`api`/`worker` reach MinIO via Compose service DNS
+(`http://minio:9000`).
 
 ## Step 5 — start Vite in a tmux session
 
