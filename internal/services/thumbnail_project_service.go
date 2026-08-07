@@ -32,6 +32,9 @@ type ThumbnailProjectStore interface {
 	ListAssignments(context.Context, int64, string) ([]models.ThumbnailAssignment, error)
 	UpdateAssignmentStatus(context.Context, int64, string, string) error
 	UpdateExportStatus(context.Context, int64, string, string, string, []byte, int64, string) error
+	CreateVeloxProjectBridge(context.Context, *models.VeloxProjectBridge) error
+	FindVeloxProjectBridge(context.Context, int64, string) (*models.VeloxProjectBridge, error)
+	DeleteVeloxProjectBridge(context.Context, int64, string) error
 }
 
 var _ ThumbnailProjectStore = (*repository.ThumbnailProjectRepository)(nil)
@@ -202,6 +205,33 @@ func (s *ThumbnailProjectService) DeleteAsset(ctx context.Context, workspaceID i
 		return err
 	}
 	return s.store.DeleteAsset(ctx, workspaceID, projectID, mediaID, role)
+}
+
+func (s *ThumbnailProjectService) CreateVeloxProjectBridge(ctx context.Context, bridge *models.VeloxProjectBridge) error {
+	if bridge == nil {
+		return fmt.Errorf("%w: bridge is required", repository.ErrVeloxProjectBridgeInvalid)
+	}
+	if err := s.validateWorkspace(bridge.WorkspaceID); err != nil {
+		return err
+	}
+	if err := bridge.NormalizeAndValidate(); err != nil {
+		return fmt.Errorf("%w: %v", repository.ErrVeloxProjectBridgeInvalid, err)
+	}
+	return s.store.CreateVeloxProjectBridge(ctx, bridge)
+}
+
+func (s *ThumbnailProjectService) FindVeloxProjectBridge(ctx context.Context, workspaceID int64, projectID string) (*models.VeloxProjectBridge, error) {
+	if err := s.validateWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+	return s.store.FindVeloxProjectBridge(ctx, workspaceID, strings.TrimSpace(projectID))
+}
+
+func (s *ThumbnailProjectService) DeleteVeloxProjectBridge(ctx context.Context, workspaceID int64, projectID string) error {
+	if err := s.validateWorkspace(workspaceID); err != nil {
+		return err
+	}
+	return s.store.DeleteVeloxProjectBridge(ctx, workspaceID, strings.TrimSpace(projectID))
 }
 
 func (s *ThumbnailProjectService) UpdateAssignmentStatus(ctx context.Context, workspaceID int64, assignmentID, status string) error {

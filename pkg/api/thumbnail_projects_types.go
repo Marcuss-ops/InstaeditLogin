@@ -50,6 +50,9 @@ type ThumbnailProjectStore interface {
 	// a project with zero rows is unlinked, one or more means it is
 	// assigned to at least one video.
 	ListAssignments(ctx context.Context, workspaceID int64, projectID string) ([]models.ThumbnailAssignment, error)
+	CreateVeloxProjectBridge(ctx context.Context, bridge *models.VeloxProjectBridge) error
+	FindVeloxProjectBridge(ctx context.Context, workspaceID int64, projectID string) (*models.VeloxProjectBridge, error)
+	DeleteVeloxProjectBridge(ctx context.Context, workspaceID int64, projectID string) error
 }
 
 type createThumbnailProjectRequest struct {
@@ -101,4 +104,19 @@ type createThumbnailProjectAssetRequest struct {
 
 type thumbnailProjectAssetListResponse struct {
 	Items []models.ThumbnailProjectAsset `json:"items"`
+}
+
+type createVeloxProjectBridgeRequest struct {
+	WorkspaceID       int64   `json:"workspace_id"`
+	Platform          string  `json:"platform,omitempty"`
+	PlatformAccountID *int64  `json:"platform_account_id,omitempty"`
+	ChannelID         *string `json:"channel_id,omitempty"`
+	VideoID           *string `json:"video_id,omitempty"`
+	Language          *string `json:"language,omitempty"`
+	VeloxProjectID    string  `json:"velox_project_id"`
+}
+
+type veloxProjectBridgeResponse struct {
+	Bridge    models.VeloxProjectBridge `json:"bridge"`
+	EditorURL string                    `json:"editor_url"`
 }

@@ -86,6 +86,15 @@ func (s *thumbnailProjectServiceStore) UpdateAssignmentStatus(context.Context, i
 func (s *thumbnailProjectServiceStore) UpdateExportStatus(context.Context, int64, string, string, string, []byte, int64, string) error {
 	return nil
 }
+func (s *thumbnailProjectServiceStore) CreateVeloxProjectBridge(context.Context, *models.VeloxProjectBridge) error {
+	return nil
+}
+func (s *thumbnailProjectServiceStore) FindVeloxProjectBridge(context.Context, int64, string) (*models.VeloxProjectBridge, error) {
+	return nil, nil
+}
+func (s *thumbnailProjectServiceStore) DeleteVeloxProjectBridge(context.Context, int64, string) error {
+	return nil
+}
 
 func TestThumbnailProjectServiceUpdateExportStatusRequiresWorkspace(t *testing.T) {
 	service := NewThumbnailProjectService(&thumbnailProjectServiceStore{})

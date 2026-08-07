@@ -31,10 +31,13 @@ type ThumbnailProjectsModule struct {
 	createAssignment http.HandlerFunc
 	listAssignments  http.HandlerFunc
 	resolveMedia     http.HandlerFunc
+	createBridge     http.HandlerFunc
+	getBridge        http.HandlerFunc
+	deleteBridge     http.HandlerFunc
 }
 
-func NewThumbnailProjectsModule(protected func(http.HandlerFunc) http.HandlerFunc, create, list, get, update, snapshot, revisions, revision, restore, archive, delete, render, getExport, addAsset, listAssets, deleteAsset, createAssignment, listAssignments, resolveMedia http.HandlerFunc) RouteModule {
-	return &ThumbnailProjectsModule{protected: protected, create: create, list: list, get: get, update: update, snapshot: snapshot, revisions: revisions, revision: revision, restore: restore, archive: archive, delete: delete, render: render, getExport: getExport, addAsset: addAsset, listAssets: listAssets, deleteAsset: deleteAsset, createAssignment: createAssignment, listAssignments: listAssignments, resolveMedia: resolveMedia}
+func NewThumbnailProjectsModule(protected func(http.HandlerFunc) http.HandlerFunc, create, list, get, update, snapshot, revisions, revision, restore, archive, delete, render, getExport, addAsset, listAssets, deleteAsset, createAssignment, listAssignments, resolveMedia, createBridge, getBridge, deleteBridge http.HandlerFunc) RouteModule {
+	return &ThumbnailProjectsModule{protected: protected, create: create, list: list, get: get, update: update, snapshot: snapshot, revisions: revisions, revision: revision, restore: restore, archive: archive, delete: delete, render: render, getExport: getExport, addAsset: addAsset, listAssets: listAssets, deleteAsset: deleteAsset, createAssignment: createAssignment, listAssignments: listAssignments, resolveMedia: resolveMedia, createBridge: createBridge, getBridge: getBridge, deleteBridge: deleteBridge}
 }
 
 var _ RouteModule = (*ThumbnailProjectsModule)(nil)
@@ -75,4 +78,10 @@ func (m *ThumbnailProjectsModule) Register(mux chi.Router) {
 	// server-authoritative source for the editor canvas — local blobs
 	// are never authoritative.
 	mux.Method(http.MethodPost, "/api/v1/thumbnail-projects/{id}/media/resolve", m.protected(m.resolveMedia))
+	// Minimal InstaEdit-owned bridge to the separate Velox editor. The
+	// bridge stores only an opaque Velox handle plus optional concrete
+	// channel context; it never exposes groups or channel catalogs.
+	mux.Method(http.MethodPost, "/api/v1/thumbnail-projects/{id}/velox-bridge", m.protected(m.createBridge))
+	mux.Method(http.MethodGet, "/api/v1/thumbnail-projects/{id}/velox-bridge", m.protected(m.getBridge))
+	mux.Method(http.MethodDelete, "/api/v1/thumbnail-projects/{id}/velox-bridge", m.protected(m.deleteBridge))
 }

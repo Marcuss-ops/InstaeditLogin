@@ -181,4 +181,13 @@ var (
 	// assigned to this export. Maps to 409 at the API layer.
 	ErrThumbnailAssignmentConflict = errors.New("thumbnail assignment already exists")
 	ErrThumbnailDomainConflict     = errors.New("thumbnail project domain conflict")
+
+	// ErrVeloxProjectBridgeNotFound is returned when a bridge is not
+	// visible in the requested workspace/project scope.
+	ErrVeloxProjectBridgeNotFound = errors.New("velox project bridge not found")
+	// ErrVeloxProjectBridgeConflict marks either one-to-one bridge
+	// uniqueness collision (project_id or velox_project_id).
+	ErrVeloxProjectBridgeConflict = errors.New("velox project bridge already exists")
+	// ErrVeloxProjectBridgeInvalid marks bridge/context validation errors.
+	ErrVeloxProjectBridgeInvalid = errors.New("invalid velox project bridge")
 )

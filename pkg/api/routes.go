@@ -179,6 +179,9 @@ func (r *Router) Setup() http.Handler {
 		r.handleCreateThumbnailAssignments,
 		r.handleListThumbnailAssignments,
 		r.handleResolveThumbnailProjectMedia,
+		r.handleCreateVeloxProjectBridge,
+		r.handleGetVeloxProjectBridge,
+		r.handleDeleteVeloxProjectBridge,
 	))
 	reg.Register(NewMediaModule(MediaModuleDeps{
 		RateLimitSvc:       r.rateLimitSvc,

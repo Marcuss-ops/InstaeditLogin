@@ -1,0 +1,114 @@
+package repository_test
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+)
+
+func newVeloxBridgeMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
+	t.Helper()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db, mock
+}
+
+func TestVeloxProjectBridgeRepository_CreateUsesWorkspaceAndContext(t *testing.T) {
+	db, mock := newVeloxBridgeMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	accountID := int64(381)
+	channelID, videoID, language := "UC123", "video123", "en"
+	mock.ExpectExec(`INSERT INTO velox_project_bridges`).
+		WithArgs(int64(7), "thumbproj_1", "vx_1", "youtube", &accountID, &channelID, &videoID, &language, models.ThumbnailProjectStatusDeleted).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	bridge := &models.VeloxProjectBridge{
+		ProjectID: " thumbproj_1 ", WorkspaceID: 7, VeloxProjectID: " vx_1 ",
+		Platform: " YouTube ", PlatformAccountID: &accountID,
+		ChannelID: &channelID, VideoID: &videoID, Language: &language,
+	}
+	if err := repo.CreateVeloxProjectBridge(context.Background(), bridge); err != nil {
+		t.Fatalf("CreateVeloxProjectBridge: %v", err)
+	}
+	if bridge.ProjectID != "thumbproj_1" || bridge.VeloxProjectID != "vx_1" || bridge.Platform != "youtube" {
+		t.Fatalf("bridge was not normalized: %+v", bridge)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVeloxProjectBridgeRepository_CreateRejectsMissingContextAccount(t *testing.T) {
+	db, mock := newVeloxBridgeMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	channelID := "UC123"
+	err := repo.CreateVeloxProjectBridge(context.Background(), &models.VeloxProjectBridge{
+		ProjectID: "thumbproj_1", WorkspaceID: 7, VeloxProjectID: "vx_1", ChannelID: &channelID,
+	})
+	if !errors.Is(err, repository.ErrVeloxProjectBridgeInvalid) {
+		t.Fatalf("want invalid context, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVeloxProjectBridgeRepository_MapsUniqueConflict(t *testing.T) {
+	db, mock := newVeloxBridgeMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	mock.ExpectExec(`INSERT INTO velox_project_bridges`).
+		WithArgs(int64(7), "thumbproj_1", "vx_1", nil, nil, nil, nil, nil, models.ThumbnailProjectStatusDeleted).
+		WillReturnError(&pq.Error{Code: "23505", Constraint: "velox_project_bridges_pkey"})
+	err := repo.CreateVeloxProjectBridge(context.Background(), &models.VeloxProjectBridge{ProjectID: "thumbproj_1", WorkspaceID: 7, VeloxProjectID: "vx_1"})
+	if !errors.Is(err, repository.ErrVeloxProjectBridgeConflict) {
+		t.Fatalf("want bridge conflict, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVeloxProjectBridgeRepository_FindScopesWorkspace(t *testing.T) {
+	db, mock := newVeloxBridgeMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	mock.ExpectQuery(`SELECT project_id, workspace_id, velox_project_id,`).
+		WithArgs(int64(7), "thumbproj_1").
+		WillReturnRows(sqlmock.NewRows([]string{"project_id", "workspace_id", "velox_project_id", "platform", "platform_account_id", "channel_id", "video_id", "language", "created_at", "updated_at"}).
+			AddRow("thumbproj_1", 7, "vx_1", "youtube", 381, "UC123", "video123", "en", time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)))
+
+	bridge, err := repo.FindVeloxProjectBridge(context.Background(), 7, "thumbproj_1")
+	if err != nil || bridge == nil {
+		t.Fatalf("FindVeloxProjectBridge: bridge=%+v err=%v", bridge, err)
+	}
+	if bridge.WorkspaceID != 7 || bridge.VeloxProjectID != "vx_1" || bridge.PlatformAccountID == nil || *bridge.PlatformAccountID != 381 {
+		t.Fatalf("unexpected bridge: %+v", bridge)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVeloxProjectBridgeRepository_DeleteScopesWorkspace(t *testing.T) {
+	db, mock := newVeloxBridgeMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	mock.ExpectExec(`DELETE FROM velox_project_bridges`).
+		WithArgs(int64(7), "thumbproj_1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := repo.DeleteVeloxProjectBridge(context.Background(), 7, "thumbproj_1"); err != nil {
+		t.Fatalf("DeleteVeloxProjectBridge: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

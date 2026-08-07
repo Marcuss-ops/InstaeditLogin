@@ -48,6 +48,10 @@ type thumbnailProjectTestStore struct {
 	createdAssignments []models.ThumbnailAssignment
 	assignments        []models.ThumbnailAssignment
 	listAssignmentsErr error
+	bridge             *models.VeloxProjectBridge
+	bridgeErr          error
+	createBridgeErr    error
+	deleteBridgeErr    error
 }
 
 func (s *thumbnailProjectTestStore) Create(_ context.Context, project *models.ThumbnailProject) error {
@@ -145,6 +149,23 @@ func (s *thumbnailProjectTestStore) CreateAssignment(_ context.Context, assignme
 }
 func (s *thumbnailProjectTestStore) ListAssignments(_ context.Context, _ int64, _ string) ([]models.ThumbnailAssignment, error) {
 	return s.assignments, s.listAssignmentsErr
+}
+func (s *thumbnailProjectTestStore) CreateVeloxProjectBridge(_ context.Context, bridge *models.VeloxProjectBridge) error {
+	if s.createBridgeErr != nil {
+		return s.createBridgeErr
+	}
+	s.bridge = bridge
+	return nil
+}
+func (s *thumbnailProjectTestStore) FindVeloxProjectBridge(_ context.Context, _ int64, _ string) (*models.VeloxProjectBridge, error) {
+	return s.bridge, s.bridgeErr
+}
+func (s *thumbnailProjectTestStore) DeleteVeloxProjectBridge(_ context.Context, _ int64, _ string) error {
+	if s.deleteBridgeErr != nil {
+		return s.deleteBridgeErr
+	}
+	s.bridge = nil
+	return nil
 }
 
 func thumbnailProjectRouter(t *testing.T, store *thumbnailProjectTestStore, ws *mockWorkspaceStore) *Router {
