@@ -157,12 +157,19 @@ func (r *Router) callbackAttachSingle(w http.ResponseWriter, req *http.Request, 
 	return account, false
 }
 
-func (r *Router) writeCallbackSuccess(w http.ResponseWriter, req *http.Request, provider string, userID int64, account *models.PlatformAccount) {
+func (r *Router) writeCallbackSuccess(w http.ResponseWriter, req *http.Request, provider string, userID int64, account *models.PlatformAccount, redirectPath string) {
 	if r.frontendURL != "" {
 		q := url.Values{}
 		q.Set("provider", provider)
 		q.Set("status", "connected")
-		http.Redirect(w, req, strings.TrimRight(r.frontendURL, "/")+"/app/linking?"+q.Encode(), http.StatusFound)
+		// Default landing is the Linking page; a validated /app/... path
+		// carried in the sibling redirect cookie (from ?redirect= at login
+		// time) sends the operator back to the page that started the flow.
+		target := "/app/linking"
+		if redirectPath != "" {
+			target = redirectPath
+		}
+		http.Redirect(w, req, strings.TrimRight(r.frontendURL, "/")+target+"?"+q.Encode(), http.StatusFound)
 		return
 	}
 	// CLI / test mode (no FRONTEND_URL): typed JSON response so

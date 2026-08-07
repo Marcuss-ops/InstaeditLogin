@@ -35,6 +35,16 @@ const oauthStateExpectedChannelSuffix = "_expected_channel"
 // consent URL.
 const oauthStateOAuthClientSuffix = "_oauth_client"
 
+// oauthStateRedirectSuffix is appended to oauth_state_{provider} to
+// form the sibling cookie that round-trips an optional ?redirect=/app/...
+// SPA path (e.g. the Groups "Aggiungi canale" button) from handleLogin
+// to the callback. The callback then lands the operator on that page
+// instead of the default /app/linking. The URL state param stays a pure
+// CSRF nonce; this HttpOnly cookie is the only path for the return
+// target to round-trip. Single-use: deleted on read, exactly like the
+// expected-channel sibling cookie.
+const oauthStateRedirectSuffix = "_redirect"
+
 func OAuthStateCookieName(provider string) string {
 	return oauthStateCookiePrefix + models.NormalizePlatformIdentifier(provider)
 }
@@ -63,6 +73,95 @@ func OAuthStateExpectedChannelCookieName(provider string) string {
 // client.
 func OAuthStateOAuthClientCookieName(provider string) string {
 	return oauthStateCookiePrefix + models.NormalizePlatformIdentifier(provider) + oauthStateOAuthClientSuffix
+}
+
+// OAuthStateRedirectCookieName returns the sibling cookie name used
+// when /api/v1/auth/{provider}/login is invoked with a validated
+// ?redirect=/app/... path: it round-trips the desired post-OAuth SPA
+// landing page to the callback. Same HttpOnly / Secure / SameSite=None
+// attributes as the other sibling cookies; deleted on read.
+func OAuthStateRedirectCookieName(provider string) string {
+	return oauthStateCookiePrefix + models.NormalizePlatformIdentifier(provider) + oauthStateRedirectSuffix
+}
+
+// isValidOAuthRedirectPath restricts post-OAuth return targets to
+// same-origin SPA paths under /app/. Everything else (external URLs,
+// protocol-relative hosts, backslashes, query strings, fragments,
+// path traversal) is rejected so a crafted ?redirect= can never turn
+// the callback into an open redirect. ".." / "." segments are
+// rejected explicitly: the browser would resolve /app/../admin to
+// /admin before the SPA router ever sees it, which defeats the
+// prefix check.
+func isValidOAuthRedirectPath(s string) bool {
+	if len(s) < len("/app/") || len(s) > 256 {
+		return false
+	}
+	if !strings.HasPrefix(s, "/app/") {
+		return false
+	}
+	for _, segment := range strings.Split(s, "/") {
+		if segment == ".." || segment == "." {
+			return false
+		}
+	}
+	for _, r := range s[len("/app/"):] {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '/', r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// setOAuthRedirectCookie writes the sibling oauth_state_{provider}
+// _redirect cookie that round-trips the validated ?redirect= SPA path
+// from handleLogin to the callback. Issued only when handleLogin saw a
+// valid /app/... path; cleared (single-use) on read by
+// verifyOAuthRedirectCookie, and re-cleared by every login that does
+// NOT carry a ?redirect= so a stale cookie from a failed flow can never
+// steer a new flow's landing page.
+func setOAuthRedirectCookie(w http.ResponseWriter, provider, redirectPath, cookieDomain string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: OAuthStateRedirectCookieName(provider), Value: redirectPath, Path: "/",
+		Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+		MaxAge: int(oauthStateMaxAge.Seconds()),
+	})
+}
+
+// clearOAuthRedirectCookie deletes the sibling redirect cookie.
+// handleLogin calls it on every flow that carries no (valid)
+// ?redirect= so the return target is ALWAYS reset at login time —
+// otherwise a stale cookie left behind by a failed flow (exchange
+// error, 409/422 attach) would redirect the NEXT flow's callback to
+// the wrong page.
+func clearOAuthRedirectCookie(w http.ResponseWriter, provider, cookieDomain string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: OAuthStateRedirectCookieName(provider), Value: "", Path: "/",
+		Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
+		MaxAge: -1, Expires: time.Unix(1, 0),
+	})
+}
+
+// verifyOAuthRedirectCookie reads + deletes the sibling redirect cookie
+// and returns the validated SPA path (or "" when absent/invalid). The
+// value is re-validated on read so a forged cookie cannot steer the
+// callback to an external host; a bad value silently falls back to the
+// default /app/linking landing. Single-use: the cookie is cleared on
+// read so a replay of the same callback cannot re-trigger the redirect.
+func verifyOAuthRedirectCookie(w http.ResponseWriter, req *http.Request, provider, cookieDomain string) string {
+	c, err := req.Cookie(OAuthStateRedirectCookieName(provider))
+	if err != nil || c.Value == "" {
+		return ""
+	}
+	clearOAuthRedirectCookie(w, provider, cookieDomain)
+	if !isValidOAuthRedirectPath(c.Value) {
+		return ""
+	}
+	return c.Value
 }
 
 // isValidYouTubeChannelID returns true for strings that look like a

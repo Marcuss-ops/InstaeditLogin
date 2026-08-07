@@ -78,7 +78,10 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Step 4 — success: redirect to the SPA (or JSON in CLI/test mode).
-	r.writeCallbackSuccess(w, req, provider, userID, account)
+	// The optional sibling redirect cookie (validated /app/... path from
+	// ?redirect= at login time) overrides the default /app/linking landing.
+	redirectPath := verifyOAuthRedirectCookie(w, req, provider, r.cookieDomain)
+	r.writeCallbackSuccess(w, req, provider, userID, account, redirectPath)
 }
 
 func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, provider, state string) (expectedChannelID string, oauthClientKey string, fromConnectLink bool, stop bool) {

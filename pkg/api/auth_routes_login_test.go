@@ -5,6 +5,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -244,6 +245,102 @@ func TestHandleLogin_YouTube_ExpectedChannelID_IgnoredForNonYouTube(t *testing.T
 	for _, c := range w.Result().Cookies() {
 		if c.Name == OAuthStateExpectedChannelCookieName("instagram") && c.MaxAge > 0 {
 			t.Errorf("expected_channel_id must be ignored on non-YouTube providers: %+v", c)
+		}
+	}
+}
+
+func TestHandleLogin_RedirectParam_SetsSiblingCookie(t *testing.T) {
+	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login?redirect=/app/groups", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
+	}
+	var sib *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateRedirectCookieName("instagram") {
+			sib = c
+			break
+		}
+	}
+	if sib == nil {
+		t.Fatal("oauth_state_instagram_redirect cookie not set; the return path cannot round-trip to the callback")
+	}
+	if sib.Value != "/app/groups" {
+		t.Errorf("redirect cookie value: want /app/groups, got %q", sib.Value)
+	}
+	if !sib.HttpOnly {
+		t.Error("redirect cookie must be HttpOnly (XSS exfiltration defense)")
+	}
+	if !sib.Secure {
+		t.Error("redirect cookie must be Secure (HTTPS-only)")
+	}
+	if sib.SameSite != http.SameSiteNoneMode {
+		t.Errorf("redirect cookie SameSite: want None, got %v", sib.SameSite)
+	}
+}
+
+func TestHandleLogin_RedirectParam_Invalid_NotSet(t *testing.T) {
+	for _, redirect := range []string{
+		"https://evil.example.com",
+		"//evil.example.com",
+		"/logout",
+		"/app/groups?admin=1",
+		"/app/../admin",
+		"javascript:alert(1)",
+		"/app/groups#fragment",
+	} {
+		t.Run("reject_"+redirect, func(t *testing.T) {
+			svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
+			store := &mockUserStore{}
+			r := newTestRouter(svc, store, "")
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login?redirect="+url.QueryEscape(redirect), nil)
+			w := httptest.NewRecorder()
+			withBearerJWT(t, req, 1)
+			r.Setup().ServeHTTP(w, req)
+
+			if w.Code != http.StatusFound {
+				t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
+			}
+			for _, c := range w.Result().Cookies() {
+				if c.Name == OAuthStateRedirectCookieName("instagram") && c.MaxAge > 0 {
+					t.Errorf("invalid redirect %q must NOT set the sibling cookie: %+v", redirect, c)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleLogin_RedirectParam_Absent_ClearsStaleCookie(t *testing.T) {
+	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	// A previous flow (e.g. one that failed at attach) left a stale
+	// redirect cookie behind. A new login WITHOUT ?redirect= must clear
+	// it so the callback falls back to the default /app/linking landing.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
+	req.AddCookie(&http.Cookie{
+		Name: OAuthStateRedirectCookieName("instagram"), Value: "/app/groups",
+		Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateRedirectCookieName("instagram") && c.MaxAge >= 0 {
+			t.Fatalf("stale redirect cookie must be cleared on a login without ?redirect= (got MaxAge=%d)", c.MaxAge)
 		}
 	}
 }

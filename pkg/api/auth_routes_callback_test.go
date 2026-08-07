@@ -189,6 +189,81 @@ func TestHandleCallback_AuthorizeChannelError(t *testing.T) {
 	}
 }
 
+func TestHandleCallback_Success_FrontendRedirect_UsesRedirectCookie(t *testing.T) {
+	svc := &mockProvider{
+		platform:       "instagram",
+		handleCallback: successCallback,
+	}
+	store := &mockUserStore{
+		attachFn: successAttach,
+	}
+	r := newTestRouter(svc, store, "https://app.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "instagram", "test-state")
+	req.AddCookie(&http.Cookie{
+		Name: OAuthStateRedirectCookieName("instagram"), Value: "/app/groups",
+		Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
+	}
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, "https://app.example.com/app/groups?") {
+		t.Fatalf("redirect URL must land on the cookie's /app/groups return path: %s", loc)
+	}
+	if !strings.Contains(loc, "provider=instagram") || !strings.Contains(loc, "status=connected") {
+		t.Fatalf("expected provider=instagram and status=connected in redirect params: %s", loc)
+	}
+	// Single-use contract: the callback must delete the redirect cookie
+	// on read so a replay of the same callback cannot re-trigger the
+	// /app/groups redirect (it would fall back to /app/linking).
+	foundDelete := false
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateRedirectCookieName("instagram") && c.MaxAge < 0 {
+			foundDelete = true
+		}
+	}
+	if !foundDelete {
+		t.Fatal("callback must clear the redirect cookie on read (single-use)")
+	}
+}
+
+func TestHandleCallback_Success_FrontendRedirect_RejectsInvalidRedirectCookie(t *testing.T) {
+	svc := &mockProvider{
+		platform:       "instagram",
+		handleCallback: successCallback,
+	}
+	store := &mockUserStore{
+		attachFn: successAttach,
+	}
+	r := newTestRouter(svc, store, "https://app.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "instagram", "test-state")
+	req.AddCookie(&http.Cookie{
+		Name: OAuthStateRedirectCookieName("instagram"), Value: "https://evil.example.com",
+		Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
+	}
+	loc := w.Header().Get("Location")
+	// A forged / invalid redirect cookie must fall back to the default
+	// /app/linking landing — never an open redirect.
+	if !strings.Contains(loc, "https://app.example.com/app/linking?") {
+		t.Fatalf("invalid redirect cookie must fall back to /app/linking (no open redirect): %s", loc)
+	}
+}
+
 func TestHandleCallback_Success_JSONResponse(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",

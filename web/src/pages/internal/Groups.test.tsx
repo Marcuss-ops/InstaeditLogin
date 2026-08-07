@@ -344,6 +344,12 @@ describe("GroupsPage", () => {
       "href",
       expect.stringContaining("/api/v1/auth/youtube/login?mode=add"),
     );
+    // After the OAuth round-trip the backend lands the operator back on
+    // the Groups page (via the sibling redirect cookie), not Linking.
+    expect(addLink).toHaveAttribute(
+      "href",
+      expect.stringContaining("redirect=/app/groups"),
+    );
     expect(screen.getByRole("link", { name: "Aggiungi canale" })).toBeInTheDocument();
   });
 });

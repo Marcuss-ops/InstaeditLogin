@@ -58,6 +58,21 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	}
 	identity := auth.IdentityFromContext(req.Context())
 
+	// Optional ?redirect=/app/... SPA path: when present (and validated)
+	// it round-trips in a sibling cookie so the callback lands the
+	// operator back on the page that started the connect flow (e.g. the
+	// Groups "Aggiungi canale" button) instead of the default
+	// /app/linking. Invalid values are silently dropped — the flow still
+	// proceeds and falls back to /app/linking. The cookie is written on
+	// EVERY login: set when a valid path is present, cleared otherwise,
+	// so a stale cookie left by a previous failed flow can never steer
+	// the next flow's landing page.
+	if redirectPath := req.URL.Query().Get("redirect"); isValidOAuthRedirectPath(redirectPath) {
+		setOAuthRedirectCookie(w, provider, redirectPath, r.cookieDomain)
+	} else {
+		clearOAuthRedirectCookie(w, provider, r.cookieDomain)
+	}
+
 	// YouTube-only: ?expected_channel_id=UC... tells the server which
 	// channel the operator intends to bind the OAuth grant to. Without
 	// it, a Google account with N>1 channels cannot be attached safely
