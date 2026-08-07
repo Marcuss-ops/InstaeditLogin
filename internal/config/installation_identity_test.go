@@ -10,6 +10,7 @@ func TestLoad_ExpectedDatabaseInstallationUUID(t *testing.T) {
 	t.Setenv("EXPECTED_DATABASE_INSTALLATION_UUID", "00000000-0000-4000-8000-000000000123")
 	t.Setenv("JWT_SECRET", validJWTSecret())
 	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("INSTAEDITOR_URL", "https://editor.instaedit.test/dark_editor_v2")
 	t.Setenv("METRICS_BASIC_AUTH_USER", "test-user")
 	t.Setenv("METRICS_BASIC_AUTH_PASS", "test-pass")
 
@@ -27,6 +28,7 @@ func TestLoad_ProductionRejectsMissingExpectedDatabaseInstallationUUID(t *testin
 	t.Setenv("EXPECTED_DATABASE_INSTALLATION_UUID", "")
 	t.Setenv("JWT_SECRET", validJWTSecret())
 	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("INSTAEDITOR_URL", "https://editor.instaedit.test/dark_editor_v2")
 	t.Setenv("METRICS_BASIC_AUTH_USER", "test-user")
 	t.Setenv("METRICS_BASIC_AUTH_PASS", "test-pass")
 
@@ -44,6 +46,7 @@ func TestLoad_ProductionRejectsInvalidExpectedDatabaseInstallationUUID(t *testin
 	t.Setenv("EXPECTED_DATABASE_INSTALLATION_UUID", "not-a-uuid")
 	t.Setenv("JWT_SECRET", validJWTSecret())
 	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("INSTAEDITOR_URL", "https://editor.instaedit.test/dark_editor_v2")
 	t.Setenv("METRICS_BASIC_AUTH_USER", "test-user")
 	t.Setenv("METRICS_BASIC_AUTH_PASS", "test-pass")
 

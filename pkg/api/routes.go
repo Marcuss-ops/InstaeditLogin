@@ -56,6 +56,7 @@ func (r *Router) Setup() http.Handler {
 		YouTubeVideoEditStore: r.youtubeVideoEditStore,
 		WorkspaceStore:        r.workspaceStore,
 		TeamStore:             r.teamStore,
+		LaunchTokenIssuer:     r.editorLaunchTokenIssuer,
 	}))
 	reg.Register(NewIntegrationsModule(IntegrationsModuleDeps{
 		ExternalDestinationStore: r.externalDestinations,
@@ -281,7 +282,7 @@ func (r *Router) Setup() http.Handler {
 	if r.csrfMiddleware != nil {
 		updateEditorSessionHandler = r.csrfMiddleware(updateEditorSessionHandler)
 	}
-	r.mux.Method(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}", r.protected(updateEditorSessionHandler.ServeHTTP))
+	r.mux.Method(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}", r.editorSessionProtected(updateEditorSessionHandler.ServeHTTP))
 
 	// P0#5: project-centric entry points for InstaEditor. The
 	// InstaEditor holds only velox_project_id in its URL; it must be
@@ -289,13 +290,13 @@ func (r *Router) Setup() http.Handler {
 	// without first POSTing /editor-sessions to discover the
 	// session_id.
 	var getEditorSessionByProjectHandler http.Handler = http.HandlerFunc(r.handleGetYouTubeEditorSessionByProject)
-	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}", r.protected(getEditorSessionByProjectHandler.ServeHTTP))
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}", r.editorSessionProtected(getEditorSessionByProjectHandler.ServeHTTP))
 
 	var publishEditorSessionByProjectHandler http.Handler = http.HandlerFunc(r.handlePublishYouTubeEditorSessionByProject)
 	if r.csrfMiddleware != nil {
 		publishEditorSessionByProjectHandler = r.csrfMiddleware(publishEditorSessionByProjectHandler)
 	}
-	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish", r.protected(publishEditorSessionByProjectHandler.ServeHTTP))
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish", r.editorSessionProtected(publishEditorSessionByProjectHandler.ServeHTTP))
 
 	// P2 — InstaEditor auto-save endpoint. The InstaEditor PUTs the
 	// form values on debounce + on-blur so an operator who closed
@@ -306,7 +307,7 @@ func (r *Router) Setup() http.Handler {
 	if r.csrfMiddleware != nil {
 		saveDraftByProjectHandler = r.csrfMiddleware(saveDraftByProjectHandler)
 	}
-	r.mux.Method(http.MethodPut, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/draft", r.protected(saveDraftByProjectHandler.ServeHTTP))
+	r.mux.Method(http.MethodPut, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/draft", r.editorSessionProtected(saveDraftByProjectHandler.ServeHTTP))
 
 	// POST /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata
 	// ASYNC NVIDIA AI metadata generation kick-off (migration 113):
@@ -356,7 +357,7 @@ func (r *Router) Setup() http.Handler {
 	if r.csrfMiddleware != nil {
 		attachThumbnailHandler = r.csrfMiddleware(attachThumbnailHandler)
 	}
-	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/thumbnail", r.protected(attachThumbnailHandler.ServeHTTP))
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/thumbnail", r.editorSessionProtected(attachThumbnailHandler.ServeHTTP))
 
 	// GET /api/v1/groups/{group_id}/youtube/videos — dashboard card
 	// grid. Read-only, no CSRF (GET exempt). Aggregates the

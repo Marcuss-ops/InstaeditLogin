@@ -89,7 +89,37 @@ func (a *App) publishWorkerSpec() worker.WorkerSpec {
 			// table is the contract boundary for the Blocco #1
 			// two-phase split (Phase-1 stamps, Phase-2 reads + videos.update).
 			pw.SetYouTubeTargetPublicationStore(a.runtime.youtubeTargetPublicationStore)
+			// Per-channel-language posting: wire the NVIDIA translator so
+			// targets whose channel declares a language (metadata["language"])
+			// get the post's title/caption translated at publish time. The
+			// feature is off when NVIDIA_API_KEY is empty — the original
+			// text is published unchanged.
+			pw.SetNvidiaMetadataTranslator(services.NewMetadataGenerator(
+				a.Cfg.AI.NVIDIAAPIKey,
+				services.WithModel(a.Cfg.AI.NVIDIAModel),
+			))
 			return pw.Run(ctx)
+		},
+	}
+}
+
+func (a *App) metadataGenerationWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
+		Name:     "metadata_generation",
+		Critical: false,
+		Run: func(ctx context.Context) error {
+			// Async NVIDIA metadata generation (migration 113): claims
+			// metadata_generation_jobs and calls NVIDIA in the background
+			// so POST /generate-metadata returns 202 immediately. Feature
+			// off when NVIDIA_API_KEY is empty (the worker idles on an
+			// empty queue; the POST endpoint still returns 503).
+			mw := worker.NewMetadataGenerationWorker(
+				repository.NewMetadataGenerationJobRepository(a.DB),
+				services.NewMetadataGenerator(a.Cfg.AI.NVIDIAAPIKey, services.WithModel(a.Cfg.AI.NVIDIAModel)),
+				time.Duration(a.Cfg.Worker.MetadataGenerationWorkerIntervalSeconds)*time.Second,
+				slog.Default(),
+			)
+			return mw.Run(ctx)
 		},
 	}
 }

@@ -17,6 +17,12 @@ func (c *Config) validateVelox() error {
 		return fmt.Errorf("VELOX_PROJECT_BRIDGE_CONTRACT_VERSION must be %q", ProjectBridgeContractVersion)
 	}
 	hasControl := c.Velox.VeloxControlURL != "" || c.Velox.VeloxControlJWTSecret != ""
+	if c.HTTP.AppEnv == "production" && len(c.Velox.EditorLaunchTokenSecret) < 32 {
+		return fmt.Errorf("INSTAEDITOR_LAUNCH_TOKEN_SECRET is required in production and must be at least 32 bytes")
+	}
+	if c.Velox.EditorLaunchTokenSecret != "" && len(c.Velox.EditorLaunchTokenSecret) < 32 {
+		return fmt.Errorf("INSTAEDITOR_LAUNCH_TOKEN_SECRET must be at least 32 bytes (got %d)", len(c.Velox.EditorLaunchTokenSecret))
+	}
 	if hasControl {
 		if c.Velox.VeloxControlURL == "" {
 			return fmt.Errorf("VELOX_CONTROL_URL is required when VELOX_CONTROL_JWT_SECRET is set")

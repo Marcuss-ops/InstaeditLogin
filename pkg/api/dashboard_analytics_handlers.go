@@ -72,11 +72,13 @@ const dashboardTopVideosPerAccount = 20
 // channels so a large fleet cannot saturate the dashboard response.
 const dashboardTopVideosMaxTotal = 20
 
-// dashboardTopVideosCacheTTL bounds how long a dashboard top-videos
-// ranking is reused before the fan-out refetches from YouTube. The
-// dashboard renders on every app visit, so a short TTL keeps the
-// YouTube quota cost of 62-channel fan-outs bounded.
-const dashboardTopVideosCacheTTL = 5 * time.Minute
+// dashboardAnalyticsCacheTTL bounds how long the FULL dashboard
+// analytics response (aggregates + per-channel rows + top videos) is
+// reused per (user, days) before the handler recomputes it. The
+// dashboard renders on every app visit, so a 1-hour TTL keeps both
+// the DB metric-history reads and the YouTube quota cost of the
+// top-videos fan-out bounded.
+const dashboardAnalyticsCacheTTL = time.Hour
 
 // dashboardVideoLister is the narrow optional capability the
 // dashboard fan-out needs to read per-video views. Defined as a local
@@ -87,9 +89,10 @@ type dashboardVideoLister interface {
 	ListAccountContent(ctx context.Context, accessToken, platformUserID, cursor string, limit int, privacyFilter string) (*models.AccountContentPage, error)
 }
 
-// dashboardTopVideosCacheEntry is the per-(user, days) cached ranking.
-type dashboardTopVideosCacheEntry struct {
-	videos    []dashboardTopVideo
+// dashboardAnalyticsCacheEntry is the per-(user, days) cached full
+// dashboard response.
+type dashboardAnalyticsCacheEntry struct {
+	resp      dashboardAnalyticsResponse
 	expiresAt time.Time
 }
 
@@ -126,6 +129,22 @@ func (r *Router) handleGetDashboardAnalytics(w http.ResponseWriter, req *http.Re
 			days = parsed
 		}
 	}
+
+	// Full-response cache: the dashboard renders on every app visit,
+	// so a fresh entry for (user, days) short-circuits before any DB
+	// history read or YouTube fan-out.
+	cacheKey := fmt.Sprintf("%d|%d", identity.UserID(), days)
+	now := time.Now()
+	r.dashboardAnalyticsCacheMu.Lock()
+	if r.dashboardAnalyticsCache == nil {
+		r.dashboardAnalyticsCache = make(map[string]dashboardAnalyticsCacheEntry)
+	}
+	if cached, hit := r.dashboardAnalyticsCache[cacheKey]; hit && cached.expiresAt.After(now) {
+		r.dashboardAnalyticsCacheMu.Unlock()
+		writeJSON(w, http.StatusOK, cached.resp)
+		return
+	}
+	r.dashboardAnalyticsCacheMu.Unlock()
 
 	accounts, err := r.userRepo.ListFilteredYouTubeAccounts(identity.UserID(), nil, "", "", "")
 	if err != nil {
@@ -203,48 +222,48 @@ func (r *Router) handleGetDashboardAnalytics(w http.ResponseWriter, req *http.Re
 		resp.Aggregates.RevenueCents = &totalRevenue
 	}
 
-	// Top-videos fan-out (cached). Failure only empties the ranking;
-	// the aggregate + tables above remain fully functional.
-	resp.TopVideos = r.dashboardTopVideosRanking(req.Context(), identity.UserID(), accounts, from, to, days)
+	// Top-videos fan-out. Failure only empties the ranking; the
+	// aggregate + tables above remain fully functional.
+	var fanoutDegraded bool
+	resp.TopVideos, fanoutDegraded = r.dashboardTopVideosRanking(req.Context(), accounts, from, to)
+
+	// Cache the full response for (user, days) so repeated dashboard
+	// loads skip both the DB history read and the YouTube fan-out.
+	// Degraded responses (at least one channel's fan-out failed) are
+	// NOT cached: a transient YouTube outage must not pin an empty or
+	// partial ranking for the full TTL.
+	if !fanoutDegraded {
+		r.dashboardAnalyticsCacheMu.Lock()
+		r.dashboardAnalyticsCache[cacheKey] = dashboardAnalyticsCacheEntry{resp: resp, expiresAt: now.Add(dashboardAnalyticsCacheTTL)}
+		r.dashboardAnalyticsCacheMu.Unlock()
+	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // dashboardTopVideosRanking returns the cross-channel "Migliori video"
 // ranking for the user, ranked by total views and capped at
-// dashboardTopVideosMaxTotal. Results are cached per (user, days) for
-// dashboardTopVideosCacheTTL so repeated dashboard loads do not burn
-// YouTube quota. A per-account failure skips that channel; the whole
-// ranking degrades to empty only when every channel fails or the
-// video lister capability is absent.
+// dashboardTopVideosMaxTotal, plus a degraded flag that is true when
+// at least one channel's fan-out failed (the ranking may be partial
+// or empty because of an upstream error, not because there are no
+// videos). The caller (handleGetDashboardAnalytics) caches the FULL
+// response for dashboardAnalyticsCacheTTL, so this fan-out runs at
+// most once per (user, days) window — and skips the cache entirely
+// when degraded.
 func (r *Router) dashboardTopVideosRanking(
 	ctx context.Context,
-	userID int64,
 	accounts []*models.PlatformAccount,
 	from, to time.Time,
-	days int,
-) []dashboardTopVideo {
+) ([]dashboardTopVideo, bool) {
 	lister, ok := r.youTubeSvc.(dashboardVideoLister)
 	if !ok || lister == nil || r.vault == nil {
-		return []dashboardTopVideo{}
+		return []dashboardTopVideo{}, false
 	}
-
-	cacheKey := fmt.Sprintf("%d|%d", userID, days)
-	now := time.Now()
-	r.dashboardTopVideosCacheMu.Lock()
-	if r.dashboardTopVideosCache == nil {
-		r.dashboardTopVideosCache = make(map[string]dashboardTopVideosCacheEntry)
-	}
-	if cached, hit := r.dashboardTopVideosCache[cacheKey]; hit && cached.expiresAt.After(now) {
-		out := append([]dashboardTopVideo(nil), cached.videos...)
-		r.dashboardTopVideosCacheMu.Unlock()
-		return out
-	}
-	r.dashboardTopVideosCacheMu.Unlock()
 
 	sem := make(chan struct{}, groupYouTubeVideosFanoutConcurrency)
 	type result struct {
 		videos []dashboardTopVideo
+		failed bool
 	}
 	results := make(chan result, len(accounts))
 	var wg sync.WaitGroup
@@ -259,12 +278,12 @@ func (r *Router) dashboardTopVideosRanking(
 			defer cancel()
 			token, tokenErr := r.vault.Renew(accCtx, acc.ID, models.TokenTypeBearer, r.youTubeSvc.RefreshOAuthToken)
 			if tokenErr != nil {
-				results <- result{}
+				results <- result{failed: true}
 				return
 			}
 			page, listErr := lister.ListAccountContent(accCtx, token.AccessToken, acc.PlatformUserID, "", dashboardTopVideosPerAccount, "")
 			if listErr != nil {
-				results <- result{}
+				results <- result{failed: true}
 				return
 			}
 			videos := make([]dashboardTopVideo, 0, len(page.Items))
@@ -289,21 +308,18 @@ func (r *Router) dashboardTopVideosRanking(
 	close(results)
 
 	all := make([]dashboardTopVideo, 0, dashboardTopVideosMaxTotal*2)
+	degraded := false
 	for res := range results {
 		all = append(all, res.videos...)
+		if res.failed {
+			degraded = true
+		}
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].Views > all[j].Views })
 	if len(all) > dashboardTopVideosMaxTotal {
 		all = all[:dashboardTopVideosMaxTotal]
 	}
-
-	r.dashboardTopVideosCacheMu.Lock()
-	r.dashboardTopVideosCache[cacheKey] = dashboardTopVideosCacheEntry{
-		videos:    append([]dashboardTopVideo(nil), all...),
-		expiresAt: now.Add(dashboardTopVideosCacheTTL),
-	}
-	r.dashboardTopVideosCacheMu.Unlock()
-	return all
+	return all, degraded
 }
 
 // metricValueByKey extracts a metric value by key (e.g. "views") from

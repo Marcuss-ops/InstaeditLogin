@@ -144,15 +144,22 @@ export function YouTubePublishCard({
                 Apri video su YouTube
               </a>
             )}
-            {session?.editor_url && (
+            {session?.editor_url ? (
               <a
                 href={session.editor_url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.06] px-3 py-2 text-[12px] font-medium text-white hover:bg-white/[0.12] transition-colors"
               >
-                Riapri editor
+                Riapri InstaEditor
               </a>
+            ) : (
+              <span
+                role="alert"
+                className="inline-flex items-center rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-[12px] font-medium text-amber-100"
+              >
+                Editor unavailable / misconfigured
+              </span>
             )}
           </div>
         </div>

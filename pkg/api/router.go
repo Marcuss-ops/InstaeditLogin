@@ -246,6 +246,9 @@ type Router struct {
 	// editor runtime. It is deliberately distinct from the jobs/assets
 	// client so editor requests cannot inherit workspace-global routes.
 	editorBFFClient editor.ProxyClient
+	// editorLaunchTokenIssuer mints/verifies the short-lived project-scoped
+	// InstaEditor handoff and in-memory editor session tokens.
+	editorLaunchTokenIssuer editor.LaunchTokenIssuer
 	// editorService is the provider-neutral application boundary for
 	// project lifecycle and render operations. It is optional for legacy
 	// bridge-only deployments and wired by the composition root when
@@ -367,8 +370,9 @@ type Router struct {
 	// in internal/bootstrap/app.go.
 	contentPipelineStore ContentPipelineStore
 
-	// editorURL is the base URL of the InstaEditor SPA. When empty,
-	// frontendURL is used as a fallback.
+	// editorURL is the base URL of the separately deployed InstaEditor SPA.
+	// When empty, editor launchers fail closed; frontendURL is never used
+	// as an editor destination.
 	editorURL string
 
 	// publishingInFlightTimeout bounds how long a session can stay in

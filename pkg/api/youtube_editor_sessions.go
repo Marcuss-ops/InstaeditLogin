@@ -172,7 +172,17 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	// project and persists the mapping. Background callers (no
 	// authenticated user) skip it; the bridge is minted lazily on the
 	// first operator open.
-	if err := r.ensureEditorProjectBridge(ctx, in, account.PlatformUserID, persisted); err != nil {
+	if err := r.ensureEditorProjectBridge(ctx, in, persisted); err != nil {
+		// The session row is durable and may have been newly inserted
+		// before the provider bridge failed. Mark it failed so the
+		// operator cannot observe an apparently editable orphan; the
+		// next Modifica attempt reuses this row and retries the same
+		// idempotent bridge resolution.
+		persisted.Status = "failed"
+		persisted.LastError = err.Error()
+		if compensateErr := r.youtubeVideoEditStore.Update(ctx, persisted); compensateErr != nil {
+			return nil, fmt.Errorf("%w (failed to mark editor session failed: %v)", err, compensateErr)
+		}
 		return nil, err
 	}
 	// YouTube's videos.list response is authoritative for the source
@@ -225,20 +235,15 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 // Velox service-to-service handoff) pass UserID=0 and are skipped here:
 // the mapping is minted lazily on the first operator open, which runs
 // the same idempotent path.
-func (r *Router) ensureEditorProjectBridge(ctx context.Context, in CreateEditorSessionInput, channelID string, edit *models.YouTubeVideoEdit) error {
+func (r *Router) ensureEditorProjectBridge(ctx context.Context, in CreateEditorSessionInput, edit *models.YouTubeVideoEdit) error {
 	if edit == nil || r.editorService == nil || in.UserID <= 0 {
 		return nil
 	}
-	accountID := in.PlatformAccountID
 	created, err := r.editorService.CreateProject(ctx, services.CreateEditorProjectRequest{
 		UserID:               in.UserID,
 		WorkspaceID:          in.WorkspaceID,
 		ApplicationProjectID: edit.ID,
 		ExternalProjectID:    edit.VeloxProjectID,
-		Platform:             models.PlatformYouTube,
-		PlatformAccountID:    &accountID,
-		ChannelID:            &channelID,
-		VideoID:              &edit.YouTubeVideoID,
 	})
 	if err != nil {
 		return fmt.Errorf("ensure editor project bridge: %w", err)

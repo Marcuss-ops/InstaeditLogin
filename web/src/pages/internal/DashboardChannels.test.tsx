@@ -141,7 +141,7 @@ beforeEach(() => {
   createEditorSessionAndOpenMock.mockReset().mockResolvedValue({
     session_id: "ytedit_x",
     velox_project_id: "ve_x",
-    editor_url: "/dark_editor_v2/editor/ve_x",
+    editor_url: "https://editor.instaedit.test/editor/ve_x",
   });
 });
 afterEach(() => {

@@ -20,6 +20,7 @@ type EditorBFFModuleDeps struct {
 	YouTubeVideoEditStore YouTubeVideoEditStore
 	WorkspaceStore        WorkspaceStore
 	TeamStore             TeamStore
+	LaunchTokenIssuer     editor.LaunchTokenIssuer
 }
 
 type editorBFFModule struct {
@@ -73,6 +74,10 @@ func (m *editorBFFModule) Register(mux chi.Router) {
 
 // WithEditorBFFClient wires the project-scoped editor bridge. When absent,
 // /api/v1/editor/* is not mounted.
+func WithEditorLaunchTokenIssuer(issuer editor.LaunchTokenIssuer) RouterOption {
+	return func(r *Router) { r.editorLaunchTokenIssuer = issuer }
+}
+
 func WithEditorBFFClient(client editor.ProxyClient) RouterOption {
 	return func(r *Router) { r.editorBFFClient = client }
 }

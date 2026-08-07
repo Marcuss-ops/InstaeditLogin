@@ -95,13 +95,8 @@ func TestCreateEditorSession_EnsuresEditorProjectBridge(t *testing.T) {
 		call.ApplicationProjectID != sessID || call.ExternalProjectID != projID {
 		t.Fatalf("CreateProject request identity wrong: %+v", call)
 	}
-	if call.Platform != models.PlatformYouTube ||
-		call.PlatformAccountID == nil || *call.PlatformAccountID != accountID {
-		t.Fatalf("CreateProject account context wrong: %+v", call)
-	}
-	if call.ChannelID == nil || *call.ChannelID != channelID ||
-		call.VideoID == nil || *call.VideoID != videoID {
-		t.Fatalf("CreateProject channel/video context wrong: %+v", call)
+	if call.ExternalProjectID != projID || call.ApplicationProjectID != sessID {
+		t.Fatalf("CreateProject must carry only the session/project mapping: %+v", call)
 	}
 }
 

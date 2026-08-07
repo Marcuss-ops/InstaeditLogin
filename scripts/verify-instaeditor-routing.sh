@@ -3,7 +3,7 @@
 #
 # Static/optional operational guard for the InstaEditor infrastructure
 # contract. The product is branded InstaEditor, but deployed editor_url
-# values still use the stable Next base path /dark_editor_v2.
+# values may still traverse a stable infrastructure compatibility path.
 #
 # Default mode is offline and read-only. Set CHECK_INSTAEDITOR=1 and
 # INSTAEDITOR_URL (or EDITOR_URL) to perform an optional HTTP probe of the
@@ -53,10 +53,10 @@ if grep -Eq '^[[:space:]]*handle(_path)?[[:space:]]+/_next' "$LOCAL_CADDY"; then
   fail "Caddy contains a forbidden root-level /_next handler"
 fi
 
-# Both aliases must remain documented in the self-hosted stack.
+# The canonical standalone URL must remain documented. EDITOR_URL is
+# legacy-only and may be removed once all deployments migrate.
 grep -Fq 'INSTAEDITOR_URL' "$COMPOSE" || fail "Compose does not document INSTAEDITOR_URL"
-grep -Fq 'EDITOR_URL' "$COMPOSE" || fail "Compose does not document the EDITOR_URL fallback"
-grep -Fq '/dark_editor_v2' "$COMPOSE" || fail "Compose no longer documents the stable editor path"
+grep -Fq 'EDITOR_URL' "$COMPOSE" || fail "Compose does not document the EDITOR_URL alias"
 
 grep -Fq 'CHECK_INSTAEDITOR' "$SMOKE" || fail "post-deploy smoke lacks the optional InstaEditor probe"
 grep -Fq 'verify-instaeditor-routing.sh' "$DEPLOY_VERIFY" || fail "deploy verifier does not run the routing guard"
@@ -68,7 +68,7 @@ for env_file in .env.dev.example .env.production.example .env.test.example; do
   grep -Fq 'EDITOR_URL' "$path" || fail "$env_file lacks EDITOR_URL fallback"
 done
 
-pass "InstaEditor naming and /dark_editor_v2 compatibility contract is intact"
+pass "InstaEditor naming and standalone editor URL contract is intact"
 
 if [ "${CHECK_INSTAEDITOR:-0}" != "1" ]; then
   pass "offline mode (set CHECK_INSTAEDITOR=1 for an HTTP probe)"
@@ -77,11 +77,6 @@ fi
 
 EDITOR_BASE_URL="${INSTAEDITOR_URL:-${EDITOR_URL:-}}"
 [ -n "$EDITOR_BASE_URL" ] || fail "CHECK_INSTAEDITOR=1 requires INSTAEDITOR_URL or EDITOR_URL"
-case "$EDITOR_BASE_URL" in
-  */dark_editor_v2|*/dark_editor_v2/) ;;
-  *) fail "editor URL must preserve /dark_editor_v2, got $EDITOR_BASE_URL" ;;
-esac
-
 probe_url="${EDITOR_BASE_URL%/}/"
 status="$(curl -sS -L --max-time "${INSTAEDITOR_TIMEOUT_SECONDS:-15}" -o /dev/null -w '%{http_code}' "$probe_url" || true)"
 case "$status" in

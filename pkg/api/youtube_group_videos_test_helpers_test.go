@@ -134,6 +134,7 @@ func newGroupVideosRouter(
 		},
 	}
 	baseOpts := []RouterOption{
+		WithEditorURL("https://editor.instaedit.test"),
 		WithWorkspaceStore(workspaceStore),
 		WithYouTubeVideoEditStore(editStore),
 		WithYouTubeService(ytSvc),

@@ -4,7 +4,7 @@ package api
 //
 // END-TO-END TEST: NVIDIA metadata publish flow.
 //
-// This test exercises the FULL Dark Editor → YouTube publish pipeline
+// This test exercises the FULL InstaEditor → YouTube publish pipeline
 // with NVIDIA-generated metadata, validating every field end-to-end:
 //
 //   1. Publish request carries the canonical contract fixture

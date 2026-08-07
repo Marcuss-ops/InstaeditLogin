@@ -100,14 +100,23 @@ export function SessionRow({
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <a
-            href={session.editor_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors no-underline"
-          >
-            <ExternalLink size={12} aria-hidden="true" /> Velox
-          </a>
+          {session.editor_url ? (
+            <a
+              href={session.editor_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors no-underline"
+            >
+              <ExternalLink size={12} aria-hidden="true" /> InstaEditor
+            </a>
+          ) : (
+            <span
+              role="alert"
+              className="rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-[11px] font-semibold text-amber-100"
+            >
+              Editor unavailable / misconfigured
+            </span>
+          )}
         </div>
       </div>
 

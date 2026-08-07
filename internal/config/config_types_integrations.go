@@ -31,6 +31,13 @@ type VeloxConfig struct {
 	// VELOX_CONTROL_JWT_SECRET. Empty = BFF routes not mounted.
 	VeloxControlJWTSecret string
 
+	// EditorLaunchTokenSecret signs the short-lived, project-scoped
+	// launch/session tokens used by the separately deployed InstaEditor.
+	// It is distinct from VeloxControlJWTSecret: the latter authenticates
+	// InstaEdit's server-to-server BFF calls, while this secret authenticates
+	// the browser editor handoff. Loaded from INSTAEDITOR_LAUNCH_TOKEN_SECRET.
+	EditorLaunchTokenSecret string
+
 	// VeloxWebhookSecret is the shared HMAC-SHA256 secret used to
 	// sign callbacks sent from InstaEdit to Velox. It is distinct
 	// from VeloxAPIToken and VeloxControlJWTSecret. Loaded from

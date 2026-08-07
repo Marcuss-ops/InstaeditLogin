@@ -92,8 +92,11 @@ export function useYouTubeStudioActions({
     } catch (err) {
       if (err instanceof AuthError) return;
       setAction({ kind: "idle" });
-      // authedFetch already toasts on non-OK responses; keep the form
-      // mounted so the user can retry.
+      // Keep the form mounted so the user can retry, but surface both
+      // backend 503s and local URL validation failures explicitly.
+      toast.error(
+        err instanceof Error ? err.message : "Editor unavailable / misconfigured",
+      );
     }
   }, [
     manualVideoId,

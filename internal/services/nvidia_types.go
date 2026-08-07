@@ -13,8 +13,20 @@ type NVIDIAMetadataRequest struct {
 	Model string `json:"model,omitempty"`
 }
 
+// TranslateRequest is the input to MetadataGenerator.Translate — the
+// per-channel-language posting step. Title + Description are the post
+// content to translate; TargetLanguage is the target channel's
+// language (BCP-47); SourceLanguage is optional (when empty the model
+// infers it from the text).
+type TranslateRequest struct {
+	Title          string
+	Description    string
+	SourceLanguage string
+	TargetLanguage string
+}
+
 // NVIDIAMetadataResponse is the JSON shape the NVIDIA API MUST return
-// AND the canonical output the Dark Editor consumes. Every field is
+// AND the canonical output InstaEditor consumes. Every field is
 // validated server-side before being returned to the caller.
 // The API must NOT return markdown, free-text, or explanations
 // around the JSON — only the raw object.

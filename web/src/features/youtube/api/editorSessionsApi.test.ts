@@ -58,14 +58,14 @@ import {
 const OK_SESSION = {
   session_id: "ytedit_test_42",
   velox_project_id: "ve_test_99",
-  editor_url: "/dark_editor_v2/editor/ve_test_99",
+  editor_url: "https://editor.instaedit.test/editor/ve_test_99",
 };
 
 const FULL_SESSION = {
   id: "ytedit_test_42",
   youtube_video_id: "dQw4w9WgXcQ",
   velox_project_id: "ve_test_99",
-  editor_url: "/dark_editor_v2/editor/ve_test_99",
+  editor_url: "https://editor.instaedit.test/editor/ve_test_99",
   status: "draft",
   thumbnail_media_id: null,
   desired_privacy: "private",
@@ -310,9 +310,9 @@ describe("openInstaEditorInNewTab", () => {
     const openSpy = vi
       .spyOn(window, "open")
       .mockImplementation(() => null);
-    openInstaEditorInNewTab("/dark_editor_v2/editor/ve_x");
+    openInstaEditorInNewTab("https://editor.instaedit.test/editor/ve_x");
     expect(openSpy).toHaveBeenCalledWith(
-      "/dark_editor_v2/editor/ve_x",
+      "https://editor.instaedit.test/editor/ve_x",
       "_blank",
       "noopener,noreferrer",
     );
@@ -324,10 +324,10 @@ describe("redirectToInstaEditor", () => {
     const { redirectToInstaEditor } = await import("./editorSessionsApi");
     const navigate = vi.fn();
 
-    redirectToInstaEditor("/dark_editor_v2/editor/ve_x", navigate);
+    redirectToInstaEditor("https://editor.instaedit.test/editor/ve_x", navigate);
 
     expect(navigate).toHaveBeenCalledWith(
-      "http://localhost:3000/dark_editor_v2/editor/ve_x",
+      "https://editor.instaedit.test/editor/ve_x",
     );
   });
 
@@ -336,7 +336,29 @@ describe("redirectToInstaEditor", () => {
     const navigate = vi.fn();
 
     expect(() => redirectToInstaEditor("javascript:alert(1)", navigate)).toThrow(
-      /URL di InstaEditor non valido/i,
+      "Editor unavailable / misconfigured",
+    );
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty, relative, and unsafe absolute URLs without navigating to InstaEdit", async () => {
+    const { redirectToInstaEditor } = await import("./editorSessionsApi");
+    const navigate = vi.fn();
+
+    expect(() => redirectToInstaEditor("", navigate)).toThrow(
+      "Editor unavailable / misconfigured",
+    );
+    expect(() => redirectToInstaEditor("/editor/ve_missing", navigate)).toThrow(
+      "Editor unavailable / misconfigured",
+    );
+    expect(() => redirectToInstaEditor("https://user:pass@editor.example/editor/ve_x", navigate)).toThrow(
+      "Editor unavailable / misconfigured",
+    );
+    expect(() => redirectToInstaEditor("https://editor.example/editor/ve_x?env=prod", navigate)).toThrow(
+      "Editor unavailable / misconfigured",
+    );
+    expect(() => redirectToInstaEditor("https://editor.example/editor/ve_x#section", navigate)).toThrow(
+      "Editor unavailable / misconfigured",
     );
     expect(navigate).not.toHaveBeenCalled();
   });
@@ -344,7 +366,9 @@ describe("redirectToInstaEditor", () => {
 
 describe("createEditorSessionAndRedirect", () => {
   it("creates/reuses the session and redirects the current document without opening an iframe or popup", async () => {
-    authedFetchMock.mockResolvedValue(jsonResponse(OK_SESSION));
+    authedFetchMock
+      .mockResolvedValueOnce(jsonResponse(OK_SESSION))
+      .mockResolvedValueOnce(jsonResponse({ launch_token: "launch-token-test" }));
     const navigate = vi.fn();
 
     // The public helper accepts a navigation dependency through the low-level
@@ -357,14 +381,16 @@ describe("createEditorSessionAndRedirect", () => {
 
     expect(session).toEqual(OK_SESSION);
     expect(navigate).toHaveBeenCalledWith(
-      "http://localhost:3000/dark_editor_v2/editor/ve_test_99",
+      "https://editor.instaedit.test/editor/ve_test_99#launch_token=launch-token-test",
     );
   });
 });
 
 describe("createEditorSessionAndOpen", () => {
   it("chains create + window.open in one canonical call", async () => {
-    authedFetchMock.mockResolvedValue(jsonResponse(OK_SESSION));
+    authedFetchMock
+      .mockResolvedValueOnce(jsonResponse(OK_SESSION))
+      .mockResolvedValueOnce(jsonResponse({ launch_token: "launch-token-test" }));
     const openSpy = vi
       .spyOn(window, "open")
       .mockImplementation(() => null);
@@ -377,7 +403,7 @@ describe("createEditorSessionAndOpen", () => {
 
     expect(session).toEqual(OK_SESSION);
     expect(openSpy).toHaveBeenCalledWith(
-      OK_SESSION.editor_url,
+      "https://editor.instaedit.test/editor/ve_test_99#launch_token=launch-token-test",
       "_blank",
       "noopener,noreferrer",
     );

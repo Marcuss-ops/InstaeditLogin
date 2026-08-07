@@ -98,6 +98,22 @@ export interface GeneratedYouTubeMetadata {
 }
 
 /**
+ * Poll response of the async metadata generation job
+ * (GET /api/v1/youtube/editor-sessions/generate-metadata/jobs/{job_id}).
+ * When `status === "completed"`, `result` carries the full generated
+ * metadata; when `status === "failed"`, `error_message` explains why.
+ */
+export interface MetadataGenerationJob {
+  job_id: number;
+  status: "queued" | "processing" | "completed" | "failed";
+  velox_project_id: string;
+  result?: GeneratedYouTubeMetadata;
+  error_message?: string;
+  created_at?: string;
+  completed_at?: string;
+}
+
+/**
  * Query-string options for GET /api/v1/youtube/editor-sessions.
  * Both filters are independent and may be omitted for an unscoped
  * list (server enforces tenant isolation server-side; an unscoped
@@ -154,7 +170,7 @@ export interface YouTubeEditorSessionDetail
  * POST /api/v1/youtube/editor-sessions.
  *
  * Returns the resolved `editor_url` and stable `velox_project_id` —
- * callers can pass it to the isolated Dark Editor SPA through either
+ * callers can pass it to the isolated InstaEditor SPA through either
  * the legacy new-tab helper or the explicit top-level redirect helper.
  */
 export async function createYouTubeEditorSession(
@@ -169,12 +185,21 @@ export async function createYouTubeEditorSession(
   return (await resp.json()) as CreateYouTubeEditorSessionResponse;
 }
 
-/** Generate reviewable NVIDIA metadata without publishing anything. */
-export async function generateYouTubeMetadata(
+/**
+ * Async metadata generation (migration 113): the POST enqueues a job
+ * and returns 202 immediately — the server never blocks on the
+ * 60-180s NVIDIA call. This client polls the job until it completes
+ * (or fails), preserving the `GeneratedYouTubeMetadata` return shape.
+ */
+const METADATA_POLL_INTERVAL_MS = 2000;
+const METADATA_POLL_TIMEOUT_MS = 6 * 60 * 1000; // 6 minutes cap
+
+/** Kick off the async metadata generation job (POST → 202 + job_id). */
+export async function startYouTubeMetadataGeneration(
   veloxProjectID: string,
   prompt: string,
   init: RequestInit = {},
-): Promise<GeneratedYouTubeMetadata> {
+): Promise<{ job_id: number; status: string }> {
   const resp = await authedFetch(
     `${SESSIONS_PATH}/by-project/${encodeURIComponent(veloxProjectID)}/generate-metadata`,
     {
@@ -183,7 +208,54 @@ export async function generateYouTubeMetadata(
       ...init,
     },
   );
-  return (await resp.json()) as GeneratedYouTubeMetadata;
+  return (await resp.json()) as { job_id: number; status: string };
+}
+
+/** Poll one metadata generation job (GET). */
+export async function pollYouTubeMetadataGeneration(
+  jobID: number,
+  init: RequestInit = {},
+): Promise<MetadataGenerationJob> {
+  const resp = await authedFetch(
+    `${SESSIONS_PATH}/generate-metadata/jobs/${encodeURIComponent(String(jobID))}`,
+    { ...init },
+  );
+  return (await resp.json()) as MetadataGenerationJob;
+}
+
+/**
+ * Generate reviewable NVIDIA metadata without publishing anything.
+ *
+ * ASYNC: kicks off the job, then polls until `completed` (returns the
+ * generated metadata) or `failed` (throws with the server's
+ * error_message). Callers that need fine-grained progress can use
+ * `startYouTubeMetadataGeneration` + `pollYouTubeMetadataGeneration`
+ * directly instead.
+ */
+export async function generateYouTubeMetadata(
+  veloxProjectID: string,
+  prompt: string,
+  init: RequestInit = {},
+): Promise<GeneratedYouTubeMetadata> {
+  const { job_id } = await startYouTubeMetadataGeneration(veloxProjectID, prompt, init);
+
+  const deadline = Date.now() + METADATA_POLL_TIMEOUT_MS;
+  for (;;) {
+    const job = await pollYouTubeMetadataGeneration(job_id, init);
+    if (job.status === "completed") {
+      if (!job.result) {
+        throw new Error("Metadata generation completed without a result");
+      }
+      return job.result;
+    }
+    if (job.status === "failed") {
+      throw new Error(job.error_message || "Metadata generation failed");
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Metadata generation timed out");
+    }
+    await new Promise((resolve) => setTimeout(resolve, METADATA_POLL_INTERVAL_MS));
+  }
 }
 
 /**
@@ -271,16 +343,34 @@ export async function publishYouTubeEditorSession(
  * not a candidate for unification there.
  */
 function validateEditorURL(editorUrl: string): URL {
-  const parsed = new URL(editorUrl, window.location.origin);
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("URL di InstaEditor non valido: il browser ha bloccato un collegamento locale.");
+  const rawURL = editorUrl.trim();
+  if (!rawURL) {
+    throw new Error("Editor unavailable / misconfigured");
+  }
+  let parsed: URL;
+  try {
+    // Do not provide a base URL here. Relative or empty values would
+    // otherwise resolve against InstaEdit and silently reopen the main
+    // frontend instead of the separately deployed editor.
+    parsed = new URL(rawURL);
+  } catch {
+    throw new Error("Editor unavailable / misconfigured");
+  }
+  if (
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("Editor unavailable / misconfigured");
   }
   return parsed;
 }
 
 export function openInstaEditorInNewTab(editorUrl: string): void {
-  validateEditorURL(editorUrl);
-  window.open(editorUrl, "_blank", "noopener,noreferrer");
+  const parsed = validateEditorURL(editorUrl);
+  window.open(parsed.toString(), "_blank", "noopener,noreferrer");
 }
 
 /** Navigate the current top-level document to the separate editor SPA. */
@@ -290,6 +380,46 @@ export function redirectToInstaEditor(
 ): void {
   const parsed = validateEditorURL(editorUrl);
   navigate(parsed.toString());
+}
+
+/**
+ * Mint a one-time project-scoped launch token before crossing into the
+ * separately deployed editor. The token is placed in the URL fragment so
+ * it is not sent in the initial editor HTTP request or reverse-proxy logs.
+ */
+export async function createEditorLaunchURL(
+  editorUrl: string,
+  projectId: string,
+): Promise<string> {
+  const parsed = validateEditorURL(editorUrl);
+  const response = await authedFetch("/api/v1/editor/launch", {
+    method: "POST",
+    body: JSON.stringify({ project_id: projectId }),
+  });
+  const payload = (await response.json()) as { launch_token?: string };
+  if (!payload.launch_token) {
+    throw new Error("Editor unavailable / misconfigured");
+  }
+  parsed.hash = `launch_token=${encodeURIComponent(payload.launch_token)}`;
+  return parsed.toString();
+}
+
+/** Mint a launch token and redirect to the separate editor application. */
+export async function redirectToInstaEditorWithLaunch(
+  editorUrl: string,
+  projectId: string,
+  navigate: (url: string) => void = (url) => window.location.assign(url),
+): Promise<void> {
+  navigate(await createEditorLaunchURL(editorUrl, projectId));
+}
+
+/** Mint a launch token and open the separate editor in a new tab. */
+export async function openInstaEditorWithLaunch(
+  editorUrl: string,
+  projectId: string,
+): Promise<void> {
+  const target = await createEditorLaunchURL(editorUrl, projectId);
+  window.open(target, "_blank", "noopener,noreferrer");
 }
 
 // ─── Barrel helper (kept terse on purpose) ───────────────────────
@@ -312,7 +442,7 @@ export async function createEditorSessionAndOpen(
   init: RequestInit = {},
 ): Promise<CreateYouTubeEditorSessionResponse> {
   const session = await createYouTubeEditorSession(body, init);
-  openInstaEditorInNewTab(session.editor_url);
+  await openInstaEditorWithLaunch(session.editor_url, session.velox_project_id);
   return session;
 }
 
@@ -323,6 +453,6 @@ export async function createEditorSessionAndRedirect(
   navigate?: (url: string) => void,
 ): Promise<CreateYouTubeEditorSessionResponse> {
   const session = await createYouTubeEditorSession(body, init);
-  redirectToInstaEditor(session.editor_url, navigate);
+  await redirectToInstaEditorWithLaunch(session.editor_url, session.velox_project_id, navigate);
   return session;
 }

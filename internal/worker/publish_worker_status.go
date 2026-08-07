@@ -77,13 +77,34 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		return w.publishDriveExport(ctx, target, account, post)
 	}
 
-	// 4. Resolve platform capabilities. We need the OAuthProvider (for
-	// token refresh) AND the Publisher (for the actual call). A
-	// platform missing either cannot be published to.
+	// 4. Resolve platform capabilities FIRST (cheap, fail-fast): we need
+	// the OAuthProvider (for token refresh) AND the Publisher (for the
+	// actual call). A platform missing either cannot be published to —
+	// resolving BEFORE the expensive per-channel translation below
+	// avoids burning a 30-180s NVIDIA call on a target that was going
+	// to fail at capability lookup anyway.
 	oauth, oauthOK := w.router.OAuth(account.Platform)
 	publisher, pubOK := w.router.Publisher(account.Platform)
 	if !oauthOK || !pubOK {
 		return w.markFailed(target, fmt.Sprintf("platform %q missing capability (oauth=%v publish=%v)", account.Platform, oauthOK, pubOK))
+	}
+
+	// 3b. PER-CHANNEL-LANGUAGE POSTING: when the target channel
+	// declares a language (account.Metadata["language"]) different
+	// from the post's source language, translate title + caption
+	// BEFORE building the publish payload. The localized post flows
+	// through buildPayload (fresh publishes), publishYouTubePhase2
+	// (Phase-2 videos.update reuse) and executePublish alike. A
+	// translation failure marks the target failed — in production the
+	// lease-aware repo routes that through the retrying state machine
+	// (auto re-pick on the next tick); with legacy test doubles it is
+	// terminal 'failed'. Either way we never publish the wrong language.
+	localizedPost, translated, err := w.localizeForChannel(ctx, target, account, post)
+	if err != nil {
+		return w.markFailed(target, err.Error())
+	}
+	if translated {
+		post = localizedPost
 	}
 
 	// 5. Refresh the OAuth token (with the Facebook page-token

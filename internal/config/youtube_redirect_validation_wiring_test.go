@@ -7,6 +7,7 @@ import (
 
 func TestLoad_YouTubeRedirectURI_ProductionValidationWiring(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("INSTAEDITOR_URL", "https://editor.instaedit.test/dark_editor_v2")
 	t.Setenv("YOUTUBE_CLIENT_ID", "youtube-client")
 	t.Setenv("YOUTUBE_CLIENT_SECRET", strings.Repeat("s", 32))
 	t.Setenv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback")

@@ -6,7 +6,10 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/editorlaunch"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
@@ -64,6 +67,33 @@ func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 			})).ServeHTTP(w, req)
 		}))
 		csrfHandler.ServeHTTP(w, req)
+	}
+}
+
+// editorSessionProtected accepts either the normal InstaEdit session or
+// the short-lived in-memory editor session bearer. The latter is already
+// bound to one project, so it is converted into the same Identity shape
+// expected by the existing YouTube editor handlers without making the
+// handlers trust a browser-supplied user/workspace identifier.
+func (r *Router) editorSessionProtected(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if r.editorLaunchTokenIssuer != nil {
+			raw := strings.TrimSpace(strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
+			projectID := strings.TrimSpace(chi.URLParam(req, "velox_project_id"))
+			if raw != "" && projectID != "" {
+				scope := editorlaunch.ScopeRead
+				if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions {
+					scope = editorlaunch.ScopeWrite
+				}
+				if claims, err := r.editorLaunchTokenIssuer.VerifySession(raw, projectID, scope); err == nil {
+					ctx := editorlaunch.WithClaims(req.Context(), claims)
+					ctx = auth.WithIdentity(ctx, auth.NewUserIdentity(claims.UserID, claims.WorkspaceID, 0))
+					next(w, req.WithContext(ctx))
+					return
+				}
+			}
+		}
+		r.protected(next)(w, req)
 	}
 }
 

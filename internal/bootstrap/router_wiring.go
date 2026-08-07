@@ -9,12 +9,14 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/editorlaunch"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxclient"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/editor"
 	"github.com/getsentry/sentry-go"
 )
 
@@ -44,6 +46,14 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	analyticsClock := analytics.RealClock{}
 
 	veloxControlClient := veloxclient.New(s.cfg.Velox.VeloxControlURL, s.cfg.Velox.VeloxControlJWTSecret)
+	var editorLaunchIssuer editor.LaunchTokenIssuer
+	if s.cfg.Velox.EditorLaunchTokenSecret != "" {
+		issuer, issuerErr := editorlaunch.New(s.cfg.Velox.EditorLaunchTokenSecret)
+		if issuerErr != nil {
+			return nil, nil, fmt.Errorf("build editor launch token issuer: %w", issuerErr)
+		}
+		editorLaunchIssuer = issuer
+	}
 	var editorService services.EditorService
 	if veloxAdapter := veloxclient.NewVeloxAdapter(veloxControlClient); veloxAdapter != nil {
 		editorService = services.NewEditorService(veloxAdapter, s.thumbnailProjectService)
@@ -112,6 +122,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		api.WithVeloxJobRegistry(veloxjobs.NewDefaultRegistry()),
 		api.WithVeloxBFFClient(veloxControlClient),
 		api.WithEditorBFFClient(veloxControlClient),
+		api.WithEditorLaunchTokenIssuer(editorLaunchIssuer),
 		api.WithEditorService(editorService),
 		api.WithVeloxBFFAuthMiddleware(s.authMgr.Middleware),
 		api.WithVeloxBFFCSRFMiddleware(func(next http.Handler) http.Handler {

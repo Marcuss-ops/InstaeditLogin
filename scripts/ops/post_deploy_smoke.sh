@@ -25,7 +25,7 @@
 #   ./scripts/ops/post_deploy_smoke.sh              # default: read-only
 #   APPLY_PUBLISH=1 ./scripts/ops/post_deploy_smoke.sh  # actually publish+sleep
 #   BASE_URL=https://staging.instaedit.org ./scripts/ops/post_deploy_smoke.sh
-#   CHECK_INSTAEDITOR=1 INSTAEDITOR_URL=https://app.instaedit.org/dark_editor_v2 \
+#   CHECK_INSTAEDITOR=1 INSTAEDITOR_URL=https://app.instaedit.org \
 #     ./scripts/ops/post_deploy_smoke.sh  # optional read-only editor-root probe
 #
 # Exit codes:
@@ -71,7 +71,7 @@ for tool in curl jq openssl; do
 done
 
 # ─── InstaEditor compatibility guard (offline by default) ─────────────
-# The deployed Next base path remains /dark_editor_v2. Do not fabricate a
+# The deployed compatibility path is infrastructure-only. Do not fabricate a
 # project id here: authenticated editor-session smoke belongs to the API
 # flow. This guard validates the configured root URL and can optionally
 # perform a read-only HTTP probe.

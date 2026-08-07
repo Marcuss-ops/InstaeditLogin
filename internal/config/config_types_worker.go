@@ -4,6 +4,13 @@ package config
 type WorkerConfig struct {
 	// PublishWorkerIntervalSeconds is the cadence of the publish worker.
 	PublishWorkerIntervalSeconds int
+	// MetadataGenerationWorkerIntervalSeconds is the cadence of the
+	// async NVIDIA metadata generation worker (migration 113). It polls
+	// metadata_generation_jobs and calls NVIDIA in the background so
+	// the POST /generate-metadata endpoint returns 202 immediately.
+	// Default 5s (snappy pickup; a single slow NVIDIA call serialises
+	// the queue).
+	MetadataGenerationWorkerIntervalSeconds int
 	// ReconcileWorkerIntervalSeconds is the cadence of the reconcile worker.
 	ReconcileWorkerIntervalSeconds int
 	// WebhookWorkerIntervalSeconds is the cadence of the webhook worker.

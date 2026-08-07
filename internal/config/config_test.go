@@ -23,6 +23,9 @@ func TestMain(m *testing.M) {
 	os.Setenv("S3_SECRET_KEY", "test-secret")
 	os.Setenv("ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") // base64 32-byte key
 	os.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	// Production config now requires a project-scoped editor launch secret;
+	// keep a deterministic non-production test value in the shared fixture.
+	os.Setenv("INSTAEDITOR_LAUNCH_TOKEN_SECRET", strings.Repeat("l", 32))
 	// Production config now requires an explicit separately deployed
 	// InstaEditor destination; individual tests may clear/override it.
 	os.Setenv("INSTAEDITOR_URL", "https://editor.instaedit.test/dark_editor_v2")

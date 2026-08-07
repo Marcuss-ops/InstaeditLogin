@@ -84,6 +84,9 @@ func TestYouTubeEditorRoutesContract_CoversMountedOperations(t *testing.T) {
 		"/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata": {
 			"post",
 		},
+		"/api/v1/youtube/editor-sessions/generate-metadata/jobs/{job_id}": {
+			"get",
+		},
 		"/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish": {
 			"post",
 		},
@@ -105,6 +108,9 @@ func TestYouTubeEditorRoutesContract_CoversMountedOperations(t *testing.T) {
 		"/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata": {
 			"post": "generateYouTubeEditorMetadata",
 		},
+		"/api/v1/youtube/editor-sessions/generate-metadata/jobs/{job_id}": {
+			"get": "pollYouTubeEditorMetadataGeneration",
+		},
 		"/api/v1/youtube/editor-sessions/{id}": {
 			"get": "getYouTubeEditorSessionById",
 		},
@@ -122,7 +128,10 @@ func TestYouTubeEditorRoutesContract_CoversMountedOperations(t *testing.T) {
 			"put": {"#/components/schemas/YouTubeEditorSessionDraftRequest", "#/components/schemas/YouTubeEditorSessionDraftResponse"},
 		},
 		"/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata": {
-			"post": {"#/components/schemas/YouTubeEditorMetadataGenerateRequest", "#/components/schemas/YouTubeEditorMetadataGenerateResponse"},
+			"post": {"#/components/schemas/YouTubeEditorMetadataGenerateRequest", "#/components/schemas/YouTubeEditorMetadataGenerateJobResponse"},
+		},
+		"/api/v1/youtube/editor-sessions/generate-metadata/jobs/{job_id}": {
+			"get": {"#/components/schemas/YouTubeEditorMetadataGenerateJobPollResponse"},
 		},
 		"/api/v1/youtube/editor-sessions/{id}": {
 			"get": {"#/components/schemas/YouTubeEditorSessionDetail"},
