@@ -8,10 +8,8 @@
 // The previous second responsibility (a hosted-platform secrets-coherence
 // leg) has been removed from this binary; the underlying two secrets-
 // fixture files were dropped in earlier cutover commits and the matching
-// env-var overrides no longer exist. Any future cohesion validation
-// lives entirely in scripts/_parse_envfile.py + scripts/test_parse_envfile.py
-// (a standalone Python CI job), as documented in
-// .github/workflows/integration.yml.
+// env-var overrides no longer exist. The archived Fly env parser and its
+// CI regression job were removed entirely (2026-08-07).
 //
 // Trigger flow:
 //   - weekly scheduled run + on-demand workflow_dispatch (see

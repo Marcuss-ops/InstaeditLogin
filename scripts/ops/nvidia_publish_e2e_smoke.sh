@@ -6,7 +6,7 @@
 #
 #   1. Magic-link login (or reuse existing session)
 #   2. POST /api/v1/media/presign → get upload URL
-#   3. PUT thumbnail to presigned URL (Tigris/S3)
+#   3. PUT thumbnail to presigned URL (MinIO/S3)
 #   4. POST /api/v1/media/{asset_id}/complete → mark asset ready
 #   5. PATCH /api/v1/youtube/editor-sessions/by-project/{project_id}
 #      → attach thumbnail to session
@@ -406,7 +406,7 @@ if [ "$FAIL" -gt 0 ]; then
   echo "  - Check that VELOX_PROJECT_ID=$VELOX_PROJECT_ID exists and has a YouTube video in 'editing' state"
   echo "  - Ensure the YouTube channel has OAuth with youtube.upload scope"
   echo "  - Verify the Velox project's platform_account is active"
-  echo "  - Check server logs: flyctl logs --app instaedit-login"
+  echo "  - Check server logs: docker compose logs api worker"
   exit 1
 fi
 

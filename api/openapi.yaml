@@ -1990,7 +1990,7 @@ components:
       description: |
         Service-to-service Bearer auth for `/internal/v1/*`.
         Token loaded from `VELOX_API_TOKEN` env var at boot
-        (roll via `set-fly-secrets.sh`). Compared constant-time
+        (roll via VPS .env edit + `docker compose restart`). Compared constant-time
         via `crypto/subtle.ConstantTimeCompare`. Distinct from
         `JwtCookie` (user) and `ApiKeyAuth` (machine user):
         this scheme is for trusted peer systems, NOT for SPA

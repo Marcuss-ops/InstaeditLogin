@@ -9,7 +9,7 @@
 #   (c) SELECT version() succeeds AND reports PostgreSQL >= 14
 #       (PITR minimum)
 #   (d) median connection latency across 5 pings is sane (<= 250ms
-#       on Fly internal network; > 2s on a flat-out misconfigured
+#       from the operator's location; > 2s on a flat-out misconfigured
 #       firewall)
 #   (e) the closed canary table set (database.CanaryTables) is
 #       present — the closed invariant the /ready endpoint also
@@ -18,11 +18,11 @@
 #   (f) role + db match the URL (sanity: didn't accidentally point
 #       at anyone's database).
 #
-# Designed to be runnable from the OPERATOR'S LAPTOP against a Fly
-# Postgres cluster (so they can verify provisioning BEFORE the first
-# `make fly-deploy`) and from INSIDE the Fly release_command machine
+# Designed to be runnable from the OPERATOR'S LAPTOP against the VPS
+# Postgres (so they can verify provisioning BEFORE the first
+# `docker compose up`) and from INSIDE the Compose `migrate` one-shot
 # (so the migration runner has a quick "is this URL actually
-# responsive?" gate before applying 036 SQL files).
+# responsive?" gate before applying the SQL files).
 #
 # ─── USAGE ──────────────────────────────────────────────────────────────
 #   DATABASE_URL="postgres://..." ./scripts/db/check-postgres-health.sh
@@ -116,8 +116,8 @@ case "$sslmode" in
         echo "✓ sslmode=${sslmode:-require} (defaulted to require if URL omits it)"
         ;;
     *)
-        # Unknown sslmode — could be a custom Fly proxy value. Warn but
-        # don't fail (Fly sometimes appends its own parameter that
+        # Unknown sslmode — could be a custom proxy value. Warn but
+        # don't fail (some proxies append their own parameter that
         # isn't an SSL mode but parses identically).
         echo "⚠ sslmode=$sslmode (not a Postgres-standard mode; tolerated)" >&2
         ;;
@@ -132,7 +132,7 @@ version=$(psql "$URL" -tA -c "SHOW server_version" 2>&1) || {
     exit 1
 }
 
-# Strip the deprecation banner noise. Fly Postgres occasionally
+# Strip the deprecation banner noise. Managed Postgres occasionally
 # prepends a NOTICE about ssl being recommended.
 cleaned=$(echo "$version" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
 major=$(echo "$cleaned" | awk -F. '{print $1}')
@@ -227,7 +227,7 @@ else
     done
     echo "   This usually means the migration was interrupted. Do NOT" >&2
     echo "   proceed with anything sensitive; restart the migration" >&2
-    echo "   by re-running \`make fly-deploy\`." >&2
+    echo "   by re-running \`docker compose up -d --build migrate\`." >&2
     exit 3
 fi
 
@@ -252,4 +252,4 @@ if (( count_canaries == ${#expected_canaries[@]} )); then
 fi
 
 echo
-echo "✓ All smoke checks passed. Safe to invoke make fly-deploy."
+echo "✓ All smoke checks passed. Safe to run the migrate one-shot (docker compose up migrate)."

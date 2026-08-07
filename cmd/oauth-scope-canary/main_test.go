@@ -201,8 +201,8 @@ func TestRun_NoTokenEnv_ExitsCleanly(t *testing.T) {
 
 // TestRun_TokenPlusDriftEnv: DRIVE_OAUTH_CANARY_TOKEN set, OAUTH_TOKENINFO_URL
 // points at an httptest.Server returning wrong scope. run() must wrap
-// errScopeDrift. The previous coherence-coupling has been removed;
-// secrets-coherence lives in scripts/_parse_envfile.py now.
+// errScopeDrift. The previous secrets-coherence coupling has been removed
+// (the Fly env parser and its CI regression job were retired in 2026-08-07).
 func TestRun_TokenPlusDriftEnv(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"scope":"https://www.googleapis.com/auth/openid"}`)) // scalped

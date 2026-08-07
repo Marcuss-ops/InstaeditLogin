@@ -7,8 +7,8 @@
 # Why this script exists:
 #   The /start alias was added as a backwards-compat sibling of /login
 #   (commit c9e760d). The TikTok OAuth gate is the load-bearing reason
-#   for the VPS-first Fly cutover, so before destroying the Fly app we
-#   must prove E2E that /start works the same as /login on the
+#   for the VPS-first cutover; before tearing down the legacy Fly app
+#   we had to prove E2E that /start works the same as /login on the
 #   VPS-served api binary.
 #
 # Prerequisites (operator workstation):

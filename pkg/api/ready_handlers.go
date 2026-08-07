@@ -44,8 +44,8 @@ type readinessResponse struct {
 // 2 readiness checks with a single shared context bounded by
 // readyTimeout; any sub-check that exceeds the budget produces an
 // error string in its slot, the overall response is 503, and the
-// caller (Fly readinessProbe or K8s readinessProbe) drops the pod
-// from the rotation until the next tick.
+// caller (orchestrator readinessProbe) drops the instance from the
+// rotation until the next tick.
 //
 // Why top-level (NOT /api/v1/ready): the readiness probe is
 // anonymous from the orchestrator's perspective (no JWT, no

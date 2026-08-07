@@ -3,8 +3,8 @@
 # scripts/db/production-restore-drill.sh
 #
 # Restore drill — given $PROD_DSN (the production pool URL, used as
-# reference) and $FORK_DSN (the URI of a freshly-cloned Fly Postgres
-# cluster, created via `fly postgres fork`), the script asserts:
+# reference) and $FORK_DSN (the URI of a freshly-cloned Postgres fork
+# of the production database), the script asserts:
 #
 #   (a) the two DSNs do NOT point at the same hostname (so a paste
 #       typo doesn't drill the production database)
@@ -18,11 +18,10 @@
 #       the operator accidentally forked after cookies were seeded —
 #       the smoke test must always start from a clean cluster)
 #   (e) the time-to-fork-ready was within the expected envelope
-#       (Fly Postgres fork usually takes 30-180s)
 #
-# The script REPORTS a PASS/FAIL verdict + a copy-pasteable
-# `fly postgres destroy` command for the cleanup step. It does NOT
-# auto-destroy the cluster — that is the operator's confirmation.
+# The script REPORTS a PASS/FAIL verdict + a copy-pasteable cleanup
+# command for the fork (see the report block). It does NOT auto-destroy
+# the fork — that is the operator's confirmation.
 #
 # ─── USAGE ──────────────────────────────────────────────────────────────
 #   DATABASE_URL=<FORK_DSN> DATABASE_URL_PROD=<PROD_DSN> \\
@@ -136,8 +135,8 @@ echo
 
 # ─── Latency check (FORK only — the fork is the new thing) ───────────────
 # We want the FORK to be reachable in <500ms from the operator's
-# laptop or <2s from the Fly internal network. >5s usually means
-# the fork VM is still spinning up.
+# laptop (or <2s when the fork sits close to the operator). >5s
+# usually means the fork is still spinning up.
 t0=$(date +%s%N)
 psql "$FORK_DSN" -tA -c "SELECT 1" >/dev/null 2>&1 || {
     echo "❌ FAIL: psql could not connect to fork" >&2
@@ -280,16 +279,19 @@ cat <<EOF
 
 ## Next step (operator action):
 \`\`\`bash
-flyctl postgres destroy --name <fork-cluster-name-from-fly> --yes
+# Destroy the fork with the same method used to create it (VPS/local):
+docker compose down -v        # if the fork is its own Compose project
+# or drop just the fork database:
+dropdb -h <fork-host> -U instaedit <fork-db>
 \`\`\`
 EOF
 
 echo
-echo "✓ Drill PASS. Save the report above, then destroy the fork with:"
-echo "    flyctl postgres destroy --name <fork-cluster-name> --yes"
+echo "✓ Drill PASS. Save the report above, then destroy the fork (see the report"
+echo "   block — e.g. \`docker compose down -v\` for a fork Compose project, or"
+echo "   \`dropdb\` for a fork database)."
 
 # Note: we print the destroy command but don't auto-execute. The
-# operator must manually type the cluster name + --yes to make the
-# destruction explicit (a fat-finger or a typosquatted name would
-# then hit another production-shaped target — the prompt + interactive
-# confirmation is the safety net).
+# operator must manually confirm the fork identity and name before
+# destroying it (a fat-finger or a typosquatted name would then hit
+# another production-shaped target — the confirmation is the safety net).

@@ -221,8 +221,8 @@ func TestLoad_AdminInviteToken_EmptyAllowed(t *testing.T) {
 
 // TestLoad_AdminInviteToken_TooShortRejected guards against the
 // operator-typo class where a 4-char placeholder ("test", "demo",
-// "1234") is pushed to Fly. The brute-force surface of a 4-char
-// token is trivially searchable; the contract is "fail at boot
+// "1234") is set as ADMIN_INVITE_TOKEN. The brute-force surface of a
+// 4-char token is trivially searchable; the contract is "fail at boot
 // rather than silently weaken the gate".
 func TestLoad_AdminInviteToken_TooShortRejected(t *testing.T) {
 	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")

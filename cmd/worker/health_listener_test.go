@@ -104,7 +104,7 @@ func TestWorkerHealthListener_InvalidFallsBackToOff(t *testing.T) {
 }
 
 // TestWorkerHealthListener_AcceptsTCPConnection confirms the
-// happy-path Fly tcp_checks contract: when WORKER_HEALTH_PORT is a
+// happy-path health-listener contract: when WORKER_HEALTH_PORT is a
 // valid port, the listener accepts a TCP connection. Uses an
 // OS-chosen free port to avoid clashing with the dev runtime.
 func TestWorkerHealthListener_AcceptsTCPConnection(t *testing.T) {

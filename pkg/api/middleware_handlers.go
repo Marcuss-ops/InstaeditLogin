@@ -253,7 +253,7 @@ func (r *Router) corsMiddleware(next http.Handler) http.Handler {
 //     Referer header trustworthy but doesn't leak full paths.
 //   - Strict-Transport-Security is ONLY emitted when the request
 //     arrived over HTTPS (TLS or via a known TLS-terminating proxy:
-//     Fly / Render / Cloudflare all set the X-Forwarded-Proto=https
+//     Caddy / Render / Cloudflare all set the X-Forwarded-Proto=https
 //     header). HSTS over plain HTTP would break the connection.
 //
 // Placed OUTSIDE CORS / rate-limit so the headers apply to every

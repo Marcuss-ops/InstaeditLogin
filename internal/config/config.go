@@ -39,13 +39,12 @@ type DatabaseConfig struct {
 	DBConnMaxLifetimeSeconds int
 	DBConnMaxIdleTimeSeconds int
 
-	// DBPoolRole selects the process profile: api, worker, server, or
-	// maintenance. The profiles keep API capacity isolated from background
-	// workers while making the total connection budget explicit.
+	// DBPoolRole selects the process profile: api, worker, or maintenance.
+	// The profiles keep API capacity isolated from background workers while
+	// making the total connection budget explicit.
 	DBPoolRole    string
 	DBAPI         DBPoolProfile
 	DBWorker      DBPoolProfile
-	DBServer      DBPoolProfile
 	DBMaintenance DBPoolProfile
 }
 
@@ -60,7 +59,6 @@ type DBPoolProfile struct {
 const (
 	DBPoolRoleAPI         = "api"
 	DBPoolRoleWorker      = "worker"
-	DBPoolRoleServer      = "server"
 	DBPoolRoleMaintenance = "maintenance"
 )
 
@@ -80,8 +78,6 @@ func (c *DatabaseConfig) Profile() (DBPoolProfile, bool) {
 		return c.DBAPI, true
 	case DBPoolRoleWorker:
 		return c.DBWorker, true
-	case DBPoolRoleServer:
-		return c.DBServer, true
 	case DBPoolRoleMaintenance:
 		return c.DBMaintenance, true
 	default:
@@ -199,7 +195,7 @@ type AuthConfig struct {
 	// (constant-time compare). When empty, registration is fully
 	// disabled (the handler returns 403 "registration is
 	// invite-only"). Generate with `openssl rand -hex 32` and
-	// rotate via `flyctl secrets import`. NOT logged, NOT exposed
+	// rotate via VPS .env edit + `docker compose restart`. NOT logged, NOT exposed
 	// in error messages.
 	AdminInviteToken string
 }
@@ -653,7 +649,7 @@ type Config struct {
 	// (constant-time compare). When empty, registration is fully
 	// disabled (the handler returns 403 "registration is
 	// invite-only"). Generate with `openssl rand -hex 32` and
-	// rotate via `flyctl secrets import`. NOT logged, NOT exposed
+	// rotate via VPS .env edit + `docker compose restart`. NOT logged, NOT exposed
 	// in error messages.
 
 	// AppMode lets operators pin the deployment to Google's OAuth-

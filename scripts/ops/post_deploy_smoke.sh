@@ -42,8 +42,9 @@
 #   is read-only by default (no DELETE), the MinIO bucket MUST have the
 #   lifecycle rules documented in docs/OPERATIONS.md §4.2 and configured via
 #   the current Compose/MinIO procedure. Without those rules, repeated runs
-#   accumulate smoke-test debris. The archived Tigris provisioning helper is
-#   historical only and is not part of this smoke path.
+#   accumulate smoke-test debris. Tigris was retired; the canonical object
+#   store is the VPS Compose MinIO bucket (lifecycle rules in
+#   docs/OPERATIONS.md §4.2). This smoke path uses only the MinIO/S3 flow.
 #   This script also assumes §B.6 already-in-flight publish posts are operator-
 #   garbage-collected (the orphan post id is printed but not auto-deleted here).
 
@@ -204,7 +205,7 @@ else
       P_URL=$(jq -r '.url // empty' "$TMP_DIR/presign.json")
       P_KEY=$(jq -r '.key // empty' "$TMP_DIR/presign.json")
       if [ -n "$P_URL" ]; then
-        pass "/api/v1/media/presign: 200 + presigned URL + key=$P_KEY (Tigris signed PUT OK)"
+        pass "/api/v1/media/presign: 200 + presigned URL + key=$P_KEY (MinIO signed PUT OK)"
         # OPTIONAL: actually PUT a 1KB file + ASSERT 200. Skipped by default.
         # To enable, this script can be extended with APPLY_MEDIA=1.
       else
@@ -213,7 +214,7 @@ else
     elif [ "$HTTP" = "401" ]; then
       warn "/api/v1/media/presign: 401 (session lost — Phase 9.2 cookie contract may be broken)"
     else
-      fail "/api/v1/media/presign: HTTP $HTTP (expected 200). Most likely S3 secrets unset on Fly — see DEPLOY.md §3.0 row 5/6 status. pkg/api/media.go handlePresignMedia requires S3_BUCKET + S3_ENDPOINT + access/secret key."
+      fail "/api/v1/media/presign: HTTP $HTTP (expected 200). Most likely S3 secrets unset — see DEPLOY.md §3.0 row 5/6 status. pkg/api/media.go handlePresignMedia requires S3_BUCKET + S3_ENDPOINT + access/secret key."
     fi
   else
     warn "Magic-link production email-wired path detected (no .magic_link_token field):"
@@ -339,6 +340,6 @@ else
   echo "    Cookie contract FAIL       → Blocco #2.4 regression — internal/auth/csrf.go + pkg/api/sessions.go"
   echo "    /api/v1/accounts FAIL      → handler issue — pkg/api/handlers.go:572"
   echo "    /api/v1/posts FAIL         → handleCreatePost issue or missing session"
-  echo "    /api/v1/media/presign FAIL → S3 secrets unset on Fly — see DEPLOY.md §3.0 row 5/6"
+  echo "    /api/v1/media/presign FAIL → S3 secrets unset — see DEPLOY.md §3.0 row 5/6"
   exit 1
 fi

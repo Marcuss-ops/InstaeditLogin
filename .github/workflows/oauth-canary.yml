@@ -7,10 +7,10 @@
 # run with a non-zero exit code.
 #
 # The previous second responsibility (hosted-platform secrets-coherence)
-# has been removed from this workflow. Its Fly secrets contract and
-# parser are historical archive material; the compatibility regression
-# remains in scripts/_parse_envfile.py + scripts/test_parse_envfile.py
-# as a standalone CI job in integration-fast.yml.
+# has been removed from this workflow. The Fly secrets contract and its
+# parser were retired entirely: scripts/_parse_envfile.py,
+# scripts/test_parse_envfile.py, and the test-parse-envfile CI job were
+# removed from the repository (2026-08-07).
 #
 # Why a SEPARATE workflow vs. integration.yml?
 #   - integration.yml is the PR-lane gate (forked PRs cannot bring

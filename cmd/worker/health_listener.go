@@ -5,10 +5,11 @@
 // only checks DB/schema; the worker readiness endpoint reflects the
 // state of the background workers supervised by the WorkerRegistry.
 //
-// Fly.io's [[services.tcp_checks]] (declared on fly.toml's worker
-// [[services]] block) needs a TCP port that accepts connections.
-// Switching to HTTP keeps tcp_checks passing (the probe still
-// completes a TCP handshake) while also allowing richer HTTP probes.
+// The listener speaks HTTP (rather than a bare TCP accept) so the
+// operator can probe liveness/readiness with richer HTTP checks,
+// e.g. curl against WORKER_HEALTH_PORT or an orchestrator health
+// probe. It is bound only when WORKER_HEALTH_PORT is a valid port
+// (disabled by default in local dev).
 package main
 
 import (
@@ -75,7 +76,7 @@ func startWorkerHealthListener(ctx context.Context, registry *worker.Registry, l
 
 	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {
-		logger.Warn("worker: health listener bind failed, continuing without tcp_checks target",
+		logger.Warn("worker: health listener bind failed, continuing without a health-probe target",
 			"addr", srv.Addr, "error", err)
 		return
 	}

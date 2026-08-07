@@ -384,28 +384,3 @@ jobs:
           echo "  - Worker integration test hung — check the per-leaf 15s parallel-drain ceiling"
           echo "  - Testcontainer image pull flake (postgres:17-alpine / redis:7-alpine) — re-run"
 
-  # ──────────────────────────────────────────────────────────────
-  # Envfile parser regression test (formerly integrated in legacy
-  # integration.yml step 8.5; that workflow was retired at the CI-split
-  # commit and the test was lifted into this file).
-  # The archived Fly .env parser in scripts/_parse_envfile.py remains
-  # a historical regression fixture only; it is not a deploy/runtime
-  # path. Fast (<1s) pure-python — no Docker / no external services.
-  # ──────────────────────────────────────────────────────────────
-  test-parse-envfile:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      # The test_parse_envfile.py script is a pure-Python regression
-      # test for the archived Fly contract and _parse_envfile.py. Exit
-      # 0 on all-pass, non-zero on first failure.
-      - name: Run envfile parser regression test
-        run: python3 scripts/test_parse_envfile.py
