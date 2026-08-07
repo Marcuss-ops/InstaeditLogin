@@ -61,7 +61,7 @@ measures TS/TSX too.
 | P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | ✅ COMPLETED in `cabcc39`: split into `posts_mutations.go` (107), `posts_read.go` (240), `posts_types.go` (81); `posts_handlers.go` remains the thin router boundary. Idempotency and workspace authorization preserved. |
 | P1 | `internal/config/config_types.go` | 616 | Config struct types split out of `config.go` (`46b6188`) | Monitor; split only if a second domain boundary (worker vs database structs) becomes worth isolating. |
 | P1 | `internal/services/youtube_oauth.go` | 586 | OAuth URL/callback, token exchange, refresh, revoke, and client pool | Isolate token transport from OAuth policy and pool selection; reuse shared HTTP/error helpers. |
-| P1 | `pkg/api/auth_oauth.go` | 565 | OAuth login, callback, exchange, and account-attach flows (split from `auth_handlers.go` in `cabcc39`) | Monitor; split only if login vs callback families grow further or a stable test seam appears. |
+| P1 | `pkg/api/auth_oauth.go` | 565 → 45 | OAuth login, callback, exchange, and account-attach flows (split from `auth_handlers.go` in `cabcc39`) | ✅ COMPLETED in `3bd437c9`: split by flow into `auth_oauth_login.go` (189, `handleLogin`), `auth_oauth_callback.go` (176, `handleCallback` + `resolveCallbackState`), `auth_oauth_exchange.go` (176, `exchangeOAuthCode` + `callbackAttach*` + `writeCallbackSuccess`); `auth_oauth.go` keeps the pool-aware contract types + `HandleOAuthCallbackRouteForTest` as a 45-line boundary. State verification (connect-link/oauth-flow/CSRF paths, single-use nonce consumption) and pool client-cookie idempotency preserved. |
 | P1 | `internal/repository/thumbnail_project_repo.go` | 558 | Project CRUD, snapshots, revisions, restore, and CAS status | Extract revision/snapshot persistence behind focused helpers; retain CAS and revision-number transaction guarantees. |
 | P1 | `pkg/api/accounts_read_handlers.go` | 552 | Account listing, account detail, content, and earnings reads | Split read endpoints by query family; keep account ownership loading in one shared helper. |
 | P1 | `internal/services/provider_error.go` | 549 | Provider error types, classification, and retry/rate-limit metadata | Separate stable error contracts from classifiers only if call sites remain behaviorally identical. |
@@ -212,8 +212,10 @@ Auth/session/cookie/CSRF contracts, YouTube client-pool state semantics, post
 idempotency, and workspace authorization all preserved; `go test ./...` (33
 packages), `go vet`, `go build`, and `loc-check` green.
 
-**Follow-up monitor:** `pkg/api/auth_oauth.go` (565) is now the next candidate
-above the 500-line threshold in the auth family.
+**Follow-up monitor:** the auth family is now fully split — `auth_oauth.go`
+(565) was split by flow in `3bd437c9` into `auth_oauth_login.go` (189),
+`auth_oauth_callback.go` (176), `auth_oauth_exchange.go` (176); no auth file
+remains above 500 lines.
 
 ### Slice 5 — YouTube OAuth policy/transport (P1)
 
