@@ -222,7 +222,7 @@ export function GroupDetailPanel({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {visibleAccounts.map((a) => (
               <div key={a.id} className="flex items-center gap-1.5 rounded-lg border border-white/[0.10] bg-white/[0.04] p-1.5">
-                <button type="button" onClick={() => onPickAccount(a.id)} className="min-w-0 truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username || a.platform_user_id}`}>{a.username || a.platform_user_id}</button>
+                <button type="button" onClick={() => onPickAccount(a.id)} className="w-44 min-w-0 truncate text-left text-[14px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username || a.platform_user_id}`}>{a.username || a.platform_user_id}</button>
                 <LanguagePicker
                   value={languages[a.id]}
                   label={`Language for ${a.username || a.platform_user_id}`}
