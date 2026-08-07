@@ -10,7 +10,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/postgres"
 )
 
-func TestMigration112_VeloxProjectBridgeSchemaAndConstraints(t *testing.T) {
+func TestMigration112And114_VeloxProjectBridgeSchemaAndConstraints(t *testing.T) {
 	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
@@ -50,6 +50,27 @@ func TestMigration112_VeloxProjectBridgeSchemaAndConstraints(t *testing.T) {
 	if groupColumns != 0 {
 		t.Fatalf("bridge contains forbidden duplicated ownership columns: %d", groupColumns)
 	}
+
+	if err := RunMigrationsUpTo(db, 114); err != nil {
+		t.Fatalf("RunMigrationsUpTo(114): %v", err)
+	}
+	if err := RunMigrationsUpTo(db, 114); err != nil {
+		t.Fatalf("RunMigrationsUpTo(114) second pass: %v", err)
+	}
+	var runIDColumnExists bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='velox_project_bridges' AND column_name='migration_run_id')`).Scan(&runIDColumnExists); err != nil {
+		t.Fatal(err)
+	}
+	if !runIDColumnExists {
+		t.Fatal("missing migration_run_id marker")
+	}
+	if _, err := db.Exec(`INSERT INTO thumbnail_projects (id, workspace_id, created_by, name, canvas_width, canvas_height) VALUES ('bridge-112-run', 11201, 11201, 'Bridge run marker project', 1280, 720)`); err != nil {
+		t.Fatalf("seed bridge run marker project: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id, migration_run_id) VALUES ('bridge-112-run', 11201, 'vx-112-run', 'bridge-run-1')`); err != nil {
+		t.Fatalf("insert bridge run marker: %v", err)
+	}
+	assertBridgeConstraintRejects(t, db, `INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id, migration_run_id) VALUES ('bridge-112-empty-run', 11201, 'vx-112-empty-run', '   ')`, "velox_project_bridges_migration_run_id_nonempty_ck")
 }
 
 func seedVeloxProjectBridge112(t *testing.T, db *sql.DB) {
