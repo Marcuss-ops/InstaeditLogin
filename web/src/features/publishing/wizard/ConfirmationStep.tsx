@@ -59,7 +59,7 @@ import type { ChannelMetadata } from "./ChannelMetadataStep";
 
 /**
  * Privacy is locked at "private" for the initial publish flow — the
- * Dark Editor applies the final visibility AFTER the publish commits.
+ * InstaEditor applies the final visibility AFTER the publish commits.
  * Sourced as a local constant (NOT a prop) so a future PR widening
  * the user's choice must explicitly opt-in here.
  */
@@ -224,7 +224,7 @@ export function ConfirmationStep({
       <p className="text-sm text-[#9aa0aa] mb-6">
         Verifica i dati e invia la pubblicazione. Il video verrà
         caricato su YouTube come privato; successivamente potrai
-        modificare copertina e visibilità dal Dark Editor.
+        modificare copertina e visibilità da InstaEditor.
       </p>
 
       {/* ────── Read-only summary ────── */}
@@ -343,7 +343,7 @@ export function ConfirmationStep({
             </div>
             <div className="text-xs text-[#9aa0aa] mt-0.5">
               Fissato dal flusso di pubblicazione. Potrai modificare
-              la visibilità in seguito dal Dark Editor (unlisted /
+              la visibilità in seguito da InstaEditor (unlisted /
               public).
             </div>
           </div>

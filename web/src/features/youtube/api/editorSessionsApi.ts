@@ -262,7 +262,7 @@ export async function publishYouTubeEditorSession(
 // ─── Single-purpose helpers (UI-agnostic on purpose) ─────────────
 
 /**
- * Open the Velox / Dark Editor in a new tab.
+ * Open the Velox / InstaEditor in a new tab.
  *
  * Centralized helper used by AccountDetails and Calendar (and
  * any future "Modifica copertina" entrypoints) so the popup
@@ -274,7 +274,7 @@ export async function publishYouTubeEditorSession(
 export function openEditorInNewTab(editorUrl: string): void {
   const parsed = new URL(editorUrl, window.location.origin);
   if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("URL del Dark Editor non valido: il browser ha bloccato un collegamento locale.");
+    throw new Error("URL di InstaEditor non valido: il browser ha bloccato un collegamento locale.");
   }
   window.open(editorUrl, "_blank", "noopener,noreferrer");
 }

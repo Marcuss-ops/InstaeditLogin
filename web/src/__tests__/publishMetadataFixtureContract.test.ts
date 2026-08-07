@@ -2,10 +2,10 @@ import { describe, expect, test } from "vitest";
 import fixture from "../../../api/fixtures/publish_metadata_fixture.json";
 
 // ============================================================================
-// CONTRACT FIXTURE TEST: TypeScript Dark Editor ↔ shared fixture
+// CONTRACT FIXTURE TEST: TypeScript InstaEditor ↔ shared fixture
 // ============================================================================
 //
-// This test validates that the TypeScript types used by the Dark Editor
+// This test validates that the TypeScript types used by InstaEditor
 // are compatible with the shared publish metadata fixture at
 // api/fixtures/publish_metadata_fixture.json.
 //
@@ -16,7 +16,7 @@ import fixture from "../../../api/fixtures/publish_metadata_fixture.json";
 //   - OpenAPI (YouTubeEditorSessionPublishRequest)
 //   - NVIDIA schema (NVIDIAMetadataResponse)
 //   - Validator backend (YouTubePublishOptions.Validate())
-//   - TypeScript Dark Editor (this test)
+//   - TypeScript InstaEditor (this test)
 //   - E2E tests
 
 // ─── TypeScript types (must match the Go DTO and OpenAPI) ──────────

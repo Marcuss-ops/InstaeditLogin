@@ -81,7 +81,7 @@ export function ContentNew() {
         <code className="px-1 rounded bg-white/[0.06] text-emerald-300 font-mono text-xs">
           private
         </code>{" "}
-        — il Dark Editor applicherà la copertina e la visibilità finale.
+        — InstaEditor applicherà la copertina e la visibilità finale.
       </p>
 
       <div className="mb-8">

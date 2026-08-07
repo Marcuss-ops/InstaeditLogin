@@ -218,7 +218,7 @@ export function LiveStreamWizardStep2({
             [
               { id: "upload", label: "Carica immagine", icon: UploadCloud },
               { id: "library", label: "Media Library", icon: FolderOpen },
-              { id: "dark", label: "Dark Editor", icon: Sparkles },
+              { id: "dark", label: "InstaEditor", icon: Sparkles },
             ] as const
           ).map(({ id, label, icon: Icon }) => (
             <button
@@ -313,9 +313,9 @@ export function LiveStreamWizardStep2({
 
         {coverSource === "dark" && (
           <div className="rounded-2xl border border-white/[0.10] bg-white/[0.02] p-4" role="tabpanel" id="ls-cover-panel-dark" aria-labelledby="ls-cover-tab-dark" data-testid="ls-step2-cover-dark">
-            <p className="text-[13px] font-semibold text-white">Crea nel Dark Editor</p>
+            <p className="text-[13px] font-semibold text-white">Crea in InstaEditor</p>
             <p className="mt-1 text-[12px] leading-relaxed text-[#9aa0aa]">
-              Il Dark Editor modifica la copertina di un video YouTube già esistente: arriva nel
+              InstaEditor modifica la copertina di un video YouTube già esistente: arriva nel
               secondo rilascio delle live, quando il flusso di pubblicazione lo supporterà.
             </p>
           </div>

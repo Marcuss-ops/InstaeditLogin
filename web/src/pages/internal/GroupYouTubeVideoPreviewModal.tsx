@@ -63,7 +63,7 @@ export function GroupYouTubeVideoPreviewModal({
           </button>
           <button type="button" onClick={() => { onClose(); onThumbnail(preview.video); }} disabled={openingVideoID !== null} className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-60">
             {openingVideoID === preview.video.youtube_video_id ? <Loader2 size={14} className="animate-spin" /> : <Edit3 size={14} aria-hidden="true" />}
-            Modifica in Dark Editor
+            Modifica in InstaEditor
           </button>
         </div>
       </div>

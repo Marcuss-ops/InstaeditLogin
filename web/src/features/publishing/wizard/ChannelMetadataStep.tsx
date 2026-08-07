@@ -17,7 +17,7 @@
  *
  * Locked (NOT user-editable per the spec):
  *   - privacy_status: "private" — surfaced as a locked chip with a
- *     `Lock` icon + explanatory caption. The Dark Editor applies the
+ *     `Lock` icon + explanatory caption. InstaEditor applies the
  *     final privacy (unlisted / public) AFTER the wizard commits
  *     the upload.
  *
@@ -157,7 +157,7 @@ export function ChannelMetadataStep({
           private
         </code>
         : la visibilità finale la imposterai dopo la prima
-        pubblicazione tramite il Dark Editor.
+        pubblicazione tramite InstaEditor.
       </p>
 
       <LoadBody
@@ -314,7 +314,7 @@ export function ChannelMetadataStep({
               </div>
               <div className="text-xs text-[#9aa0aa] mt-0.5">
                 Fissato dal flusso di pubblicazione. Potrai
-                modificare la visibilità in seguito dal Dark Editor
+                modificare la visibilità in seguito da InstaEditor
                 (unlisted / public).
               </div>
             </div>

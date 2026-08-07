@@ -54,13 +54,13 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
         youtube_video_id: video.youtube_video_id,
         ...(safeAssetUrl(video.thumbnail_url) ? { source_thumbnail_url: safeAssetUrl(video.thumbnail_url) } : {}),
       });
-      toast.success("Dark Editor aperto: il video resta privato finché non scegli di pubblicarlo.");
+      toast.success("InstaEditor aperto: il video resta privato finché non scegli di pubblicarlo.");
     } catch (error) {
       if (error instanceof AuthError) {
         navigate("/login", { replace: true });
         return;
       }
-      toast.error(error instanceof Error ? error.message : "Impossibile aprire il Dark Editor.");
+      toast.error(error instanceof Error ? error.message : "Impossibile aprire InstaEditor.");
     } finally {
       setOpeningVideoID(null);
     }

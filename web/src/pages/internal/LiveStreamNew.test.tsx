@@ -372,7 +372,7 @@ describe("LiveStreamNewPage — step 2 (Configurazione YouTube)", () => {
     expect(screen.getByTestId("ls-step2-cover-upload")).toBeInTheDocument();
   });
 
-  it("renders the Media Library and Dark Editor sources as in-arrivo panels", async () => {
+  it("renders the Media Library and InstaEditor sources as in-arrivo panels", async () => {
     await advanceToStep2();
 
     await userEvent.click(screen.getByTestId("ls-step2-cover-source-library"));
