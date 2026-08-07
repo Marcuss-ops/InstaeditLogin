@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 type editorBridgeFake struct {
-	bridge    *models.VeloxProjectBridge
-	created   *models.VeloxProjectBridge
-	findCalls int
+	bridge          *models.VeloxProjectBridge
+	created         *models.VeloxProjectBridge
+	findCalls       int
+	findWorkspaceID int64
+	findProjectID   string
 }
 
 func (f *editorBridgeFake) CreateVeloxProjectBridge(_ context.Context, bridge *models.VeloxProjectBridge) error {
@@ -21,8 +24,9 @@ func (f *editorBridgeFake) CreateVeloxProjectBridge(_ context.Context, bridge *m
 	return nil
 }
 
-func (f *editorBridgeFake) FindVeloxProjectBridge(_ context.Context, _ int64, _ string) (*models.VeloxProjectBridge, error) {
+func (f *editorBridgeFake) FindVeloxProjectBridge(_ context.Context, workspaceID int64, projectID string) (*models.VeloxProjectBridge, error) {
 	f.findCalls++
+	f.findWorkspaceID, f.findProjectID = workspaceID, projectID
 	return f.bridge, nil
 }
 
@@ -91,6 +95,21 @@ func TestEditorServiceCreateProjectPersistsOnlyBridgeAndIsIdempotent(t *testing.
 	}
 }
 
+func TestEditorServiceDTOsRejectLegacyOwnershipFields(t *testing.T) {
+	for _, typ := range []reflect.Type{
+		reflect.TypeOf(CreateEditorProjectRequest{}),
+		reflect.TypeOf(OpenEditorProjectRequest{}),
+		reflect.TypeOf(GetEditorProjectStatusRequest{}),
+		reflect.TypeOf(RequestEditorRenderRequest{}),
+	} {
+		for _, forbidden := range []string{"GroupID", "GroupIDs", "ChannelID", "ChannelIDs", "MemberIDs", "PlatformAccountID", "VideoID", "Language"} {
+			if _, ok := typ.FieldByName(forbidden); ok {
+				t.Fatalf("%s contains forbidden legacy field %q", typ.Name(), forbidden)
+			}
+		}
+	}
+}
+
 func TestEditorServiceRejectsRebindingExistingBridge(t *testing.T) {
 	service := NewEditorService(&editorAdapterFake{}, &editorBridgeFake{bridge: &models.VeloxProjectBridge{
 		ProjectID: "thumb_1", ExternalProjectID: "ve_existing", WorkspaceID: 7,
@@ -142,6 +161,40 @@ func TestEditorServiceDelegatesExistingBridgeThroughProviderNeutralDTO(t *testin
 	}
 	if adapter.renderRequest.IdempotencyKey == "" {
 		t.Fatal("service should provide an idempotency key when caller omits it")
+	}
+}
+
+func TestEditorServiceRejectsBridgeReturnedFromForeignWorkspace(t *testing.T) {
+	bridges := &editorBridgeFake{bridge: &models.VeloxProjectBridge{
+		ProjectID: "thumb_1", ExternalProjectID: "ve_existing", WorkspaceID: 99,
+	}}
+	service := NewEditorService(&editorAdapterFake{}, bridges)
+	_, err := service.OpenProject(context.Background(), OpenEditorProjectRequest{UserID: 11, WorkspaceID: 7, ApplicationProjectID: "thumb_1"})
+	if !errors.Is(err, ErrEditorProjectNotFound) {
+		t.Fatalf("foreign workspace bridge: want not found, got %v", err)
+	}
+	if bridges.findWorkspaceID != 7 || bridges.findProjectID != "thumb_1" {
+		t.Fatalf("bridge lookup was not scoped: workspace=%d project=%q", bridges.findWorkspaceID, bridges.findProjectID)
+	}
+}
+
+func TestEditorServiceRejectsBridgeWithoutExternalProjectID(t *testing.T) {
+	bridges := &editorBridgeFake{bridge: &models.VeloxProjectBridge{ProjectID: "thumb_1", WorkspaceID: 7}}
+	service := NewEditorService(&editorAdapterFake{}, bridges)
+	_, err := service.OpenProject(context.Background(), OpenEditorProjectRequest{UserID: 11, WorkspaceID: 7, ApplicationProjectID: "thumb_1"})
+	if !errors.Is(err, ErrEditorProjectNotFound) {
+		t.Fatalf("incomplete bridge: want not found, got %v", err)
+	}
+}
+
+func TestEditorServiceRejectsBridgeReturnedForDifferentProject(t *testing.T) {
+	bridges := &editorBridgeFake{bridge: &models.VeloxProjectBridge{
+		ProjectID: "thumb_other", ExternalProjectID: "ve_existing", WorkspaceID: 7,
+	}}
+	service := NewEditorService(&editorAdapterFake{}, bridges)
+	_, err := service.GetProjectStatus(context.Background(), GetEditorProjectStatusRequest{UserID: 11, WorkspaceID: 7, ApplicationProjectID: "thumb_1"})
+	if !errors.Is(err, ErrEditorProjectNotFound) {
+		t.Fatalf("foreign project bridge: want not found, got %v", err)
 	}
 }
 
@@ -200,6 +253,21 @@ func TestEditorServiceConcurrentDivergentCreateIsConflict(t *testing.T) {
 
 // TestEditorServiceConcurrentEquivalentCreateIsIdempotent: a racing
 // creator that won with the SAME external project id is a benign retry.
+func TestEditorServiceConcurrentCreateRejectsForeignWinner(t *testing.T) {
+	adapter := &editorAdapterFake{}
+	bridges := &conflictingBridgeFake{bridge: &models.VeloxProjectBridge{
+		ProjectID: "thumb_other", ExternalProjectID: "ve_created", WorkspaceID: 99,
+	}}
+	service := NewEditorService(adapter, bridges)
+
+	_, err := service.CreateProject(context.Background(), CreateEditorProjectRequest{
+		UserID: 11, WorkspaceID: 7, ApplicationProjectID: "thumb_1",
+	})
+	if !errors.Is(err, ErrEditorProjectNotFound) {
+		t.Fatalf("foreign concurrent winner: want not found, got %v", err)
+	}
+}
+
 func TestEditorServiceConcurrentEquivalentCreateIsIdempotent(t *testing.T) {
 	adapter := &editorAdapterFake{}
 	// The adapter fake mints ve_created; the racing winner must have

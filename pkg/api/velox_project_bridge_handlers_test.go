@@ -42,6 +42,9 @@ func TestVeloxProjectBridge_CreateAndReplayIsIdempotent(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("same bridge replay want 200, got %d: %s", w.Code, w.Body.String())
 	}
+	if store.createBridgeCalls != 1 {
+		t.Fatalf("same bridge replay must not persist twice, got %d create calls", store.createBridgeCalls)
+	}
 	if store.bridge == nil || store.bridge.ExternalProjectID != "vx_1" {
 		t.Fatalf("bridge not persisted in store: %+v", store.bridge)
 	}
@@ -60,7 +63,7 @@ func TestVeloxProjectBridge_ChangedReplayIs409(t *testing.T) {
 	}
 }
 
-func TestVeloxProjectBridge_CrossWorkspaceIs404(t *testing.T) {
+func TestVeloxProjectBridge_CrossWorkspaceIs404WithoutPersistence(t *testing.T) {
 	store := &thumbnailProjectTestStore{project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft}}
 	r := bridgeTestRouter(t, store, 99)
 	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"external_project_id":"vx_1"}`)
@@ -68,19 +71,40 @@ func TestVeloxProjectBridge_CrossWorkspaceIs404(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("foreign workspace want 404, got %d", w.Code)
 	}
-}
-
-func TestVeloxProjectBridge_UnknownContextFieldsAreRejected(t *testing.T) {
-	store := &thumbnailProjectTestStore{project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft}}
-	r := bridgeTestRouter(t, store, 1)
-	w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"external_project_id":"vx_1","channel_id":"UC123"}`)
-	r.Setup().ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("unknown context field want 400, got %d: %s", w.Code, w.Body.String())
+	if store.createBridgeCalls != 0 || store.bridge != nil {
+		t.Fatalf("foreign workspace request was persisted: calls=%d bridge=%+v", store.createBridgeCalls, store.bridge)
 	}
 }
 
-func TestVeloxProjectBridge_GetAndDelete(t *testing.T) {
+func TestVeloxProjectBridge_LegacyOwnershipFieldsAreRejectedWithoutPersistence(t *testing.T) {
+	legacyFields := []string{
+		`"group_id":9`,
+		`"group_ids":[9]`,
+		`"channel_id":"UC123"`,
+		`"channel_ids":["UC123"]`,
+		`"member_ids":[1]`,
+		`"platform_account_id":42`,
+		`"video_id":"video-1"`,
+		`"language":"it"`,
+	}
+	for _, field := range legacyFields {
+		t.Run(field, func(t *testing.T) {
+			store := &thumbnailProjectTestStore{project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft}}
+			r := bridgeTestRouter(t, store, 1)
+			body := fmt.Sprintf(`{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"external_project_id":"vx_1",%s}`, field)
+			w, req := bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge", body)
+			r.Setup().ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("legacy field %s: want 400, got %d: %s", field, w.Code, w.Body.String())
+			}
+			if store.createBridgeCalls != 0 || store.bridge != nil {
+				t.Fatalf("legacy field %s was persisted: calls=%d bridge=%+v", field, store.createBridgeCalls, store.bridge)
+			}
+		})
+	}
+}
+
+func TestVeloxProjectBridge_GetAndDeleteIsWorkspaceScoped(t *testing.T) {
 	store := &thumbnailProjectTestStore{
 		project: &models.ThumbnailProject{ID: "thumbproj_1", WorkspaceID: 7, Status: models.ThumbnailProjectStatusDraft},
 		bridge:  &models.VeloxProjectBridge{ProjectID: "thumbproj_1", WorkspaceID: 7, ExternalProjectID: "vx_1"},

@@ -126,6 +126,9 @@ func (s *DefaultEditorService) CreateProject(ctx context.Context, req CreateEdit
 	if existing, err := s.bridges.FindVeloxProjectBridge(ctx, req.WorkspaceID, strings.TrimSpace(req.ApplicationProjectID)); err != nil {
 		return nil, fmt.Errorf("find editor project bridge: %w", err)
 	} else if existing != nil {
+		if !bridgeMatchesRequest(existing, req.WorkspaceID, req.ApplicationProjectID) || strings.TrimSpace(existing.ExternalProjectID) == "" {
+			return nil, ErrEditorProjectNotFound
+		}
 		requestedExternalID := strings.TrimSpace(req.ExternalProjectID)
 		if requestedExternalID != "" && existing.ExternalProjectID != requestedExternalID {
 			return nil, ErrEditorProjectConflict
@@ -153,6 +156,9 @@ func (s *DefaultEditorService) CreateProject(ctx context.Context, req CreateEdit
 	}
 	if err := s.bridges.CreateVeloxProjectBridge(ctx, bridge); err != nil {
 		if existing, findErr := s.bridges.FindVeloxProjectBridge(ctx, req.WorkspaceID, req.ApplicationProjectID); findErr == nil && existing != nil {
+			if !bridgeMatchesRequest(existing, req.WorkspaceID, req.ApplicationProjectID) || strings.TrimSpace(existing.ExternalProjectID) == "" {
+				return nil, ErrEditorProjectNotFound
+			}
 			if existing.ExternalProjectID != bridge.ExternalProjectID {
 				return nil, ErrEditorProjectConflict
 			}
@@ -221,10 +227,16 @@ func (s *DefaultEditorService) findBridge(ctx context.Context, userID, workspace
 	if err != nil {
 		return nil, fmt.Errorf("find editor project bridge: %w", err)
 	}
-	if bridge == nil {
+	if bridge == nil || !bridgeMatchesRequest(bridge, workspaceID, projectID) || strings.TrimSpace(bridge.ExternalProjectID) == "" {
 		return nil, ErrEditorProjectNotFound
 	}
 	return bridge, nil
+}
+
+func bridgeMatchesRequest(bridge *models.VeloxProjectBridge, workspaceID int64, projectID string) bool {
+	return bridge != nil &&
+		bridge.WorkspaceID == workspaceID &&
+		bridge.ProjectID == strings.TrimSpace(projectID)
 }
 
 func validateEditorIdentity(userID, workspaceID int64, projectID string) error {
