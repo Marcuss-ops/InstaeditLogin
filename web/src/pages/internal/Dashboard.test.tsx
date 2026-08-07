@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 import { clearSessionCache } from "../../lib/auth";
@@ -174,5 +174,43 @@ describe("InternalDashboard", () => {
     await waitFor(() => {
       expect(screen.getAllByText("0")).toHaveLength(2);
     });
+  });
+
+  it("offers to add a channel through the same OAuth flow as Linking", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.endsWith("/api/v1/auth/me")) {
+          return mockJsonResponse({ user_id: 1 });
+        }
+        if (new URL(url, "http://localhost").pathname === "/api/v1/accounts") {
+          return mockJsonResponse({ accounts: [] });
+        }
+        if (url.endsWith("/api/v1/posts")) {
+          return mockJsonResponse({ posts: [] });
+        }
+        if (url.endsWith("/api/v1/uploads/counts")) {
+          return mockJsonResponse({ counts: [], total_uploads: 0, total_targets: 0 });
+        }
+        return mockJsonResponse({}, false, 404);
+      }),
+    );
+
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Connected accounts")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("dashboard-add-channel"));
+
+    const youtubeItem = screen.getByRole("menuitem", { name: /YouTube/ });
+    expect(youtubeItem).toHaveAttribute(
+      "href",
+      expect.stringContaining("/api/v1/auth/youtube/login?mode=add"),
+    );
+    expect(screen.getByRole("menuitem", { name: /TikTok/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Instagram/ })).toBeInTheDocument();
   });
 });
