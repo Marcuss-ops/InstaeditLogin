@@ -52,7 +52,7 @@ vi.mock(
     listYouTubeEditorSessions: vi.fn(),
     attachYouTubeEditorSessionThumbnail: vi.fn(),
     publishYouTubeEditorSession: vi.fn(),
-    openEditorInNewTab: vi.fn(),
+    openInstaEditorInNewTab: vi.fn(),
   }),
 );
 

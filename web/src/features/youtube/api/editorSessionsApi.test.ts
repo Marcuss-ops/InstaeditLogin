@@ -45,7 +45,7 @@ import {
   createYouTubeEditorSession,
   listYouTubeEditorSessions,
   getYouTubeEditorSession,
-  openEditorInNewTab,
+  openInstaEditorInNewTab,
   publishYouTubeEditorSession,
 } from "./editorSessionsApi";
 
@@ -303,12 +303,12 @@ describe("publishYouTubeEditorSession", () => {
 // UI helpers
 // ────────────────────────────────────────────────────────────────
 
-describe("openEditorInNewTab", () => {
+describe("openInstaEditorInNewTab", () => {
   it("calls window.open with target=_blank + noopener+noreferrer", () => {
     const openSpy = vi
       .spyOn(window, "open")
       .mockImplementation(() => null);
-    openEditorInNewTab("/dark_editor_v2/editor/ve_x");
+    openInstaEditorInNewTab("/dark_editor_v2/editor/ve_x");
     expect(openSpy).toHaveBeenCalledWith(
       "/dark_editor_v2/editor/ve_x",
       "_blank",

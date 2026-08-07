@@ -6,7 +6,7 @@ import {
   attachYouTubeEditorSessionThumbnail,
   publishYouTubeEditorSession,
   getYouTubeEditorSession,
-  openEditorInNewTab,
+  openInstaEditorInNewTab,
 } from "../../features/youtube/api/editorSessionsApi";
 import { isScheduleInPast, localToUTC } from "./youtubeStudioTime";
 import type { ActionState } from "./youtubeStudioTypes";
@@ -87,7 +87,7 @@ export function useYouTubeStudioActions({
       // submission. The opened tab is the user's confirmation; we don't
       // gate further form interaction on it.
       setAction({ kind: "idle" });
-      openEditorInNewTab(session.editor_url);
+      openInstaEditorInNewTab(session.editor_url);
       void refresh();
     } catch (err) {
       if (err instanceof AuthError) return;

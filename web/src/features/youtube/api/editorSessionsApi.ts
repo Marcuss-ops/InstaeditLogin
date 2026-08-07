@@ -48,7 +48,7 @@
  *     new callers MUST send `youtube_video_id`.
  *   - `window.open(editor_url, "_blank", "noopener,noreferrer")` is
  *     a UI concern, not an API concern. Pages call this AFTER
- *     resolving the create promise; the openEditorInNewTab helper
+ *     resolving the create promise; the openInstaEditorInNewTab helper
  *     below exists for the single-purpose `openVeloxEditor` shim
  *     used by AccountDetails/Calendar (YouTubeStudio inlines its own
  *     because it has post-open refresh logic).
@@ -155,7 +155,7 @@ export interface YouTubeEditorSessionDetail
  * POST /api/v1/youtube/editor-sessions.
  *
  * Returns the resolved `editor_url` — callers should open it via
- * {@link openEditorInNewTab} (or pass through to a component that
+ * {@link openInstaEditorInNewTab} (or pass through to a component that
  * already does the popup dance).
  */
 export async function createYouTubeEditorSession(
@@ -271,7 +271,7 @@ export async function publishYouTubeEditorSession(
  * the sessions list right after open completes — different shape,
  * not a candidate for unification there.
  */
-export function openEditorInNewTab(editorUrl: string): void {
+export function openInstaEditorInNewTab(editorUrl: string): void {
   const parsed = new URL(editorUrl, window.location.origin);
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error("URL di InstaEditor non valido: il browser ha bloccato un collegamento locale.");
@@ -301,6 +301,6 @@ export async function createEditorSessionAndOpen(
   const session = await createYouTubeEditorSession(body, init);
   // Open immediately so the browser popup-blocker trusts us — the
   // gesture chains through from the click handler unchanged.
-  openEditorInNewTab(session.editor_url);
+  openInstaEditorInNewTab(session.editor_url);
   return session;
 }
