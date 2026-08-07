@@ -9,9 +9,11 @@
 # LOC reporting: the BLOCKING diff-based size-regression gate (`make
 # loc-check`, threshold 800) deliberately lives in integration-fast.yml
 # (item 12 of its header). This workflow adds its NON-BLOCKING
-# companion: `scripts/loc-report.sh -t 800` prints the current full-tree
-# LOC backlog report on every run and always exits 0, so the refactoring
-# backlog stays tracked automatically without ever reddening the gate.
+# companion: `scripts/loc-report.sh -t 800 -o reports/loc-report.md`
+# writes the current full-tree LOC backlog report on every run (always
+# exits 0) and uploads it as the downloadable `loc-report` workflow
+# artifact, so the refactoring backlog stays tracked automatically
+# without ever reddening the gate.
 #
 # This workflow INTENTIONALLY complements (not replaces) the heavier
 # ones already in .github/workflows/:
@@ -42,8 +44,13 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# Least-privilege: checkout + build + test don't need deploy scopes,
+# but the LOC step uploads `reports/loc-report.md` as the `loc-report`
+# artifact, and actions/upload-artifact@v4 requires `actions: write`
+# on the token (mirrors integration-fast.yml's `web-dist` upload).
 permissions:
   contents: read
+  actions: write
 
 # One concurrent run per ref; cancel in-flight runs on a new push so
 # the latest commit always wins.
@@ -92,14 +99,29 @@ jobs:
         run: go build ./...
 
       - name: LOC backlog report (non-blocking, threshold 800)
-        # Informational only: prints the current source-file length
+        # Informational only: writes the current source-file length
         # report (top-N largest + every tracked go/ts/tsx file above
-        # 800 lines) so the refactoring backlog stays visible on every
-        # main run. loc-report.sh ALWAYS exits 0 — this step can never
-        # block the gate. The BLOCKING diff-based regression gate
-        # (`make loc-check`) remains in integration-fast.yml; this is
-        # its non-blocking companion that keeps the report tracked.
-        run: scripts/loc-report.sh -t 800
+        # 800 lines) to reports/loc-report.md so the refactoring
+        # backlog stays visible on every main run. loc-report.sh
+        # ALWAYS exits 0 — this step can never block the gate. The
+        # BLOCKING diff-based regression gate (`make loc-check`)
+        # remains in integration-fast.yml; this is its non-blocking
+        # companion that keeps the report tracked.
+        run: |
+          mkdir -p reports
+          scripts/loc-report.sh -t 800 -o reports/loc-report.md
+
+      - name: Upload LOC report artifact
+        # Makes the report downloadable from the workflow run page
+        # (Actions → run → Artifacts → loc-report) so operators can
+        # grab the backlog without re-running the scan. `warn` (not
+        # `error`) keeps the step non-blocking: a missing report
+        # must never redden the informational gate.
+        uses: actions/upload-artifact@v4
+        with:
+          name: loc-report
+          path: reports/loc-report.md
+          if-no-files-found: warn
 
       - name: go test ./...
         # Full ./... test target — NO package filter. The historical
