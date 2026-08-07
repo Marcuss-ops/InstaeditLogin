@@ -33,8 +33,9 @@ The wrapper still has intentional, live uses:
 - `make run-server-api-only` runs `RUN_WORKERS=false go run ./cmd/server`.
 - `docker compose --profile legacy up` selects the `server` service and its
   Dockerfile `server` target.
-- `docs/BINARIES.md`, `README.md`, and `HANDOFF-LINUX.md` describe the wrapper
-  as a local recovery/compatibility path.
+- `docs/BINARIES.md` and `README.md` describe the wrapper as a local
+  recovery/compatibility path; `docs/LOCAL-DEVELOPMENT.md` documents the
+  canonical split local stack.
 
 **Conclusion:** removing `cmd/server/main.go`, its Docker target, Compose
 profile, or Makefile targets now would break documented development/recovery

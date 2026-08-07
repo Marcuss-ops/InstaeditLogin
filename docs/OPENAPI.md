@@ -10,7 +10,9 @@ This document provides the human-readable companion to the formal `api/openapi.y
 
 ## Servers
 
-- Local: `http://localhost:8080/api/v1`
+- Local direct binary: `http://localhost:8080/api/v1`
+- Local `make dev` host binding: `http://localhost:8081/api/v1`
+- Local Caddy single-origin proxy: `https://localhost:8443/api/v1`
 - Staging: `https://api-staging.example.com/api/v1`
 - Production: `https://api.example.com/api/v1`
 
@@ -131,6 +133,79 @@ Request body (Taglio 3.2 — `media_url` REMOVED, use `media: [{ asset_id }]`):
 The server resolves each `asset_id` to a verified internal S3 URL. Only
 assets in status `ready` are accepted; missing / non-owned / expired /
 not-ready assets produce 422.
+
+### Workspace and post validation contract
+
+For the `/workspaces` and `/posts` handlers, keep malformed and semantic
+validation distinct:
+
+- **400 Bad Request** means the JSON body cannot be parsed or a parsed value
+  is invalid, such as an unknown post status.
+- **422 Unprocessable Entity** means valid JSON is missing a required semantic
+  field, such as `name`, `workspace_id`, `targets`, or a target's
+  `platform_account_id`.
+
+Examples:
+
+| Request | Response |
+|---|---|
+| `POST /workspaces` with `{}` | 422, `name is required` |
+| `POST /workspaces` with `not json` | 400, invalid request body |
+| `POST /posts` with `{"title":"x"}` | 422, `workspace_id is required` |
+| `POST /posts` with `{"workspace_id":1}` | 422, at least one target is required |
+| `POST /posts` with `targets:[{"platform_account_id":0}]` | 422, target platform account is required |
+| `POST /posts` with an invalid `status` | 400, status must be one of the supported values |
+
+The SPA uses 422 for form correction and 400 for an integration/payload bug;
+do not collapse these response classes. The contract is locked by
+`TestHandleCreateWorkspace_MissingName_422` in
+`pkg/api/workspace_routes_test.go`,
+`TestHandleCreatePost_MissingWorkspaceID_422`,
+`TestHandleCreatePost_NoTargets_422`, and
+`TestHandleCreatePost_BadTargetID_422` in `pkg/api/post_routes_test.go`, plus
+`TestPostsAPI_Create_BadStatus_400` in `pkg/api/posts_test.go`.
+
+Protected endpoints derive identity only from the authenticated JWT context
+(Bearer header or HttpOnly `session` cookie). They must not accept `user_id`
+from the request body or query string. The shared `requireUserID` helper is the
+first authorization step for workspaces, posts, publishing, accounts, and
+storage handlers.
+
+### Create-post response compatibility
+
+`POST /posts` returns both the flat post fields and a nested `post` object,
+plus `targets`, for compatibility with the existing flat and nested decoders:
+
+```json
+{
+  "id": 100,
+  "workspace_id": 1,
+  "title": "hello",
+  "caption": "world",
+  "media_url": "",
+  "scheduled_at": null,
+  "status": "draft",
+  "post": {
+    "id": 100,
+    "workspace_id": 1,
+    "title": "hello",
+    "caption": "world",
+    "media_url": "",
+    "scheduled_at": null,
+    "status": "draft",
+    "created_at": "2024-01-01T00:00:00Z"
+  },
+  "targets": [
+    {"id": 200, "post_id": 100, "platform_account_id": 10, "status": "scheduled"}
+  ]
+}
+```
+
+The flat fields and nested `post` represent the same resource. `media_url`
+remains in the response for compatibility even though new create requests use
+server-resolved media assets. If this shape changes, update the flat and nested
+handler tests together; do not simplify it to only one shape without an
+explicit API migration.
 
 ### POST /posts/publish
 

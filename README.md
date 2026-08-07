@@ -54,6 +54,10 @@ cp .env.dev.example .env.dev
 make dev
 ```
 
+Usa sempre un file ambiente esplicito: `.env.dev` in locale e
+`/opt/instaedit/secrets/.env.production` sul VPS. Non creare o usare un root
+`.env` per il percorso Compose, e non copiare secret reali nel repository.
+
 ### Worker di background
 
 La topologia supportata usa processi separati: `cmd/migrate` applica le
@@ -233,6 +237,35 @@ msg="Router configured" jwt_access_ttl_minutes=15 jwt_refresh_ttl_days=30
 > HttpOnly). Il body e la query string non vengono mai usati per ricavare
 > l'identità. Un client senza Bearer valido riceve 401 in qualsiasi
 > ambiente (`dev`, `staging`, `production`).
+
+## Local Meta OAuth setup
+
+Per provare Instagram/Facebook/Threads in locale, configura una Meta app in
+Development mode e aggiungi l'account operatore come Developer o Tester:
+
+1. In [Meta for Developers](https://developers.facebook.com), crea o apri l'app.
+2. Copia App ID e App Secret in `META_APP_ID` e `META_APP_SECRET` del solo
+   `.env.dev`.
+3. Configura Facebook Login for Business (o Facebook Login) e registra
+   **lo stesso valore di ciascuna `*_REDIRECT_URI` Meta presente in `.env.dev`**
+   (`INSTAGRAM_REDIRECT_URI`, `FACEBOOK_REDIRECT_URI`,
+   `THREADS_REDIRECT_URI`). Il template può contenere `localhost:8080` come
+   default del processo Go, ma il percorso `make dev` pubblica l'API su `8081`:
+   prima di usarlo, imposta tutti i callback su `http://localhost:8081/...`,
+   oppure usa il proxy Caddy e imposta tutti i callback su
+   `https://localhost:8443/...`. L'URL registrato su Meta e quello nel file
+   ambiente devono essere identici e raggiungibili dal browser.
+4. Collega, se necessario, un account Instagram Business all'app.
+5. Dopo aver aggiornato il file ambiente, riavvia il backend e verifica il
+   redirect OAuth con l'host/porta configurati, ad esempio:
+
+```bash
+curl -sI http://localhost:8081/api/v1/auth/instagram/login
+```
+
+Per produzione, il redirect deve usare l'host API HTTPS ed è documentato nel
+runbook [`docs/DEPLOY.md`](docs/DEPLOY.md); non copiare secret in documenti,
+log o commit.
 
 ## Deployment
 

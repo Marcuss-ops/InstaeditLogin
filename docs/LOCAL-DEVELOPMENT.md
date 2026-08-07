@@ -145,6 +145,25 @@ Then hand-edit `.env.dev`:
 > **Never** commit `.env.dev`. The repo `.gitignore` already
 > excludes it. If the values appear in a PR diff, the diff is wrong.
 
+## Environment isolation contract
+
+Treat development and production as separate security domains:
+
+- local runtime uses `.env.dev` and the Compose `db`/MinIO services;
+- production uses `/opt/instaedit/secrets/.env.production`, outside the Git
+  checkout and mode `0600`;
+- never share `DATABASE_URL`, `S3_BUCKET`, `JWT_SECRET`, or encryption keys
+  between environments;
+- production CORS must not include localhost origins;
+- do not create a root `.env` or let an exported shell variable silently
+  override the explicit profile used by Compose.
+
+Before a production deploy, verify the interpolated Compose configuration with
+`docker compose --env-file /opt/instaedit/secrets/.env.production ... config
+--quiet`, then run the health/readiness and CORS checks in `docs/DEPLOY.md` and
+`docs/OPERATIONS.md`. Never print the environment file or copy real secrets
+into documentation, logs, or Git.
+
 ## Step 4 — bring up the Docker stack
 
 ```bash

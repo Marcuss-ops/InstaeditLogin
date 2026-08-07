@@ -18,6 +18,40 @@ threshold since the afternoon snapshot: 8 test files >800 lines split by
 scenario + DriveBatchImportDialogViews.tsx. The >800 section is now empty:
 no tracked source file is above 800 lines today. Count dropped 69 → 59)._
 
+## Current refactoring policy and candidates
+
+The historical rankings below are evidence, not an executable backlog. The
+current rule is **split by responsibility only when the change removes a
+measured duplication, creates a useful test seam, or measurably simplifies the
+code**. Do not create placeholder issues or mechanically divide files solely
+because of line count.
+
+The six original focus files are already reduced or organized into cohesive
+families: the former `youtube_channel.go` monolith was removed; `upload_worker.go`
+is a small orchestrator with ingest/lifecycle/publish siblings; `post_repo.go`
+is a facade over focused repository files; `router.go` delegates to modules;
+`config.go` has loader/validation/OAuth/encryption siblings; and
+`internal/bootstrap/app.go` delegates wiring to dedicated bootstrap files.
+
+### Current production candidates (snapshot 2026-08-07)
+
+| Path | Decision |
+|---|---|
+| `pkg/api/livestreams_handlers.go` | Map routes and tests first, then separate command/query or HTTP responsibilities. |
+| `internal/repository/group_repo.go` | Distinguish membership, aggregate, and read queries while preserving transactions. |
+| `internal/config/config.go` + `config_validation.go` | Extract a shared field/default resolver only if it removes duplicated environment mapping. |
+| `pkg/api/posts_handlers.go` | Separate lifecycle/idempotency from serialization while keeping route registration cohesive. |
+| `internal/bootstrap/workers_wiring.go` | Keep the existing worker registry; extract only duplicated worker configuration with count/order tests. |
+| `internal/services/youtube_oauth.go` | Isolate HTTP/token exchange from policy while reusing shared resolvers and registries. |
+| `internal/services/provider.go` | Treat as a capability contract; change it only to remove duplicated capability lookup. |
+| `internal/repository/post_repo_{post,aggregate,retry}.go` | Prefer a shared retry/lease policy over additional facade files. |
+| `internal/worker/reconcile_worker.go` | Refactor only after the `AsyncPublisher` contract is stable; do not duplicate its state machine. |
+
+The completed `internal/sampler.RandomDurationInRange` abstraction is the
+shared primitive for inclusive scheduling-duration sampling. Upload/outbox/HTTP
+backoffs and crawler jitter remain separate because they implement different
+policies and randomness semantics.
+
 ## Legend
 
 | Status | Meaning |
@@ -43,7 +77,12 @@ gh issue create \
 
 ---
 
-## > 800 lines (0 files)
+## Historical LOC snapshot
+
+The threshold tables below are historical evidence from the 2026-08-02 scan,
+not a promise that every listed size is current and not an instruction to
+create placeholder issues automatically. Refresh them with `scripts/loc-report.sh`
+before planning a new slice.
 
 The 8 test files that previously sat here (nvidia_metadata_publish_e2e 928,
 youtube_oauth_browser_e2e 926, internal_velox_get_delivery 923,
@@ -188,6 +227,13 @@ monitorarlo per non farlo risalire.
 file dello split del crawler, anch'esso sotto soglia ma in watchlist.
 
 ---
+
+## Historical suggested execution order
+
+The execution order retained below is planning history, not an active
+instruction list. Before starting any item, refresh the LOC report, apply the
+current policy and candidate table above, and verify that the responsibility
+still exists and is not already split.
 
 ## Completati in questa sessione (stato: `fatto`)
 
