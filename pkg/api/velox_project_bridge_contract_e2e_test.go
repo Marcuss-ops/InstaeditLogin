@@ -39,7 +39,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 		WithEditorURL("https://instaeditor.example.test/app"),
 	)
 	h := r.Setup()
-	body := `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_contract_1"}`
+	body := `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"external_project_id":"vx_contract_1"}`
 
 	// The InstaEdit-owned project and workspace are the authorization and
 	// source-of-truth gates. The first request creates only the bridge.
@@ -55,7 +55,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if created.ContractVersion != models.ProjectBridgeContractVersion {
 		t.Fatalf("unexpected bridge contract version: %q", created.ContractVersion)
 	}
-	if created.Bridge.ProjectID != "thumbproj_contract" || created.Bridge.WorkspaceID != 7 || created.Bridge.VeloxProjectID != "vx_contract_1" {
+	if created.Bridge.ProjectID != "thumbproj_contract" || created.Bridge.WorkspaceID != 7 || created.Bridge.ExternalProjectID != "vx_contract_1" {
 		t.Fatalf("bridge is not InstaEdit-scoped: %+v", created.Bridge)
 	}
 	if created.Bridge.EditorProvider != "velox" {
@@ -68,7 +68,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if parsedURL.Host != "instaeditor.example.test" || parsedURL.Path != "/app/editor/vx_contract_1" {
 		t.Fatalf("redirect does not target the separate editor SPA: %q", created.EditorURL)
 	}
-	if store.bridge == nil || store.bridge.VeloxProjectID != "vx_contract_1" {
+	if store.bridge == nil || store.bridge.ExternalProjectID != "vx_contract_1" {
 		t.Fatalf("InstaEdit store did not receive the opaque bridge: %+v", store.bridge)
 	}
 	if store.createBridgeCalls != 1 {
@@ -86,7 +86,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if err := json.Unmarshal(w.Body.Bytes(), &replayed); err != nil {
 		t.Fatalf("decode replay response: %v", err)
 	}
-	if replayed.Bridge.ProjectID != created.Bridge.ProjectID || replayed.Bridge.VeloxProjectID != created.Bridge.VeloxProjectID || replayed.EditorURL != created.EditorURL {
+	if replayed.Bridge.ProjectID != created.Bridge.ProjectID || replayed.Bridge.ExternalProjectID != created.Bridge.ExternalProjectID || replayed.EditorURL != created.EditorURL {
 		t.Fatalf("replay changed the authoritative bridge: created=%+v replayed=%+v", created, replayed)
 	}
 	if store.createBridgeCalls != 1 {
@@ -94,7 +94,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	}
 
 	// A different Velox handle cannot overwrite the InstaEdit-owned relation.
-	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"velox_project_id":"vx_other"}`)
+	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":7,"external_project_id":"vx_other"}`)
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("changed replay: want 409, got %d: %s", w.Code, w.Body.String())
@@ -108,7 +108,7 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if unauthenticatedW.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated create: want 401, got %d", unauthenticatedW.Code)
 	}
-	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":8,"velox_project_id":"vx_probe"}`)
+	w, req = bridgeRequest(t, http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_contract/velox-bridge", `{"contract_version":"instaedit.velox.project-bridge.v1","workspace_id":8,"external_project_id":"vx_probe"}`)
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("cross-workspace create: want 404, got %d", w.Code)
@@ -129,18 +129,25 @@ func TestVeloxProjectBridge_ContractHasOnlyMinimalContextAndSeparateSPA(t *testi
 			t.Fatalf("bridge request contains duplicated ownership field %q", requestType.Field(i).Name)
 		}
 	}
-	for _, field := range []string{"WorkspaceID", "VeloxProjectID", "Platform", "PlatformAccountID", "ChannelID", "VideoID", "Language"} {
+	for _, field := range []string{"WorkspaceID", "ExternalProjectID"} {
 		if _, ok := requestType.FieldByName(field); !ok {
 			t.Fatalf("minimal bridge request lost field %q", field)
+		}
+	}
+	bridgeType := reflect.TypeOf(models.VeloxProjectBridge{})
+	for _, field := range []string{"Platform", "PlatformAccountID", "ChannelID", "VideoID", "Language", "GroupID", "GroupIDs", "MemberIDs"} {
+		if _, ok := bridgeType.FieldByName(field); ok {
+			t.Fatalf("minimal bridge model contains forbidden field %q", field)
 		}
 	}
 
 	root := projectRoot(t)
 	migration := readContractFile(t, root, "internal", "database", "migrations", "112_velox_project_bridges.sql")
 	metadataMigration := readContractFile(t, root, "internal", "database", "migrations", "115_velox_project_bridge_editor_metadata.sql")
+	minimalMigration := readContractFile(t, root, "internal", "database", "migrations", "116_velox_project_bridge_minimal.sql")
 	handler := readContractFile(t, root, "pkg", "api", "velox_project_bridge_handlers.go")
 	module := readContractFile(t, root, "pkg", "api", "modules_thumbnail_projects.go")
-	for name, content := range map[string]string{"bridge migration": migration, "bridge metadata migration": metadataMigration, "bridge handler": handler, "thumbnail module": module} {
+	for name, content := range map[string]string{"bridge migration": migration, "bridge metadata migration": metadataMigration, "bridge minimal migration": minimalMigration, "bridge handler": handler, "thumbnail module": module} {
 		lower := strings.ToLower(stripSQLComments(content))
 		for _, forbidden := range []string{
 			"group_id", "channel_ids", "member_ids", "velox_workspace",
@@ -169,6 +176,11 @@ func TestVeloxProjectBridge_ContractHasOnlyMinimalContextAndSeparateSPA(t *testi
 			t.Fatalf("bridge metadata migration lost required column %q", required)
 		}
 	}
+	for _, removed := range []string{"platform", "platform_account_id", "channel_id", "video_id", "language"} {
+		if !strings.Contains(strings.ToLower(minimalMigration), "drop column if exists "+removed) {
+			t.Fatalf("minimal bridge migration does not remove legacy column %q", removed)
+		}
+	}
 	assertBoundaryGoFile(t, filepath.Join(root, "pkg", "api", "velox_project_bridge_handlers.go"), map[string]bool{
 		"database/sql":            false,
 		"github.com/lib/pq":       false,
@@ -184,7 +196,7 @@ func TestVeloxProjectBridge_ContractHasOnlyMinimalContextAndSeparateSPA(t *testi
 			t.Fatalf("bridge boundary contains forbidden shared/synchronization construct %q", forbidden)
 		}
 	}
-	for _, localTable := range []string{"thumbnail_projects", "workspace_channels", "platform_accounts", "workspaces"} {
+	for _, localTable := range []string{"thumbnail_projects", "workspaces"} {
 		if !strings.Contains(strings.ToLower(migration), localTable) {
 			t.Fatalf("bridge migration no longer declares expected InstaEdit-local relation %q", localTable)
 		}

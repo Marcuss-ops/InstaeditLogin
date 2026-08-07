@@ -107,17 +107,12 @@ type thumbnailProjectAssetListResponse struct {
 }
 
 type createVeloxProjectBridgeRequest struct {
-	// Required bridge discriminator. It must match the sole supported
-	// contract; no request field may carry a group, channel list,
-	// membership snapshot, or workspace copy.
-	ContractVersion   string  `json:"contract_version"`
-	WorkspaceID       int64   `json:"workspace_id"`
-	Platform          string  `json:"platform,omitempty"`
-	PlatformAccountID *int64  `json:"platform_account_id,omitempty"`
-	ChannelID         *string `json:"channel_id,omitempty"`
-	VideoID           *string `json:"video_id,omitempty"`
-	Language          *string `json:"language,omitempty"`
-	VeloxProjectID    string  `json:"velox_project_id"`
+	// Required bridge discriminator. The bridge contains only the opaque
+	// project mapping and tenant boundary; groups, channels, videos and
+	// provider context remain in their InstaEdit-owned records.
+	ContractVersion   string `json:"contract_version"`
+	WorkspaceID       int64  `json:"workspace_id"`
+	ExternalProjectID string `json:"external_project_id"`
 }
 
 type veloxProjectBridgeResponse struct {

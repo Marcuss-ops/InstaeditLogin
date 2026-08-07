@@ -39,9 +39,7 @@ func TestMigration112And114_VeloxProjectBridgeSchemaAndConstraints(t *testing.T)
 		t.Fatalf("insert cross-context projects: %v", err)
 	}
 	assertBridgeConstraintRejects(t, db, `INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id) VALUES ('bridge-112-a', 11201, 'vx-112-b')`, "velox_project_bridges_pkey")
-	assertBridgeConstraintRejects(t, db, `INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id) VALUES ('bridge-112-b', 11201, 'vx-112-a')`, "velox_project_bridges_velox_project_uq")
-	assertBridgeConstraintRejects(t, db, `INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id, platform, platform_account_id) VALUES ('bridge-112-cross', 11201, 'vx-112-cross', 'youtube', 11202)`, "velox_project_bridges_channel_fk")
-	assertBridgeConstraintRejects(t, db, `INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id, platform, platform_account_id) VALUES ('bridge-112-platform', 11201, 'vx-112-platform', 'tiktok', 11201)`, "velox_project_bridges_platform_account_fk")
+	assertBridgeConstraintRejects(t, db, `INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id) VALUES ('bridge-112-b', 11201, 'vx-112-a')`, "velox_project_bridges_external_project_uq")
 
 	var groupColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_name='velox_project_bridges' AND column_name IN ('group_id', 'channel_ids', 'member_ids')`).Scan(&groupColumns); err != nil {
@@ -51,11 +49,11 @@ func TestMigration112And114_VeloxProjectBridgeSchemaAndConstraints(t *testing.T)
 		t.Fatalf("bridge contains forbidden duplicated ownership columns: %d", groupColumns)
 	}
 
-	if err := RunMigrationsUpTo(db, 114); err != nil {
-		t.Fatalf("RunMigrationsUpTo(114): %v", err)
+	if err := RunMigrationsUpTo(db, 116); err != nil {
+		t.Fatalf("RunMigrationsUpTo(116): %v", err)
 	}
-	if err := RunMigrationsUpTo(db, 114); err != nil {
-		t.Fatalf("RunMigrationsUpTo(114) second pass: %v", err)
+	if err := RunMigrationsUpTo(db, 116); err != nil {
+		t.Fatalf("RunMigrationsUpTo(116) second pass: %v", err)
 	}
 	var runIDColumnExists bool
 	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='velox_project_bridges' AND column_name='migration_run_id')`).Scan(&runIDColumnExists); err != nil {
@@ -64,13 +62,27 @@ func TestMigration112And114_VeloxProjectBridgeSchemaAndConstraints(t *testing.T)
 	if !runIDColumnExists {
 		t.Fatal("missing migration_run_id marker")
 	}
+	var legacyColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_name='velox_project_bridges' AND column_name IN ('velox_project_id', 'platform', 'platform_account_id', 'channel_id', 'video_id', 'language')`).Scan(&legacyColumns); err != nil {
+		t.Fatal(err)
+	}
+	if legacyColumns != 0 {
+		t.Fatalf("legacy context columns remain after migration 116: %d", legacyColumns)
+	}
+	var metadataColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_name='velox_project_bridges' AND column_name IN ('editor_provider', 'editor_status', 'last_editor_sync_at')`).Scan(&metadataColumns); err != nil {
+		t.Fatal(err)
+	}
+	if metadataColumns != 3 {
+		t.Fatalf("minimal bridge metadata columns missing: %d", metadataColumns)
+	}
 	if _, err := db.Exec(`INSERT INTO thumbnail_projects (id, workspace_id, created_by, name, canvas_width, canvas_height) VALUES ('bridge-112-run', 11201, 11201, 'Bridge run marker project', 1280, 720)`); err != nil {
 		t.Fatalf("seed bridge run marker project: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id, migration_run_id) VALUES ('bridge-112-run', 11201, 'vx-112-run', 'bridge-run-1')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO velox_project_bridges (project_id, workspace_id, external_project_id, migration_run_id) VALUES ('bridge-112-run', 11201, 'vx-112-run', 'bridge-run-1')`); err != nil {
 		t.Fatalf("insert bridge run marker: %v", err)
 	}
-	assertBridgeConstraintRejects(t, db, `INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id, migration_run_id) VALUES ('bridge-112-empty-run', 11201, 'vx-112-empty-run', '   ')`, "velox_project_bridges_migration_run_id_nonempty_ck")
+	assertBridgeConstraintRejects(t, db, `INSERT INTO velox_project_bridges (project_id, workspace_id, external_project_id, migration_run_id) VALUES ('bridge-112-empty-run', 11201, 'vx-112-empty-run', '   ')`, "velox_project_bridges_migration_run_id_nonempty_ck")
 }
 
 func seedVeloxProjectBridge112(t *testing.T, db *sql.DB) {

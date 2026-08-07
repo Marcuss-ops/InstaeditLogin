@@ -91,12 +91,24 @@ func TestEditorServiceCreateProjectPersistsOnlyBridgeAndIsIdempotent(t *testing.
 	}
 }
 
+func TestEditorServiceRejectsRebindingExistingBridge(t *testing.T) {
+	service := NewEditorService(&editorAdapterFake{}, &editorBridgeFake{bridge: &models.VeloxProjectBridge{
+		ProjectID: "thumb_1", ExternalProjectID: "ve_existing", WorkspaceID: 7,
+	}})
+	_, err := service.CreateProject(context.Background(), CreateEditorProjectRequest{
+		UserID: 11, WorkspaceID: 7, ApplicationProjectID: "thumb_1", ExternalProjectID: "ve_other",
+	})
+	if !errors.Is(err, ErrEditorProjectConflict) {
+		t.Fatalf("want ErrEditorProjectConflict, got %v", err)
+	}
+}
+
 func TestEditorServiceDelegatesExistingBridgeThroughProviderNeutralDTO(t *testing.T) {
 	adapter := &editorAdapterFake{}
 	bridges := &editorBridgeFake{bridge: &models.VeloxProjectBridge{
-		ProjectID:      "thumb_1",
-		VeloxProjectID: "ve_existing",
-		WorkspaceID:    7,
+		ProjectID:         "thumb_1",
+		ExternalProjectID: "ve_existing",
+		WorkspaceID:       7,
 	}}
 	service := NewEditorService(adapter, bridges)
 
@@ -169,9 +181,9 @@ func (f *conflictingBridgeFake) FindVeloxProjectBridge(_ context.Context, _ int6
 func TestEditorServiceConcurrentDivergentCreateIsConflict(t *testing.T) {
 	adapter := &editorAdapterFake{}
 	bridges := &conflictingBridgeFake{bridge: &models.VeloxProjectBridge{
-		ProjectID:      "thumb_1",
-		VeloxProjectID: "ve_other_creator",
-		WorkspaceID:    7,
+		ProjectID:         "thumb_1",
+		ExternalProjectID: "ve_other_creator",
+		WorkspaceID:       7,
 	}}
 	service := NewEditorService(adapter, bridges)
 
@@ -193,9 +205,9 @@ func TestEditorServiceConcurrentEquivalentCreateIsIdempotent(t *testing.T) {
 	// The adapter fake mints ve_created; the racing winner must have
 	// created the same external project for the retry to be benign.
 	bridges := &conflictingBridgeFake{bridge: &models.VeloxProjectBridge{
-		ProjectID:      "thumb_1",
-		VeloxProjectID: "ve_created",
-		WorkspaceID:    7,
+		ProjectID:         "thumb_1",
+		ExternalProjectID: "ve_created",
+		WorkspaceID:       7,
 	}}
 	service := NewEditorService(adapter, bridges)
 

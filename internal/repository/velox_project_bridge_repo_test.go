@@ -24,24 +24,20 @@ func newVeloxBridgeMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	return db, mock
 }
 
-func TestVeloxProjectBridgeRepository_CreateUsesWorkspaceAndContext(t *testing.T) {
+func TestVeloxProjectBridgeRepository_CreatePersistsOnlyMinimalMapping(t *testing.T) {
 	db, mock := newVeloxBridgeMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)
-	accountID := int64(381)
-	channelID, videoID, language := "UC123", "video123", "en"
 	mock.ExpectExec(`INSERT INTO velox_project_bridges`).
-		WithArgs(int64(7), "thumbproj_1", "vx_1", "youtube", &accountID, &channelID, &videoID, &language, "velox", nil, nil, models.ThumbnailProjectStatusDeleted).
+		WithArgs(int64(7), "thumbproj_1", "vx_1", "velox", nil, nil, models.ThumbnailProjectStatusDeleted).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	bridge := &models.VeloxProjectBridge{
-		ProjectID: " thumbproj_1 ", WorkspaceID: 7, VeloxProjectID: " vx_1 ",
-		Platform: " YouTube ", PlatformAccountID: &accountID,
-		ChannelID: &channelID, VideoID: &videoID, Language: &language,
+		ProjectID: " thumbproj_1 ", WorkspaceID: 7, ExternalProjectID: " vx_1 ",
 	}
 	if err := repo.CreateVeloxProjectBridge(context.Background(), bridge); err != nil {
 		t.Fatalf("CreateVeloxProjectBridge: %v", err)
 	}
-	if bridge.ProjectID != "thumbproj_1" || bridge.VeloxProjectID != "vx_1" || bridge.Platform != "youtube" {
+	if bridge.ProjectID != "thumbproj_1" || bridge.ExternalProjectID != "vx_1" {
 		t.Fatalf("bridge was not normalized: %+v", bridge)
 	}
 	if bridge.EditorProvider != "velox" {
@@ -52,28 +48,13 @@ func TestVeloxProjectBridgeRepository_CreateUsesWorkspaceAndContext(t *testing.T
 	}
 }
 
-func TestVeloxProjectBridgeRepository_CreateRejectsMissingContextAccount(t *testing.T) {
-	db, mock := newVeloxBridgeMockDB(t)
-	repo := repository.NewThumbnailProjectRepository(db)
-	channelID := "UC123"
-	err := repo.CreateVeloxProjectBridge(context.Background(), &models.VeloxProjectBridge{
-		ProjectID: "thumbproj_1", WorkspaceID: 7, VeloxProjectID: "vx_1", ChannelID: &channelID,
-	})
-	if !errors.Is(err, repository.ErrVeloxProjectBridgeInvalid) {
-		t.Fatalf("want invalid context, got %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestVeloxProjectBridgeRepository_MapsUniqueConflict(t *testing.T) {
 	db, mock := newVeloxBridgeMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)
 	mock.ExpectExec(`INSERT INTO velox_project_bridges`).
-		WithArgs(int64(7), "thumbproj_1", "vx_1", nil, nil, nil, nil, nil, "velox", nil, nil, models.ThumbnailProjectStatusDeleted).
+		WithArgs(int64(7), "thumbproj_1", "vx_1", "velox", nil, nil, models.ThumbnailProjectStatusDeleted).
 		WillReturnError(&pq.Error{Code: "23505", Constraint: "velox_project_bridges_pkey"})
-	err := repo.CreateVeloxProjectBridge(context.Background(), &models.VeloxProjectBridge{ProjectID: "thumbproj_1", WorkspaceID: 7, VeloxProjectID: "vx_1"})
+	err := repo.CreateVeloxProjectBridge(context.Background(), &models.VeloxProjectBridge{ProjectID: "thumbproj_1", WorkspaceID: 7, ExternalProjectID: "vx_1"})
 	if !errors.Is(err, repository.ErrVeloxProjectBridgeConflict) {
 		t.Fatalf("want bridge conflict, got %v", err)
 	}
@@ -85,16 +66,16 @@ func TestVeloxProjectBridgeRepository_MapsUniqueConflict(t *testing.T) {
 func TestVeloxProjectBridgeRepository_FindScopesWorkspace(t *testing.T) {
 	db, mock := newVeloxBridgeMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)
-	mock.ExpectQuery(`SELECT project_id, workspace_id, velox_project_id,`).
+	mock.ExpectQuery(`SELECT project_id, workspace_id, external_project_id,`).
 		WithArgs(int64(7), "thumbproj_1").
-		WillReturnRows(sqlmock.NewRows([]string{"project_id", "workspace_id", "velox_project_id", "platform", "platform_account_id", "channel_id", "video_id", "language", "editor_provider", "editor_status", "last_editor_sync_at", "created_at", "updated_at"}).
-			AddRow("thumbproj_1", 7, "vx_1", "youtube", 381, "UC123", "video123", "en", "velox", "linked", nil, time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)))
+		WillReturnRows(sqlmock.NewRows([]string{"project_id", "workspace_id", "external_project_id", "editor_provider", "editor_status", "last_editor_sync_at", "created_at", "updated_at"}).
+			AddRow("thumbproj_1", 7, "vx_1", "velox", "linked", nil, time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)))
 
 	bridge, err := repo.FindVeloxProjectBridge(context.Background(), 7, "thumbproj_1")
 	if err != nil || bridge == nil {
 		t.Fatalf("FindVeloxProjectBridge: bridge=%+v err=%v", bridge, err)
 	}
-	if bridge.WorkspaceID != 7 || bridge.VeloxProjectID != "vx_1" || bridge.PlatformAccountID == nil || *bridge.PlatformAccountID != 381 {
+	if bridge.WorkspaceID != 7 || bridge.ExternalProjectID != "vx_1" {
 		t.Fatalf("unexpected bridge: %+v", bridge)
 	}
 	if bridge.EditorProvider != "velox" || bridge.EditorStatus != "linked" {

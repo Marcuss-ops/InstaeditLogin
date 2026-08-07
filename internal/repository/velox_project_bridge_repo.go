@@ -12,17 +12,14 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-const veloxProjectBridgeColumns = `project_id, workspace_id, velox_project_id,
-	platform, platform_account_id, channel_id, video_id, language,
+const veloxProjectBridgeColumns = `project_id, workspace_id, external_project_id,
 	editor_provider, editor_status, last_editor_sync_at, created_at, updated_at`
 
 func scanVeloxProjectBridge(row interface{ Scan(...any) error }) (*models.VeloxProjectBridge, error) {
 	bridge := &models.VeloxProjectBridge{}
 	if err := row.Scan(
-		&bridge.ProjectID, &bridge.WorkspaceID, &bridge.VeloxProjectID,
-		&bridge.Platform, &bridge.PlatformAccountID, &bridge.ChannelID,
-		&bridge.VideoID, &bridge.Language, &bridge.EditorProvider,
-		&bridge.EditorStatus, &bridge.LastEditorSyncAt,
+		&bridge.ProjectID, &bridge.WorkspaceID, &bridge.ExternalProjectID,
+		&bridge.EditorProvider, &bridge.EditorStatus, &bridge.LastEditorSyncAt,
 		&bridge.CreatedAt, &bridge.UpdatedAt,
 	); err != nil {
 		return nil, err
@@ -39,34 +36,33 @@ func mapVeloxProjectBridgeConstraint(err error) error {
 	case "23505":
 		if pqErr.Constraint == "velox_project_bridges_pkey" ||
 			strings.Contains(pqErr.Constraint, "velox_project_bridges_project") ||
-			strings.Contains(pqErr.Constraint, "velox_project_bridges_velox") {
+			strings.Contains(pqErr.Constraint, "velox_project_bridges_external") {
 			return fmt.Errorf("%w: constraint=%s", ErrVeloxProjectBridgeConflict, pqErr.Constraint)
 		}
 	case "23503":
-		return fmt.Errorf("%w: channel or project is not visible in workspace", ErrVeloxProjectBridgeNotFound)
+		return fmt.Errorf("%w: project is not visible in workspace", ErrVeloxProjectBridgeNotFound)
 	case "23514":
-		return fmt.Errorf("%w: bridge context is invalid", ErrVeloxProjectBridgeInvalid)
+		return fmt.Errorf("%w: bridge metadata is invalid", ErrVeloxProjectBridgeInvalid)
 	}
 	return err
 }
 
-// CreateVeloxProjectBridge inserts one bridge. Composite foreign keys make
-// both the project and optional channel context workspace-local at SQL level.
+// CreateVeloxProjectBridge inserts one minimal bridge. The project foreign
+// key and workspace scope remain enforced by SQL; no channel or video context
+// is persisted here.
 func (r *ThumbnailProjectRepository) CreateVeloxProjectBridge(ctx context.Context, bridge *models.VeloxProjectBridge) error {
 	if err := bridge.NormalizeAndValidate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrVeloxProjectBridgeInvalid, err)
 	}
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO velox_project_bridges
-			(project_id, workspace_id, velox_project_id, platform,
-			 platform_account_id, channel_id, video_id, language,
+			(project_id, workspace_id, external_project_id,
 			 editor_provider, editor_status, last_editor_sync_at)
-		SELECT p.id, p.workspace_id, $3, $4, $5, $6, $7, $8, $9, $10, $11
+		SELECT p.id, p.workspace_id, $3, $4, $5, $6
 		  FROM thumbnail_projects p
 		 WHERE p.workspace_id = $1 AND p.id = $2
-		   AND p.status <> $12`,
-		bridge.WorkspaceID, bridge.ProjectID, bridge.VeloxProjectID, nullableBridgeString(bridge.Platform),
-		bridge.PlatformAccountID, bridge.ChannelID, bridge.VideoID, bridge.Language,
+		   AND p.status <> $7`,
+		bridge.WorkspaceID, bridge.ProjectID, bridge.ExternalProjectID,
 		bridge.EditorProvider, nullableBridgeString(bridge.EditorStatus), bridge.LastEditorSyncAt,
 		models.ThumbnailProjectStatusDeleted)
 	if err != nil {
@@ -110,7 +106,7 @@ func (r *ThumbnailProjectRepository) FindVeloxProjectBridge(ctx context.Context,
 	return bridge, nil
 }
 
-// DeleteVeloxProjectBridge removes InstaEdit's relationship only. It never
+// DeleteVeloxProjectBridge removes only InstaEdit's relation. It never
 // deletes editor data in Velox.
 func (r *ThumbnailProjectRepository) DeleteVeloxProjectBridge(ctx context.Context, workspaceID int64, projectID string) error {
 	projectID = strings.TrimSpace(projectID)

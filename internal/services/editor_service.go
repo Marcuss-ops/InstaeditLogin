@@ -16,7 +16,7 @@ import (
 
 // EditorService is the provider-neutral application boundary for editor
 // projects. InstaEdit owns the application project and bridge; the injected
-// EditorAdapter owns the provider-specific editor/runtime calls.
+// EditorAdapter owns provider-specific editor/runtime calls.
 type EditorService interface {
 	CreateProject(context.Context, CreateEditorProjectRequest) (*EditorProject, error)
 	OpenProject(context.Context, OpenEditorProjectRequest) (*EditorProject, error)
@@ -25,9 +25,6 @@ type EditorService interface {
 }
 
 // EditorAdapter is the replaceable provider port behind EditorService.
-// A VeloxAdapter is the current implementation; another editor can implement
-// this interface without changing InstaEdit's project, channel, or posting
-// logic.
 type EditorAdapter interface {
 	CreateProject(context.Context, CreateEditorProjectRequest) (*EditorProject, error)
 	OpenProject(context.Context, EditorProject) (*EditorProject, error)
@@ -35,18 +32,14 @@ type EditorAdapter interface {
 	RequestRender(context.Context, EditorProject, RequestEditorRenderRequest) (*EditorRender, error)
 }
 
-// EditorProjectBridgeStore is the narrow InstaEdit-owned persistence port.
-// It deliberately stores only the application-project to external-project
-// relationship and optional provider context.
 type EditorProjectBridgeStore interface {
 	CreateVeloxProjectBridge(context.Context, *models.VeloxProjectBridge) error
 	FindVeloxProjectBridge(context.Context, int64, string) (*models.VeloxProjectBridge, error)
 }
 
-// CreateEditorProjectRequest identifies an InstaEdit application project.
-// ExternalProjectID is optional: trusted handoff callers may provide an
-// already-created opaque provider reference, while the adapter may mint one
-// when it is empty.
+// CreateEditorProjectRequest contains only the editor project identity and
+// optional editor document. Group/channel/video context is validated by
+// InstaEdit's owning records and is deliberately not part of this bridge.
 type CreateEditorProjectRequest struct {
 	UserID               int64
 	WorkspaceID          int64
@@ -54,30 +47,20 @@ type CreateEditorProjectRequest struct {
 	ExternalProjectID    string
 	Name                 string
 	InitialDocument      json.RawMessage
-	Platform             string
-	PlatformAccountID    *int64
-	ChannelID            *string
-	VideoID              *string
-	Language             *string
 }
 
-// OpenEditorProjectRequest opens an existing InstaEdit-owned bridge.
 type OpenEditorProjectRequest struct {
 	UserID               int64
 	WorkspaceID          int64
 	ApplicationProjectID string
 }
 
-// GetEditorProjectStatusRequest reads provider status for an existing bridge.
 type GetEditorProjectStatusRequest struct {
 	UserID               int64
 	WorkspaceID          int64
 	ApplicationProjectID string
 }
 
-// RequestEditorRenderRequest carries provider-neutral render input. The
-// editor project handle is resolved from the InstaEdit bridge, never accepted
-// as a browser authorization credential.
 type RequestEditorRenderRequest struct {
 	UserID               int64
 	WorkspaceID          int64
@@ -88,7 +71,6 @@ type RequestEditorRenderRequest struct {
 	Output               *veloxcontract.JobOutput
 }
 
-// EditorProject is the stable application-facing project reference.
 type EditorProject struct {
 	ApplicationProjectID string    `json:"project_id"`
 	ExternalProjectID    string    `json:"external_project_id"`
@@ -99,9 +81,6 @@ type EditorProject struct {
 	CreatedAt            time.Time `json:"created_at,omitempty"`
 }
 
-// EditorProjectStatus is intentionally operational. It is not an InstaEdit
-// project lifecycle and must not be used to mutate groups, channels, or the
-// application project's archived/deleted state.
 type EditorProjectStatus struct {
 	ExternalProjectID string    `json:"external_project_id"`
 	State             string    `json:"state"`
@@ -110,7 +89,6 @@ type EditorProjectStatus struct {
 	UpdatedAt         time.Time `json:"updated_at,omitempty"`
 }
 
-// EditorRender is the provider-neutral result of a render request.
 type EditorRender struct {
 	JobID             string    `json:"job_id"`
 	ExternalProjectID string    `json:"external_project_id"`
@@ -124,21 +102,14 @@ var (
 	ErrEditorServiceNotConfigured = errors.New("editor service is not configured")
 	ErrEditorProjectInvalid       = errors.New("editor project is invalid")
 	ErrEditorProjectNotFound      = errors.New("editor project not found")
-	// ErrEditorProjectConflict surfaces when a concurrent create won the
-	// unique bridge with a different external project id than this request
-	// produced. The caller must not silently adopt the other creator's
-	// project.
-	ErrEditorProjectConflict = errors.New("editor project already linked to a different external project")
+	ErrEditorProjectConflict      = errors.New("editor project already linked to a different external project")
 )
 
-// DefaultEditorService owns the orchestration and keeps provider details out
-// of application callers.
 type DefaultEditorService struct {
 	adapter EditorAdapter
 	bridges EditorProjectBridgeStore
 }
 
-// NewEditorService constructs the provider-neutral editor service.
 func NewEditorService(adapter EditorAdapter, bridges EditorProjectBridgeStore) *DefaultEditorService {
 	return &DefaultEditorService{adapter: adapter, bridges: bridges}
 }
@@ -155,6 +126,10 @@ func (s *DefaultEditorService) CreateProject(ctx context.Context, req CreateEdit
 	if existing, err := s.bridges.FindVeloxProjectBridge(ctx, req.WorkspaceID, strings.TrimSpace(req.ApplicationProjectID)); err != nil {
 		return nil, fmt.Errorf("find editor project bridge: %w", err)
 	} else if existing != nil {
+		requestedExternalID := strings.TrimSpace(req.ExternalProjectID)
+		if requestedExternalID != "" && existing.ExternalProjectID != requestedExternalID {
+			return nil, ErrEditorProjectConflict
+		}
 		project := editorProjectFromBridge(existing)
 		project.UserID = req.UserID
 		return project, nil
@@ -170,23 +145,15 @@ func (s *DefaultEditorService) CreateProject(ctx context.Context, req CreateEdit
 	bridge := &models.VeloxProjectBridge{
 		ProjectID:         req.ApplicationProjectID,
 		WorkspaceID:       req.WorkspaceID,
-		VeloxProjectID:    project.ExternalProjectID,
-		Platform:          req.Platform,
-		PlatformAccountID: req.PlatformAccountID,
-		ChannelID:         req.ChannelID,
-		VideoID:           req.VideoID,
-		Language:          req.Language,
+		ExternalProjectID: project.ExternalProjectID,
 		ContractVersion:   models.ProjectBridgeContractVersion,
 	}
 	if err := bridge.NormalizeAndValidate(); err != nil {
 		return nil, fmt.Errorf("validate editor bridge: %w", err)
 	}
 	if err := s.bridges.CreateVeloxProjectBridge(ctx, bridge); err != nil {
-		// A concurrent creator may have won. Re-read the durable bridge and
-		// return it, preserving idempotent create semantics — but only when
-		// the winner is the same external project this request produced.
 		if existing, findErr := s.bridges.FindVeloxProjectBridge(ctx, req.WorkspaceID, req.ApplicationProjectID); findErr == nil && existing != nil {
-			if existing.VeloxProjectID != bridge.VeloxProjectID {
+			if existing.ExternalProjectID != bridge.ExternalProjectID {
 				return nil, ErrEditorProjectConflict
 			}
 			project := editorProjectFromBridge(existing)
@@ -287,7 +254,7 @@ func editorProjectFromBridge(bridge *models.VeloxProjectBridge) *EditorProject {
 	}
 	return &EditorProject{
 		ApplicationProjectID: bridge.ProjectID,
-		ExternalProjectID:    bridge.VeloxProjectID,
+		ExternalProjectID:    bridge.ExternalProjectID,
 		WorkspaceID:          bridge.WorkspaceID,
 		State:                "linked",
 		CreatedAt:            bridge.CreatedAt,

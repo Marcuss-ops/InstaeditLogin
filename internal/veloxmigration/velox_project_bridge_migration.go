@@ -25,13 +25,8 @@ var (
 )
 
 type Mapping struct {
-	VeloxProjectID string `json:"velox_project_id"`
-	ProjectID      string `json:"project_id"`
-	// Optional operator assertion. The authoritative value is always read
-	// from platform_accounts; this field is never used to discover a match.
-	ChannelID string `json:"channel_id,omitempty"`
-	VideoID   string `json:"video_id,omitempty"`
-	Language  string `json:"language,omitempty"`
+	ExternalProjectID string `json:"external_project_id"`
+	ProjectID         string `json:"project_id"`
 }
 
 type Status string
@@ -46,15 +41,11 @@ const (
 )
 
 type Entry struct {
-	Mapping                Mapping   `json:"mapping"`
-	Status                 Status    `json:"status"`
-	Reason                 string    `json:"reason,omitempty"`
-	WorkspaceID            int64     `json:"workspace_id,omitempty"`
-	PlatformAccountID      int64     `json:"platform_account_id,omitempty"`
-	AuthoritativeChannelID string    `json:"authoritative_channel_id,omitempty"`
-	AuthoritativeVideoID   string    `json:"authoritative_video_id,omitempty"`
-	Language               string    `json:"language,omitempty"`
-	CreatedAt              time.Time `json:"created_at,omitempty"`
+	Mapping     Mapping   `json:"mapping"`
+	Status      Status    `json:"status"`
+	Reason      string    `json:"reason,omitempty"`
+	WorkspaceID int64     `json:"workspace_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
 }
 
 type Summary struct {
@@ -85,10 +76,6 @@ type Options struct {
 	RunID  string
 }
 
-// VerifyMigrationReady ensures the additive rollback marker is installed
-// before the CLI attempts to read or write bridge rows. Checking both the
-// schema and migration ledger gives operators an actionable failure when the
-// command is run against a database that has not completed migration 114.
 func VerifyMigrationReady(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("%w: database is required", ErrMigrationNotReady)
@@ -101,43 +88,61 @@ func VerifyMigrationReady(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("%w: apply 114_velox_project_bridge_run_id.sql first", ErrMigrationNotReady)
 	}
 	var migrationRecorded bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '114_velox_project_bridge_run_id.sql')`).Scan(&migrationRecorded); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '116_velox_project_bridge_minimal.sql')`).Scan(&migrationRecorded); err != nil {
 		return fmt.Errorf("%w: check schema_migrations: %v", ErrMigrationNotReady, err)
 	}
 	if !migrationRecorded {
-		return fmt.Errorf("%w: migration 114 is not recorded; run the application migrations first", ErrMigrationNotReady)
+		return fmt.Errorf("%w: migration 116 is not recorded; apply the minimal bridge migration first", ErrMigrationNotReady)
+	}
+	var legacyColumns int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'velox_project_bridges' AND column_name IN ('velox_project_id', 'platform', 'platform_account_id', 'channel_id', 'video_id', 'language')`).Scan(&legacyColumns); err != nil {
+		return fmt.Errorf("%w: check legacy bridge columns: %v", ErrMigrationNotReady, err)
+	}
+	if legacyColumns != 0 {
+		return fmt.Errorf("%w: legacy bridge columns are still present", ErrMigrationNotReady)
+	}
+	var canonicalColumns int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'velox_project_bridges' AND column_name IN ('project_id', 'workspace_id', 'external_project_id')`).Scan(&canonicalColumns); err != nil {
+		return fmt.Errorf("%w: check canonical bridge columns: %v", ErrMigrationNotReady, err)
+	}
+	if canonicalColumns != 3 {
+		return fmt.Errorf("%w: canonical bridge columns are incomplete", ErrMigrationNotReady)
+	}
+	var metadataColumns int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'velox_project_bridges' AND column_name IN ('editor_provider', 'editor_status', 'last_editor_sync_at')`).Scan(&metadataColumns); err != nil {
+		return fmt.Errorf("%w: check editor metadata columns: %v", ErrMigrationNotReady, err)
+	}
+	if metadataColumns != 3 {
+		return fmt.Errorf("%w: editor metadata columns are incomplete", ErrMigrationNotReady)
 	}
 	return nil
 }
 
 func normalizeMapping(m Mapping) (Mapping, error) {
-	m.VeloxProjectID = strings.TrimSpace(m.VeloxProjectID)
+	m.ExternalProjectID = strings.TrimSpace(m.ExternalProjectID)
 	m.ProjectID = strings.TrimSpace(m.ProjectID)
-	m.ChannelID = strings.TrimSpace(m.ChannelID)
-	m.VideoID = strings.TrimSpace(m.VideoID)
-	m.Language = strings.TrimSpace(m.Language)
-	if m.VeloxProjectID == "" || m.ProjectID == "" {
-		return Mapping{}, fmt.Errorf("%w: velox_project_id and project_id are required", ErrInvalidMapping)
+	if m.ExternalProjectID == "" || m.ProjectID == "" {
+		return Mapping{}, fmt.Errorf("%w: external_project_id and project_id are required", ErrInvalidMapping)
 	}
 	return m, nil
 }
 
 func NormalizeMappings(input []Mapping) ([]Mapping, error) {
 	out := make([]Mapping, 0, len(input))
-	seenVelox := map[string]struct{}{}
+	seenExternal := map[string]struct{}{}
 	seenProject := map[string]struct{}{}
 	for _, raw := range input {
 		m, err := normalizeMapping(raw)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seenVelox[m.VeloxProjectID]; ok {
-			return nil, fmt.Errorf("%w: duplicate velox_project_id %q", ErrInvalidMapping, m.VeloxProjectID)
+		if _, ok := seenExternal[m.ExternalProjectID]; ok {
+			return nil, fmt.Errorf("%w: duplicate external_project_id %q", ErrInvalidMapping, m.ExternalProjectID)
 		}
 		if _, ok := seenProject[m.ProjectID]; ok {
 			return nil, fmt.Errorf("%w: duplicate project_id %q", ErrInvalidMapping, m.ProjectID)
 		}
-		seenVelox[m.VeloxProjectID] = struct{}{}
+		seenExternal[m.ExternalProjectID] = struct{}{}
 		seenProject[m.ProjectID] = struct{}{}
 		out = append(out, m)
 	}
@@ -156,16 +161,11 @@ type projectRow struct {
 }
 
 type bridgeRow struct {
-	ProjectID      string
-	WorkspaceID    int64
-	VeloxProjectID string
-	Platform       string
-	AccountID      sql.NullInt64
-	ChannelID      sql.NullString
-	VideoID        sql.NullString
-	Language       sql.NullString
-	CreatedAt      time.Time
-	MigrationRunID sql.NullString
+	ProjectID         string
+	WorkspaceID       int64
+	ExternalProjectID string
+	CreatedAt         time.Time
+	MigrationRunID    sql.NullString
 }
 
 func queryOneSession(ctx context.Context, db interface {
@@ -206,29 +206,10 @@ func queryProject(ctx context.Context, db interface {
 	return out, rows.Err()
 }
 
-func queryChannel(ctx context.Context, db interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, workspaceID, accountID int64) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT pa.platform_user_id FROM workspace_channels wc JOIN platform_accounts pa ON pa.id = wc.platform_account_id WHERE wc.workspace_id = $1 AND wc.platform_account_id = $2 AND pa.platform = 'youtube'`, workspaceID, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("lookup workspace channel: %w", err)
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan workspace channel: %w", err)
-		}
-		out = append(out, strings.TrimSpace(id))
-	}
-	return out, rows.Err()
-}
-
 func queryExistingBridge(ctx context.Context, db interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, m Mapping) ([]bridgeRow, error) {
-	rows, err := db.QueryContext(ctx, `SELECT project_id, workspace_id, velox_project_id, platform, platform_account_id, channel_id, video_id, language, created_at, migration_run_id FROM velox_project_bridges WHERE project_id = $1 OR velox_project_id = $2`, m.ProjectID, m.VeloxProjectID)
+	rows, err := db.QueryContext(ctx, `SELECT project_id, workspace_id, external_project_id, created_at, migration_run_id FROM velox_project_bridges WHERE project_id = $1 OR external_project_id = $2`, m.ProjectID, m.ExternalProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("lookup velox_project_bridges: %w", err)
 	}
@@ -236,7 +217,7 @@ func queryExistingBridge(ctx context.Context, db interface {
 	var out []bridgeRow
 	for rows.Next() {
 		var b bridgeRow
-		if err := rows.Scan(&b.ProjectID, &b.WorkspaceID, &b.VeloxProjectID, &b.Platform, &b.AccountID, &b.ChannelID, &b.VideoID, &b.Language, &b.CreatedAt, &b.MigrationRunID); err != nil {
+		if err := rows.Scan(&b.ProjectID, &b.WorkspaceID, &b.ExternalProjectID, &b.CreatedAt, &b.MigrationRunID); err != nil {
 			return nil, fmt.Errorf("scan velox_project_bridges: %w", err)
 		}
 		out = append(out, b)
@@ -244,30 +225,26 @@ func queryExistingBridge(ctx context.Context, db interface {
 	return out, rows.Err()
 }
 
-func sameBridge(b bridgeRow, s sessionRow, channel, language string, m Mapping) bool {
-	return b.ProjectID == m.ProjectID && b.VeloxProjectID == m.VeloxProjectID && b.WorkspaceID == s.WorkspaceID && b.Platform == "youtube" && b.AccountID.Valid && b.AccountID.Int64 == s.AccountID && b.ChannelID.Valid && b.ChannelID.String == channel && b.VideoID.Valid && b.VideoID.String == s.VideoID && ((strings.TrimSpace(language) == "" && !b.Language.Valid) || (strings.TrimSpace(language) != "" && b.Language.Valid && b.Language.String == language))
+func sameBridge(b bridgeRow, workspaceID int64, m Mapping) bool {
+	return b.ProjectID == m.ProjectID && b.ExternalProjectID == m.ExternalProjectID && b.WorkspaceID == workspaceID
 }
 
 func validateOne(ctx context.Context, db *sql.DB, m Mapping) (Entry, error) {
 	entry := Entry{Mapping: m}
-	sessions, err := queryOneSession(ctx, db, m.VeloxProjectID)
+	sessions, err := queryOneSession(ctx, db, m.ExternalProjectID)
 	if err != nil {
 		return entry, err
 	}
 	if len(sessions) == 0 {
-		entry.Status, entry.Reason = StatusMissing, "no youtube_video_edits row for velox_project_id"
+		entry.Status, entry.Reason = StatusMissing, "no youtube_video_edits row for the external project handle"
 		return entry, nil
 	}
 	if len(sessions) != 1 {
-		entry.Status, entry.Reason = StatusAmbiguous, "multiple youtube_video_edits rows for velox_project_id"
+		entry.Status, entry.Reason = StatusAmbiguous, "multiple youtube_video_edits rows for the external project handle"
 		return entry, nil
 	}
 	s := sessions[0]
-	entry.WorkspaceID, entry.PlatformAccountID, entry.AuthoritativeVideoID = s.WorkspaceID, s.AccountID, s.VideoID
-	if m.VideoID != "" && m.VideoID != s.VideoID {
-		entry.Status, entry.Reason = StatusConflict, "mapping video_id does not match authoritative session"
-		return entry, nil
-	}
+	entry.WorkspaceID = s.WorkspaceID
 	projects, err := queryProject(ctx, db, m.ProjectID)
 	if err != nil {
 		return entry, err
@@ -288,34 +265,16 @@ func validateOne(ctx context.Context, db *sql.DB, m Mapping) (Entry, error) {
 		entry.Status, entry.Reason = StatusConflict, "thumbnail project and Velox session belong to different workspaces"
 		return entry, nil
 	}
-	channels, err := queryChannel(ctx, db, s.WorkspaceID, s.AccountID)
-	if err != nil {
-		return entry, err
-	}
-	if len(channels) == 0 {
-		entry.Status, entry.Reason = StatusMissing, "authoritative YouTube account is not a workspace channel"
-		return entry, nil
-	}
-	if len(channels) != 1 {
-		entry.Status, entry.Reason = StatusAmbiguous, "account resolves to multiple workspace channel identities"
-		return entry, nil
-	}
-	channel := channels[0]
-	entry.AuthoritativeChannelID, entry.Language = channel, m.Language
-	if m.ChannelID != "" && m.ChannelID != channel {
-		entry.Status, entry.Reason = StatusConflict, "mapping channel_id does not match platform_accounts.platform_user_id"
-		return entry, nil
-	}
 	bridges, err := queryExistingBridge(ctx, db, m)
 	if err != nil {
 		return entry, err
 	}
 	for _, b := range bridges {
-		if sameBridge(b, s, channel, m.Language, m) {
+		if sameBridge(b, s.WorkspaceID, m) {
 			entry.Status = StatusAlreadyLinked
 			return entry, nil
 		}
-		entry.Status, entry.Reason = StatusConflict, "project_id or velox_project_id is already linked with different context"
+		entry.Status, entry.Reason = StatusConflict, "project_id or external_project_id is already linked to a different project"
 		return entry, nil
 	}
 	entry.Status = StatusMatched
@@ -389,7 +348,7 @@ func Run(ctx context.Context, db *sql.DB, mappings []Mapping, opts Options) (*Re
 			e := &r.Entries[i]
 			e.CreatedAt = time.Now().UTC()
 			var insertedAt time.Time
-			err = tx.QueryRowContext(ctx, `INSERT INTO velox_project_bridges (project_id, workspace_id, velox_project_id, platform, platform_account_id, channel_id, video_id, language, created_at, migration_run_id) VALUES ($1, $2, $3, 'youtube', $4, $5, $6, NULLIF($7, ''), $8, $9) ON CONFLICT DO NOTHING RETURNING created_at`, e.Mapping.ProjectID, e.WorkspaceID, e.Mapping.VeloxProjectID, e.PlatformAccountID, e.AuthoritativeChannelID, e.AuthoritativeVideoID, e.Language, e.CreatedAt, r.RunID).Scan(&insertedAt)
+			err = tx.QueryRowContext(ctx, `INSERT INTO velox_project_bridges (project_id, workspace_id, external_project_id, editor_provider, created_at, migration_run_id) VALUES ($1, $2, $3, 'velox', $4, $5) ON CONFLICT DO NOTHING RETURNING created_at`, e.Mapping.ProjectID, e.WorkspaceID, e.Mapping.ExternalProjectID, e.CreatedAt, r.RunID).Scan(&insertedAt)
 			if err == nil {
 				e.CreatedAt = insertedAt
 				e.Status = StatusCreated
@@ -398,16 +357,13 @@ func Run(ctx context.Context, db *sql.DB, mappings []Mapping, opts Options) (*Re
 			if !errors.Is(err, sql.ErrNoRows) {
 				return failedReport(r, fmt.Errorf("insert bridge project_id=%s: %w", e.Mapping.ProjectID, err), true)
 			}
-			// A concurrent equivalent insert is an idempotent success;
-			// a conflicting insert remains a hard failure.
 			bridges, findErr := queryExistingBridge(ctx, tx, e.Mapping)
 			if findErr != nil {
 				return failedReport(r, findErr, true)
 			}
-			s := sessionRow{WorkspaceID: e.WorkspaceID, AccountID: e.PlatformAccountID, VideoID: e.AuthoritativeVideoID}
 			foundEquivalent := false
 			for _, b := range bridges {
-				if sameBridge(b, s, e.AuthoritativeChannelID, e.Language, e.Mapping) {
+				if sameBridge(b, e.WorkspaceID, e.Mapping) {
 					foundEquivalent = true
 					e.Status = StatusAlreadyLinked
 					break
@@ -428,7 +384,7 @@ func Run(ctx context.Context, db *sql.DB, mappings []Mapping, opts Options) (*Re
 }
 
 func lockBridgeForRollback(ctx context.Context, tx *sql.Tx, e *Entry, runID string) (int, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT project_id FROM velox_project_bridges WHERE project_id = $1 AND workspace_id = $2 AND velox_project_id = $3 AND platform = 'youtube' AND platform_account_id = $4 AND channel_id = $5 AND video_id = $6 AND language IS NOT DISTINCT FROM NULLIF($7, '') AND created_at = $8 AND migration_run_id = $9 FOR UPDATE`, e.Mapping.ProjectID, e.WorkspaceID, e.Mapping.VeloxProjectID, e.PlatformAccountID, e.AuthoritativeChannelID, e.AuthoritativeVideoID, e.Language, e.CreatedAt, runID)
+	rows, err := tx.QueryContext(ctx, `SELECT project_id FROM velox_project_bridges WHERE project_id = $1 AND workspace_id = $2 AND external_project_id = $3 AND created_at = $4 AND migration_run_id = $5 FOR UPDATE`, e.Mapping.ProjectID, e.WorkspaceID, e.Mapping.ExternalProjectID, e.CreatedAt, runID)
 	if err != nil {
 		return 0, err
 	}
@@ -473,7 +429,7 @@ func Rollback(ctx context.Context, db *sql.DB, report Report) (*Report, error) {
 		if count != 1 {
 			return &out, failedRollbackReport(&out, fmt.Errorf("%w: expected exactly one unchanged bridge for project_id=%s, found %d", ErrRollbackUnsafe, e.Mapping.ProjectID, count))
 		}
-		result, err := tx.ExecContext(ctx, `DELETE FROM velox_project_bridges WHERE project_id = $1 AND workspace_id = $2 AND velox_project_id = $3 AND platform = 'youtube' AND platform_account_id = $4 AND channel_id = $5 AND video_id = $6 AND language IS NOT DISTINCT FROM NULLIF($7, '') AND created_at = $8 AND migration_run_id = $9`, e.Mapping.ProjectID, e.WorkspaceID, e.Mapping.VeloxProjectID, e.PlatformAccountID, e.AuthoritativeChannelID, e.AuthoritativeVideoID, e.Language, e.CreatedAt, report.RunID)
+		result, err := tx.ExecContext(ctx, `DELETE FROM velox_project_bridges WHERE project_id = $1 AND workspace_id = $2 AND external_project_id = $3 AND created_at = $4 AND migration_run_id = $5`, e.Mapping.ProjectID, e.WorkspaceID, e.Mapping.ExternalProjectID, e.CreatedAt, report.RunID)
 		if err != nil {
 			return &out, failedRollbackReport(&out, fmt.Errorf("rollback bridge project_id=%s: %w", e.Mapping.ProjectID, err))
 		}

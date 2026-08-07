@@ -37,18 +37,18 @@ Velox project_id              │
 - the application project record;
 - the relationship between the application project and the Velox project;
 - authorization to open or operate on the project;
-- optional destination/channel context;
+- editor bridge metadata only (`editor_provider`, optional `editor_status` and `last_editor_sync_at`);
 - the application lifecycle of the project.
 
 ### The separate editor application owns
 
-- the editor representation referenced by `velox_project_id`;
+- the editor representation referenced by `external_project_id`;
 - editor project creation/lookup and editor-native persistence.
 
 ### VeloxEditiingg owns
 
 - render execution for the referenced editor project;
-- the editor/render representation referenced by `velox_project_id` only where
+- the editor/render representation referenced by `external_project_id` only where
   that representation is explicitly delegated to the render system;
 - canvas/editor state;
 - scenes, layers, objects, timelines, animations and keyframes;
@@ -69,7 +69,7 @@ editor backend, `editor_status` is an optional coarse application-level
 state, and `last_editor_sync_at` records when InstaEdit last synchronized
 operational metadata. None of these make the bridge a Velox replica.
 
-The trusted editor application that creates or resolves `velox_project_id`
+The trusted editor application that creates or resolves `external_project_id`
 MUST be the editor-project owner. The InstaEdit bridge route only persists or
 resolves that opaque reference. VeloxEditiingg MUST NOT invent a second
 editor-project identity or make InstaEdit depend on a Velox-owned catalog.
@@ -83,9 +83,9 @@ The bridge record is persisted and authorized by InstaEdit. The minimum
 canonical representation is:
 
 ```text
-bridge(project_id, velox_project_id, workspace_id)
+bridge(project_id, external_project_id, workspace_id)
 UNIQUE(project_id)
-UNIQUE(velox_project_id)
+UNIQUE(external_project_id)
 ```
 
 Both uniqueness constraints are global within one deployment/environment.
@@ -97,13 +97,11 @@ project identifier MUST NOT be attached to another InstaEdit project.
 {
   "contract_version": "instaedit.velox.project-bridge.v1",
   "project_id": "thumbproj_01JABC",
-  "velox_project_id": "vx_01JXYZ",
+  "external_project_id": "vx_01JXYZ",
   "workspace_id": 12,
-  "platform": "youtube",
-  "platform_account_id": 381,
-  "channel_id": "UCxxxxxxxx",
-  "video_id": "AbCd1234",
-  "language": "en"
+  "editor_provider": "velox",
+  "editor_status": "linked",
+  "last_editor_sync_at": "2026-08-07T12:00:00Z"
 }
 ```
 
@@ -111,7 +109,7 @@ project identifier MUST NOT be attached to another InstaEdit project.
 
 The bridge carries only the mapping plus the three allowed operational
 metadata fields: `editor_provider` (which editor backend owns
-`velox_project_id`; `"velox"` today), `editor_status` and
+`external_project_id`; `"velox"` today), `editor_status` and
 `last_editor_sync_at`. These are operational metadata, not a competing
 project lifecycle: editor-internal timeline, layers, scenes, assets,
 revisions and render state remain editor-owned and MUST NOT be stored here.
@@ -120,30 +118,22 @@ revisions and render state remain editor-owned and MUST NOT be stored here.
 |---|---:|---|---|
 | `contract_version` | yes | InstaEdit | Exact value is `instaedit.velox.project-bridge.v1`. Unknown versions MUST fail closed. |
 | `project_id` | yes | InstaEdit | Opaque, stable identifier of the InstaEdit application project. It MUST NOT be a Velox identifier. For the autonomous project model this is `thumbnail_projects.id`; the YouTube compatibility model currently exposes a `youtube_video_edits` session row and MUST NOT be silently treated as the universal project model. |
-| `velox_project_id` | yes after linking | Velox-issued, InstaEdit-persisted (target contract) | Opaque identifier of the editor/render project. InstaEdit stores it; only the editor service may define its internal meaning. The current YouTube compatibility path may mint a project hint in InstaEdit because no standalone Velox editor-project API is currently exposed; this is transitional and MUST NOT become a second Velox domain model. |
+| `external_project_id` (`external_project_id`) | yes after linking | Velox-issued, InstaEdit-persisted | The existing wire name `external_project_id` is the opaque `external_project_id` in the provider-neutral contract. InstaEdit stores it; only the editor service may define its internal meaning. |
 | `workspace_id` | yes | InstaEdit | Tenant boundary. It is not a copied Velox workspace and does not grant access by itself. |
-| `channel_context` | no | InstaEdit | Optional context for a project that is being edited for a provider destination. It is absent for an autonomous editor project. |
+| `editor_provider` | no | InstaEdit | Optional editor backend identifier; defaults to `velox`. |
+| `editor_status` | no | InstaEdit | Optional coarse operational status. |
+| `last_editor_sync_at` | no | InstaEdit | Optional timestamp for operational metadata refresh. |
 
-`project_id` and `velox_project_id` MUST be treated as opaque strings. No
+`project_id` and `external_project_id` MUST be treated as opaque strings. No
 caller may infer ownership, workspace, user, channel or permissions by
 parsing either identifier.
 
-### 2.2 Channel context
+### 2.2 Context ownership (not part of the bridge)
 
-`channel_context` is a narrow, optional reference. It is not a channel
-catalog and it is not a second ownership model.
-
-When present:
-
-- `platform` is required and identifies the provider;
-- `platform_account_id` is required and refers to the InstaEdit-owned account;
-- `channel_id` is optional provider metadata and MUST match the account
-  binding when supplied;
-- `video_id` is optional and is required only when the project is tied to one
-  provider video;
-- `language` is optional presentation/publishing context, not a grouping key;
-- `group_id`, `channel_ids`, `member_ids` and mutable group/channel
-  membership snapshots are forbidden in `channel_context`.
+Channel, video, platform, language, group and membership context remains in
+InstaEdit-owned project/session/account records. It may be validated before an
+editor launch and may be sent as ephemeral launch context when strictly
+needed, but it is never persisted in this bridge.
 
 For the current YouTube editor-session compatibility path, the minimum
 validated tuple is:
@@ -181,7 +171,7 @@ current codebase has two application models:
 
 - `thumbnail_projects.id` for autonomous, workspace-scoped editor projects;
 - `youtube_video_edits.id` for the legacy/provider-specific editing session,
-  which also stores `velox_project_id`.
+  which also stores `external_project_id`.
 
 A future implementation MUST make the bridge relation explicit for both
 models, or explicitly declare the YouTube session row to be the temporary
@@ -189,40 +179,40 @@ application project for that compatibility flow. Until that decision is
 implemented, `youtube_video_edits.id` is a provider-specific session ID only;
 it is not interchangeable with `thumbnail_projects.id`. The code MUST NOT
 infer a universal project identity from whichever row happens to contain a
-`velox_project_id`.
+`external_project_id`.
 
 
 A linked InstaEdit project maps to exactly one active Velox project:
 
 ```text
-one InstaEdit project_id ↔ one velox_project_id
+one InstaEdit project_id ↔ one external_project_id
 ```
 
 The editor may have many revisions and render jobs, but those revisions do
 not create new bridge records. Replacing the editor technology later means
 replacing the bridge target, not moving editor internals into InstaEdit.
 
-A `velox_project_id` MUST NOT be shared by unrelated InstaEdit projects.
+A `external_project_id` MUST NOT be shared by unrelated InstaEdit projects.
 
 ### 3.2 Persist-or-resolve semantics
 
 The canonical route is implemented by InstaEdit and persists or resolves an
-already-created opaque `velox_project_id`. It does not create, enumerate,
+already-created opaque `external_project_id`. It does not create, enumerate,
 import, delete or synchronize Velox editor projects. The trusted editor
 handoff is responsible for creating/resolving the editor project before the
 InstaEdit-owned relation is written.
 
 The operation MUST be idempotent. The bridge relation is owned by InstaEdit,
 scoped at minimum by `(workspace_id, project_id)`, and protected by the
-persisted uniqueness constraints. The winning `velox_project_id` is stored
+persisted uniqueness constraints. The winning `external_project_id` is stored
 in the bridge; the operation does not rely on an in-memory cache.
 
 The operation is:
 
 1. Authenticate the caller in InstaEdit.
 2. Resolve and authorize `project_id` in its `workspace_id`.
-3. If the bridge already exists, return the existing `velox_project_id`.
-4. Otherwise persist the supplied opaque `velox_project_id` as the sole
+3. If the bridge already exists, return the existing `external_project_id`.
+4. Otherwise persist the supplied opaque `external_project_id` as the sole
    InstaEdit bridge relation.
 5. Retrying the same equivalent request MUST NOT create a second relation;
    attempting to rebind the project to a different editor ID returns `409`.
@@ -241,7 +231,7 @@ workspace/account/video tuple above. `FindOrCreateEditableSession` and the
 partial unique index currently provide this behavior for non-terminal
 sessions. While the editor session is non-terminal,
 repeated clicks MUST converge on the same session and
-`velox_project_id`. After an application-defined terminal/published session,
+`external_project_id`. After an application-defined terminal/published session,
 a later re-edit MAY create a new application session and a new Velox project;
 that behavior MUST be explicit and MUST NOT overwrite the old project.
 
@@ -307,10 +297,9 @@ For every bridge operation, InstaEdit MUST:
 3. verify the requested `workspace_id` matches the project;
 4. verify the user owns or is an authorized member of the workspace according
    to the InstaEdit permission model;
-5. verify any `channel_context.platform_account_id` belongs to the workspace;
-6. when `video_id` is present, verify it belongs to the selected platform
-   account and satisfies the provider/editor rules;
-7. only then resolve or use `velox_project_id`.
+5. when the launch originates from a provider video, verify that video and
+   channel in InstaEdit-owned records;
+6. only then resolve or use `external_project_id`.
 
 A request that supplies a foreign workspace, project, account, channel or
 video MUST fail without revealing whether the foreign resource exists.
@@ -334,7 +323,7 @@ also verify that the referenced job, asset or render resource belongs to the
 signed workspace. A client-supplied workspace header is never authoritative.
 
 The bridge itself is authorized by InstaEdit. Velox may validate the opaque
-`velox_project_id` and its workspace binding, but it MUST NOT independently
+`external_project_id` and its workspace binding, but it MUST NOT independently
 look up or reconstruct InstaEdit groups, channels, users or permissions.
 
 ## 5. API shape
@@ -345,10 +334,9 @@ its semantics; the route does not create a Velox editor project.
 
 ### 5.1 Persist or resolve the bridge
 
-The API represents `channel_context` as flat optional fields in the request
-and response (`platform`, `platform_account_id`, `channel_id`, `video_id`,
-and `language`). The logical context is still narrow and provider-scoped;
-it is not a catalog.
+The API represents the bridge as the project mapping plus optional editor
+metadata. It does not accept or return platform, channel, video, language,
+group, or membership fields.
 
 ```http
 POST /api/v1/thumbnail-projects/{id}/velox-bridge
@@ -362,12 +350,7 @@ Request (the version is mandatory):
 {
   "contract_version": "instaedit.velox.project-bridge.v1",
   "workspace_id": 12,
-  "velox_project_id": "vx_01JXYZ",
-  "platform": "youtube",
-  "platform_account_id": 381,
-  "channel_id": "UCxxxxxxxx",
-  "video_id": "AbCd1234",
-  "language": "en"
+  "external_project_id": "vx_01JXYZ"
 }
 ```
 
@@ -378,13 +361,9 @@ Response:
   "contract_version": "instaedit.velox.project-bridge.v1",
   "bridge": {
     "project_id": "thumbproj_01JABC",
-    "velox_project_id": "vx_01JXYZ",
+    "external_project_id": "vx_01JXYZ",
     "workspace_id": 12,
-    "platform": "youtube",
-    "platform_account_id": 381,
-    "channel_id": "UCxxxxxxxx",
-    "video_id": "AbCd1234",
-    "language": "en"
+    "editor_provider": "velox"
   },
   "editor_url": "https://editor.example.com/project/vx_01JXYZ"
 }
@@ -406,7 +385,7 @@ unknown, archived, revoked or inaccessible.
 The existing compatibility endpoint:
 
 ```http
-GET /api/v1/youtube/editor-sessions/by-project/{velox_project_id}
+GET /api/v1/youtube/editor-sessions/by-project/{external_project_id}
 ```
 
 is allowed to remain, but it MUST keep the same authorization behavior. The
@@ -438,9 +417,8 @@ Allowed direction:
 InstaEdit
   ├── project_id
   ├── workspace_id
-  ├── optional channel_context
   ├── authorization decision
-  └── resolved velox_project_id
+  └── resolved external_project_id
           │
           ▼
 Velox/editor
@@ -454,7 +432,7 @@ Velox may echo these values for correlation:
 
 ```text
 project_id
-velox_project_id
+external_project_id
 workspace_id
 correlation_id
 ```
@@ -485,7 +463,7 @@ keyframes
 editor_snapshot
 ```
 
-The bridge stores the mapping (`project_id ↔ velox_project_id`) and at most
+The bridge stores the mapping (`project_id ↔ external_project_id`) and at most
 `editor_provider`, `editor_status` and `last_editor_sync_at`. Editor-internal
 representations are never persisted in InstaEdit.
 
@@ -547,10 +525,10 @@ provider lifecycle, but Velox does not own or reconcile that metadata.
 
 The current codebase already has the following compatible pieces:
 
-- `youtube_video_edits.velox_project_id` is the existing opaque editor handle;
+- `youtube_video_edits.external_project_id` is the existing opaque editor handle;
 - `FindOrCreateEditableSession` provides click-idempotent reuse for the
   `(workspace_id, platform_account_id, youtube_video_id)` tuple;
-- `GET/PATCH/PUT/POST .../by-project/{velox_project_id}` routes use the Velox
+- `GET/PATCH/PUT/POST .../by-project/{external_project_id}` routes use the Velox
   project handle as a lookup key;
 - `ThumbnailProject` is already a workspace-scoped autonomous project model
   that does not require a channel or video;
@@ -601,15 +579,14 @@ The contract is enforced by:
 An implementation conforms only when all of the following are true:
 
 - [ ] Every linked project has exactly one InstaEdit `project_id` and one
-      opaque `velox_project_id`.
+      opaque `external_project_id`.
 - [ ] `workspace_id` is mandatory and authorization is checked in InstaEdit.
-- [ ] Channel context is optional, minimal and provider-account scoped.
-- [ ] Video/channel ownership is revalidated when context is present.
+- [ ] Channel/video ownership is revalidated in InstaEdit before editor launch; no such context is persisted in the bridge.
 - [ ] Repeated create/open requests are idempotent.
 - [ ] Cross-tenant probes return no resource existence information.
 - [ ] Browser clients never receive OAuth or Velox control secrets.
-- [ ] Velox receives only the minimum project/context data needed for its
-      operation.
+- [ ] Velox receives only the minimum project context needed for its
+      operation; channel/video context is never persisted in the bridge.
 - [ ] Velox has no groups, group membership, channel catalog or user
       permission domain.
 - [ ] There is no shared database and no bidirectional group/channel sync.

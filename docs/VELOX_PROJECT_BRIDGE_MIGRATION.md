@@ -1,7 +1,7 @@
 # Velox project bridge migration
 
 This is a one-time, relationship-only backfill. It connects an existing Velox
-handle (`velox_project_id`) to an already-existing InstaEdit
+handle (`external_project_id`) to an already-existing InstaEdit
 `thumbnail_projects.id`. It does **not** create shell projects and does not
 move or rewrite timeline, scene, layer, object, asset, revision, export, render,
 or canvas data.
@@ -14,28 +14,25 @@ or canvas data.
   by the normal production configuration.
 - A human-verified mapping file is required. No match is inferred from names,
   titles, timestamps, canvas JSON, thumbnails, or render data.
-- Migration 114 must be applied before using this command; it adds the
-  persistent `migration_run_id` marker used to scope rollback safely.
+- Migrations 114 and 116 must be applied before using this command. Migration
+  114 adds the persistent `migration_run_id` marker used to scope rollback
+  safely; migration 116 removes legacy channel/video context from the bridge.
 
 Mapping format:
 
 ```json
 [
   {
-    "velox_project_id": "ve_abc123",
-    "project_id": "thumbproj_01JABC",
-    "channel_id": "UCxxxxxxxx",
-    "video_id": "AbCd1234",
-    "language": "en"
+    "external_project_id": "ve_abc123",
+    "project_id": "thumbproj_01JABC"
   }
 ]
 ```
 
-Only `velox_project_id` and `project_id` are required. The optional assertions
-are checked against authoritative database values; they are never used to
-search for a project. The channel is resolved from
-`workspace_channels → platform_accounts.platform_user_id`, and the video from
-`youtube_video_edits.youtube_video_id`.
+Only `external_project_id` and `project_id` are accepted. Workspace and
+application-project validity are checked against InstaEdit's authoritative
+records; no channel, video, platform, language, group, or membership data is
+read into or written to the bridge.
 
 ## Dry-run (default)
 
@@ -94,9 +91,8 @@ go run ./cmd/migrate-velox-bridges \
 ```
 
 Rollback deletes only entries marked `created` in that report. Before deleting,
-it requires the report `run_id`, the persisted `migration_run_id`, and the
-bridge's complete workspace, channel, video, language, project, Velox context,
-and creation timestamp to be unchanged. If an operator or later migration
+it requires the report `run_id`, the persisted `migration_run_id`, andthe bridge's project, workspace, Velox reference, editor metadata, and creation
+timestamp to be unchanged. If an operator or later migration
 changed a bridge, rollback aborts without deleting it. `already_linked` entries
 are never removed. Rollback affects only `velox_project_bridges`; it never deletes an
 InstaEdit project or any Velox editor data.

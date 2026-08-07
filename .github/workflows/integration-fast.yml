@@ -198,6 +198,9 @@ jobs:
       - name: Verify entrypoint topology
         run: make verify-entrypoint-topology
 
+      - name: Verify InstaEdit/Velox catalog boundary
+        run: make verify-no-velox-catalog-sync
+
       - name: Check source-file size regressions (loc-check)
         run: make loc-check
 

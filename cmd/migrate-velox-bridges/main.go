@@ -3,7 +3,7 @@
 // It never copies or modifies editor-native data.
 //
 // Safety: dry-run is the default. --apply is required for writes. A mapping
-// JSON file is mandatory and must contain explicit velox_project_id/project_id
+// JSON file is mandatory and must contain explicit external_project_id/project_id
 // pairs. --rollback-report removes only bridges created by that exact applied
 // report, and only when their full context is unchanged.
 package main
@@ -22,7 +22,7 @@ import (
 )
 
 func main() {
-	mappingPath := flag.String("mapping", "", "JSON file with explicit velox_project_id -> project_id mappings")
+	mappingPath := flag.String("mapping", "", "JSON file with explicit external_project_id -> project_id mappings")
 	reportPath := flag.String("report", "", "write JSON report to this path (stdout when omitted)")
 	apply := flag.Bool("apply", false, "write bridge rows; without this flag the command is a dry-run")
 	rollbackPath := flag.String("rollback-report", "", "rollback an applied migration report instead of running a migration")

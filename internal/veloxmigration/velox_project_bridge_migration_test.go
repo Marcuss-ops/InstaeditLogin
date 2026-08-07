@@ -10,8 +10,8 @@ import (
 
 func TestNormalizeMappingsRejectsDuplicateOwnership(t *testing.T) {
 	_, err := NormalizeMappings([]Mapping{
-		{VeloxProjectID: "ve_1", ProjectID: "thumb_1"},
-		{VeloxProjectID: "ve_1", ProjectID: "thumb_2"},
+		{ExternalProjectID: "ve_1", ProjectID: "thumb_1"},
+		{ExternalProjectID: "ve_1", ProjectID: "thumb_2"},
 	})
 	if !errors.Is(err, ErrInvalidMapping) {
 		t.Fatalf("expected invalid mapping, got %v", err)
@@ -20,20 +20,20 @@ func TestNormalizeMappingsRejectsDuplicateOwnership(t *testing.T) {
 
 func TestNormalizeMappingsRejectsDuplicateInstaEditProject(t *testing.T) {
 	_, err := NormalizeMappings([]Mapping{
-		{VeloxProjectID: "ve_1", ProjectID: "thumb_1"},
-		{VeloxProjectID: "ve_2", ProjectID: "thumb_1"},
+		{ExternalProjectID: "ve_1", ProjectID: "thumb_1"},
+		{ExternalProjectID: "ve_2", ProjectID: "thumb_1"},
 	})
 	if !errors.Is(err, ErrInvalidMapping) {
 		t.Fatalf("expected invalid mapping, got %v", err)
 	}
 }
 
-func TestNormalizeMappingsTrimsAssertions(t *testing.T) {
-	got, err := NormalizeMappings([]Mapping{{VeloxProjectID: " ve_1 ", ProjectID: " thumb_1 ", ChannelID: " UC1 ", VideoID: " vid1 ", Language: " en "}})
+func TestNormalizeMappingsTrimsProjectReferences(t *testing.T) {
+	got, err := NormalizeMappings([]Mapping{{ExternalProjectID: " ve_1 ", ProjectID: " thumb_1 "}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got[0].VeloxProjectID != "ve_1" || got[0].ProjectID != "thumb_1" || got[0].ChannelID != "UC1" || got[0].VideoID != "vid1" || got[0].Language != "en" {
+	if got[0].ExternalProjectID != "ve_1" || got[0].ProjectID != "thumb_1" {
 		t.Fatalf("mapping was not normalized: %+v", got[0])
 	}
 }
@@ -108,6 +108,12 @@ func TestVerifyMigrationReadyAcceptsAppliedMigration(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM schema_migrations`).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema.columns`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema.columns`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema.columns`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
 	if err := VerifyMigrationReady(context.Background(), db); err != nil {
 		t.Fatalf("VerifyMigrationReady: %v", err)
 	}

@@ -17,7 +17,7 @@ import (
 func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing.T) {
 	db, cleanup := postgres.StartTestPostgres(t, postgres.WithDatabase("instaedit_bridge_contract"))
 	defer cleanup()
-	if err := database.RunMigrationsUpTo(db, 114); err != nil {
+	if err := database.RunMigrationsUpTo(db, 116); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
 	seedBridgeContractDatabase(t, db)
@@ -29,18 +29,12 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 		veloxProjectID       = "vx_contract_pg"
 	)
 	repo := repository.NewThumbnailProjectRepository(db)
-	accountID := int64(7711)
-	channelID := "UC-contract-pg"
-	videoID := "video-contract-pg"
-	language := "en"
 	bridge := &models.VeloxProjectBridge{
-		ProjectID: projectID, WorkspaceID: workspaceID, VeloxProjectID: veloxProjectID,
-		Platform: "youtube", PlatformAccountID: &accountID,
-		ChannelID: &channelID, VideoID: &videoID, Language: &language,
+		ProjectID: projectID, WorkspaceID: workspaceID, ExternalProjectID: veloxProjectID,
 	}
 
 	var editorRowsBefore int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE velox_project_id = $1`, veloxProjectID).Scan(&editorRowsBefore); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE external_project_id = $1`, veloxProjectID).Scan(&editorRowsBefore); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.CreateVeloxProjectBridge(context.Background(), bridge); err != nil {
@@ -51,11 +45,11 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 	if err != nil {
 		t.Fatalf("find bridge: %v", err)
 	}
-	if got == nil || got.ProjectID != projectID || got.VeloxProjectID != veloxProjectID || got.WorkspaceID != workspaceID {
+	if got == nil || got.ProjectID != projectID || got.ExternalProjectID != veloxProjectID || got.WorkspaceID != workspaceID {
 		t.Fatalf("unexpected authoritative bridge: %+v", got)
 	}
-	if got.PlatformAccountID == nil || *got.PlatformAccountID != accountID || got.ChannelID == nil || *got.ChannelID != channelID {
-		t.Fatalf("channel context was not preserved: %+v", got)
+	if got.EditorProvider != "velox" {
+		t.Fatalf("editor provider metadata was not defaulted: %+v", got)
 	}
 
 	// The existing Velox handle is replayed as an equivalent bridge. The
@@ -65,7 +59,7 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 		t.Fatalf("duplicate project replay: want conflict, got %v", err)
 	}
 	var bridgeCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM velox_project_bridges WHERE velox_project_id = $1`, veloxProjectID).Scan(&bridgeCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM velox_project_bridges WHERE external_project_id = $1`, veloxProjectID).Scan(&bridgeCount); err != nil {
 		t.Fatal(err)
 	}
 	if bridgeCount != 1 {
@@ -81,7 +75,7 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 		t.Fatalf("cross-workspace bridge leaked: bridge=%+v err=%v", foreign, err)
 	}
 	var editorRowsAfter int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE velox_project_id = $1`, veloxProjectID).Scan(&editorRowsAfter); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE external_project_id = $1`, veloxProjectID).Scan(&editorRowsAfter); err != nil {
 		t.Fatal(err)
 	}
 	if editorRowsAfter != editorRowsBefore {
@@ -92,7 +86,7 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 		t.Fatalf("delete bridge relation: %v", err)
 	}
 	var editorRowsFinal int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE velox_project_id = $1`, veloxProjectID).Scan(&editorRowsFinal); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_video_edits WHERE external_project_id = $1`, veloxProjectID).Scan(&editorRowsFinal); err != nil {
 		t.Fatal(err)
 	}
 	if editorRowsFinal != editorRowsBefore {

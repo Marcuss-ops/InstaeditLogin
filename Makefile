@@ -1,6 +1,7 @@
 .PHONY: dev stop seed lint lint-check backend-test test verify test-integration \
         test-integration-db test-integration-db-a test-integration-db-b test-integration-db-c \
         test-integration-worker \
+        verify-no-velox-catalog-sync \
         verify-entrypoint-topology oauth-preflight-check oauth-preflight-test \
         installation-identity-diagnostic installation-identity-diagnostic-test \
         duplicate-token-diagnostic-test oauth-migrations-diagnostic-test \
@@ -99,10 +100,17 @@ verify-entrypoint-topology:
 test: backend-test
 
 # Canonical local repository gate: formatting/vet, race-tested Go suite,
-# entrypoint topology, and diff-based source-size regression check.
-# Keep this aggregate aligned with the blocking CI checks while leaving
-# operational production probes (SSH, live workers, and credentials) out.
-verify: lint-check backend-test verify-entrypoint-topology loc-check
+# entrypoint topology, data-ownership boundary, and diff-based source-size
+# regression check. Keep this aggregate aligned with the blocking CI checks
+# while leaving operational production probes (SSH, live workers, and
+# credentials) out.
+verify: lint-check backend-test verify-entrypoint-topology verify-no-velox-catalog-sync loc-check
+
+# Negative architecture guard: InstaEdit must never grow a Velox-owned
+# Groups/Channels catalog or a synchronization path. The project-scoped
+# editor bridge is intentionally outside this guard's forbidden surface.
+verify-no-velox-catalog-sync:
+	./scripts/verify-no-velox-catalog-sync.sh
 
 # Run Go tests with race detection (unit only — no Docker required)
 backend-test:
