@@ -19,6 +19,13 @@ the VPS and Compose network.
 > `docker-compose.production.yml`, `Dockerfile`, the production secret-manager
 > record, `ops/vps/Caddyfile`, root `vercel.json`, and
 > `.github/workflows/deploy.yml`.
+>
+> **Supported-provider boundary:** production uses only Vercel for the
+> frontend and the VPS Compose stack for backend hosting, PostgreSQL, and MinIO
+> object storage. Fly, Railway, Render, Tigris, and other alternative backend
+> hosting or object-storage paths are retired and are not deployment options.
+> Historical material, when retained, belongs under `docs/archive/` and is not
+> an operational procedure.
 
 ## 1. Production topology and DNS
 
@@ -312,7 +319,7 @@ truth.
 
 ## 5. Docker Compose deployment
 
-> **⚠️ Actual VPS production configuration (differs from the canonical shape).**
+> **⚠️ Live migration exception (not the canonical production shape).**
 > The canonical runbook deploys with `docker-compose.production.yml` and
 > `/opt/instaedit/secrets/.env.production`. **The production VPS that currently
 > serves `api.instaedit.org` does not use that shape.** The live stack
@@ -341,7 +348,9 @@ truth.
 >   up -d --build
 > ```
 >
-> **Orphaned-binary pitfall (incident 2026-08-05):** Caddy only ever talks to
+> This live exception must be converged to the canonical production shape;
+> do not copy its `.env.dev` or local Compose settings into new production
+> hosts. **Orphaned-binary pitfall (incident 2026-08-05):** Caddy only ever talks to
 > `127.0.0.1:8080`. If `API_HOST_PORT` drifts from `8080` (it was `8082`), the
 > rebuilt container publishes elsewhere while Caddy keeps proxying to the old
 > port — where an orphaned single-process dev binary

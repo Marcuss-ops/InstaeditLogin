@@ -13,10 +13,12 @@ keeps the anchor map (so code comments and scripts referencing
 
 **VPS canonical refs:** the live stack is `docker-compose.yml` (topology) +
 `ops/vps/Caddyfile` (edge routing) + `docs/DEPLOY.md` (full cutover runbook).
-This runbook anchors the VPS-native stack end-to-end; legacy
-hosting-platform references (managed-Postgres forks, hidden-service URI
-shapes, platform-specific CI steps) should be removed in favor of the
-corresponding VPS procedure.
+This runbook anchors the VPS-native stack end-to-end. Vercel is the only
+supported frontend host; the VPS Compose stack is the only supported backend,
+PostgreSQL, and MinIO runtime. Fly, Railway, Render, Tigris, and other
+alternative backend-hosting or object-storage paths are retired and are not
+operational alternatives. Historical references, when retained, belong under
+`docs/archive/` and must not be used as procedures.
 
 ## Documentation map
 
