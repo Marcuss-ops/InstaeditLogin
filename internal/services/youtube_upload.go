@@ -415,3 +415,7 @@ func (s *YouTubeOAuthService) UploadVideoAsPrivate(ctx context.Context, accessTo
 	}
 	return videoID, nil
 }
+
+// Compile-time assertion: services.YouTubeOAuthService must satisfy
+// UploadChannelUploader. Caught by `go vet`, not at runtime.
+var _ UploadChannelUploader = (*YouTubeOAuthService)(nil)

@@ -41,7 +41,4 @@ type UploadChannelUploader interface {
 	UploadVideoAsPrivate(ctx context.Context, accessToken string, post *models.Post, videoURL string) (videoID string, err error)
 }
 
-// Compile-time assertion: services.YouTubeOAuthService must satisfy
-// UploadChannelUploader. Caught by `go vet`, not at runtime. Mirror the
-// pattern used for YouTubeChannelBinder (see youtube_oauth.go).
-var _ UploadChannelUploader = (*YouTubeOAuthService)(nil)
+

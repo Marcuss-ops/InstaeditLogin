@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -320,22 +319,9 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 	}
 }
 
-// ValidateYouTubeSnippet returns an error if the supplied title or
-// description exceed YouTube's documented snippet limits (title 100
-// characters, description 5000 characters). It counts runes, not
-// bytes, and trims surrounding whitespace before measuring.
-func ValidateYouTubeSnippet(title, description string) error {
-	const maxTitleLen = 100
-	const maxDescriptionLen = 5000
-	if utf8.RuneCountInString(strings.TrimSpace(title)) > maxTitleLen {
-		return fmt.Errorf("title exceeds %d characters", maxTitleLen)
-	}
-	if utf8.RuneCountInString(strings.TrimSpace(description)) > maxDescriptionLen {
-		return fmt.Errorf("description exceeds %d characters", maxDescriptionLen)
-	}
-	return nil
-}
-
+// ValidateYouTubeSnippet is defined in validator.go (neutral shared
+// position — both YouTube and NVIDIA services call it).
+//
 // YouTubeAPIError carries the HTTP status code and a machine-readable
 // category for a YouTube Data API failure. It is returned by low-level
 // YouTube service methods so callers can decide whether the error is
