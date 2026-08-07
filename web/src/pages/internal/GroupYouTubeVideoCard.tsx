@@ -62,7 +62,7 @@ export const GroupYouTubeVideoCard = memo(function GroupYouTubeVideoCard({
               <span className="sr-only">{publication.label}</span>
             </span>
             <span title={`Lingua: ${(video.language?.trim() || "non impostata").toUpperCase()}`} className="inline-flex h-7 min-w-[30px] items-center justify-center rounded-lg border border-violet-500/20 bg-violet-500/[0.10] px-2">
-              <LanguageFlag code={video.language} className="h-5 w-5" />
+              <LanguageFlag code={video.language} className="h-4 w-6 drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
             </span>
             {formatPublishAt(video.publish_at) && (
               <span className="rounded-lg border border-blue-500/20 bg-blue-500/[0.08] px-2 py-1 text-[10px] font-semibold text-blue-200" title="Orario di pubblicazione programmato">

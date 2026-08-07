@@ -113,7 +113,7 @@ export function EditorTranslate() {
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-eyebrow text-zinc-500">Original</div>
                   <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400">
-                    <LanguageFlag code="en" className="h-4 w-6 rounded-[4px]" />
+                    <LanguageFlag code="en" className="h-5 w-[30px] rounded-[3px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
                     EN
                   </span>
                 </div>
@@ -133,7 +133,7 @@ export function EditorTranslate() {
                       className="text-2xl leading-none flex-shrink-0 mt-0.5"
                       aria-hidden="true"
                     >
-                      <LanguageFlag code={p.code} className="h-6 w-9 rounded-[5px] ring-1 ring-white/15" />
+                      <LanguageFlag code={p.code} className="h-7 w-[42px] rounded-[4px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
                     </span>
                     <div className="min-w-0">
                       <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">
@@ -167,7 +167,7 @@ export function EditorTranslate() {
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full surface-glass border border-white/10 hover:border-white/25 transition-colors"
                   title={`${lang.name} · ${lang.code}`}
                 >
-                  <LanguageFlag code={lang.code} className="h-4 w-6 rounded-[4px] ring-1 ring-white/15" />
+                  <LanguageFlag code={lang.code} className="h-5 w-[30px] rounded-[3px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
                   <span className="text-[12px] text-zinc-200">{lang.name}</span>
                   <span className="text-[10px] text-zinc-500 tabular-nums">
                     {lang.code}
