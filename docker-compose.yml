@@ -82,7 +82,7 @@ services:
       # Keep the runtime S3 credentials aligned with the selected env file;
       # these explicit entries intentionally win over host integration env.
       - S3_ENDPOINT=${S3_ENDPOINT}
-      - S3_BUCKET=${S3_BUCKET}
+      - S3_BUCKET=${S3_BUCKET:?S3_BUCKET must be set}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       # NVIDIA AI metadata generation (server-side only — NEVER exposed
@@ -98,7 +98,7 @@ services:
       # never appear in the committed file. The download timeout +
       # max-bytes cap match the values documented in
       # docs/ARCHITECTURE.md §Velox integration limits.
-      - VELOX_INTEGRATION_ENABLED=true
+      - VELOX_INTEGRATION_ENABLED=${VELOX_INTEGRATION_ENABLED:-false}
       - VELOX_API_TOKEN=${VELOX_API_TOKEN}
       - VELOX_WEBHOOK_SECRET=${VELOX_WEBHOOK_SECRET}
       - VELOX_CONTROL_URL=${VELOX_CONTROL_URL}
@@ -139,7 +139,7 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
       - S3_PATH_STYLE=true
       - S3_ENDPOINT=${S3_ENDPOINT}
-      - S3_BUCKET=${S3_BUCKET}
+      - S3_BUCKET=${S3_BUCKET:?S3_BUCKET must be set}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       # NVIDIA AI metadata generation (mirrors the api service).
@@ -149,7 +149,7 @@ services:
       # from the same env block — having the same VELOX_* keys on
       # both processes means a single .env.dev update flips the
       # feature on for the whole fleet.
-      - VELOX_INTEGRATION_ENABLED=true
+      - VELOX_INTEGRATION_ENABLED=${VELOX_INTEGRATION_ENABLED:-false}
       - VELOX_API_TOKEN=${VELOX_API_TOKEN}
       - VELOX_WEBHOOK_SECRET=${VELOX_WEBHOOK_SECRET}
       - VELOX_CONTROL_URL=${VELOX_CONTROL_URL}
@@ -261,8 +261,9 @@ services:
         echo 'minio alias set failed, retrying in 2s';
         sleep 2;
       done;
-      mc mb --ignore-existing local/instaedit-local;
-      echo 'minio bucket instaedit-local ready';
+      test -n "$$S3_BUCKET";
+      mc mb --ignore-existing local/"$$S3_BUCKET";
+      echo "minio bucket $$S3_BUCKET ready";
       exit 0;
       "
 

@@ -131,8 +131,8 @@ Then hand-edit `.env.dev`:
 | ---                       | ---                                                       |
 | `DATABASE_URL`            | `postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable` |
 | `S3_ENDPOINT`             | `http://minio:9000`                                       |
-| `S3_BUCKET`               | `instaedit-dev`                                           |
-| `S3_ACCESS_KEY`           | (matches `MINIO_ROOT_PASSWORD` in the docker overlay)     |
+| `S3_BUCKET`               | `instaedit-local`                                         |
+| `S3_ACCESS_KEY`           | (matches `MINIO_ROOT_USER` in the docker overlay)         |
 | `S3_SECRET_KEY`           | (same string as above)                                    |
 | `S3_REGION`               | `us-east-1`                                               |
 | `FRONTEND_URL`            | `https://localhost:8443`                                  |
