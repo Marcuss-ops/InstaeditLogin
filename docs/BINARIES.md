@@ -16,10 +16,12 @@ components it owns:
 | `cmd/worker` | [`cmd/worker/main.go`](../cmd/worker/main.go) | Background publishing, reconciliation, outbox, webhook, metrics, cleanup, and related worker loops; no public HTTP listener. |
 
 `cmd/server` remains a deprecated compatibility wrapper for deliberate local
-recovery only. It combines migration, HTTP, and workers in one process and is
-not part of the supported VPS deployment. See the
-[`cmd/server` removal audit](CMD-SERVER-REMOVAL-AUDIT.md) before changing or
-removing its compatibility surfaces.
+recovery only. It combines migration, HTTP, and workers in one process, uses
+the `server` database-pool role, and is not part of the supported VPS
+deployment. Critical worker failures shut the wrapper down with a non-zero
+exit after coordinated HTTP/metrics/worker draining. See the [`cmd/server`
+removal audit](CMD-SERVER-REMOVAL-AUDIT.md) before changing or removing its
+compatibility surfaces.
 
 ## Canonical production topology
 
@@ -132,19 +134,25 @@ overlay. The complete service graph and migration dependency are defined in
 All three canonical binaries call `bootstrap.Wire` first. `Wire` loads and
 validates configuration, connects to PostgreSQL, builds repositories and
 providers, and prepares the API handler. It does not apply migrations or start
-long-running workers by itself.
+long-running workers by itself. The supported bootstrap boundary is this
+`Wire` entrypoint; the former `Core`/`WireCore`/`WireAPI`/`WireWorkers` split
+was removed after repository-wide call-site verification and is not part of
+the supported internal API.
 
 ### `cmd/migrate`
 
 ```text
+DB_POOL_ROLE=maintenance
 bootstrap.Wire
   -> database.Migrate(app.DB)
+  -> installation-identity verification
   -> exit 0 on success, exit 1 on failure
 ```
 
 ### `cmd/api`
 
 ```text
+DB_POOL_ROLE=api
 bootstrap.Wire
   -> HTTP listener on PORT (default 8080)
   -> graceful HTTP and metrics shutdown on SIGTERM
@@ -154,24 +162,37 @@ bootstrap.Wire
 
 ```text
 bootstrap.Wire
-  -> worker health/metrics setup
+  -> WORKER_HEALTH_PORT listener (disabled by default in local dev)
+  -> worker registry metrics setup
   -> app.RunWorkers(ctx)
   -> context cancellation and graceful worker drain on SIGTERM
 ```
 
+The worker health listener exposes `/health` and `/ready` when
+`WORKER_HEALTH_PORT` is a valid port. Readiness fails when the registry is
+empty or a critical worker is not healthy; non-critical maintenance-worker
+failures remain visible without taking readiness down. A critical worker error
+is returned by `RunWorkers` so the process exits non-zero for orchestrator
+restart.
+
 ### `cmd/server` legacy wrapper
 
 ```text
+DB_POOL_ROLE=server
 bootstrap.Wire
   -> database.Migrate(app.DB)
+  -> installation-identity verification
   -> optional app.RunWorkers(ctx) controlled by RUN_WORKERS
   -> HTTP listener
-  -> graceful shutdown
+  -> graceful HTTP/metrics/worker shutdown
+  -> non-zero exit on critical worker failure
 ```
 
 The wrapper's in-process migration assumes exclusive database access and its
-combined lifecycle prevents independent API/worker scaling. It must remain a
-local recovery path, not a production entrypoint.
+combined lifecycle prevents independent API/worker scaling. It registers worker
+metrics before starting goroutines, drains HTTP and metrics on signal or
+critical-worker failure, and returns non-zero after a critical worker error.
+It must remain a local recovery path, not a production entrypoint.
 
 ## Environment and storage parity
 

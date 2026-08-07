@@ -4,10 +4,35 @@
 
 InstaEditLogin is a Go monolith with a React/Vite SPA frontend and a PostgreSQL database. It authenticates users via OAuth 2.0 against multiple social platforms and publishes content on their behalf.
 
+## Canonical deployment topology
+
+The supported production topology is deliberately split between the frontend and
+stateful backend:
+
+```text
+Internet
+  ├── app.instaedit.org → Vercel → web/ React/Vite SPA
+  └── api.instaedit.org → VPS Caddy → 127.0.0.1:8080 → Docker Compose
+                                             ├── migrate (one-shot)
+                                             ├── api (cmd/api, HTTP only)
+                                             ├── worker (cmd/worker, 13 supervised workers)
+                                             ├── PostgreSQL (private)
+                                             └── MinIO (private S3-compatible storage)
+```
+
+Caddy on the VPS is the only public backend entry point. PostgreSQL, MinIO,
+and the worker health listener remain private. `cmd/migrate` completes before
+`api` and `worker` are released by Compose. Vercel serves only the frontend and
+never connects directly to PostgreSQL or MinIO. The deprecated `cmd/server`
+wrapper is retained only for local recovery and compatibility testing.
+
 ## Layers
 
 ```
-cmd/server/main.go          # Application entry point, wiring, graceful shutdown
+cmd/api/main.go             # Canonical HTTP entry point, wiring, graceful shutdown
+cmd/worker/main.go          # Canonical background-worker entry point
+cmd/migrate/main.go         # One-shot migration entry point
+cmd/server/main.go          # Deprecated local/recovery wrapper
 cmd/seed/main.go            # Development seed command
 internal/config/            # Environment configuration and validation
 internal/database/          # PostgreSQL connection and migrations
@@ -90,11 +115,11 @@ When the auto-crop, hashtag generation, AI image placement, stock-footage curati
 
 ## Background workers and Async Publishing Pipeline
 
-`internal/bootstrap/app.go::RunWorkers` starts exactly **seven independent background goroutines**, mirrored by the `cmd/worker` binary and by the `cmd/server` dev wrapper (the production topology runs `cmd/api` + `cmd/worker` as separate pods, plus a one-shot `cmd/migrate` before deploy). Each goroutine owns its own cancellable context, tick interval, and `Done` channel; the boot log line confirms it: `7 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / upload`.
+`internal/bootstrap/workers_wiring.go::RunWorkers` registers exactly **13 supervised background workers**, mirrored by the `cmd/worker` binary and by the `cmd/server` dev wrapper (the production topology runs `cmd/api` + `cmd/worker` as separate pods, plus a one-shot `cmd/migrate` before deploy). The shared `worker.Registry` owns lifecycle, heartbeat, readiness, metrics, and the single 15-second shutdown budget. The boot log lists: `publish / reconcile / outbox / webhook / metrics / sessions_cleanup / asset_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / token_refresh_sweep / snapshot_refresh_sweep`.
 
 > **Documentation drift (Taglio 5.x)**: earlier versions of this document described the runtime as a "two- / three-goroutine" pipeline because only the publish + reconcile + outbox triple was tracked in the indexed case study. The other four (`webhook`, `metrics`, `sessions_cleanup`, `upload`) have been part of the boot surface since Blocco #2.1 — readers should treat the canonical table below as authoritative and ignore the older "TWO/THREE/5" references that may still appear in commit-message archaeology or `cmd/server/main.go` comments.
 
-### Authoritative goroutine list (mirrors `pkg/api/worker_status.go::WorkerNames`)
+### Authoritative worker list (mirrors `internal/bootstrap/workers_wiring.go::RunWorkers`)
 
 | # | Name              | Component                              | Default tick                       | Env var                              | Responsibility                                                                 | Drain budget |
 |---|-------------------|----------------------------------------|------------------------------------|--------------------------------------|--------------------------------------------------------------------------------|--------------|
@@ -102,11 +127,16 @@ When the auto-crop, hashtag generation, AI image placement, stock-footage curati
 | 2 | `reconcile`       | `worker.ReconcileWorker`               | 5s                                 | `RECONCILE_WORKER_INTERVAL_SECONDS`  | Reconciler: terminal `publishing → published \| failed` via `AsyncPublisher`   | 15s          |
 | 3 | `outbox`          | `outbox.Dispatcher`                    | 5s tick + 60s lease + 20s heartbeat | n/a (constants)                      | Materialise `publish_jobs` audit rows via `SELECT FOR UPDATE SKIP LOCKED`       | 15s          |
 | 4 | `webhook`         | `worker.WebhookWorker`                 | 5s                                 | `WEBHOOK_WORKER_INTERVAL_SECONDS`     | Drain `webhook_deliveries` (HMAC sign + HTTP POST + retry)                     | 15s          |
-| 5 | `metrics`         | `metrics.RunPeriodicCollector`         | 10s                                | n/a (`DefaultCollectorInterval`)     | Refresh Prometheus gauges (queue depth, age, publish state counts)             | 15s          |
-| 6 | `sessions_cleanup`| `worker.SessionsCleanupWorker`         | 300s                               | `SESSION_CLEANUP_INTERVAL_SECONDS`   | Retention-policy hard delete on `sessions` (revoked > 30d OR refresh expired > 7d) | 15s          |
-| 7 | `upload`          | `worker.UploadWorker`                  | 30s                                | `UPLOAD_WORKER_INTERVAL_SECONDS`     | Stream `upload_jobs` (queued) → fetch Google Drive → S3 → posts + publish queue | 15s          |
+| 5 | `metrics`         | `metrics.RunPeriodicCollector`         | 10s                                | n/a (`DefaultCollectorInterval`)     | Refresh Prometheus gauges (queue depth, age, publish state counts)             | 15s          || 6 | `sessions_cleanup` | `worker.SessionsCleanupWorker` | 300s | `SESSION_CLEANUP_INTERVAL_SECONDS` | Retention-policy hard delete on `sessions` (revoked > 30d OR refresh expired > 7d) | 15s |
+| 7 | `asset_cleanup` | `worker.AssetCleanupWorker` | configured | `ASSET_CLEANUP_INTERVAL_SECONDS` | Delete aged media assets after the retention buffer | non-critical |
+| 8 | `velox_downloader` | `worker.VeloxArtifactDownloader` | configured | n/a | Claim accepted Velox deliveries and register upload jobs | 15s |
+| 9 | `upload` | `worker.UploadWorker` | 30s | `UPLOAD_WORKER_INTERVAL_SECONDS` | Stream `upload_jobs` (queued) → fetch Google Drive → S3 → posts + publish queue | 15s |
+| 10 | `drive_batch_crawler` | `worker.DriveBatchCrawler` | configured | n/a | Drain `import_batches` into upload jobs | 15s |
+| 11 | `youtube_processing_reconciler` | `worker.YoutubeProcessingReconciler` | configured | n/a | Link processed YouTube publications to editor sessions | 15s |
+| 12 | `token_refresh_sweep` | `worker.TokenRefreshSweepWorker` | configured | n/a | Refresh dormant OAuth grants | non-critical |
+| 13 | `snapshot_refresh_sweep` | `worker.SnapshotRefreshSweepWorker` | configured | n/a | Refresh cached account snapshots asynchronously | non-critical |
 
-Every goroutine flips an `atomic.Bool` on its first executable line via `WorkerStatus.Mark(name)`; the `/ready` endpoint aggregates the same set. The `publish` + `reconcile` + `outbox` triple drives the publishing pipeline detailed below; the other four are documented in their own package files (`internal/worker/`, `internal/outbox/`, `pkg/metrics/`).
+The registry marks workers healthy at startup and records heartbeats, readiness, terminal state, and Prometheus metrics for the same set. The `publish` + `reconcile` + `outbox` triple drives the publishing pipeline detailed below; maintenance and ingestion workers are documented in their own package files (`internal/worker/`, `internal/outbox/`, `pkg/metrics/`).
 
 ### Pipeline-specific cadence (publish + reconcile)
 
@@ -228,7 +258,8 @@ Two independent mechanisms govern how the system handles backpressure from upstr
 | Preventive throttle | `internal/worker/throttle.go` (`PlatformThrottle.Wait`) | Token bucket per platform name, `defaultBurst=1`, pure spacing | Per worker replica, NOT distributed |
 | Async retry with jitter + DLQ | `internal/outbox/dispatcher.go` (`Dispatcher.computeBackoff`, `processOne`) | Decorrelated jitter, `MaxAttempts=5`, `BaseDelay=1s`, `CapDelay=1h`, `ErrTerminal→DLQ-immediate` | Outbox events audit-row materialisation |
 | Webhook outbound delivery | `internal/worker/webhook_worker.go` | Retries `5xx/408/425/429/timeout` up to `MaxAttempts` with backoff | Operator-configured webhook sinks |
-| **Gap** — final publish call retry | — | `publisher.Publish(...)` errors short-circuit to `markFailed` today; no `next_attempt_at` reschedule from the worker | To be added |
+| Final publish call rate-limit retry | `internal/worker/publish_worker_retry.go` | `429`/`Retry-After` is requeued with `next_attempt_at`; non-rate-limit errors remain terminal | Per target, bounded by the existing retry state |
+| Final publish call 5xx retry | — | Transient 5xx/network errors still take the terminal `markFailed` path; operator requeue is required | Gap, follow-up |
 
 #### (a) Per-process throttle (pre-call)
 
@@ -254,15 +285,15 @@ The canonical async retry curve lives in the **outbox dispatcher goroutine** (`i
 - **Retry curve** (`Dispatcher.computeBackoff`): AWS-style decorrelated jitter with `MaxAttempts = 5`, `BaseDelay = 1s`, `CapDelay = 1h`. The formula is `temp = min(cap, prev * 3)`, `sleep = uniform(base..temp)` where `prev = base * 2^(attempt-1)`. After 5 failed attempts the row is marked `dead_letter` and surfaces for operator triage.
 - **Terminal opt-out**: a provider can `fmt.Errorf("%w: …", services.ErrTerminal)` to skip retries and go straight to DLQ — used for unrecoverable conditions (schema mismatch, payload too large, business-rule violation). Anything else is treated as transient → `MarkFailed` with backoff.
 
-The transactional outbox table is the audit-only appendix to `post_targets.status`; the outbox dispatcher is a separate goroutine from the publish/reconcile workers, running on its own 5s tick with a 15s drain budget on shutdown. See [Transactional Outbox Pipeline](#transactional-outbox-pipeline).
+The transactional outbox table is the audit-only appendix to `post_targets.status`; the outbox dispatcher is a separate supervised worker in the shared registry, running on its own 5s tick with the registry's single 15s drain budget. See [Transactional Outbox Pipeline](#transactional-outbox-pipeline).
 
 #### (c) Webhook outbound retry
 
-`internal/worker/webhook_worker.go` (seventh goroutine in the **Authoritative goroutine list** subsection above) has its own retry curve for outbound webhooks to operator-configured HTTP sinks. Status codes `5xx / 408 / 425 / 429 / timeout` are rescheduled up to `MaxAttempts`; `2xx` is success; other `4xx` (non-408/425/429) is dead. This is a separate domain from platform publishing and is fully documented in `webhook_worker.go`.
+`internal/worker/webhook_worker.go` (fourth worker in the **Authoritative worker list** subsection above) has its own retry curve for outbound webhooks to operator-configured HTTP sinks. Status codes `5xx / 408 / 425 / 429 / timeout` are rescheduled up to `MaxAttempts`; `2xx` is success; other `4xx` (non-408/425/429) is dead. This is a separate domain from platform publishing and is fully documented in `webhook_worker.go`.
 
-#### (d) Retry on 429/Retry-After at the final publish-platform call (CLOSED for 429; 5xx still terminal)
+#### (d) Retry on 429/Retry-After at the final publish-platform call (closed for 429; 5xx still terminal)
 
-**Status: the 429 half of this gap is CLOSED.** The publish worker's final `publisher.Publish(ctx, ...)` error path in `internal/worker/publish_worker_upload.go::executePublish` now branches on `services.IsRateLimitError`:
+**Status: the 429 path is closed.** The publish worker's final `publisher.Publish(ctx, ...)` error path in `internal/worker/publish_worker_upload.go::executePublish` branches on `services.IsRateLimitError`:
 
 ```go
 result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
@@ -285,41 +316,25 @@ Covered by `internal/worker/publish_worker_ratelimit_test.go` (Retry-After honou
 
 **Still open — transient 5xx at the final publish call.** Non-429 transient platform errors (5xx, network timeouts) continue to route through the terminal `markFailed`. Extending the same requeue mechanics to a retryable-5xx classification (bounded by `max_attempts` → DLQ) is the natural follow-up; until then treat 5xx-failed rows as operator-requeue.
 
-### Seven-way shutdown
+### Worker shutdown
 
-`internal/bootstrap/app.go::RunWorkers` spawns all seven background goroutines in parallel at startup and shuts them down **sequentially** on SIGINT/SIGTERM. Each goroutine has its own cancellable context + `Done` channel; the cancels go out as a single broadcast on the signal, then the awaits are stacked (each with its own 15s budget), followed by the HTTP server's own 30s drain (`cmd/api` and `cmd/server` paths):
+`internal/bootstrap/workers_wiring.go::RunWorkers` starts the registered workers in parallel through the shared `worker.Registry`. Cancellation is broadcast once and `Registry.StopAll` waits on one shared 15-second deadline; critical worker failures propagate to the owning process, while the HTTP server drains independently in the API and legacy wrapper entrypoints:
 
 ```
-go publishWorker.Run(workerCtx)         // [1] driver                — 30s tick
-go reconcileWorker.Run(reconcileCtx)     // [2] reconciler            — 5s tick
-go dispatcher.Run(dispatcherCtx)         // [3] outbox                — SKIP LOCKED + 60s lease
-go webhookWorker.Run(webhookCtx)         // [4] webhook               — 5s tick
-go metricsCollector.Run(metricsCtx)      // [5] metrics               — 10s tick
-go sessionsCleanupWorker.Run(sessionsCtx)// [6] sessions_cleanup     — 300s tick
-go uploadWorker.Run(uploadCtx)           // [7] upload                — 30s tick
+worker.Registry.StartAll(ctx)
 
 <-ctx.Done() (SIGINT/SIGTERM)
-workerCancel(); reconcileCancel(); dispatcherCancel(); webhookCancel()
-metricsCancel(); sessionsCleanupCancel(); uploadCancel()            // single broadcast
+worker.Registry.StopAll(15 * time.Second) // one shared deadline; workers drain concurrently
 
-select { <-workerDone,            15s }    // drain budget [1]
-select { <-reconcileDone,         15s }    // drain budget [2]
-select { <-dispatcherDone,        15s }    // drain budget [3]
-select { <-webhookDone,           15s }    // drain budget [4]
-select { <-metricsDone,           15s }    // drain budget [5]
-select { <-sessionsCleanupDone,   15s }    // drain budget [6]
-select { <-uploadDone,            15s }    // drain budget [7]
-srv.Shutdown(ctx) with 30s budget          // HTTP server drain — runs AFTER goroutine drains
+srv.Shutdown(ctx) with 30s budget          // HTTP server drain, owned by the entrypoint
 ```
 
 Each goroutine performs a graceful drain on its own context: when `ctx.Done()` fires while a tick is mid-flight, the current tick completes naturally and `Run` returns only after that. A slow shutdown on one goroutine (e.g. a hung platform call in the reconciler, or a hung S3 PUT in the upload worker) does NOT block the others — each `Done` channel is independent, so the corresponding `select` returns via the timeout path while the healthy ones drain as they go.
 
 Wall-clock bounds on shutdown:
 
-- **Graceful drain** (default path): ms-level per goroutine. On a clean SIGTERM each goroutine returns within ms of the cancel broadcast and all seven `Done` channels close at sub-second timescales. The HTTP server's 30s drain then begins.
-- **Hard hangs** (e.g. platform API stuck on one tick, or a goroutine ignoring `ctx.Done()`): each governance budget fires sequentially. The stacked `<-time.After(15s)` design caps the **goroutine-drain** window at `7 × 15s = 105s` before the operator logs "drain timeout, continuing shutdown" for the still-pending goroutine(s). After the goroutines settle (clean or timed-out), `srv.Shutdown(30s)` kicks off another 30s budget for the HTTP server. Total worst-case wall-clock: `105s (goroutines) + 30s (HTTP) = up to 135s`.
-
-The goroutine-drain stack and the HTTP-server drain are **sequential, not concurrent** — this matches the production wiring in `internal/bootstrap/app.go::RunWorkers` and `cmd/server/main.go::main` (the seven `<-XxxDone` selects come before `srv.Shutdown(ctx)` in the source order). Operators tuning the shutdown budgets should bound total shutdown at the worst case (`135s`) plus any operator-imposed `kill -9` wait time.
+- **Graceful drain** (default path): workers receive cancellation concurrently and normally return promptly; `Registry.StopAll` observes the shared 15-second deadline.
+- **Hard hangs**: a worker that ignores cancellation is marked failed when the shared deadline expires, while other workers are not forced to wait through separate sequential budgets. The HTTP server has its own 30-second drain in the entrypoint, so the worker and HTTP budgets are bounded independently rather than multiplied by worker count.
 
 ### Cross-references
 
@@ -332,17 +347,17 @@ The goroutine-drain stack and the HTTP-server drain are **sequential, not concur
   - **Reconciler tests** (`internal/worker/reconcile_worker_test.go`): `TestReconcileTarget_*` (6 tests covering PublishComplete, Failed, InFlight, SyncPlatform, OrphanAccount, TransientError); `TestTickReconcile_*` (3 tests covering iterates-all / empty-list / list-error); `TestReconcileWorker_Run_*` (2 Run-loop tests: `TicksAndExitsOnCtxCancel` + `GracefulShutdown_DrainsInFlight`, mirroring the outbox dispatcher's Run test shape).
   - The transient-error behavioural change under `Reconcile`'s contract is asserted by `TestReconcileTarget_TransientError_TerminalFailure`.
 - **Configuration**: `internal/config/config.go::PublishWorkerIntervalSeconds` (default 30) + `::ReconcileWorkerIntervalSeconds` (default 5). Environment variables: `PUBLISH_WORKER_INTERVAL_SECONDS`, `RECONCILE_WORKER_INTERVAL_SECONDS`. Both fall back to defaults on ≤0 inside their respective `NewXxxWorker` constructors (defensive constructor logic, not config-validation logic — operators can simply leave env unset to get the canonical defaults).
-- **Driver/reconciler split commit** (`ca7c879`, Taglio 5.x): extracted `tickReconcile` / `reconcileTarget` / `markFailedAndReturn` from `PublishWorker` into a new `ReconcileWorker` struct with its own `Run` goroutine, mirroring the outbox dispatcher. Verified via `git show --stat ca7c879` (touches `internal/worker/reconcile_worker.go` + `reconcile_worker_test.go` + `mocks_test.go` + slims `publish_worker.go` + `publish_worker_test.go` + adds `cfg.ReconcileWorkerIntervalSeconds`). The pre-Blocco #5.x wiring collapsed the whole shutdown into a 3-way stack; the post-Blocco #2.1 / Taglio 5.x runtime is a 7-goroutine stack (see "Seven-way shutdown" above).
+- **Driver/reconciler split commit** (`ca7c879`, Taglio 5.x): extracted `tickReconcile` / `reconcileTarget` / `markFailedAndReturn` from `PublishWorker` into a new `ReconcileWorker` struct with its own `Run` goroutine, mirroring the outbox dispatcher. Verified via `git show --stat ca7c879` (touches `internal/worker/reconcile_worker.go` + `reconcile_worker_test.go` + `mocks_test.go` + slims `publish_worker.go` + `publish_worker_test.go` + adds `cfg.ReconcileWorkerIntervalSeconds`). The pre-Blocco #5.x wiring collapsed the whole shutdown into a 3-way stack; the current runtime is managed by the 13-worker registry described in the "Worker shutdown" section above.
 
 ## Transactional Outbox Pipeline
 
 **Cross-reference: `internal/outbox/dispatcher.go`, `internal/outbox/processors/publishjobs.go`, `cmd/server/main.go`.**
 
-`PostRepository.Create` writes `posts + post_targets + outbox_events` in one `BEGIN/COMMIT` tx. A background goroutine (`outbox.NewDispatcher`) reads `outbox_events` via `SELECT FOR UPDATE SKIP LOCKED` + heartbeat lease, then calls `processors.NewPublishJobsMaterialiser` to insert the audit row. Both run parallel to the publish worker with independent 15s drain budgets on shutdown. The PublishJob table is the audit-only appendix; `post_targets.status` remains the source of truth for current publish state.
+`PostRepository.Create` writes `posts + post_targets + outbox_events` in one `BEGIN/COMMIT` tx. The supervised outbox worker (`outbox.NewDispatcher`) reads `outbox_events` via `SELECT FOR UPDATE SKIP LOCKED` + heartbeat lease, then calls `processors.NewPublishJobsMaterialiser` to insert the audit row. It runs in parallel with the publish worker under the registry's single shared 15s drain budget. The PublishJob table is the audit-only appendix; `post_targets.status` remains the source of truth for current publish state.
 
 ## Google Drive folder import (POST `/api/v1/media/import/drive/folder`)
 
-The Drive import endpoint fans a (public or authenticated) Google Drive folder out into a staggered schedule of `upload_jobs` that the upload worker (seventh goroutine, **Authoritative goroutine list** subsection above) drains in the background. It is **NOT** a publish API — it queues and spreads the work across time, then exits. The endpoint, the request body, and the CLI that drives it from an operator shell are documented below.
+The Drive import endpoint fans a (public or authenticated) Google Drive folder out into a staggered schedule of `upload_jobs` that the upload worker (ninth worker, **Authoritative worker list** subsection above) drains in the background. It is **NOT** a publish API — it queues and spreads the work across time, then exits. The endpoint, the request body, and the CLI that drives it from an operator shell are documented below.
 
 ### Endpoints
 
@@ -391,7 +406,7 @@ What it does NOT do:
 
 - It does **not** simulate a human posting cadence. The pacing is randomised against `[min, max]` per job, but the rate-limit reason stands regardless of perceived "humanness".
 - It does **not** "avoid shadowban"; that phrasing has no technical basis in this codebase. The actual mitigation is the configurable jitter uniform against the per-platform perforated rate budgets in `internal/worker/throttle.go`.
-- It does **not** guarantee delivery — it only queues `upload_jobs`. The upload worker owns the actual streaming-to-S3 + publish hand-off. Provider-side `*services.RateLimitError` responses are caught at the worker layer (see the **OPEN GAP — retry on 429/Retry-After/5xx** under [Rate limiting and retry semantics](#rate-limiting-and-retry-semantics)).
+- It does **not** guarantee delivery — it only queues `upload_jobs`. The upload worker owns the actual streaming-to-S3 + publish hand-off. Provider-side `*services.RateLimitError` responses are requeued with `Retry-After`; transient 5xx/network errors remain terminal and require operator requeue (see [Rate limiting and retry semantics](#rate-limiting-and-retry-semantics)).
 
 ### CLI: `cmd/link-drive-and-import` env vars
 
