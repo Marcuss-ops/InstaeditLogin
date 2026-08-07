@@ -3,8 +3,8 @@
 //
 // Blocco #2.1 split cmd/server/main.go into:
 //   - cmd/api     — HTTP only
-//   - cmd/worker  — 7 background goroutines (publish, reconcile, outbox,
-//     webhook, metrics, sessions_cleanup, upload)
+//   - cmd/worker  — 13 registry-managed background workers (publish,
+//     reconcile, outbox, webhook, metrics, cleanup, ingestion, and sweeps)
 //   - cmd/migrate — Connect + Migrate + exit (one-shot pre-deploy job)
 //   - cmd/server  — wrapper: dev/local-compat single-bundle that runs
 //     migrate + api + (optionally) workers in one process.
@@ -127,6 +127,40 @@ type App struct {
 	// boundary for YouTube Live workers and services.
 	YouTubeCredentialResolver *services.YouTubeCredentialResolver
 	YouTubeLiveGateway        services.YouTubeLiveGateway
+
+	// runtime contains the shared capabilities built by the composition
+	// root. It is private so consumers cannot replace or mutate the
+	// composition-root contract after Wire returns.
+	runtime *RuntimeCapabilities
+}
+
+// RuntimeCapabilities is the bootstrap-owned shared runtime contract.
+// Its members are constructed once and must be treated as immutable after
+// Wire returns; workers and the router only consume these capabilities.
+type RuntimeCapabilities struct {
+	mediaDownloadResolver         services.MediaDownloadResolver
+	youtubeTargetPublicationStore *repository.YouTubeTargetPublicationRepository
+	youtubeOAuthClientRegistry    *services.YouTubeOAuthClientRegistry
+}
+
+// requireRuntime validates the capabilities needed by every worker before
+// any registration closure can dereference them. Keeping this check in one
+// place prevents a partially hand-built App (for example in an integration
+// harness) from failing later with a typed-nil panic.
+func (a *App) requireRuntime() (*RuntimeCapabilities, error) {
+	if a == nil {
+		return nil, fmt.Errorf("bootstrap App is nil")
+	}
+	if a.runtime == nil {
+		return nil, fmt.Errorf("bootstrap App has nil Runtime capabilities")
+	}
+	if a.runtime.mediaDownloadResolver == nil {
+		return nil, fmt.Errorf("bootstrap Runtime is missing MediaDownloadResolver")
+	}
+	if a.runtime.youtubeTargetPublicationStore == nil {
+		return nil, fmt.Errorf("bootstrap Runtime is missing YouTubeTargetPublicationStore")
+	}
+	return a.runtime, nil
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -148,6 +182,9 @@ func Wire(ctx context.Context) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s.runtime == nil || s.runtime.mediaDownloadResolver == nil || s.runtime.youtubeTargetPublicationStore == nil {
+		return nil, fmt.Errorf("bootstrap shared runtime capabilities are incomplete")
+	}
 	if err := buildProviderWiring(s); err != nil {
 		return nil, err
 	}
@@ -165,5 +202,6 @@ func Wire(ctx context.Context) (*App, error) {
 		OneTimeCodes: s.oneTimeCodes, Encryptor: s.enc,
 		YouTubeCredentialResolver: s.youtubeCredentialResolver,
 		YouTubeLiveGateway:        s.youtubeLiveGateway,
+		runtime:                   s.runtime,
 	}, nil
 }

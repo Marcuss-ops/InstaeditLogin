@@ -20,47 +20,49 @@ import (
 )
 
 type wireState struct {
-	cfg                       *config.Config
-	logger                    *slog.Logger
-	db                        *sql.DB
-	workerID                  string
-	memoryLimiter             *services.MemoryLimiter
-	enc                       *crypto.Encryptor
-	userRepo                  *repository.UserRepository
-	tokenRepo                 *repository.TokenRepository
-	teamRepo                  *repository.TeamRepository
-	groupRepo                 *repository.GroupRepository
-	workspaceRepo             *repository.WorkspaceRepository
-	apiKeyRepo                *repository.ApiKeyRepository
-	apiKeyAuth                *auth.Authenticator
-	idempotencyRepo           *repository.IdempotencyRepository
-	postRepo                  *repository.PostRepository
-	mediaRepo                 *repository.MediaAssetRepository
-	uploadJobRepo             *repository.UploadJobRepository
-	importBatchRepo           *repository.ImportBatchRepository
-	connectionStateRepo       *repository.ConnectionStateRepository
-	auditLogRepo              *repository.AuditLogRepository
-	externalDestinationRepo   *repository.ExternalDestinationRepository
-	externalDeliveryRepo      *repository.ExternalDeliveryRepository
-	connectLinkNonceRepo      *repository.ConnectLinkNonceRepository
-	youtubeVideoEditRepo      *repository.YouTubeVideoEditRepository
-	youtubeThumbnailBatchRepo *repository.YouTubeThumbnailBatchRepository
-	livestreamRepo            *repository.LivestreamRepository
-	thumbnailProjectRepo      *repository.ThumbnailProjectRepository
-	thumbnailProjectService   *services.ThumbnailProjectService
-	contentPipelineRepo       *repository.ContentPipelineRepository
-	vault                     credentials.VaultAPI
-	capRouter                 *services.CapabilityRouter
-	authMgr                   *auth.Manager
-	oneTimeCodes              api.OneTimeCodeStore
-	storageProvider           services.StorageProvider
-	sessionsSvc               *services.SessionsService
-	webhookRepo               *repository.WebhookRepository
-	bookingEventRepo          *repository.BookingEventRepository
-	channelAuthorizer         services.ChannelAuthorizer
-	youtubeCredentialResolver *services.YouTubeCredentialResolver
-	youtubeLiveGateway        services.YouTubeLiveGateway
-	renderRegistry            *worker.RenderConcurrencyRegistry
+	cfg                        *config.Config
+	logger                     *slog.Logger
+	db                         *sql.DB
+	workerID                   string
+	memoryLimiter              *services.MemoryLimiter
+	enc                        *crypto.Encryptor
+	userRepo                   *repository.UserRepository
+	tokenRepo                  *repository.TokenRepository
+	teamRepo                   *repository.TeamRepository
+	groupRepo                  *repository.GroupRepository
+	workspaceRepo              *repository.WorkspaceRepository
+	apiKeyRepo                 *repository.ApiKeyRepository
+	apiKeyAuth                 *auth.Authenticator
+	idempotencyRepo            *repository.IdempotencyRepository
+	postRepo                   *repository.PostRepository
+	mediaRepo                  *repository.MediaAssetRepository
+	uploadJobRepo              *repository.UploadJobRepository
+	importBatchRepo            *repository.ImportBatchRepository
+	connectionStateRepo        *repository.ConnectionStateRepository
+	auditLogRepo               *repository.AuditLogRepository
+	externalDestinationRepo    *repository.ExternalDestinationRepository
+	externalDeliveryRepo       *repository.ExternalDeliveryRepository
+	connectLinkNonceRepo       *repository.ConnectLinkNonceRepository
+	youtubeVideoEditRepo       *repository.YouTubeVideoEditRepository
+	youtubeThumbnailBatchRepo  *repository.YouTubeThumbnailBatchRepository
+	livestreamRepo             *repository.LivestreamRepository
+	thumbnailProjectRepo       *repository.ThumbnailProjectRepository
+	thumbnailProjectService    *services.ThumbnailProjectService
+	contentPipelineRepo        *repository.ContentPipelineRepository
+	vault                      credentials.VaultAPI
+	capRouter                  *services.CapabilityRouter
+	authMgr                    *auth.Manager
+	oneTimeCodes               api.OneTimeCodeStore
+	storageProvider            services.StorageProvider
+	sessionsSvc                *services.SessionsService
+	webhookRepo                *repository.WebhookRepository
+	bookingEventRepo           *repository.BookingEventRepository
+	channelAuthorizer          services.ChannelAuthorizer
+	youtubeCredentialResolver  *services.YouTubeCredentialResolver
+	youtubeLiveGateway         services.YouTubeLiveGateway
+	renderRegistry             *worker.RenderConcurrencyRegistry
+	runtime                    *RuntimeCapabilities
+	youtubeOAuthClientRegistry *services.YouTubeOAuthClientRegistry
 }
 
 func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
@@ -161,6 +163,14 @@ func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
 	}
 	slog.Info("storage provider: S3-compatible configured",
 		"endpoint", cfg.Storage.S3Endpoint, "bucket", cfg.Storage.S3Bucket, "region", cfg.Storage.S3Region)
+
+	// Build shared runtime capabilities once. The API and workers must use
+	// the same resolver and publication store so ownership, signing, and
+	// idempotency policy cannot drift between execution paths.
+	s.runtime = &RuntimeCapabilities{
+		mediaDownloadResolver:         services.NewMediaDownloadResolver(s.storageProvider, assetsAdapter{repo: s.mediaRepo}, s.logger),
+		youtubeTargetPublicationStore: repository.NewYouTubeTargetPublicationRepository(s.db),
+	}
 
 	s.webhookRepo = repository.NewWebhookRepository(s.db)
 	s.bookingEventRepo = repository.NewBookingEventRepository(s.db)

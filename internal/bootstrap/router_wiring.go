@@ -203,10 +203,8 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	// the capability interface — a silent no-op would leave
 	// r.youTubeSvc nil and the /accounts/{id}/validate 4-step
 	// pipeline would fall back to the legacy token-freshness probe.
-	// The /cmd/api and /cmd/server entrypoints both call Wire() here
-	// (NOT bootstrap.WireAPI in api.go), so this is the production
-	// injection site; api.go carries the same wiring for the
-	// WireCore+WireAPI refactor path.
+	// The /cmd/api and /cmd/server entrypoints both call Wire() here.
+	// This is the single production router injection site.
 	rawYouTubeService, youtubeRegistered :=
 		s.capRouter.Get(models.PlatformYouTube)
 
@@ -260,6 +258,10 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	); regErr != nil {
 		return nil, nil, fmt.Errorf("build youtube oauth client pool registry: %w", regErr)
 	} else if ytPoolRegistry != nil {
+		// Keep one immutable pool registry in the composition root. Router,
+		// token refreshers, and metrics all observe this same snapshot.
+		s.youtubeOAuthClientRegistry = ytPoolRegistry
+		s.runtime.youtubeOAuthClientRegistry = ytPoolRegistry
 		opts = append(opts, api.WithYouTubeOAuthClientRegistry(ytPoolRegistry))
 		// R4 — attach the pool to the SHARED YouTubeOAuthService instance
 		// (the same one the capability router hands to workers and the
