@@ -255,8 +255,9 @@ validator before deployment:
 - `S3_ENDPOINT=http://minio:9000`, `S3_BUCKET`, `S3_ACCESS_KEY`,
   `S3_SECRET_KEY`, and `S3_REGION`;
 - `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`;
-- `FRONTEND_URL`, `INSTAEDITOR_URL` (preferred; `EDITOR_URL` remains a
-  backward-compatible fallback), `CORS_ALLOWED_ORIGINS`, and cookie settings;
+- `FRONTEND_URL`, `INSTAEDITOR_URL` (required in production; `EDITOR_URL` is
+  no longer read — a missing value fails fast), `CORS_ALLOWED_ORIGINS`, and
+  cookie settings;
 - enabled OAuth provider credentials and their registered redirect URIs;
 - the explicitly enabled internal integration settings, if used.
 

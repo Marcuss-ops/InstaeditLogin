@@ -18,6 +18,7 @@ func Load() (*Config, error) {
 			VeloxAPIToken:                getEnv("VELOX_API_TOKEN", ""),
 			VeloxControlURL:              getEnv("VELOX_CONTROL_URL", ""),
 			VeloxControlJWTSecret:        getEnv("VELOX_CONTROL_JWT_SECRET", ""),
+			EditorLaunchTokenSecret:      getEnv("INSTAEDITOR_LAUNCH_TOKEN_SECRET", ""),
 			VeloxWebhookSecret:           getEnv("VELOX_WEBHOOK_SECRET", ""),
 		},
 		Monitoring: MonitoringConfig{
@@ -75,9 +76,11 @@ func Load() (*Config, error) {
 		},
 		HTTP: HTTPConfig{
 			FrontendURL: getEnv("FRONTEND_URL", ""),
-			// INSTAEDITOR_URL is canonical; EDITOR_URL remains a
-			// backward-compatible fallback for existing deployments.
-			EditorURL:          getEnvWithFallback("INSTAEDITOR_URL", "EDITOR_URL"),
+			// INSTAEDITOR_URL is the only canonical editor configuration.
+			// EDITOR_URL is intentionally not read: production must fail fast
+			// when INSTAEDITOR_URL is absent instead of silently accepting a
+			// legacy or frontend destination.
+			EditorURL:          getEnv("INSTAEDITOR_URL", ""),
 			AllowedCORSOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
 			CookieDomain:       getEnv("COOKIE_DOMAIN", ""),
 			LogLevel:           getEnv("LOG_LEVEL", "info"),

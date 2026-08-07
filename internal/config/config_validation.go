@@ -52,6 +52,12 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("APP_ENV must be one of dev|staging|production (got %q)", c.HTTP.AppEnv)
 	}
+	if c.HTTP.AppEnv == "production" && strings.TrimSpace(c.HTTP.EditorURL) == "" {
+		return fmt.Errorf("INSTAEDITOR_URL is required in production")
+	}
+	if err := validateInstaEditorURL(c.HTTP.EditorURL, c.HTTP.AppEnv); err != nil {
+		return err
+	}
 
 	// APP_MODE is the explicit mirror of Google's OAuth consent-screen
 	// publishing status used by the refresh-token policy and test seams.
@@ -352,6 +358,27 @@ func (c *Config) validate() error {
 // Local development and staging intentionally retain their existing HTTP
 // localhost/test-host compatibility; production must use the exact public
 // InstaEdit callback endpoint registered in Google Cloud.
+func validateInstaEditorURL(rawURL, appEnv string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("INSTAEDITOR_URL must be an absolute URL")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("INSTAEDITOR_URL must not include credentials, query parameters, or fragments")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("INSTAEDITOR_URL must use HTTP or HTTPS")
+	}
+	if appEnv != "dev" && u.Scheme != "https" {
+		return fmt.Errorf("INSTAEDITOR_URL must use HTTPS in %s", appEnv)
+	}
+	return nil
+}
+
 func validateYouTubeRedirectURI(rawURI, appEnv string) error {
 	const callbackPath = "/api/v1/auth/youtube/callback"
 	const canonicalHost = "api.instaedit.org"

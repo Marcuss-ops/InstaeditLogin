@@ -38,8 +38,9 @@ type MonitoringConfig struct {
 type HTTPConfig struct {
 	// FrontendURL is where the OAuth callback should redirect.
 	FrontendURL string
-	// EditorURL is the base URL of the InstaEditor SPA. When empty,
-	// FrontendURL is used as a fallback.
+	// EditorURL is the base URL of the separately deployed InstaEditor
+	// SPA. It is never derived from FrontendURL or EDITOR_URL.
+	// Production validation requires INSTAEDITOR_URL explicitly.
 	EditorURL string
 	// AllowedCORSOrigins is the comma-separated list of origins.
 	AllowedCORSOrigins []string

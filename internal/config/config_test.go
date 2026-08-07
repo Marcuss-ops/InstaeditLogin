@@ -23,6 +23,9 @@ func TestMain(m *testing.M) {
 	os.Setenv("S3_SECRET_KEY", "test-secret")
 	os.Setenv("ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") // base64 32-byte key
 	os.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	// Production config now requires an explicit separately deployed
+	// InstaEditor destination; individual tests may clear/override it.
+	os.Setenv("INSTAEDITOR_URL", "https://editor.instaedit.test/dark_editor_v2")
 	os.Exit(m.Run())
 }
 
@@ -488,34 +491,37 @@ func TestLoad_YouTubeOAuthClientPool_ShortSecretRejected(t *testing.T) {
 }
 
 func TestLoad_EditorURL_InstaEditorNamePreferred(t *testing.T) {
-	t.Setenv("INSTAEDITOR_URL", "https://app.instaedit.org/insta-editor")
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("INSTAEDITOR_URL", "https://editor.instaedit.org")
 	t.Setenv("EDITOR_URL", "https://legacy.example.test/dark_editor_v2")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() with both editor URL names: want nil, got %v", err)
 	}
-	if got := cfg.HTTP.EditorURL; got != "https://app.instaedit.org/insta-editor" {
+	if got := cfg.HTTP.EditorURL; got != "https://editor.instaedit.org" {
 		t.Fatalf("EditorURL: got %q, want preferred INSTAEDITOR_URL", got)
 	}
 }
 
-func TestLoad_EditorURL_LegacyFallback(t *testing.T) {
+func TestLoad_EditorURL_DoesNotFallbackToLegacyName(t *testing.T) {
+	t.Setenv("APP_ENV", "dev")
 	t.Setenv("INSTAEDITOR_URL", "")
 	t.Setenv("EDITOR_URL", "https://legacy.example.test/dark_editor_v2")
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load() with legacy editor URL: want nil, got %v", err)
+		t.Fatalf("Load() with only legacy editor URL: want nil, got %v", err)
 	}
-	if got := cfg.HTTP.EditorURL; got != "https://legacy.example.test/dark_editor_v2" {
-		t.Fatalf("EditorURL: got %q, want EDITOR_URL fallback", got)
+	if got := cfg.HTTP.EditorURL; got != "" {
+		t.Fatalf("EditorURL: got %q, want empty without INSTAEDITOR_URL", got)
 	}
 }
 
 func TestLoad_EditorURL_DefaultEmpty(t *testing.T) {
 	t.Setenv("INSTAEDITOR_URL", "")
 	t.Setenv("EDITOR_URL", "")
+	t.Setenv("APP_ENV", "dev")
 
 	cfg, err := Load()
 	if err != nil {
@@ -523,6 +529,22 @@ func TestLoad_EditorURL_DefaultEmpty(t *testing.T) {
 	}
 	if got := cfg.HTTP.EditorURL; got != "" {
 		t.Fatalf("EditorURL: got %q, want empty default", got)
+	}
+}
+
+func TestLoad_ProductionRequiresStandaloneInstaEditorURL(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("INSTAEDITOR_URL", "")
+	t.Setenv("EDITOR_URL", "")
+	t.Setenv("METRICS_BASIC_AUTH_USER", "test-user")
+	t.Setenv("METRICS_BASIC_AUTH_PASS", "test-pass")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() without InstaEditor URL: want fail-fast validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "INSTAEDITOR_URL") {
+		t.Fatalf("error must identify the standalone editor configuration, got %v", err)
 	}
 }
 

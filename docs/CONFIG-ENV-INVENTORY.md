@@ -15,10 +15,11 @@ inventory names keys and behavior, but never contains credential values.
 4. JWT TTL compatibility is resolved after construction:
    `JWT_ACCESS_TTL_MINUTES` wins; otherwise `JWT_TTL_HOURS * 60`; otherwise
    access TTL defaults to 15 minutes. Refresh TTL defaults to 30 days.
-5. Editor URL compatibility is resolved while constructing `HTTPConfig`:
-   non-empty `INSTAEDITOR_URL` wins; otherwise `EDITOR_URL` is used. The
-   latter remains supported so existing Compose/VPS environments continue
-   working without a secret-file migration.
+5. Editor URL is loaded exclusively from `INSTAEDITOR_URL` while
+   constructing `HTTPConfig`. `EDITOR_URL` is intentionally not read: a
+   missing `INSTAEDITOR_URL` fails fast (empty launcher + 503 on editor
+   endpoints, and a hard validation error in production) instead of silently
+   falling back to a legacy or frontend destination.
 6. `Config.validate()` applies cross-field and environment-specific gates.
 
 Invalid integer/boolean text currently falls back to the declared default rather
