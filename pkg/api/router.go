@@ -246,6 +246,11 @@ type Router struct {
 	// editor runtime. It is deliberately distinct from the jobs/assets
 	// client so editor requests cannot inherit workspace-global routes.
 	editorBFFClient editor.ProxyClient
+	// editorService is the provider-neutral application boundary for
+	// project lifecycle and render operations. It is optional for legacy
+	// bridge-only deployments and wired by the composition root when
+	// Velox is configured.
+	editorService services.EditorService
 	// veloxJobRegistry resolves the technical job_type definitions used by
 	// the canonical POST /api/v1/jobs boundary.
 	veloxJobRegistry *veloxjobs.Registry

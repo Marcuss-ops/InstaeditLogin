@@ -161,7 +161,10 @@ func (m *EditorBFFModule) proxyHandler() http.Handler {
 	})
 }
 
-var editorProjectIDPattern = regexp.MustCompile(`^ve_[A-Za-z0-9_-]{1,125}$`)
+// Accept both current ve_ handles and legacy vx_ handles while existing
+// InstaEdit bridges are migrated. Both forms remain opaque project IDs;
+// neither permits path separators or control characters.
+var editorProjectIDPattern = regexp.MustCompile(`^(?:ve_|vx_)[A-Za-z0-9_-]{1,125}$`)
 
 func projectIDFromEditorPath(path string) string {
 	const prefix = "/projects/"

@@ -113,6 +113,7 @@ type CreateJobRequest struct {
 	ProjectID    string          `json:"project_id,omitempty"`
 	RenderSpec   json.RawMessage `json:"render_spec,omitempty"`
 	DeliveryPlan DeliveryPlan    `json:"delivery_plan"`
+	RenderOnly   bool            `json:"render_only,omitempty"`
 }
 
 // UnmarshalJSON keeps the canonical client DTO strict and prevents

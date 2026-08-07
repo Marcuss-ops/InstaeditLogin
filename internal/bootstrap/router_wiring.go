@@ -44,6 +44,10 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	analyticsClock := analytics.RealClock{}
 
 	veloxControlClient := veloxclient.New(s.cfg.Velox.VeloxControlURL, s.cfg.Velox.VeloxControlJWTSecret)
+	var editorService services.EditorService
+	if veloxAdapter := veloxclient.NewVeloxAdapter(veloxControlClient); veloxAdapter != nil {
+		editorService = services.NewEditorService(veloxAdapter, s.thumbnailProjectService)
+	}
 	if veloxControlClient == nil {
 		slog.Info("velox control client not configured — jobs and project-scoped editor bridges remain unmounted")
 	} else {
@@ -108,6 +112,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		api.WithVeloxJobRegistry(veloxjobs.NewDefaultRegistry()),
 		api.WithVeloxBFFClient(veloxControlClient),
 		api.WithEditorBFFClient(veloxControlClient),
+		api.WithEditorService(editorService),
 		api.WithVeloxBFFAuthMiddleware(s.authMgr.Middleware),
 		api.WithVeloxBFFCSRFMiddleware(func(next http.Handler) http.Handler {
 			return auth.NewCSRF(auth.CSRFConfig{

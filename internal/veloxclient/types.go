@@ -138,6 +138,7 @@ type createJobRequest struct {
 	ProjectID    string          `json:"project_id,omitempty"`
 	RenderSpec   json.RawMessage `json:"render_spec,omitempty"`
 	DeliveryPlan deliveryPlanReq `json:"delivery_plan" validate:"required"`
+	RenderOnly   bool            `json:"render_only,omitempty"`
 }
 
 // deliveryPlanReq mirrors veloxapi.DeliveryPlan for the outbound body.

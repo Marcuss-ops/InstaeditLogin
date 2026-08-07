@@ -86,6 +86,7 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 		DeliveryPlan: deliveryPlanReq{
 			Destinations: make([]deliveryDestinationReq, 0, len(req.DeliveryPlan.Destinations)),
 		},
+		RenderOnly: req.RenderOnly,
 	}
 	for _, d := range req.DeliveryPlan.Destinations {
 		body.DeliveryPlan.Destinations = append(body.DeliveryPlan.Destinations, deliveryDestinationReq{

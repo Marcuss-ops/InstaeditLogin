@@ -99,7 +99,7 @@ func signControlToken(secret []byte, userID, workspaceID int64, scopes []string)
 // jobs/workers/assets calls remain workspace-scoped.
 func signControlTokenForProject(secret []byte, userID, workspaceID int64, projectID string, scopes []string) (string, error) {
 	projectID = strings.TrimSpace(projectID)
-	if projectID != "" && (len(projectID) > 128 || strings.ContainsAny(projectID, "\r\n") || !strings.HasPrefix(projectID, "ve_")) {
+	if projectID != "" && (len(projectID) > 128 || strings.ContainsAny(projectID, "\r\n") || (!strings.HasPrefix(projectID, "ve_") && !strings.HasPrefix(projectID, "vx_"))) {
 		return "", fmt.Errorf("veloxclient: invalid project_id")
 	}
 	if len(secret) == 0 {

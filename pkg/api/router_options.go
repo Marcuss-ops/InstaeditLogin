@@ -424,6 +424,16 @@ func WithEditorURL(url string) RouterOption {
 	}
 }
 
+// WithEditorService wires the provider-neutral editor lifecycle service.
+// The service is intentionally separate from the legacy project-bridge
+// handoff routes so callers can migrate to CreateProject/OpenProject/
+// GetProjectStatus/RequestRender without exposing provider details.
+func WithEditorService(service services.EditorService) RouterOption {
+	return func(r *Router) {
+		r.editorService = service
+	}
+}
+
 // WithPublishingInFlightTimeout configures the guard window used by the
 // YouTube thumbnail publish handler to treat a session with
 // status='publishing' as still in-flight. The default is 5 minutes;

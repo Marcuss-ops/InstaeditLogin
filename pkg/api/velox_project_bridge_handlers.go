@@ -8,9 +8,27 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
+
+func mapEditorServiceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, services.ErrEditorProjectNotFound):
+		writeError(w, http.StatusNotFound, "project bridge not found")
+	case errors.Is(err, services.ErrEditorProjectInvalid):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, services.ErrEditorProjectConflict):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		// Unknown errors are local (persistence, validation, wiring)
+		// failures, not provider errors. 500 lets operators distinguish
+		// them from an editor-provider outage.
+		writeError(w, http.StatusInternalServerError, "editor service failed")
+	}
+}
 
 func mapVeloxProjectBridgeError(w http.ResponseWriter, err error) {
 	switch {
@@ -103,6 +121,40 @@ func (r *Router) handleCreateVeloxProjectBridge(w http.ResponseWriter, req *http
 	}
 	if _, _, ok := r.authorizeThumbnailProjectBridge(w, req, body.WorkspaceID, projectID); !ok {
 		return
+	}
+	if r.editorService != nil {
+		if existing, err := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID); err != nil {
+			mapVeloxProjectBridgeError(w, err)
+			return
+		} else if existing == nil {
+			identityUserID := auth.IdentityFromContext(req.Context()).UserID()
+			created, err := r.editorService.CreateProject(req.Context(), services.CreateEditorProjectRequest{
+				UserID:               identityUserID,
+				WorkspaceID:          body.WorkspaceID,
+				ApplicationProjectID: projectID,
+				ExternalProjectID:    strings.TrimSpace(body.VeloxProjectID),
+				Platform:             body.Platform,
+				PlatformAccountID:    body.PlatformAccountID,
+				ChannelID:            body.ChannelID,
+				VideoID:              body.VideoID,
+				Language:             body.Language,
+			})
+			if err != nil {
+				mapEditorServiceError(w, err)
+				return
+			}
+			bridge, bridgeErr := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), body.WorkspaceID, projectID)
+			if bridgeErr != nil || bridge == nil || bridge.VeloxProjectID != created.ExternalProjectID {
+				if bridgeErr != nil {
+					mapVeloxProjectBridgeError(w, bridgeErr)
+				} else {
+					writeError(w, http.StatusInternalServerError, "editor project bridge was not persisted")
+				}
+				return
+			}
+			writeJSON(w, http.StatusCreated, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.VeloxProjectID)})
+			return
+		}
 	}
 	bridge := &models.VeloxProjectBridge{
 		ProjectID:         projectID,
