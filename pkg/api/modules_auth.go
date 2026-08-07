@@ -24,6 +24,7 @@ type AuthHandlers struct {
 	GetAccount                    http.HandlerFunc
 	GetAccountsPerformanceSummary http.HandlerFunc
 	GetAccountPerformance         http.HandlerFunc
+	GetDashboardAnalytics         http.HandlerFunc
 	ValidateAccount               http.HandlerFunc
 	ReconnectAccount              http.HandlerFunc
 	DeleteAccount                 http.HandlerFunc
@@ -148,6 +149,7 @@ func (m *AuthModule) Register(mux chi.Router) {
 	mux.Method(http.MethodGet, "/api/v1/accounts", m.deps.Protected(m.deps.Handlers.ListAccounts))
 	mux.Method(http.MethodGet, "/api/v1/accounts/{id}", m.deps.Protected(m.deps.Handlers.GetAccount))
 	mux.Method(http.MethodGet, "/api/v1/accounts/performance/summary", m.deps.Protected(m.deps.Handlers.GetAccountsPerformanceSummary))
+	mux.Method(http.MethodGet, "/api/v1/dashboard/analytics", m.deps.Protected(m.deps.Handlers.GetDashboardAnalytics))
 	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/performance", m.deps.Protected(m.deps.Handlers.GetAccountPerformance))
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", m.deps.Protected(m.deps.Handlers.ValidateAccount))
 	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", m.deps.Protected(m.deps.Handlers.ReconnectAccount))

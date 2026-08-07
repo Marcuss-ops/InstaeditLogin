@@ -318,6 +318,14 @@ type Router struct {
 	youtubeGroupVideosCacheMu sync.Mutex
 	youtubeGroupVideosCache   map[string]youtubeGroupVideosCacheEntry
 
+	// dashboardTopVideosCache caches the dashboard's cross-channel
+	// "Migliori video" ranking per (user, days) so repeated dashboard
+	// loads do not burn YouTube quota on the fan-out. Protected by
+	// dashboardTopVideosCacheMu; entries expire after
+	// dashboardTopVideosCacheTTL.
+	dashboardTopVideosCacheMu sync.Mutex
+	dashboardTopVideosCache   map[string]dashboardTopVideosCacheEntry
+
 	// youtubeVideoEditStore persists thumbnail editor sessions for
 	// YouTube videos. Wired via WithYouTubeVideoEditStore.
 	youtubeVideoEditStore YouTubeVideoEditStore

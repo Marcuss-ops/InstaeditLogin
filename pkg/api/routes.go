@@ -110,6 +110,7 @@ func (r *Router) Setup() http.Handler {
 			GetAccount:                    r.handleGetAccount,
 			GetAccountsPerformanceSummary: r.handleGetAccountsPerformanceSummary,
 			GetAccountPerformance:         r.handleGetAccountPerformance,
+			GetDashboardAnalytics:         r.handleGetDashboardAnalytics,
 			ValidateAccount:               r.handleValidateAccount,
 			ReconnectAccount:              r.handleReconnectAccount,
 			DeleteAccount:                 r.handleDeleteAccount,

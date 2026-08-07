@@ -84,10 +84,18 @@ type accountsPerformanceSummaryResponse struct {
 	Trends   []trendPoint                `json:"trends"`
 }
 
+// isAllowedSummaryDay reports whether days is one of the canonical
+// aggregate-summary periods (1, 7, 14, 28, 30, 90). 30 remains a
+// legacy default; the dashboard analytics endpoint uses the
+// {1, 7, 14, 28, 90} subset.
+func isAllowedSummaryDay(days int) bool {
+	return days == 1 || days == 7 || days == 14 || days == 28 || days == 30 || days == 90
+}
+
 // handleGetAccountsPerformanceSummary returns aggregated KPIs and
 // rankings across all connected YouTube channels for the authenticated
-// user. Supports ?days=7|30|90 (default 30). Returns 501 if the metric
-// history store is not wired.
+// user. Supports ?days=1|7|14|28|30|90 (default 30). Returns 501 if
+// the metric history store is not wired.
 func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req *http.Request) {
 	if r.metricHistoryStore == nil {
 		writeError(w, http.StatusNotImplemented, "metric history store not configured")
@@ -102,7 +110,7 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 
 	days := 30
 	if d := req.URL.Query().Get("days"); d != "" {
-		if parsed, err := strconv.Atoi(d); err == nil && (parsed == 7 || parsed == 30 || parsed == 90) {
+		if parsed, err := strconv.Atoi(d); err == nil && isAllowedSummaryDay(parsed) {
 			days = parsed
 		}
 	}
