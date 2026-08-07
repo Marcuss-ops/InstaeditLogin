@@ -20,7 +20,6 @@ const baseNavItems: NavItem[] = [
   { to: "/app/calendar", label: "Calendar", icon: FUNCTIONAL_ICON_CATALOG.product.calendar },
   { to: "/app/groups", label: "Groups", icon: FUNCTIONAL_ICON_CATALOG.product.folder },
   { to: "/app/livestreams", label: "Live streaming", icon: FUNCTIONAL_ICON_CATALOG.product.live, liveCountBadge: true },
-  { to: "/app/covers", label: "Copertine", icon: FUNCTIONAL_ICON_CATALOG.product.image },
   { to: "/app/linking", label: "Linking", icon: FUNCTIONAL_ICON_CATALOG.product.link },
 ];
 

@@ -81,17 +81,6 @@ const LiveStreamNewPage = lazy(() =>
     default: m.LiveStreamNewPage,
   })),
 );
-const CoversPage = lazy(() =>
-  import("./pages/internal/Covers").then((m) => ({
-    default: m.CoversPage,
-  })),
-);
-const CoverEditorPage = lazy(() =>
-  import("./pages/internal/CoverEditor").then((m) => ({
-    default: m.CoverEditorPage,
-  })),
-);
-
 function RouteLoadingFallback() {
   return (
     <div
@@ -275,22 +264,6 @@ function App() {
                 element={
                   <LazyRoute>
                     <CalendarPage />
-                  </LazyRoute>
-                }
-              />
-              <Route
-                path="covers"
-                element={
-                  <LazyRoute>
-                    <CoversPage />
-                  </LazyRoute>
-                }
-              />
-              <Route
-                path="covers/:projectId"
-                element={
-                  <LazyRoute>
-                    <CoverEditorPage />
                   </LazyRoute>
                 }
               />
