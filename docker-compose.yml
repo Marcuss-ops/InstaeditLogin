@@ -290,7 +290,7 @@ volumes:
 # The InstaEdit-side /internal/v1/* endpoints (destinations/validate,
 # deliveries POST + GET) are guarded by the VELOX_API_TOKEN
 # constant-time Bearer check (pkg/api/internal_auth.go). The public
-# Caddyfile (ops/legacy/Caddyfile + ops/local/Caddyfile) explicitly
+# Caddyfiles (ops/vps/Caddyfile + ops/local/Caddyfile) explicitly
 # aborts requests for /internal/* before any reverse-proxy pass.
 #
 # velox-master placeholder — when the Velox image lands in a

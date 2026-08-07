@@ -11,8 +11,9 @@
 **Scope:** Historical Block #2 audit. The current deployment source of truth is
 `docs/DEPLOY.md` + `docs/OPERATIONS.md`, with `vercel.json` for the frontend,
 `ops/vps/Caddyfile` for production VPS routing, and `ops/local/Caddyfile` for
-local development. References to `fly.toml` and `ops/legacy/Caddyfile` below
-are retained only to explain the historical cutover and are not deploy paths.
+local development. References to `fly.toml` and the removed legacy Caddy
+configuration below are retained only to explain the historical cutover and
+are not deploy paths.
 
 ## Executive summary
 
@@ -20,7 +21,7 @@ are retained only to explain the historical cutover and are not deploy paths.
 - **DNS delegation: ✅ documented canonical records in `docs/DEPLOY.md` §1.5.** The frontend records are Vercel-managed and `api.instaedit.org` resolves to the VPS. CAA records restrict issuance to LE; SPF + DKIM + DMARC are documented in the operations runbook.
 - **Apex 301 redirect to canonical**: **✅ fixed in commit `8271639` on `main`.** Previously only declared via the Vercel dashboard (not auditable in git); now declarative in `root vercel.json` `redirects[]`. Also redirects `www.instaedit.org` → `app.instaedit.org` (the `www.` variant was previously undocumented).
 - **Canonical SEO host: ✅ fixed in commit `8271639` on `main`.** `web/index.html` `og:url`, `twitter:url`, JSON-LD `url`, `image`, `author.url` switched from `https://instaedit.org/` (the apex that 301-redirects) to `https://app.instaedit.org/` (the landing surface). `sitemap.xml` was already on this canonical. `<link rel="canonical" href="https://app.instaedit.org/" />` added for browser-level canonicalization.
-- **Legacy VPS Caddy: ✅ moved to `ops/legacy/Caddyfile` (commit `8271639`).** The file describes a `dev.instaedit.org` deployment that pre-dates the current Fly + Vercel architecture. `git mv` preserves history; `docker-compose.yml` inline reference updated to match.
+- **Legacy VPS Caddy: ✅ removed from the supported repository surface.** The historical `dev.instaedit.org` deployment pre-dates the current Vercel + VPS architecture; the supported production source is `ops/vps/Caddyfile`.
 
 ## DNS + hosting topology (post-audit)
 
@@ -29,7 +30,7 @@ are retained only to explain the historical cutover and are not deploy paths.
 | Marketing SPA (apex) | `instaedit.org` | Vercel (A `76.76.21.21`) | Automatic LE (Vercel) | `root vercel.json` `redirects[]` now enforces 301 → `app.instaedit.org` |
 | Marketing SPA (app) | `app.instaedit.org` | Vercel (CNAME `cname.vercel-dns.com.`) | Automatic LE (Vercel) | `root vercel.json` framework/rewrites |
 | API backend | `api.instaedit.org` | VPS (A record) + host-managed Caddy | Automatic LE (Caddy) | `ops/vps/Caddyfile` + `docs/DEPLOY.md` |
-| Legacy VPS (no longer on path) | `dev.instaedit.org` | Caddy + LE (manual, kept in repo as archaeology) | Manual LE | `ops/legacy/Caddyfile` (was `ops/vps/Caddyfile`) |
+| Legacy VPS (removed) | `dev.instaedit.org` | Retired Caddy deployment | N/A | Removed; use `ops/vps/Caddyfile` for the supported VPS edge |
 | Local dev tunnel | `https://:8443` (cloudflared) | mkcert + cloudflared on operator laptop | mkcert (local CA) | `ops/local/Caddyfile` |
 
 OAuth callback URIs (registered in each provider's developer console) all terminate at the VPS API:
@@ -51,10 +52,9 @@ OAuth callback URIs (registered in each provider's developer console) all termin
 - **HSTS not declared** in `vercel.json` `headers[]` — real defect, deferred.
 - Canonical SEO surface (in `web/index.html`): `og:url`, `twitter:url`, JSON-LD fields, `<link rel="canonical">` all reference `https://app.instaedit.org/` (commit `8271639`). ✅
 
-### Retired VPS deployment (`dev.instaedit.org`) — `ops/legacy/Caddyfile`
-- Was mounted under `/srv/instaedit/web/dist` and reverse-proxied `/api/*` + `/instaedit-dev/*` on the host. Not in the production path for months.
-- **Moved to `ops/legacy/Caddyfile`** in commit `8271639` via `git mv` (history preserved). `docker-compose.yml` inline reference at the Velox bridge section now reads `ops/legacy/Caddyfile + ops/local/Caddyfile`.
-- File content unchanged — kept as historical record of the pre-Fly/Vercel shape; do NOT use as a deploy reference.
+### Retired VPS deployment (`dev.instaedit.org`) — removed
+- Was mounted under `/srv/instaedit/web/dist` and reverse-proxied `/api/*` + `/instaedit-dev/*` on the host. It is not part of the supported production path.
+- The obsolete repository Caddyfile has been removed. Do not recreate or deploy that topology; use `ops/vps/Caddyfile` for the supported VPS edge and `ops/local/Caddyfile` for local development.
 
 ### Local dev tunnel (`ops/local/Caddyfile`)
 - Hostname-less `https://:8443` block with mkcert certs from `~/instaedit-certs/localhost.pem`. Behind cloudflared for off-laptop access. ✅
@@ -97,7 +97,7 @@ Both `has`-match on the `host` so they trigger only for the apex + `www.` hostna
 
 ### C. Legacy VPS Caddyfile on production path (REAL defect, **fixed** in `8271639`)
 
-`ops/vps/Caddyfile` describes a `dev.instaedit.org` deployment built around `/srv/instaedit/web/dist` (VPS filesystem path) and a hand-rolled LE renewal. The current production topology is Fly (backend) + Vercel (frontend) — the VPS file is not on the path. File moved to `ops/legacy/Caddyfile` (Git history preserved) + `docker-compose.yml` inline comment updated to match. File body unchanged (kept as historical record).
+The retired `dev.instaedit.org` topology served `/srv/instaedit/web/dist` and used a hand-rolled LE renewal. It is no longer represented by an operational Caddyfile in the repository. The current production topology is VPS backend/state + Vercel frontend, with `ops/vps/Caddyfile` as the supported VPS edge source.
 
 ### D. HSTS / security headers (REAL defect, **deferred**)
 
@@ -136,16 +136,15 @@ Doc itself records that as of 2026-07-14 the live `api.instaedit.org` was respon
 - Hostname-less `https://:8443` with mkcert certs (SAN `localhost`).
 - Hardens `/internal/*` (abort), proxies `/api/*` → `127.0.0.1:8080`, proxies `/instaedit-dev/*` → `127.0.0.1:19000` (local MinIO), and reverse-proxies all other traffic to `127.0.0.1:5173` (Vite dev server).
 
-### `ops/legacy/Caddyfile` (was `ops/vps/Caddyfile`)
+### Removed legacy Caddy configuration
 
-- Single site block `dev.instaedit.org` with `encode gzip`, `handle /internal/* abort`, `/api/*` reverse-proxy to `127.0.0.1:8080`, `/instaedit-dev/*` reverse-proxy to MinIO `:19000`, SPA fallback served from `/srv/instaedit/web/dist`.
-- Body unchanged from when it shipped at `ops/vps/`. Kept as historical record. Do not deploy from this file.
+- The former single-site `dev.instaedit.org` configuration is intentionally absent. Do not use or recreate it; deploy the supported VPS edge only from `ops/vps/Caddyfile`.
 
 ### `docker-compose.yml` + `docker-compose.local.yml`
 
 - Compose-merge caveat documented (overlay redeclares `healthcheck`, `networks`, `internal: true`).
 - Local-only MinIO host binding `127.0.0.1:19000:9000` for VMs where `:9000` is occupied.
-- Single inline reference to `ops/legacy/Caddyfile` + `ops/local/Caddyfile` updated from `ops/vps/Caddyfile + ops/local/Caddyfile` in commit `8271639`.
+- The inline Compose hardening reference points to `ops/vps/Caddyfile` + `ops/local/Caddyfile`; no legacy production Caddyfile is supported.
 
 ## Historical follow-ups (non-operative)
 
