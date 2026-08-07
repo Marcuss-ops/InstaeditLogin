@@ -32,24 +32,26 @@ and worker ordering intact.
 
 ## Current inventory
 
-The current scan found **23 tracked runtime production files above 500 lines**.
+The current scan found **22 tracked runtime production files above 500 lines**.
 No runtime production file is above 800 lines in this snapshot. Test, E2E, and
 CLI files are tracked separately below so their size does not distort runtime
 priorities. Refresh this count before each new slice; it is an inventory, not a
-set of automatically generated tickets. Two previous candidates were split and
-removed from this table since the last snapshot: `internal/config/config.go`
-(672, split in `46b6188`) and `internal/repository/group_repo.go` (625, split
-in `6886c37`); the config split surfaced `internal/config/config_types.go`
-(616), which is monitored below.
+set of automatically generated tickets. Since the last snapshot:
+`internal/config/config.go` (672) split in `46b6188`, `internal/repository/group_repo.go`
+(625) split in `6886c37`, `internal/bootstrap/workers_wiring.go` (630) split in
+`7d03153`, and `pkg/api/auth_handlers.go` (786) + `pkg/api/posts_handlers.go`
+(547) split in `cabcc39`; the auth split surfaced `pkg/api/auth_oauth.go`
+(565), which is monitored below.
 
 ### Runtime production files above 500 lines
 
 | Priority | File | Lines | Current responsibility | Next action |
 |---|---|---:|---|---|
-| P0 | `pkg/api/auth_handlers.go` | 786 | Magic-link, password/admin auth, and related HTTP flows | **Next split:** separate OAuth login, callback, exchange, and `/auth/me` flows by flow; see Slice 4 below. |
+| P0 | `pkg/api/auth_handlers.go` | 786 → 3 | OAuth login/callback/exchange and session bootstrap | ✅ COMPLETED in `cabcc39`: split into `auth_oauth.go` (565), `auth_oauth_state.go` (224), `auth_account_attach.go` (239), `auth_session.go` (92); `auth_handlers.go` left as 3-line pointer. Dead `Router.handleMe` removed in `040fa04`. `auth_oauth.go` remains >500 → monitor below. |
 | P0 | `internal/bootstrap/workers_wiring.go` | 630 | Dependency adapters and all worker specifications | ✅ COMPLETED in `7d03153`: specs → `workers_specs.go` (409), adapters → `workers_adapters.go` (66); `workers_wiring.go` now 121 lines with one ordered registry + `TestWorkerSpecs_PreserveLifecycleContract`. |
-| P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | Separate lifecycle commands from query/list handlers and serialization; preserve idempotency and workspace authorization. |
+| P0 | `pkg/api/posts_handlers.go` | 547 | Post create, read, list, patch, delete, and response mapping | ✅ COMPLETED in `cabcc39`: split into `posts_mutations.go` (107), `posts_read.go` (240), `posts_types.go` (81); `posts_handlers.go` remains the thin router boundary. Idempotency and workspace authorization preserved. |
 | P1 | `internal/config/config_types.go` | 616 | Config struct types split out of `config.go` (`46b6188`) | Monitor; split only if a second domain boundary (worker vs database structs) becomes worth isolating. |
+| P1 | `pkg/api/auth_oauth.go` | 565 | OAuth login, callback, exchange, and account-attach flows (split from `auth_handlers.go` in `cabcc39`) | Monitor; split only if login vs callback families grow further or a stable test seam appears. |
 | P1 | `internal/services/youtube_oauth.go` | 586 | OAuth URL/callback, token exchange, refresh, revoke, and client pool | Isolate token transport from OAuth policy and pool selection; reuse shared HTTP/error helpers. |
 | P1 | `internal/repository/thumbnail_project_repo.go` | 558 | Project CRUD, snapshots, revisions, restore, and CAS status | Extract revision/snapshot persistence behind focused helpers; retain CAS and revision-number transaction guarantees. |
 | P1 | `pkg/api/accounts_read_handlers.go` | 552 | Account listing, account detail, content, and earnings reads | Split read endpoints by query family; keep account ownership loading in one shared helper. |
@@ -136,6 +138,8 @@ number is assigned unless an actual external ticket exists.
 | Retry/sampler primitives | Uniform semi-open duration sampling is shared only where RNG ownership and interval semantics are identical; distinct backoff policies remain separate. | Range/distribution tests, full Go tests, vet, build | `3148d94` |
 | Configuration boundaries (final) | `internal/config/config.go` split into `config_types.go` (structs), `config_load.go` (resolution), `config_validation.go`, `config_database.go`; `Load()` output unchanged. | Config tests, full Go tests, vet, build | `46b6188` |
 | Group repository seams (final) | `internal/repository/group_repo.go` split into `group_repo_helpers.go`, `group_repo_membership.go`, `group_repo_settings.go`, `group_repo_page.go`; ownership and cycle checks preserved. | Repository/API tests, full Go tests, vet, build | `6886c37` |
+| Worker wiring registry (final) | `internal/bootstrap/workers_wiring.go` split into `workers_specs.go` + `workers_adapters.go`; one ordered registry + lifecycle-contract test retained. | Wiring/runtime tests, full Go tests, vet, build | `7d03153` |
+| Auth and post HTTP handlers | `pkg/api/auth_handlers.go` (786) split into `auth_oauth.go` / `auth_oauth_state.go` / `auth_account_attach.go` / `auth_session.go` (dead `Router.handleMe` removed in `040fa04`); `pkg/api/posts_handlers.go` (547) split into `posts_mutations.go` / `posts_read.go` / `posts_types.go`. | API tests, full Go tests (33 pkgs), vet, build, loc-check | `cabcc39` |
 
 ## Remaining execution order
 
@@ -169,37 +173,28 @@ spec per cohesive grouping) + `workers_adapters.go` (66, shared adapters);
 `TestWorkerSpecs_PreserveLifecycleContract` retained. Wiring/runtime tests,
 full Go tests, vet, build green.
 
-### Slice 4 — Auth and post HTTP handlers (P0)
+### Slice 4 — Auth and post HTTP handlers (P0) ✅ COMPLETED
 
-**Targets:** `pkg/api/auth_handlers.go` (786), `pkg/api/posts_handlers.go` (547).
+Split in `cabcc39` + dead-code cleanup in `040fa04`:
 
-**First file to split: `pkg/api/auth_handlers.go`** — the largest remaining
-runtime production file and the next unclaimed P0. Proposed pure file moves in
-the same package (no logic change, no signature change; mounts in
-`routes.go`/`AuthHandlers` resolve to the same method values):
+- `pkg/api/auth_handlers.go` (786) → `auth_oauth.go` (565: login/callback/
+exchange flows) + `auth_oauth_state.go` (224: signed-state and client-cookie
+helpers) + `auth_account_attach.go` (239: account attach/discovery) +
+`auth_session.go` (92: exchange-code + workspace resolution); `auth_handlers.go`
+is now a 3-line pointer.
+- Dead `Router.handleMe` removed in `040fa04` (the live `/api/v1/auth/me` route
+is mounted from `AuthModule.handleMe` in `modules_auth.go`; repo-wide search
+confirmed zero `Router`-method call sites).
+- `pkg/api/posts_handlers.go` (547) → `posts_mutations.go` (107) +
+`posts_read.go` (240) + `posts_types.go` (81); `posts_handlers.go` remains the
+thin registration boundary.
 
-- `auth_login.go` — `YouTubePoolAwareLogin`, `exchangeOAuthCode`, `handleLogin`
-  (~lines 27–252);
-- `auth_callback.go` — `handleCallback`, `resolveCallbackState`,
-  `callbackAttachDiscovered`, `callbackAttachSingle`, `writeCallbackSuccess`,
-  `HandleOAuthCallbackRouteForTest` (~lines 253–669);
-- `auth_exchange.go` — `handleExchangeCode` (~lines 670–714);
-- `auth_me.go` — `handleMe`, `resolveActiveWorkspace` (~lines 715–785).
+Auth/session/cookie/CSRF contracts, YouTube client-pool state semantics, post
+idempotency, and workspace authorization all preserved; `go test ./...` (33
+packages), `go vet`, `go build`, and `loc-check` green.
 
-**Opportunistic cleanup (flagged, do in the same slice):** `Router.handleMe`
-(line 720) is dead code — `/api/v1/auth/me` is mounted from
-`AuthModule.handleMe` (`modules_auth.go`), and no production call site
-references the `Router` variant. Removing it with the move keeps the slice
-behavior-neutral; verify with a repo-wide search before deleting.
-
-Keep auth/session/cookie/CSRF contracts and the YouTube client-pool state
-semantics unchanged; run `go test ./pkg/api/...` targeted auth tests plus the
-full Go suite. Then `pkg/api/posts_handlers.go` follows the same
-lifecycle-vs-query split.
-
-**Done when:** each auth flow has a focused file, the router stays a thin
-registration boundary, and post idempotency/workspace authorization is
-unchanged.
+**Follow-up monitor:** `pkg/api/auth_oauth.go` (565) is now the next candidate
+above the 500-line threshold in the auth family.
 
 ### Slice 5 — YouTube OAuth policy/transport (P1)
 
