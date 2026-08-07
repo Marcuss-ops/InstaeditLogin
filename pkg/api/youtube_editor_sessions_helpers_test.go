@@ -345,6 +345,7 @@ func newPublishRouter(t *testing.T, workspace *models.Workspace, editStore *mock
 		"",
 		nil,
 		append([]RouterOption{
+			WithEditorURL("https://editor.instaedit.test"),
 			WithWorkspaceStore(&mockWorkspaceStore{
 				findByIDFn: func(id int64) (*models.Workspace, error) {
 					if id == workspace.ID {

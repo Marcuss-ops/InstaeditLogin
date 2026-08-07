@@ -80,5 +80,9 @@ func (r *Router) handleGetYouTubeEditorSessionByID(w http.ResponseWriter, req *h
 		return
 	}
 
-	writeJSON(w, http.StatusOK, toYouTubeEditorSessionDetail(edit))
+	detail, ok := r.editorDetailWithURL(w, toYouTubeEditorSessionDetail(edit))
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
 }

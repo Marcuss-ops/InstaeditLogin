@@ -220,6 +220,12 @@ func TestGetYouTubeEditorSessionByProject_200_HappyPath(t *testing.T) {
 	if dto.DesiredPrivacy != "private" {
 		t.Fatalf("expected desired_privacy=private, got %s", dto.DesiredPrivacy)
 	}
+	// The launcher URL must be present and point at the session's own
+	// project handle (the InstaEditor SPA redirect target).
+	wantEditorURL := "https://editor.instaedit.test/editor/vp-1"
+	if dto.EditorURL != wantEditorURL {
+		t.Fatalf("expected editor_url=%s, got %s", wantEditorURL, dto.EditorURL)
+	}
 }
 
 // TestPublishYouTubeEditorSessionByProject_409_Idempotent verifies

@@ -33,6 +33,7 @@ type youTubeEditorSessionDetail struct {
 	ChannelID          string     `json:"channel_id,omitempty"`
 	YouTubeVideoID     string     `json:"youtube_video_id"`
 	VeloxProjectID     string     `json:"velox_project_id"`
+	EditorURL          string     `json:"editor_url"`
 	SourceThumbnailURL string     `json:"source_thumbnail_url,omitempty"`
 	ThumbnailMediaID   *string    `json:"thumbnail_media_id,omitempty"`
 	DesiredPrivacy     string     `json:"desired_privacy"`
@@ -51,6 +52,25 @@ type youTubeEditorSessionDetail struct {
 	DraftDescription *string   `json:"draft_description,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// editorDetailWithURL stamps the launcher URL on the session detail DTO
+// and reports whether the editor is available. It is the shared gate for
+// the by-id and by-project GET handlers so the two endpoints can never
+// drift apart.
+//
+// The 503 branch is intentionally forward-compatible: editorURLForProject
+// currently falls back to the frontend URL (never empty), but once the
+// editorURL fail-fast change lands it returns "" when the editor is not
+// configured and this gate becomes live — "Editor unavailable /
+// misconfigured", never a silent redirect to the main frontend.
+func (r *Router) editorDetailWithURL(w http.ResponseWriter, detail youTubeEditorSessionDetail) (youTubeEditorSessionDetail, bool) {
+	detail.EditorURL = r.editorURLForProject(detail.VeloxProjectID)
+	if detail.EditorURL == "" {
+		writeError(w, http.StatusServiceUnavailable, "Editor unavailable / misconfigured")
+		return detail, false
+	}
+	return detail, true
 }
 
 func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSessionDetail {
@@ -136,7 +156,10 @@ func (r *Router) handleGetYouTubeEditorSessionByProject(w http.ResponseWriter, r
 		return
 	}
 
-	detail := toYouTubeEditorSessionDetail(edit)
+	detail, ok := r.editorDetailWithURL(w, toYouTubeEditorSessionDetail(edit))
+	if !ok {
+		return
+	}
 	if r.userRepo != nil {
 		if account, accountErr := r.userRepo.FindPlatformAccountByID(edit.PlatformAccountID); accountErr == nil && account != nil {
 			if channelID, ok := account.Metadata["channel_id"].(string); ok && channelID != "" {

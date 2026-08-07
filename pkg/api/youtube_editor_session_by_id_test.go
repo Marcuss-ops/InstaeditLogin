@@ -106,6 +106,7 @@ func runGetEditorSessionByID(
 	r := &Router{
 		youtubeVideoEditStore: yteStore,
 		workspaceStore:        ws,
+		editorURL:             "https://editor.instaedit.test",
 	}
 	mux := chi.NewRouter()
 	mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/{id}", http.HandlerFunc(r.handleGetYouTubeEditorSessionByID))
@@ -178,6 +179,12 @@ func TestGetYouTubeEditorSessionByID_HappyPath(t *testing.T) {
 	}
 	if !hasStringPrefix(dto.VeloxProjectID, "ve_") {
 		t.Errorf("VeloxProjectID: want ve_ prefix, got %q", dto.VeloxProjectID)
+	}
+	// The launcher URL must be present and point at the session's own
+	// project handle (the InstaEditor SPA redirect target).
+	wantEditorURL := "https://editor.instaedit.test/editor/" + row.VeloxProjectID
+	if dto.EditorURL != wantEditorURL {
+		t.Errorf("EditorURL: want %q, got %q", wantEditorURL, dto.EditorURL)
 	}
 	if dto.DesiredPrivacy != "public" {
 		t.Errorf("DesiredPrivacy: want public, got %q", dto.DesiredPrivacy)
