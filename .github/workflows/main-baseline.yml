@@ -2,9 +2,16 @@
 #
 # Minimal "every commit on main is healthy" gate for InstaeditLogin.
 #
-# Scope: build + vet + test + gofmt-lint. Runs on every push to main so
-# the HEAD commit carries a required status check that flips green the
-# moment the canonical main passes.
+# Scope: build + vet + test + gofmt-lint + non-blocking LOC report.
+# Runs on every push to main so the HEAD commit carries a required
+# status check that flips green the moment the canonical main passes.
+#
+# LOC reporting: the BLOCKING diff-based size-regression gate (`make
+# loc-check`, threshold 800) deliberately lives in integration-fast.yml
+# (item 12 of its header). This workflow adds its NON-BLOCKING
+# companion: `scripts/loc-report.sh -t 800` prints the current full-tree
+# LOC backlog report on every run and always exits 0, so the refactoring
+# backlog stays tracked automatically without ever reddening the gate.
 #
 # This workflow INTENTIONALLY complements (not replaces) the heavier
 # ones already in .github/workflows/:
@@ -83,6 +90,16 @@ jobs:
         # operator working tree are not present on main so the
         # canonical code path compiles cleanly.
         run: go build ./...
+
+      - name: LOC backlog report (non-blocking, threshold 800)
+        # Informational only: prints the current source-file length
+        # report (top-N largest + every tracked go/ts/tsx file above
+        # 800 lines) so the refactoring backlog stays visible on every
+        # main run. loc-report.sh ALWAYS exits 0 — this step can never
+        # block the gate. The BLOCKING diff-based regression gate
+        # (`make loc-check`) remains in integration-fast.yml; this is
+        # its non-blocking companion that keeps the report tracked.
+        run: scripts/loc-report.sh -t 800
 
       - name: go test ./...
         # Full ./... test target — NO package filter. The historical
