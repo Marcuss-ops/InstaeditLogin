@@ -58,6 +58,9 @@ func TestVeloxProjectBridge_EndToEndSourceOfTruthAuthorizationIdempotencyAndRedi
 	if created.Bridge.ProjectID != "thumbproj_contract" || created.Bridge.WorkspaceID != 7 || created.Bridge.VeloxProjectID != "vx_contract_1" {
 		t.Fatalf("bridge is not InstaEdit-scoped: %+v", created.Bridge)
 	}
+	if created.Bridge.EditorProvider != "velox" {
+		t.Fatalf("bridge editor_provider must default to the current editor backend: %q", created.Bridge.EditorProvider)
+	}
 	parsedURL, err := url.Parse(created.EditorURL)
 	if err != nil {
 		t.Fatalf("parse editor_url: %v", err)
@@ -134,10 +137,11 @@ func TestVeloxProjectBridge_ContractHasOnlyMinimalContextAndSeparateSPA(t *testi
 
 	root := projectRoot(t)
 	migration := readContractFile(t, root, "internal", "database", "migrations", "112_velox_project_bridges.sql")
+	metadataMigration := readContractFile(t, root, "internal", "database", "migrations", "115_velox_project_bridge_editor_metadata.sql")
 	handler := readContractFile(t, root, "pkg", "api", "velox_project_bridge_handlers.go")
 	module := readContractFile(t, root, "pkg", "api", "modules_thumbnail_projects.go")
-	for name, content := range map[string]string{"bridge migration": migration, "bridge handler": handler, "thumbnail module": module} {
-		lower := strings.ToLower(content)
+	for name, content := range map[string]string{"bridge migration": migration, "bridge metadata migration": metadataMigration, "bridge handler": handler, "thumbnail module": module} {
+		lower := strings.ToLower(stripSQLComments(content))
 		for _, forbidden := range []string{
 			"group_id", "channel_ids", "member_ids", "velox_workspace",
 			"dblink", "postgres_fdw", "attach database", "create database",
@@ -146,6 +150,23 @@ func TestVeloxProjectBridge_ContractHasOnlyMinimalContextAndSeparateSPA(t *testi
 			if strings.Contains(lower, forbidden) {
 				t.Fatalf("%s violates bridge boundary with %q", name, forbidden)
 			}
+		}
+	}
+	// The bridge must never become a replica of the editor. Editor-internal
+	// representations (timeline, layers, scenes, assets, revisions, render
+	// state) are forbidden in the bridge schema.
+	for _, replicaColumn := range []string{
+		"timeline", "layers", "scenes", "render_state", "revisions",
+		"keyframes", "canvas", "editor_snapshot",
+	} {
+		if strings.Contains(strings.ToLower(migration), replicaColumn) || strings.Contains(strings.ToLower(metadataMigration), replicaColumn) {
+			t.Fatalf("bridge migration replicates editor-internal column %q", replicaColumn)
+		}
+	}
+	// The bridge records its editor backend explicitly.
+	for _, required := range []string{"editor_provider", "editor_status", "last_editor_sync_at"} {
+		if !strings.Contains(strings.ToLower(metadataMigration), required) {
+			t.Fatalf("bridge metadata migration lost required column %q", required)
 		}
 	}
 	assertBoundaryGoFile(t, filepath.Join(root, "pkg", "api", "velox_project_bridge_handlers.go"), map[string]bool{
@@ -168,6 +189,16 @@ func TestVeloxProjectBridge_ContractHasOnlyMinimalContextAndSeparateSPA(t *testi
 			t.Fatalf("bridge migration no longer declares expected InstaEdit-local relation %q", localTable)
 		}
 	}
+}
+
+func stripSQLComments(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if idx := strings.Index(line, "--"); idx >= 0 {
+			lines[i] = line[:idx]
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func assertBoundaryGoFile(t *testing.T, path string, allowedImports map[string]bool, requiredFunctions []string) {

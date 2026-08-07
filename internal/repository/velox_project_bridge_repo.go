@@ -13,14 +13,17 @@ import (
 )
 
 const veloxProjectBridgeColumns = `project_id, workspace_id, velox_project_id,
-	platform, platform_account_id, channel_id, video_id, language, created_at, updated_at`
+	platform, platform_account_id, channel_id, video_id, language,
+	editor_provider, editor_status, last_editor_sync_at, created_at, updated_at`
 
 func scanVeloxProjectBridge(row interface{ Scan(...any) error }) (*models.VeloxProjectBridge, error) {
 	bridge := &models.VeloxProjectBridge{}
 	if err := row.Scan(
 		&bridge.ProjectID, &bridge.WorkspaceID, &bridge.VeloxProjectID,
 		&bridge.Platform, &bridge.PlatformAccountID, &bridge.ChannelID,
-		&bridge.VideoID, &bridge.Language, &bridge.CreatedAt, &bridge.UpdatedAt,
+		&bridge.VideoID, &bridge.Language, &bridge.EditorProvider,
+		&bridge.EditorStatus, &bridge.LastEditorSyncAt,
+		&bridge.CreatedAt, &bridge.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -56,13 +59,15 @@ func (r *ThumbnailProjectRepository) CreateVeloxProjectBridge(ctx context.Contex
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO velox_project_bridges
 			(project_id, workspace_id, velox_project_id, platform,
-			 platform_account_id, channel_id, video_id, language)
-		SELECT p.id, p.workspace_id, $3, $4, $5, $6, $7, $8
+			 platform_account_id, channel_id, video_id, language,
+			 editor_provider, editor_status, last_editor_sync_at)
+		SELECT p.id, p.workspace_id, $3, $4, $5, $6, $7, $8, $9, $10, $11
 		  FROM thumbnail_projects p
 		 WHERE p.workspace_id = $1 AND p.id = $2
-		   AND p.status <> $9`,
+		   AND p.status <> $12`,
 		bridge.WorkspaceID, bridge.ProjectID, bridge.VeloxProjectID, nullableBridgeString(bridge.Platform),
 		bridge.PlatformAccountID, bridge.ChannelID, bridge.VideoID, bridge.Language,
+		bridge.EditorProvider, nullableBridgeString(bridge.EditorStatus), bridge.LastEditorSyncAt,
 		models.ThumbnailProjectStatusDeleted)
 	if err != nil {
 		return fmt.Errorf("create velox project bridge: %w", mapVeloxProjectBridgeConstraint(err))

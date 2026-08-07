@@ -64,6 +64,11 @@ VeloxFrontend   → editor UI and editor-native project state
 VeloxEditiingg  → headless render/job execution
 ```
 
+The bridge record is deliberately narrow. `editor_provider` declares the
+editor backend, `editor_status` is an optional coarse application-level
+state, and `last_editor_sync_at` records when InstaEdit last synchronized
+operational metadata. None of these make the bridge a Velox replica.
+
 The trusted editor application that creates or resolves `velox_project_id`
 MUST be the editor-project owner. The InstaEdit bridge route only persists or
 resolves that opaque reference. VeloxEditiingg MUST NOT invent a second
@@ -103,6 +108,13 @@ project identifier MUST NOT be attached to another InstaEdit project.
 ```
 
 ### 2.1 Field rules
+
+The bridge carries only the mapping plus the three allowed operational
+metadata fields: `editor_provider` (which editor backend owns
+`velox_project_id`; `"velox"` today), `editor_status` and
+`last_editor_sync_at`. These are operational metadata, not a competing
+project lifecycle: editor-internal timeline, layers, scenes, assets,
+revisions and render state remain editor-owned and MUST NOT be stored here.
 
 | Field | Required | Owner | Contract rule |
 |---|---:|---|---|
@@ -464,7 +476,18 @@ velox_workspace_copy
 velox_user_groups_cache
 velox_channel_catalog
 velox OAuth tokens
+timeline
+layers
+scenes
+render_state
+revisions
+keyframes
+editor_snapshot
 ```
+
+The bridge stores the mapping (`project_id ↔ velox_project_id`) and at most
+`editor_provider`, `editor_status` and `last_editor_sync_at`. Editor-internal
+representations are never persisted in InstaEdit.
 
 Specifically:
 
