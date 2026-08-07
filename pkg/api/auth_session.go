@@ -1,6 +1,6 @@
 package api
 
-// Session bootstrap and authenticated identity handlers.
+// Session bootstrap and exchange-code handlers.
 
 import (
 	"context"
@@ -10,8 +10,6 @@ import (
 	"fmt"
 
 	"net/http"
-
-	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 
@@ -65,31 +63,6 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 	metrics.IncJWTIssued()
 	r.setSessionCookie(w, result)
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
-	id := auth.IdentityFromContext(req.Context())
-	if id == nil {
-		writeError(w, http.StatusUnauthorized, "missing identity")
-		return
-	}
-	// Existing sessions created before the CSRF cookie was introduced (or
-	// after a browser cleared only that cookie) must be repaired on the next
-	// authenticated bootstrap request. Do not rotate an existing value: the
-	// SPA may issue several requests concurrently after /auth/me.
-	if _, err := req.Cookie(auth.CSRFTokenCookieName); err != nil {
-		_, _ = auth.SetCSRFToken(w, auth.CSRFConfig{
-			Secure:       r.cookieSecure,
-			Path:         "/",
-			CookieDomain: r.cookieDomain,
-			SameSite:     http.SameSiteNoneMode,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"user_id":      id.UserID(),
-		"workspace_id": id.WorkspaceID(),
-		"is_admin":     id.IsAdmin(),
-	})
 }
 
 func (r *Router) resolveActiveWorkspace(ctx context.Context, userID int64) (int64, error) {
