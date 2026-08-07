@@ -21,7 +21,7 @@ type ConnectionStateStore interface {
 }
 
 // SessionsStore is the contract between the HTTP layer and the SPRINT 2.1
-// session lifecycle. Production wiring in cmd/server/main.go injects the
+// session lifecycle. Production wiring in internal/bootstrap/app.go injects the
 // concrete *services.SessionsService (which satisfies the interface).
 // Tests inject an in-memory fake (see fakeSessionsService in
 // pkg/api/auth_email_test.go and pkg/api/sessions_test.go) so handler

@@ -317,7 +317,7 @@ Covered by `internal/worker/publish_worker_ratelimit_test.go` (Retry-After honou
 
 ### Worker shutdown
 
-`internal/bootstrap/workers_wiring.go::RunWorkers` starts the registered workers in parallel through the shared `worker.Registry`. Cancellation is broadcast once and `Registry.StopAll` waits on one shared 15-second deadline; critical worker failures propagate to the owning process, while the HTTP server drains independently in the API and legacy wrapper entrypoints:
+`internal/bootstrap/workers_wiring.go::RunWorkers` starts the registered workers in parallel through the shared `worker.Registry`. Cancellation is broadcast once and `Registry.StopAll` waits on one shared 15-second deadline; critical worker failures propagate to the owning process, while the HTTP server drains independently in the API entrypoint:
 
 ```
 worker.Registry.StartAll(ctx)

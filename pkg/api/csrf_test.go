@@ -308,7 +308,7 @@ func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
 		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
 	}
 	// secure=true mirrors the production cookieSecure toggle in
-	// cmd/server/main.go: the CSRF cookie must be Secure in
+	// cmd/api/main.go: the CSRF cookie must be Secure in
 	// production so SameSite=None is honoured by browsers.
 	h.Router.cookieSecure = true
 	h.Router.setSessionCookie(w, result)
