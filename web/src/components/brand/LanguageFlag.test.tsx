@@ -5,8 +5,10 @@ import { LanguageFlag, languageLabel } from "./LanguageFlag";
 describe("LanguageFlag", () => {
   it("renders an SVG flag for known codes", () => {
     const { container } = render(<LanguageFlag code="it" />);
-    expect(container.querySelector("svg")).not.toBeNull();
-    expect(container.querySelector("svg")?.getAttribute("viewBox")).toBe("0 0 24 16");
+    const svg = container.querySelector("svg");
+    expect(svg).not.toBeNull();
+    // Official country-flag-icons artwork carries its own 3:2 viewBox.
+    expect(svg?.getAttribute("viewBox")).not.toBeNull();
   });
 
   it("renders a globe for empty or unknown codes instead of a flag", () => {
