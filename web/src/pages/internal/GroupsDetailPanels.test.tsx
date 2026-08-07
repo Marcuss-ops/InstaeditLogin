@@ -243,6 +243,42 @@ describe("GroupDetailPanel", () => {
     expect(within(dialog).queryByText("channel-one")).not.toBeInTheDocument();
   });
 
+  it("shows which other groups an offered channel already belongs to in the add dialog", () => {
+    const available = [{
+      id: 201,
+      platform: "youtube",
+      username: "channel-new",
+      platform_user_id: "UC-new",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+    }];
+    const groupNamesByAccountId = new Map([[201, ["Editorial", "Rap"]]]);
+    renderPanel({ availableAccounts: available, groupNamesByAccountId });
+
+    fireEvent.click(screen.getByTestId("group-add-channels"));
+
+    const dialog = screen.getByTestId("group-add-channels-dialog");
+    // The channel is already in "Rap" (a different folder): the badge shows
+    // it, while the current group "Editorial" is deliberately not repeated.
+    expect(within(dialog).getByTitle("Rap")).toBeInTheDocument();
+    expect(within(dialog).queryByTitle("Editorial")).not.toBeInTheDocument();
+  });
+
+  it("shows which other groups a member channel already belongs to in the group list", () => {
+    const groupNamesByAccountId = new Map([[101, ["Editorial", "HipHop", "Rap", "Boxe"]]]);
+    renderPanel({ groupNamesByAccountId });
+
+    // channel-one is already in HipHop, Rap and Boxe (all different from the
+    // current "Editorial" folder): the first two render as badges with the
+    // overflow marker for the third.
+    expect(screen.getByTitle("HipHop")).toBeInTheDocument();
+    expect(screen.getByTitle("Rap")).toBeInTheDocument();
+    expect(screen.getByText("+1")).toBeInTheDocument();
+    // The current group is not shown as a badge on its own members.
+    expect(screen.queryByTitle("Editorial")).not.toBeInTheDocument();
+    expect(screen.getByText("già in")).toBeInTheDocument();
+  });
+
   it("adds the selected channels when confirming the dialog", () => {
     const onAddAccounts = vi.fn();
     const available = [{

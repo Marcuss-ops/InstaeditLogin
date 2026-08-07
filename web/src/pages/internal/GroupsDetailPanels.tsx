@@ -20,6 +20,7 @@ import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
 import { type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
+import { GroupBadges } from "./GroupBadges";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
 import { LanguagePicker } from "../../components/brand/LanguagePicker";
 
@@ -98,6 +99,7 @@ export function GroupDetailPanel({
   onRename,
   availableAccounts,
   onAddAccounts,
+  groupNamesByAccountId,
 }: {
   group: TreeNode;
   onPickAccount: (id: number) => void;
@@ -108,6 +110,9 @@ export function GroupDetailPanel({
   availableAccounts: PlatformAccount[];
   /** Add channels to this group directly (no drag & drop needed). */
   onAddAccounts: (accountIds: number[]) => void;
+  /** accountId → group names the channel belongs to (from the tray map), so
+   *  each channel row can show which OTHER folders it already lives in. */
+  groupNamesByAccountId?: Map<number, string[]>;
 }) {
   const [editingName, setEditingName] = useState(false);
   const [groupName, setGroupName] = useState(group.name);
@@ -310,6 +315,11 @@ export function GroupDetailPanel({
                 </div>
                 <div className="min-w-0 flex-1">
                   <button type="button" onClick={() => onPickAccount(a.id)} className="block w-full truncate text-left text-[14px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username || a.platform_user_id}`}>{a.username || a.platform_user_id}</button>
+                  <GroupBadges
+                    names={(groupNamesByAccountId?.get(a.id) ?? []).filter((name) => name !== group.name)}
+                    label="già in"
+                    className="mt-1"
+                  />
                   <div className="mt-1.5 flex items-center gap-1.5">
                     <LanguagePicker
                       value={languages[a.id]}
@@ -334,6 +344,7 @@ export function GroupDetailPanel({
         <AddChannelsDialog
           groupName={group.name}
           available={availableAccounts}
+          groupNamesByAccountId={groupNamesByAccountId}
           onAdd={(accountIds) => {
             setAddChannelsOpen(false);
             onAddAccounts(accountIds);
@@ -348,11 +359,15 @@ export function GroupDetailPanel({
 function AddChannelsDialog({
   groupName,
   available,
+  groupNamesByAccountId,
   onAdd,
   onClose,
 }: {
   groupName: string;
   available: PlatformAccount[];
+  /** accountId → group names, so each row shows which OTHER folders the
+   *  channel already lives in before the operator adds it here. */
+  groupNamesByAccountId?: Map<number, string[]>;
   onAdd: (accountIds: number[]) => void;
   onClose: () => void;
 }) {
@@ -472,6 +487,11 @@ function AddChannelsDialog({
                     )}
                   </div>
                   <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white">{label}</span>
+                  <GroupBadges
+                    names={(groupNamesByAccountId?.get(account.id) ?? []).filter((name) => name !== groupName)}
+                    max={1}
+                    className="shrink-0"
+                  />
                   <span className="shrink-0 text-[10px] uppercase tracking-wider text-[#9aa0aa]">{account.platform === "youtube" ? "YouTube" : account.platform}</span>
                 </button>
               );

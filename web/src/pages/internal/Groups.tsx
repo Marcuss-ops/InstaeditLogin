@@ -15,9 +15,8 @@ import { authedFetch } from "../../lib/auth";
 import { API_BASE_URL } from "../../lib/api";
 import { useGroupsData } from "./useGroupsData";
 import { AccountDetailPanel, GroupDetailPanel } from "./GroupsDetailPanels";
-import {
-  type PlatformAccount,
-} from "./groupsTypes";
+import { GroupBadges } from "./GroupBadges";
+import { type PlatformAccount } from "./groupsTypes";
 import { cn } from "../../lib/utils";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
 
@@ -253,6 +252,7 @@ export function GroupsPage() {
             ) : selectedGroup ? (
               <GroupDetailPanel
                 group={selectedGroup}
+                groupNamesByAccountId={groupNamesByAccountId}
                 onPickAccount={(id) => {
                   setSelectedAccountId(id);
                   navigate(`/app/dashboard-channels/${id}`);
@@ -562,21 +562,7 @@ function YouTubeChannelCard({
       <div className="min-w-0 flex-1">
         <p className="truncate text-[14px] font-semibold text-white">{label}</p>
         <p className="truncate text-[10px] uppercase tracking-wider text-[#9aa0aa]">{account.platform === "youtube" ? "YouTube" : account.platform}</p>
-        {groupNames.length > 0 ? (
-          <div className="mt-1 flex flex-wrap items-center gap-1">
-            {groupNames.slice(0, 2).map((name) => (
-              <span
-                key={name}
-                title={name}
-                className="inline-flex max-w-[96px] items-center gap-1 rounded-[5px] bg-amber-300/[0.12] px-1.5 py-[1px] text-[10px] font-semibold text-amber-200/90"
-              >
-                <Folder size={9} className="shrink-0" />
-                <span className="truncate">{name}</span>
-              </span>
-            ))}
-            {groupNames.length > 2 ? <span className="text-[10px] font-semibold text-[#9aa0aa]">+{groupNames.length - 2}</span> : null}
-          </div>
-        ) : null}
+        <GroupBadges names={groupNames} className="mt-1" />
       </div>
       {busy ? (
         <RefreshCw size={13} className="animate-spin text-amber-300" aria-label="Assegnazione in corso" />
