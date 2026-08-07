@@ -95,7 +95,7 @@ protected-resource call where this audit env has no real OAuth.
 
 ### 3.3 Shared editor session client
 
-* `web/src/features/youtube/api/editorSessionsApi.ts` + test — single typed `createYouTubeEditorSession({workspace_id, platform_account_id, youtube_video_id, source_thumbnail_url?})`, `createEditorSessionAndOpen`, `openDarkEditor` helper. 4 call sites: `DashboardChannels.tsx`, `AccountDetails.tsx`, `Calendar.tsx`, `YouTubeStudio.tsx`. **Zero duplication.**
+* `web/src/features/youtube/api/editorSessionsApi.ts` + test — single typed `createYouTubeEditorSession({workspace_id, platform_account_id, youtube_video_id, source_thumbnail_url?})`, `createEditorSessionAndOpen`, `openInstaEditorInNewTab` helper. 4 call sites: `DashboardChannels.tsx`, `AccountDetails.tsx`, `Calendar.tsx`, `YouTubeStudio.tsx`. **Zero duplication.**
 
 ### 3.4 Routing change
 

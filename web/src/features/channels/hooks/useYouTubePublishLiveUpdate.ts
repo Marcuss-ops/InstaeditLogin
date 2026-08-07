@@ -42,7 +42,7 @@
  *     optional privacy-filter bookkeeping.
  *
  *   - We key by accountId ONLY (not by accountId+privacyFilter).
- *     Reasoning: a single Dark Editor publish can flip
+ *     Reasoning: a single InstaEditor publish can flip
  *     `private → public`. Three cache entries exist per account
  *     (`['channel-content', accountId, 'all']`,
  *     `['channel-content', accountId, 'private']`,
@@ -311,7 +311,7 @@ export function useGroupVideosLiveUpdate(
  *
  * Called from the publish-status page (ContentPublish.tsx) when a
  * target reaches `published`, AND can be triggered from any future
- * caller (the Dark Editor publish endpoint, a manual re-sync, etc.).
+ * caller (the InstaEditor publish endpoint, a manual re-sync, etc.).
  * The dispatcher is idempotent at the receiver level — receiving
  * multiple identical events just calls `refetch` multiple times,
  * which is harmless because `refetch` already aborts a stale fetch.

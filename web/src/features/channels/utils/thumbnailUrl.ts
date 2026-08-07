@@ -2,7 +2,7 @@
  * Thumbnail cache-buster for the channel feature and shared video grids.
  *
  * Why this exists: The browser caches <img> URLs by their src string.
- * After the Dark Editor flips a thumbnail, the server MAY return the
+ * After InstaEditor flips a thumbnail, the server MAY return the
  * same `thumbnail_url` for the same `external_id` (YouTube CDN paths
  * are stable per-video). Without a cache-buster, the browser keeps
  * rendering the OLD thumbnail from its disk cache even after the API

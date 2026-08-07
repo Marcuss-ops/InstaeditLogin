@@ -47,7 +47,7 @@
  *
  * `refetchOnWindowFocus` — fires the same refetch code path that
  * `refetch` exposes whenever the browser tab regains focus. Useful
- * after the user closes the Velox Dark Editor popup and refocuses
+ * after the user closes the Velox InstaEditor popup and refocuses
  * the channel tab — the live-update hook (useYouTubePublishLiveUpdate)
  * may not have fired (BC has no echo on the same sender tab), but
  * the focus event definitely has. Cleanup removes the listener on

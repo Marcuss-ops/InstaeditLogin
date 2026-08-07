@@ -2,7 +2,7 @@
  * Canonical browser-storage keys owned by the InstaEditor SPA.
  *
  * These values are intentionally stable: changing a key is a data migration,
- * not a cosmetic rename. No legacy Dark Editor storage keys have been found in
+ * not a cosmetic rename. No legacy editor-branded storage keys have been found in
  * the current or historical editor surfaces, so this module does not invent a
  * compatibility alias or copy unknown data.
  */

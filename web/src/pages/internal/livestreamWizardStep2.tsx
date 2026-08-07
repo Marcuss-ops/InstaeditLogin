@@ -34,12 +34,12 @@ const IMAGE_TYPES: MediaAssetContentType[] = ["image/png", "image/jpeg", "image/
  * form:
  *   titolo / descrizione, privacy (privata / non in elenco / pubblica),
  *   categoria, destinato ai bambini, lingua, copertina (upload / Media
- *   Library / Dark Editor), attiva DVR, auto-start, auto-stop e
+ *   Library / InstaEditor), attiva DVR, auto-start, auto-stop e
  *   latenza.
  *
  * The cover's "Carica immagine" source is fully wired to the existing
  * presign → S3 → /complete pipeline (client-computed SHA-256). The
- * Media Library picker and the Dark Editor source land with later
+ * Media Library picker and the InstaEditor source land with later
  * releases and are shown as disabled tabs with an honest explanation.
  *
  * All state is lifted to the page; this component only reports back
