@@ -32,6 +32,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // CreateEditorSession is the central helper for the per-target YouTube
@@ -162,6 +163,18 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	if err != nil {
 		return nil, fmt.Errorf("find or create editor session: %w", err)
 	}
+	// Action 6 "Modifica" flow: the session row carries the opaque
+	// velox_project_id (created or reused by FindOrCreateEditableSession
+	// above), but the provider project itself must exist and be mapped
+	// through the EditorService boundary. ensureEditorProjectBridge is
+	// create-or-reuse: it either finds the durable bridge for
+	// (workspace, session) or asks the provider adapter to create the
+	// project and persists the mapping. Background callers (no
+	// authenticated user) skip it; the bridge is minted lazily on the
+	// first operator open.
+	if err := r.ensureEditorProjectBridge(ctx, in, account.PlatformUserID, persisted); err != nil {
+		return nil, err
+	}
 	// YouTube's videos.list response is authoritative for the source
 	// thumbnail. This matters for an existing session: older rows can
 	// contain a stale/broken URL, and the Dark Editor will otherwise
@@ -191,6 +204,52 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 		}
 	}
 	return persisted, nil
+}
+
+// ensureEditorProjectBridge resolves the provider project mapping for a
+// persisted editor session (Action 6 "Modifica" flow). It is strictly
+// create-or-reuse through the EditorService boundary:
+//
+//   - a bridge already exists for (workspace, session) → the service
+//     returns it unchanged (idempotent REUSE, same velox_project_id);
+//   - no bridge yet → the service asks the provider adapter to create
+//     the project (validating the session's opaque handle) and persists
+//     the mapping (CREATE).
+//
+// The adapter performs no remote call when the external project id is
+// already a valid opaque handle: the Velox control plane lazily
+// materializes the project on its first document write. The bridge row
+// therefore records the mapping before the launcher is returned.
+//
+// Background callers (processing reconciler, thumbnail batches, the
+// Velox service-to-service handoff) pass UserID=0 and are skipped here:
+// the mapping is minted lazily on the first operator open, which runs
+// the same idempotent path.
+func (r *Router) ensureEditorProjectBridge(ctx context.Context, in CreateEditorSessionInput, channelID string, edit *models.YouTubeVideoEdit) error {
+	if edit == nil || r.editorService == nil || in.UserID <= 0 {
+		return nil
+	}
+	accountID := in.PlatformAccountID
+	created, err := r.editorService.CreateProject(ctx, services.CreateEditorProjectRequest{
+		UserID:               in.UserID,
+		WorkspaceID:          in.WorkspaceID,
+		ApplicationProjectID: edit.ID,
+		ExternalProjectID:    edit.VeloxProjectID,
+		Platform:             models.PlatformYouTube,
+		PlatformAccountID:    &accountID,
+		ChannelID:            &channelID,
+		VideoID:              &edit.YouTubeVideoID,
+	})
+	if err != nil {
+		return fmt.Errorf("ensure editor project bridge: %w", err)
+	}
+	// Defence-in-depth: the service may only hand back the very external
+	// project the session already owns. A different handle would mean a
+	// foreign bridge was adopted — never redirect the operator there.
+	if created == nil || created.ExternalProjectID != edit.VeloxProjectID {
+		return fmt.Errorf("%w: resolved project does not match the session handle", services.ErrEditorProjectInvalid)
+	}
+	return nil
 }
 
 // handleCreateYouTubeEditorSession is the HTTP entry point of POST
@@ -243,6 +302,7 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		PlatformAccountID:  payload.PlatformAccountID,
 		YouTubeVideoID:     payload.YouTubeVideoID,
 		SourceThumbnailURL: payload.SourceThumbnailURL,
+		UserID:             identity.UserID(),
 	})
 	if err != nil {
 		r.writeEditorSessionError(w, err)

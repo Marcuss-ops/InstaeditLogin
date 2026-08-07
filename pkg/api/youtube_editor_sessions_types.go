@@ -26,11 +26,20 @@ var (
 // Blocco #4 P0: the struct is EXPORTED so the worker in
 // internal/worker can import it without breaking pkg/api's unexported-
 // type boundary.
+//
+// UserID attributes the provider project mapping (the editor project
+// bridge, Action 6 "Modifica" flow) to the authenticated operator that
+// initiated the request. The user-facing handler sets it from the JWT;
+// background callers (processing reconciler, thumbnail batches, the
+// Velox service-to-service handoff) leave it 0 and the helper skips
+// bridge creation — the bridge is then minted lazily on the first
+// operator open of that session (the REUSE path is idempotent).
 type CreateEditorSessionInput struct {
 	WorkspaceID        int64
 	PlatformAccountID  int64
 	YouTubeVideoID     string
 	SourceThumbnailURL string
+	UserID             int64
 }
 
 // createYouTubeEditorSessionRequest is the body accepted by

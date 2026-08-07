@@ -33,6 +33,7 @@ func buildFindOrCreateRouter(
 	accountID int64,
 	channelID string,
 	findOrCreate func(ctx context.Context, wsID, aID int64, videoID, sessHint, projHint string) (*models.YouTubeVideoEdit, error),
+	opts ...RouterOption,
 ) *Router {
 	t.Helper()
 	channelOut := &models.WorkspaceChannel{WorkspaceID: workspace.ID, PlatformAccountID: accountID}
@@ -68,7 +69,7 @@ func buildFindOrCreateRouter(
 		},
 	}
 
-	return newPublishRouter(t, workspace, editStore,
+	return newPublishRouter(t, workspace, editStore, append([]RouterOption{
 		WithWorkspaceStore(&mockWorkspaceStore{
 			findByIDFn: func(id int64) (*models.Workspace, error) {
 				if id == workspace.ID {
@@ -90,7 +91,7 @@ func buildFindOrCreateRouter(
 			},
 		}),
 		WithYouTubeService(youTubeSvc),
-	)
+	}, opts...)...)
 }
 
 // TestCreateEditorSession_FindOrCreate_Idempotent verifies the helper

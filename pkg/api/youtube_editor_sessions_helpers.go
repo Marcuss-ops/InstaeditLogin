@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // writeEditorSessionError maps the helper's typed sentinel errors to
@@ -33,6 +34,12 @@ func (r *Router) writeEditorSessionError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrEditorSessionVideoNotReady),
 		errors.Is(err, ErrEditorSessionVideoAlreadyPub):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrEditorProjectInvalid):
+		// The session row was persisted but the editor project mapping
+		// could not be created from the session's opaque handle. The
+		// operator can re-trigger the click: the REUSE path re-runs the
+		// same idempotent resolution.
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}
