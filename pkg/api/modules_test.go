@@ -347,3 +347,61 @@ func TestVeloxBFFModule_UsesInjectedJobRegistry(t *testing.T) {
 		t.Fatalf("injected empty registry must reject the known default type, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// LivestreamModule tests
+// ---------------------------------------------------------------------------
+
+func TestLivestreamModule_MountsRoutes(t *testing.T) {
+	mux := chi.NewRouter()
+	mod := NewLivestreamModule(LivestreamModuleDeps{
+		Protected:      func(h http.HandlerFunc) http.HandlerFunc { return h },
+		CSRFMiddleware: func(next http.Handler) http.Handler { return next },
+		Handlers: LivestreamHandlers{
+			ListLivestreamChannels: func(http.ResponseWriter, *http.Request) {},
+			ListLivestreams:        func(http.ResponseWriter, *http.Request) {},
+			CreateLivestream:       func(http.ResponseWriter, *http.Request) {},
+			GetLivestream:          func(http.ResponseWriter, *http.Request) {},
+			PatchLivestream:        func(http.ResponseWriter, *http.Request) {},
+			DeleteLivestream:       func(http.ResponseWriter, *http.Request) {},
+		},
+	})
+	mod.Register(mux)
+
+	routes := mux.Routes()
+	if len(routes) == 0 {
+		t.Fatal("expected livestream routes to be mounted")
+	}
+}
+
+func TestLivestreamModule_StaticChannelsSegmentWins(t *testing.T) {
+	mux := chi.NewRouter()
+	mod := NewLivestreamModule(LivestreamModuleDeps{
+		Protected: func(h http.HandlerFunc) http.HandlerFunc { return h },
+		Handlers: LivestreamHandlers{
+			// Distinct headers distinguish which handler matched so the
+			// test genuinely proves static-segment precedence.
+			ListLivestreamChannels: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("X-Livestream-Handler", "channels")
+			},
+			ListLivestreams:  func(http.ResponseWriter, *http.Request) {},
+			CreateLivestream: func(http.ResponseWriter, *http.Request) {},
+			GetLivestream: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("X-Livestream-Handler", "id")
+			},
+			PatchLivestream:  func(http.ResponseWriter, *http.Request) {},
+			DeleteLivestream: func(http.ResponseWriter, *http.Request) {},
+		},
+	})
+	mod.Register(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/livestreams/channels", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	// The static /channels segment must be matched by the channels
+	// handler (a distinct header proves it did not fall through to
+	// /{id}).
+	if got := w.Header().Get("X-Livestream-Handler"); got != "channels" {
+		t.Fatalf("static /channels segment not matched: got handler %q, want %q", got, "channels")
+	}
+}

@@ -49,6 +49,11 @@ func (r *Router) Setup() http.Handler {
 		AuthMiddleware: r.veloxBFFAuthMiddleware,
 		CSRFMiddleware: r.veloxBFFCSRFMiddleware,
 	}))
+	reg.Register(NewEditorBFFModule(EditorBFFModuleDeps{
+		Client:         r.editorBFFClient,
+		AuthMiddleware: r.editorBFFAuthMiddleware,
+		CSRFMiddleware: r.editorBFFCSRFMiddleware,
+	}))
 	reg.Register(NewIntegrationsModule(IntegrationsModuleDeps{
 		ExternalDestinationStore: r.externalDestinations,
 		WorkspaceStore:           r.workspaceStore,
@@ -200,6 +205,25 @@ func (r *Router) Setup() http.Handler {
 		ListMedia:          r.handleListMediaAssets,
 		GetMedia:           r.handleGetMediaAsset,
 	}))
+	// Livestream configuration CRUD base. The state machine
+	// (desired_state/actual_state) is worker-owned; the control
+	// endpoints (prepare/start/stop/restart) land with the encoder
+	// worker. GET /api/v1/livestreams returns the workspace's rows as
+	// {items: [...]} — the sidebar badge counts actual_state == "live".
+	// Extracted from Setup's inline block so the bounded context owns
+	// its route table + CSRF order (see LivestreamModule).
+	reg.Register(NewLivestreamModule(LivestreamModuleDeps{
+		Protected:      r.protected,
+		CSRFMiddleware: r.csrfMiddleware,
+		Handlers: LivestreamHandlers{
+			ListLivestreamChannels: r.handleListLivestreamChannels,
+			ListLivestreams:        r.handleListLivestreams,
+			CreateLivestream:       r.handleCreateLivestream,
+			GetLivestream:          r.handleGetLivestream,
+			PatchLivestream:        r.handlePatchLivestream,
+			DeleteLivestream:       r.handleDeleteLivestream,
+		},
+	}))
 	reg.Register(NewPublishingModule(PublishingModuleDeps{
 		RateLimitSvc:         r.rateLimitSvc,
 		Protected:            r.protected,
@@ -256,8 +280,8 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}", r.protected(updateEditorSessionHandler.ServeHTTP))
 
-	// P0#5: project-centric entry points for the Dark Editor. The
-	// Dark Editor holds only velox_project_id in its URL; it must be
+	// P0#5: project-centric entry points for InstaEditor. The
+	// InstaEditor holds only velox_project_id in its URL; it must be
 	// able to (a) fetch the session row + (b) trigger a publish
 	// without first POSTing /editor-sessions to discover the
 	// session_id.
@@ -270,7 +294,7 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish", r.protected(publishEditorSessionByProjectHandler.ServeHTTP))
 
-	// P2 — Dark Editor auto-save endpoint. The Dark Editor PUTs the
+	// P2 — InstaEditor auto-save endpoint. The InstaEditor PUTs the
 	// form values on debounce + on-blur so an operator who closed
 	// the tab mid-edit can resume the same form state on reload.
 	// CSRF semantics match the publish endpoint above (middleware
@@ -337,41 +361,6 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/thumbnail-batches", r.protected(createYouTubeThumbnailBatchHandler.ServeHTTP))
 	var getYouTubeThumbnailBatchHandler http.Handler = http.HandlerFunc(r.handleGetYouTubeThumbnailBatch)
 	r.mux.Method(http.MethodGet, "/api/v1/youtube/thumbnail-batches/{batch_id}", r.protected(getYouTubeThumbnailBatchHandler.ServeHTTP))
-
-	// Livestream module — configuration CRUD base. A POST creates a
-	// live CONFIGURATION in state draft; the state machine
-	// (desired_state/actual_state) is worker-owned and the control
-	// endpoints (prepare/start/stop/restart) land with the encoder
-	// worker. GET /api/v1/livestreams returns the workspace's rows as
-	// {items: [...]} — the sidebar badge counts actual_state == "live".
-	var listLivestreamsHandler http.Handler = http.HandlerFunc(r.handleListLivestreams)
-	r.mux.Method(http.MethodGet, "/api/v1/livestreams", r.protected(listLivestreamsHandler.ServeHTTP))
-
-	// GET /api/v1/livestreams/channels — creation-wizard preflight.
-	// Registered before /{id} so the static segment wins.
-	var listLivestreamChannelsHandler http.Handler = http.HandlerFunc(r.handleListLivestreamChannels)
-	r.mux.Method(http.MethodGet, "/api/v1/livestreams/channels", r.protected(listLivestreamChannelsHandler.ServeHTTP))
-
-	var createLivestreamHandler http.Handler = http.HandlerFunc(r.handleCreateLivestream)
-	if r.csrfMiddleware != nil {
-		createLivestreamHandler = r.csrfMiddleware(createLivestreamHandler)
-	}
-	r.mux.Method(http.MethodPost, "/api/v1/livestreams", r.protected(createLivestreamHandler.ServeHTTP))
-
-	var getLivestreamHandler http.Handler = http.HandlerFunc(r.handleGetLivestream)
-	r.mux.Method(http.MethodGet, "/api/v1/livestreams/{id}", r.protected(getLivestreamHandler.ServeHTTP))
-
-	var patchLivestreamHandler http.Handler = http.HandlerFunc(r.handlePatchLivestream)
-	if r.csrfMiddleware != nil {
-		patchLivestreamHandler = r.csrfMiddleware(patchLivestreamHandler)
-	}
-	r.mux.Method(http.MethodPatch, "/api/v1/livestreams/{id}", r.protected(patchLivestreamHandler.ServeHTTP))
-
-	var deleteLivestreamHandler http.Handler = http.HandlerFunc(r.handleDeleteLivestream)
-	if r.csrfMiddleware != nil {
-		deleteLivestreamHandler = r.csrfMiddleware(deleteLivestreamHandler)
-	}
-	r.mux.Method(http.MethodDelete, "/api/v1/livestreams/{id}", r.protected(deleteLivestreamHandler.ServeHTTP))
 
 	// Blocco Carosello — unified pipeline view endpoint. Aggregates
 	// Drive + storage + per-target YouTube publish + Velox editor
