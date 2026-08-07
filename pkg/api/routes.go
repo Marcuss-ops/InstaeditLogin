@@ -50,9 +50,11 @@ func (r *Router) Setup() http.Handler {
 		CSRFMiddleware: r.veloxBFFCSRFMiddleware,
 	}))
 	reg.Register(NewEditorBFFModule(EditorBFFModuleDeps{
-		Client:         r.editorBFFClient,
-		AuthMiddleware: r.editorBFFAuthMiddleware,
-		CSRFMiddleware: r.editorBFFCSRFMiddleware,
+		Client:                r.editorBFFClient,
+		AuthMiddleware:        r.editorBFFAuthMiddleware,
+		CSRFMiddleware:        r.editorBFFCSRFMiddleware,
+		YouTubeVideoEditStore: r.youtubeVideoEditStore,
+		WorkspaceStore:        r.workspaceStore,
 	}))
 	reg.Register(NewIntegrationsModule(IntegrationsModuleDeps{
 		ExternalDestinationStore: r.externalDestinations,
@@ -325,7 +327,7 @@ func (r *Router) Setup() http.Handler {
 
 	// GET /api/v1/youtube/editor-sessions/{id} — session-id-keyed
 	// companion to GET /by-project/{velox_project_id}. Powers the
-	// dark-editor SPA after the auto-provisioner
+	// InstaEditor SPA after the auto-provisioner
 	// (POST /internal/v1/thumbnail-sessions) returns a fresh
 	// ytedit_<uuid> that the SPA reads back through this endpoint.
 	// Read-only; no CSRF (GET exempt by spec).
