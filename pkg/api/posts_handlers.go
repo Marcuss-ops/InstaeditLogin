@@ -226,7 +226,7 @@ func (r *Router) handleGetPost(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
+	id, err := postIDFromURL(req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
 		return
@@ -241,8 +241,7 @@ func (r *Router) handleGetPost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "post not found")
 		return
 	}
-	ws, err := r.workspaceStore.FindByID(p.WorkspaceID)
-	if err != nil || ws == nil || ws.OwnerID != userID {
+	if !r.postWorkspaceOwnedByUser(p, userID) {
 		writeError(w, http.StatusNotFound, "post not found")
 		return
 	}
@@ -274,19 +273,10 @@ func (r *Router) handleListByWorkspace(w http.ResponseWriter, req *http.Request)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"posts": posts})
 		return
 	}
-	limit, rawCursor, err := parseListPageWithBounds(req.URL.Query(), 50, 100)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	cursorContext := "workspace_id=" + strconv.FormatInt(wid, 10)
-	cursorTime, cursorID, cursorNull, err := decodeListCursorDetails(rawCursor, "posts", cursorContext)
+	limit, afterTime, afterID, hasCursor, err := parsePostListPage(req.URL.Query(), cursorContext)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if cursorNull && rawCursor != "" {
-		writeError(w, http.StatusBadRequest, "invalid list cursor: post cursor timestamp is required")
 		return
 	}
 	var posts []models.Post
@@ -294,19 +284,9 @@ func (r *Router) handleListByWorkspace(w http.ResponseWriter, req *http.Request)
 	if paged, ok := r.postStore.(interface {
 		ListByWorkspacePage(int64, *time.Time, int64, int) ([]models.Post, bool, error)
 	}); ok {
-		var afterTime *time.Time
-		var afterID int64
-		if rawCursor != "" {
-			afterTime = &cursorTime
-			afterID, err = strconv.ParseInt(cursorID, 10, 64)
-			if err != nil || afterID <= 0 {
-				writeError(w, http.StatusBadRequest, "invalid list cursor")
-				return
-			}
-		}
 		posts, hasMore, err = paged.ListByWorkspacePage(wid, afterTime, afterID, limit)
 	} else {
-		if rawCursor != "" {
+		if hasCursor {
 			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this post store")
 			return
 		}
@@ -367,19 +347,10 @@ func (r *Router) handleListPosts(w http.ResponseWriter, req *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]interface{}{"posts": posts})
 			return
 		}
-		limit, rawCursor, pageErr := parseListPageWithBounds(req.URL.Query(), 50, 100)
-		if pageErr != nil {
-			writeError(w, http.StatusBadRequest, pageErr.Error())
-			return
-		}
 		cursorContext := listCursorFilterContext(req.URL.Query(), "workspace_id")
-		cursorTime, cursorID, cursorNull, pageErr := decodeListCursorDetails(rawCursor, "posts", cursorContext)
+		limit, afterTime, afterID, hasCursor, pageErr := parsePostListPage(req.URL.Query(), cursorContext)
 		if pageErr != nil {
 			writeError(w, http.StatusBadRequest, pageErr.Error())
-			return
-		}
-		if cursorNull && rawCursor != "" {
-			writeError(w, http.StatusBadRequest, "invalid list cursor: post cursor timestamp is required")
 			return
 		}
 		var posts []models.Post
@@ -387,19 +358,9 @@ func (r *Router) handleListPosts(w http.ResponseWriter, req *http.Request) {
 		if paged, ok := r.postStore.(interface {
 			ListByWorkspacePage(int64, *time.Time, int64, int) ([]models.Post, bool, error)
 		}); ok {
-			var afterTime *time.Time
-			var afterID int64
-			if rawCursor != "" {
-				afterTime = &cursorTime
-				afterID, pageErr = strconv.ParseInt(cursorID, 10, 64)
-				if pageErr != nil || afterID <= 0 {
-					writeError(w, http.StatusBadRequest, "invalid list cursor")
-					return
-				}
-			}
 			posts, hasMore, pageErr = paged.ListByWorkspacePage(wid, afterTime, afterID, limit)
 		} else {
-			if rawCursor != "" {
+			if hasCursor {
 				writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this post store")
 				return
 			}
@@ -442,19 +403,10 @@ func (r *Router) handleListPosts(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"posts": all})
 		return
 	}
-	limit, rawCursor, pageErr := parseListPageWithBounds(req.URL.Query(), 50, 100)
-	if pageErr != nil {
-		writeError(w, http.StatusBadRequest, pageErr.Error())
-		return
-	}
 	cursorContext := "workspaces=" + joinInt64List(workspaceIDs)
-	cursorTime, cursorID, cursorNull, pageErr := decodeListCursorDetails(rawCursor, "posts", cursorContext)
+	limit, afterTime, afterID, hasCursor, pageErr := parsePostListPage(req.URL.Query(), cursorContext)
 	if pageErr != nil {
 		writeError(w, http.StatusBadRequest, pageErr.Error())
-		return
-	}
-	if cursorNull && rawCursor != "" {
-		writeError(w, http.StatusBadRequest, "invalid list cursor: post cursor timestamp is required")
 		return
 	}
 	var all []models.Post
@@ -462,19 +414,9 @@ func (r *Router) handleListPosts(w http.ResponseWriter, req *http.Request) {
 	if paged, ok := r.postStore.(interface {
 		ListByWorkspacesPage([]int64, *time.Time, int64, int) ([]models.Post, bool, error)
 	}); ok {
-		var afterTime *time.Time
-		var afterID int64
-		if rawCursor != "" {
-			afterTime = &cursorTime
-			afterID, pageErr = strconv.ParseInt(cursorID, 10, 64)
-			if pageErr != nil || afterID <= 0 {
-				writeError(w, http.StatusBadRequest, "invalid list cursor")
-				return
-			}
-		}
 		all, hasMore, pageErr = paged.ListByWorkspacesPage(workspaceIDs, afterTime, afterID, limit)
 	} else {
-		if rawCursor != "" {
+		if hasCursor {
 			writeError(w, http.StatusNotImplemented, "cursor pagination is not supported by this post store")
 			return
 		}
@@ -519,7 +461,7 @@ func (r *Router) handlePatchPost(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
+	id, err := postIDFromURL(req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
 		return
@@ -529,8 +471,7 @@ func (r *Router) handlePatchPost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "post not found")
 		return
 	}
-	ws, err := r.workspaceStore.FindByID(existing.WorkspaceID)
-	if err != nil || ws == nil || ws.OwnerID != userID {
+	if !r.postWorkspaceOwnedByUser(existing, userID) {
 		writeError(w, http.StatusNotFound, "post not found")
 		return
 	}
@@ -592,7 +533,7 @@ func (r *Router) handleDeletePost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
 		return
 	}
-	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
+	id, err := postIDFromURL(req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
 		return
