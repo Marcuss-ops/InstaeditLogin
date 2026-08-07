@@ -15,6 +15,14 @@ type envStringFieldSpec struct {
 	fallback string
 }
 
+func (s envIntFieldSpec) resolve() int {
+	return getEnvInt(s.key, s.fallback)
+}
+
+func (s envStringFieldSpec) resolve() string {
+	return getEnv(s.key, s.fallback)
+}
+
 type dbPoolFieldSpec struct {
 	maxOpen         envIntFieldSpec
 	maxIdle         envIntFieldSpec
@@ -33,10 +41,10 @@ func newDBPoolFieldSpec(prefix string, defaults DBPoolProfile) dbPoolFieldSpec {
 
 func (s dbPoolFieldSpec) resolve() DBPoolProfile {
 	return DBPoolProfile{
-		MaxOpenConns:           getEnvInt(s.maxOpen.key, s.maxOpen.fallback),
-		MaxIdleConns:           getEnvInt(s.maxIdle.key, s.maxIdle.fallback),
-		ConnMaxLifetimeSeconds: getEnvInt(s.connMaxLifetime.key, s.connMaxLifetime.fallback),
-		ConnMaxIdleTimeSeconds: getEnvInt(s.connMaxIdleTime.key, s.connMaxIdleTime.fallback),
+		MaxOpenConns:           s.maxOpen.resolve(),
+		MaxIdleConns:           s.maxIdle.resolve(),
+		ConnMaxLifetimeSeconds: s.connMaxLifetime.resolve(),
+		ConnMaxIdleTimeSeconds: s.connMaxIdleTime.resolve(),
 	}
 }
 
@@ -57,8 +65,8 @@ func newYouTubeOAuthClientFieldSpec(slot string) youTubeOAuthClientFieldSpec {
 
 func (s youTubeOAuthClientFieldSpec) resolve() YouTubeOAuthPoolClient {
 	return YouTubeOAuthPoolClient{
-		ClientID:     getEnv(s.clientID.key, s.clientID.fallback),
-		ClientSecret: getEnv(s.clientSecret.key, s.clientSecret.fallback),
-		RedirectURI:  getEnv(s.redirectURI.key, s.redirectURI.fallback),
+		ClientID:     s.clientID.resolve(),
+		ClientSecret: s.clientSecret.resolve(),
+		RedirectURI:  s.redirectURI.resolve(),
 	}
 }

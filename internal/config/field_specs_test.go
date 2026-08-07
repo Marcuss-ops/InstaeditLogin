@@ -21,6 +21,16 @@ func TestDBPoolFieldSpec_ResolvesDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestDBPoolFieldSpec_InvalidIntegerUsesFallback(t *testing.T) {
+	t.Setenv("DB_TEST_MAX_OPEN_CONNS", "not-an-integer")
+	t.Setenv("DB_TEST_MAX_IDLE_CONNS", "8")
+
+	got := newDBPoolFieldSpec("DB_TEST", DBPoolProfile{MaxOpenConns: 15, MaxIdleConns: 7}).resolve()
+	if got.MaxOpenConns != 15 || got.MaxIdleConns != 8 {
+		t.Fatalf("invalid integer fallback: got %+v", got)
+	}
+}
+
 func TestYouTubeOAuthClientFieldSpec_ResolvesBothSlotsWithoutSecretLeak(t *testing.T) {
 	t.Setenv("YOUTUBE_OAUTH_CLIENT_TEST_ID", "client-id")
 	t.Setenv("YOUTUBE_OAUTH_CLIENT_TEST_SECRET", strings.Repeat("s", 32))
@@ -37,6 +47,17 @@ func TestYouTubeOAuthClientFieldSpec_ResolvesBothSlotsWithoutSecretLeak(t *testi
 	t.Setenv("YOUTUBE_OAUTH_CLIENT_TEST_SECRET", "")
 	if got := newYouTubeOAuthClientFieldSpec("TEST").resolve(); got.ClientSecret != "" {
 		t.Fatalf("empty env override must win over fallback: got secret length %d", len(got.ClientSecret))
+	}
+}
+
+func TestYouTubeOAuthClientFieldSpec_ResolvesSlotsIndependently(t *testing.T) {
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_A_ID", "client-a")
+	t.Setenv("YOUTUBE_OAUTH_CLIENT_B_ID", "client-b")
+
+	a := newYouTubeOAuthClientFieldSpec("A").resolve()
+	b := newYouTubeOAuthClientFieldSpec("B").resolve()
+	if a.ClientID != "client-a" || b.ClientID != "client-b" {
+		t.Fatalf("slot-specific IDs: A=%q B=%q", a.ClientID, b.ClientID)
 	}
 }
 
