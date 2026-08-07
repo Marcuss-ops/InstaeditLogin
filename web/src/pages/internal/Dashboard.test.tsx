@@ -95,7 +95,7 @@ describe("InternalDashboard", () => {
     });
   });
 
-  it("loads group memberships from one aggregate response without per-group fan-out", async () => {
+  it("stays analytics-only: no group/aggregate fetch and no groups UI", async () => {
     const requestedUrls: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -120,14 +120,7 @@ describe("InternalDashboard", () => {
           return mockJsonResponse({ counts: [], total_uploads: 0, total_targets: 0 });
         }
         if (url.endsWith("/api/v1/groups/aggregate")) {
-          return mockJsonResponse({
-            groups: [
-              { id: 1, workspace_id: 7, name: "Editorial", account_ids: [101, 102] },
-            ],
-          });
-        }
-        if (/\/api\/v1\/groups\/\d+\/accounts$/.test(url)) {
-          throw new Error(`unexpected per-group membership request: ${url}`);
+          throw new Error(`unexpected group aggregate request: ${url}`);
         }
         return mockJsonResponse({}, false, 404);
       }),
@@ -136,10 +129,13 @@ describe("InternalDashboard", () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByText("Editorial")).toBeInTheDocument();
+      expect(screen.getByText("Connected accounts")).toBeInTheDocument();
     });
-    expect(requestedUrls.filter((url) => url.endsWith("/api/v1/groups/aggregate"))).toHaveLength(1);
-    expect(requestedUrls.some((url) => /\/api\/v1\/groups\/\d+\/accounts$/.test(url))).toBe(false);
+    expect(screen.getByText("Upload in coda")).toBeInTheDocument();
+    // Group management belongs to /app/groups, not the analytics dashboard.
+    expect(screen.queryByText("Account disponibili")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-groups")).not.toBeInTheDocument();
+    expect(requestedUrls.some((url) => url.endsWith("/api/v1/groups/aggregate"))).toBe(false);
   });
 
   it("renders zero stats and empty accounts when no data exists", async () => {
@@ -178,6 +174,5 @@ describe("InternalDashboard", () => {
     await waitFor(() => {
       expect(screen.getAllByText("0")).toHaveLength(2);
     });
-    expect(screen.getByTestId("dashboard-groups")).toBeInTheDocument();
   });
 });

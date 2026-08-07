@@ -1,17 +1,11 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
+  Clock,
   LayoutDashboard,
   Link2,
-  ArrowRight,
-  Clock,
-  Folder,
 } from "lucide-react";
-import { authedFetch } from "../../lib/auth";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import { useDashboardData } from "./useDashboardData";
-import { isPublishableAccount } from "../../types/uploads";
-import { ProviderBadge, getProviderRegistryEntry } from "../../components/brand/PlatformLogos";
 
 function StatCard({
   label,
@@ -43,62 +37,15 @@ function StatCard({
 }
 
 export function InternalDashboard() {
-  const navigate = useNavigate();
   const { state, refetch: load } = useDashboardData();
-  const [createGroupOpen, setCreateGroupOpen] = useState(false);
-  const [newGroupName, setNewGroupName] = useState("");
-  const [creatingGroup, setCreatingGroup] = useState(false);
-  const [draggedAccountId, setDraggedAccountId] = useState<number | null>(null);
-  const [savingDrop, setSavingDrop] = useState<number | null>(null);
-
 
   const stats =
     state.kind === "ready"
       ? {
           connected: state.data.accounts.length,
-          posts: state.data.posts.length,
-          published: state.data.posts.filter((p) => p.status === "published").length,
-          scheduled: state.data.posts.filter((p) => p.status === "queued").length,
           queuedUploads: state.data.pendingUploads,
         }
       : null;
-
-  const createGroup = async () => {
-    if (!newGroupName.trim() || creatingGroup) return;
-    setCreatingGroup(true);
-    try {
-      const me = await authedFetch("/api/v1/auth/me");
-      const { workspace_id: workspaceId } = await me.json() as { workspace_id: number };
-      const response = await authedFetch("/api/v1/groups/", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, name: newGroupName.trim() }) });
-      const group = await response.json() as { id: number };
-      setCreateGroupOpen(false);
-      setNewGroupName("");
-      navigate(`/app/groups/${group.id}`);
-    } finally {
-      setCreatingGroup(false);
-    }
-  };
-
-  const addAccountToGroup = async (accountId: number, groupId: number) => {
-    if (savingDrop != null || state.kind !== "ready") return;
-    const summary = state.data.groupSummaries.find((item) => item.group.id === groupId);
-    if (!summary || summary.accountIds.includes(accountId)) return;
-    setSavingDrop(groupId);
-    try {
-      const currentResponse = await authedFetch(`/api/v1/groups/${groupId}/accounts`);
-      const current = await currentResponse.json() as { account_ids?: number[] };
-      const currentIds = current.account_ids ?? [];
-      if (currentIds.includes(accountId)) return;
-      await authedFetch(`/api/v1/groups/${groupId}/accounts`, {
-        method: "PUT",
-        body: JSON.stringify({ account_ids: [...currentIds, accountId] }),
-      });
-      await load();
-    } finally {
-      setSavingDrop(null);
-      setDraggedAccountId(null);
-    }
-  };
 
   return (
     <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
@@ -116,9 +63,7 @@ export function InternalDashboard() {
         </div>
 
         {state.kind === "loading" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <Skeleton variant="card" height={96} />
-            <Skeleton variant="card" height={96} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
             <Skeleton variant="card" height={96} />
             <Skeleton variant="card" height={96} />
           </div>
@@ -134,130 +79,25 @@ export function InternalDashboard() {
         )}
 
         {state.kind === "ready" && stats && (
-          <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-              <StatCard label="Connected accounts" value={stats.connected} icon={Link2} to="/app/linking" />
-              <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5">
-                <Link
-                  to={`/app/calendar?group_id=all`}
-                  className="group block no-underline"
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-[13px] font-medium text-[#9aa0aa] mb-1">Upload in coda</p>
-                      <p className="text-[28px] font-extrabold tracking-tight text-white">{state.data.pendingUploads}</p>
-                    </div>
-                    <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-[#9aa0aa] group-hover:bg-white group-hover:text-[#030308] transition-colors">
-                      <Clock size={20} />
-                    </div>
-                  </div>
-                </Link>
-
-              </div>
-            </div>
-
-            {(
-              <section className="mb-8" data-testid="dashboard-groups">
-                <div className="flex items-center justify-between mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <StatCard label="Connected accounts" value={stats.connected} icon={Link2} to="/app/linking" />
+            <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5">
+              <Link
+                to={`/app/calendar?group_id=all`}
+                className="group block no-underline"
+              >
+                <div className="flex items-start justify-between">
                   <div>
-                    <h2 className="text-[18px] font-extrabold tracking-tight text-white flex items-center gap-2">
-                      <Folder size={20} className="text-amber-300/80" />
-                      Groups
-                    </h2>
-                    <p className="text-[13px] text-[#9aa0aa] mt-0.5">Apri un gruppo per vedere e gestire i canali che contiene.</p>
+                    <p className="text-[13px] font-medium text-[#9aa0aa] mb-1">Upload in coda</p>
+                    <p className="text-[28px] font-extrabold tracking-tight text-white">{stats.queuedUploads}</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button type="button" onClick={() => setCreateGroupOpen(true)} className="rounded-xl bg-violet-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-violet-400">+ Crea gruppo</button>
-                    <Link to="/app/groups" className="text-[13px] font-medium text-[#9aa0aa] hover:text-white no-underline">Gestisci <ArrowRight size={14} className="inline" /></Link>
+                  <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-[#9aa0aa] group-hover:bg-white group-hover:text-[#030308] transition-colors">
+                    <Clock size={20} />
                   </div>
                 </div>
-                {createGroupOpen && (
-                  <div className="mb-4 flex flex-col sm:flex-row gap-2 rounded-xl border border-violet-400/30 bg-violet-500/[0.08] p-3">
-                    <input autoFocus value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createGroup(); }} placeholder="Nome gruppo, es. WWE" className="flex-1 rounded-lg border border-white/[0.10] bg-black/20 px-3 py-2 text-[13px] text-white outline-none" />
-                    <button type="button" disabled={!newGroupName.trim() || creatingGroup} onClick={() => void createGroup()} className="rounded-lg bg-white px-3 py-2 text-[12px] font-semibold text-black disabled:opacity-50">Crea e scegli canali</button>
-                    <button type="button" onClick={() => setCreateGroupOpen(false)} className="rounded-lg border border-white/[0.10] px-3 py-2 text-[12px] text-[#c8cbd4]">Annulla</button>
-                  </div>
-                )}
-                {state.data.groupSummaries.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.02] p-8 text-center text-[13px] text-[#9aa0aa]">
-                    Nessun gruppo creato. Premi “Crea gruppo” per iniziare a organizzare i canali validi.
-                  </div>
-                ) : <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {state.data.groupSummaries.map((summary) => (
-                    <Link
-                      key={summary.group.id}
-                      to={`/app/groups/${summary.group.id}`}
-                      onDragOver={(event) => {
-                        if (draggedAccountId != null) {
-                          event.preventDefault();
-                          event.dataTransfer.dropEffect = "copy";
-                        }
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        const accountId = Number(event.dataTransfer.getData("application/x-instaedit-account"));
-                        if (Number.isFinite(accountId) && accountId > 0) void addAccountToGroup(accountId, summary.group.id);
-                      }}
-                      className={`surface-card bg-[#1f1f2e] border rounded-2xl p-5 hover:border-violet-400/50 hover:bg-[#252538] transition-all no-underline ${draggedAccountId != null ? "border-dashed border-violet-400/60 ring-1 ring-violet-400/20" : "border-white/[0.12]"}`}
-                    >
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className="w-10 h-10 rounded-xl bg-amber-400/15 text-amber-300 flex items-center justify-center"><Folder size={19} /></div>
-                        <div className="min-w-0"><p className="text-[15px] font-bold text-white truncate">{summary.group.name}</p><p className="text-[12px] text-[#9aa0aa]">{summary.accounts.length} canali{savingDrop === summary.group.id ? " · salvataggio…" : " · trascina qui"}</p></div>
-                        <ArrowRight size={16} className="ml-auto text-[#9aa0aa]" />
-                      </div>
-                      <div className="rounded-lg bg-white/[0.04] px-3 py-2 text-[12px] text-[#c8cbd4]">Programmati <b className="text-white">{summary.scheduled}</b></div>
-                    </Link>
-                  ))}
-                </div>}
-              </section>
-            )}
-
-            {(() => {
-              const groupedIds = new Set(state.data.groupSummaries.flatMap((summary) => summary.accountIds));
-              const availableAccounts = state.data.accounts.filter((account) => isPublishableAccount(account) && account.platform !== "google-drive" && !groupedIds.has(account.id));
-              return (
-                <section className="mb-8" data-testid="dashboard-available-accounts">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h2 className="text-[18px] font-extrabold tracking-tight text-white">Account disponibili</h2>
-                      <p className="text-[13px] text-[#9aa0aa] mt-0.5">Canali attivi non ancora assegnati a un gruppo.</p>
-                    </div>
-                    <Link to="/app/groups" className="text-[13px] font-medium text-violet-300 hover:text-white no-underline">Gestisci gruppi <ArrowRight size={14} className="inline" /></Link>
-                  </div>
-                  {availableAccounts.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.02] p-6 text-center text-[13px] text-[#9aa0aa]">Tutti i canali attivi sono già organizzati in un gruppo.</div>
-                  ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {availableAccounts.map((account) => (
-                        <Link
-                          key={account.id}
-                          to={`/app/dashboard-channels/${account.id}`}
-                          draggable
-                          onDragStart={(event) => {
-                            event.dataTransfer.setData("application/x-instaedit-account", String(account.id));
-                            event.dataTransfer.effectAllowed = "copy";
-                            setDraggedAccountId(account.id);
-                          }}
-                          onDragEnd={() => setDraggedAccountId(null)}
-                          className="flex cursor-grab items-center gap-3 rounded-xl border border-white/[0.10] bg-white/[0.03] p-3 no-underline hover:border-violet-400/50 hover:bg-white/[0.06] active:cursor-grabbing transition-colors"
-                        >
-                          <ProviderBadge
-                            platform={account.platform}
-                            className="h-9 w-9 shrink-0 justify-center rounded-lg"
-                            compact
-                            logoClassName="h-5 w-5"
-                          />
-                          <div className="min-w-0"><p className="truncate text-[13px] font-semibold text-white">{account.username || `Account ${account.id}`}</p><p className="text-[11px] text-[#9aa0aa]">{getProviderRegistryEntry(account.platform)?.name ?? account.platform} · trascina nel gruppo</p></div>
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              );
-            })()}
-
-            <div className="h-4" />
-          </>
+              </Link>
+            </div>
+          </div>
         )}
       </div>
     </div>

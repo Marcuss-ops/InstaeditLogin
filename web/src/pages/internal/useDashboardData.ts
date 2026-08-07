@@ -1,17 +1,8 @@
 import { useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, AuthError, authedFetch, fetchSession } from "../../lib/auth";
-import { isPublishableAccount } from "../../types/uploads";
 import { listAllAccounts, type PlatformAccount } from "../../features/channels/api/channelsApi";
 import { useSharedQuery } from "../../lib/queryRegistry";
-import type { Group } from "./groupsTypes";
-
-export type GroupSummary = {
-  group: Group;
-  accountIds: number[];
-  accounts: PlatformAccount[];
-  scheduled: number;
-};
 
 type Post = {
   id: number;
@@ -19,17 +10,10 @@ type Post = {
   scheduled_at?: string | null;
 };
 
-type AccountProgrammatoCount = {
-  count: number;
-  nextAt: string | null;
-};
-
 export type DashboardData = {
   accounts: PlatformAccount[];
   posts: Post[];
   pendingUploads: number;
-  countMap: Map<number, AccountProgrammatoCount>;
-  groupSummaries: GroupSummary[];
 };
 
 export type DashboardFetchState =
@@ -48,6 +32,9 @@ function hasActiveWork(data: DashboardData | undefined): boolean {
   );
 }
 
+// The dashboard is an analytics-only view: connected accounts, post counts
+// and pending uploads. Group memberships live in the Groups section and are
+// deliberately not fetched here.
 async function fetchDashboardData(signal: AbortSignal): Promise<DashboardData> {
   const session = await fetchSession();
   if (!session) throw new AuthError();
@@ -68,70 +55,10 @@ async function fetchDashboardData(signal: AbortSignal): Promise<DashboardData> {
     total_uploads: number;
   };
 
-  let groupSummaries: GroupSummary[] = [];
-  try {
-    const groupsResp = await authedFetch("/api/v1/groups/aggregate", { signal });
-    const groupsData = (await groupsResp.json()) as {
-      groups: Array<Group & { account_ids?: number[] }>;
-    };
-    const accountIndex = new Map(accounts.map((account) => [account.id, account]));
-    const directMemberships = new Map(
-      (groupsData.groups ?? []).map((group) => [group.id, group.account_ids ?? []] as const),
-    );
-    const children = new Map<number, Group[]>();
-    for (const group of groupsData.groups ?? []) {
-      if (group.parent_group_id != null) {
-        const list = children.get(group.parent_group_id) ?? [];
-        list.push(group);
-        children.set(group.parent_group_id, list);
-      }
-    }
-    const collect = (group: Group): number[] => {
-      const ids = new Set(directMemberships.get(group.id) ?? []);
-      for (const child of children.get(group.id) ?? []) {
-        collect(child).forEach((id) => ids.add(id));
-      }
-      return [...ids];
-    };
-    groupSummaries = (groupsData.groups ?? [])
-      .filter((group) => group.parent_group_id == null)
-      .map((group) => {
-        const accountIds = collect(group);
-        const groupAccounts = accountIds
-          .map((id) => accountIndex.get(id))
-          .filter((account): account is PlatformAccount =>
-            account != null && isPublishableAccount(account),
-          );
-        return {
-          group,
-          accountIds,
-          accounts: groupAccounts,
-          scheduled: accountIds.reduce(
-            (sum, id) => sum + (countsData.counts?.find((count) => count.account_id === id)?.count ?? 0),
-            0,
-          ),
-        };
-      });
-  } catch (error) {
-    if (error instanceof AuthError || signal.aborted) throw error;
-    // Groups are an optional dashboard projection; other dashboard data
-    // remains usable when the aggregate endpoint is unavailable.
-  }
-
-  const countMap = new Map<number, AccountProgrammatoCount>();
-  for (const count of countsData.counts ?? []) {
-    countMap.set(count.account_id, {
-      count: count.count,
-      nextAt: count.next_publish_at ?? null,
-    });
-  }
-
   return {
     accounts,
     posts: postsData.posts ?? [],
     pendingUploads: countsData.total_uploads ?? 0,
-    countMap,
-    groupSummaries,
   };
 }
 
