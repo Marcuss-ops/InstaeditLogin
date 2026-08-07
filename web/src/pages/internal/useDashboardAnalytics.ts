@@ -26,6 +26,7 @@ export type DashboardAnalyticsData = {
   aggregates: {
     channels: number;
     views: number;
+    subscribers: number;
     videos: number;
     revenue_cents?: number | null;
   };

@@ -5,6 +5,7 @@ import {
   Eye,
   RefreshCw,
   TrendingUp,
+  Users,
   Video,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -265,8 +266,8 @@ export function InternalDashboard() {
         </div>
 
         {state.kind === "loading" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            {Array.from({ length: 4 }).map((_, i) => (
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+            {Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} variant="card" height={104} />
             ))}
           </div>
@@ -283,11 +284,16 @@ export function InternalDashboard() {
 
         {state.kind === "ready" && (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
               <KpiCard
                 label="Views totali"
                 value={formatNumber(state.data.aggregates.views)}
                 icon={Eye}
+              />
+              <KpiCard
+                label="Iscritti"
+                value={formatNumber(state.data.aggregates.subscribers)}
+                icon={Users}
               />
               <KpiCard
                 label="Revenue"

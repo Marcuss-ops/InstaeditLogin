@@ -20,6 +20,7 @@ function analyticsPayload(overrides: Record<string, unknown> = {}) {
     aggregates: {
       channels: 2,
       views: 1500,
+      subscribers: 8000,
       videos: 12,
       revenue_cents: 5000,
     },
@@ -96,6 +97,7 @@ describe("InternalDashboard", () => {
       expect(screen.getByText("Views totali")).toBeInTheDocument();
     });
     expect(screen.getByText("1.5K")).toBeInTheDocument();
+    expect(screen.getByText("8.0K")).toBeInTheDocument();
     expect(screen.getByText("$50.00")).toBeInTheDocument();
     expect(screen.getByText("Canali")).toBeInTheDocument();
     // Sections for the requested analytics tables ("Revenue", "Views", and
@@ -105,6 +107,7 @@ describe("InternalDashboard", () => {
     expect(screen.getAllByText("Views").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Revenue").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Video").length).toBeGreaterThan(0);
+    expect(screen.getByText("Iscritti")).toBeInTheDocument();
   });
 
   it("switches period on button click and refetches", async () => {
@@ -199,7 +202,7 @@ describe("InternalDashboard", () => {
         if (url.endsWith("/api/v1/dashboard/analytics?days=28")) {
           return mockJsonResponse(
             analyticsPayload({
-              aggregates: { channels: 0, views: 0, videos: 0, revenue_cents: null },
+              aggregates: { channels: 0, views: 0, subscribers: 0, videos: 0, revenue_cents: null },
               channels: [],
               top_videos: [],
             }),
@@ -216,10 +219,10 @@ describe("InternalDashboard", () => {
     });
     // The KPI cards render a tick after the heading appears; wait for the
     // zero values instead of asserting immediately (was flaky in CI). With all
-    // aggregates zero, three KPI cards show "0" (Views totali, Canali, Video);
-    // Revenue shows "—" because revenue_cents is null.
+    // aggregates zero, four KPI cards show "0" (Views totali, Iscritti,
+    // Canali, Video); Revenue shows "—" because revenue_cents is null.
     await waitFor(() => {
-      expect(screen.getAllByText("0")).toHaveLength(3);
+      expect(screen.getAllByText("0")).toHaveLength(4);
     });
     expect(screen.getByText("Nessun video pubblicato in questo periodo.")).toBeInTheDocument();
   });

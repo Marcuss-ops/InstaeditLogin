@@ -33,6 +33,7 @@ type dashboardAnalyticsResponse struct {
 type dashboardAggregates struct {
 	Channels     int    `json:"channels"`
 	Views        int64  `json:"views"`
+	Subscribers  int64  `json:"subscribers"`
 	Videos       int64  `json:"videos"`
 	RevenueCents *int64 `json:"revenue_cents,omitempty"`
 }
@@ -101,8 +102,10 @@ func isAllowedDashboardDay(days int) bool {
 // handleGetDashboardAnalytics is the HTTP boundary for
 // GET /api/v1/dashboard/analytics?days=1|7|14|28|90 (default 28).
 //
-// It aggregates the user's YouTube metric history (views, revenue)
-// and fan-outs a real per-video ranking via videos.list statistics.
+// It aggregates the user's YouTube metric history (views,
+// subscribers, revenue) and fan-outs a real per-video ranking via
+// videos.list statistics. Subscribers uses the latest known point in
+// the window per channel (a snapshot sum, like views).
 // Degradation policy: the aggregate + per-channel sections always
 // render from the metric history store; a YouTube fan-out failure
 // only empties the top_videos array (the dashboard keeps working).
@@ -178,6 +181,7 @@ func (r *Router) handleGetDashboardAnalytics(w http.ResponseWriter, req *http.Re
 			row.Views = latest.Views
 			row.RevenueCents = latest.RevenueCents
 			resp.Aggregates.Views += latest.Views
+			resp.Aggregates.Subscribers += latest.Subscribers
 			resp.Aggregates.Videos += latest.Videos
 			if latest.RevenueCents != nil {
 				totalRevenue += *latest.RevenueCents

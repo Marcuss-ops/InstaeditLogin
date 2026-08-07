@@ -162,14 +162,14 @@ func TestHandleGetDashboardAnalytics_AggregatesViewsRevenue(t *testing.T) {
 			return map[int64][]repository.AccountMetricPoint{
 				// Two points so ViewsGrowth/RevenueGrowth are computed.
 				11: {
-					{Date: time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC), Views: 800, Videos: 8, RevenueCents: &revOne},
-					{Date: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), Views: 1000, Videos: 10, RevenueCents: &revOne},
+					{Date: time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC), Views: 800, Subscribers: 4800, Videos: 8, RevenueCents: &revOne},
+					{Date: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), Views: 1000, Subscribers: 5000, Videos: 10, RevenueCents: &revOne},
 				},
 				// No revenue: row must render RevenueCents=nil and the
 				// aggregate revenue must still reflect channel 11 only.
 				22: {
-					{Date: time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC), Views: 200, Videos: 2},
-					{Date: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), Views: 500, Videos: 5},
+					{Date: time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC), Views: 200, Subscribers: 1900, Videos: 2},
+					{Date: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), Views: 500, Subscribers: 2000, Videos: 5},
 				},
 			}, nil
 		},
@@ -188,9 +188,16 @@ func TestHandleGetDashboardAnalytics_AggregatesViewsRevenue(t *testing.T) {
 	if resp.Aggregates.Views != 1500 {
 		t.Fatalf("aggregates.views = %d, want 1500", resp.Aggregates.Views)
 	}
+	// Subscribers use the latest known point per channel (5000 + 2000):
+	// the aggregate is a snapshot sum of current subscribers, not a
+	// window delta.
+	if resp.Aggregates.Subscribers != 7000 {
+		t.Fatalf("aggregates.subscribers = %d, want 7000", resp.Aggregates.Subscribers)
+	}
 	if resp.Aggregates.Videos != 15 {
 		t.Fatalf("aggregates.videos = %d, want 15", resp.Aggregates.Videos)
 	}
+
 	if resp.Aggregates.RevenueCents == nil || *resp.Aggregates.RevenueCents != 5000 {
 		t.Fatalf("aggregates.revenue_cents = %v, want 5000 (channel 11 only)", resp.Aggregates.RevenueCents)
 	}
