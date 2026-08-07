@@ -95,9 +95,9 @@ not treated as runtime architecture work:
 
 | Priority | File | Lines | Planned organization |
 |---|---|---:|---|
-| T0 | `internal/worker/reconcile_worker_test.go` | 963 | Split by in-flight, terminal success/failure, lease/retry, and shutdown scenarios. |
-| T0 | `pkg/api/livestreams_test.go` | 953 | Separate route validation, lifecycle commands, and provider error cases. |
-| T0 | `pkg/api/account_routes_test.go` | 935 | Split read, write, OAuth, authorization, and regression scenarios. |
+| T0 | `internal/worker/reconcile_worker_test.go` | 963 → 507 | ✅ COMPLETED in `SLICE7` (`cabcc39`+`SLICE7`): split by scenario into `reconcile_worker_test.go` (target state machine, 507), `reconcile_worker_tick_test.go` (tick+bounded batch+backoff, 243), `reconcile_worker_run_test.go` (Run/RunOnce+shutdown, 237); mock/helpers preserved in place. |
+| T0 | `pkg/api/livestreams_test.go` | 953 → 528 | ✅ COMPLETED in `SLICE7`: split into `livestreams_test.go` (mocks+fixtures+shared policy+create, 528), `livestreams_list_test.go` (list/channels, 237), `livestreams_item_test.go` (get/patch/delete, 211). |
+| T0 | `pkg/api/account_routes_test.go` | 935 → 232 | ✅ COMPLETED in `SLICE7`: split into `account_routes_test.go` (list, 232), `account_routes_get_test.go` (get+snapshot, 237), `account_routes_disconnect_test.go` (disconnect/delete/shared-grant, 490). |
 | T1 | `internal/worker/publish_reconcile_integration_test.go` | 785 | Separate integration fixtures from publish/reconcile assertions. |
 | T1 | `internal/repository/upload_job_pool_test.go` | 774 | Split claim/lease, reclaim, heartbeat, and concurrency cases. |
 | T1 | `internal/worker/publish_worker_publish_youtube_test.go` | 780 | Split upload, idempotency, failure, and retry scenarios. |
