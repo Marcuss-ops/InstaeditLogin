@@ -1,9 +1,10 @@
 # 📋 Tomorrow — Cosa fare quando riapri
 
-> File di onboarding operativo per la sessione di domani. Tutto è già
-> committato in `main`. Tu devi solo: (1) deployare la demo su Vercel,
-> (2) decidere se aspettare Fly o passare a un VPS, (3) ruotare la key
-> Tigris che hai leakato in chat (sì, sempre, lo so).
+> Questo documento è una checklist temporanea. L'architettura supportata è
+> già definita: **Vercel per il frontend e un VPS per backend e stato**.
+> Non scegliere provider alternativi e non usare questo file come runbook:
+> le procedure canoniche sono [`docs/DEPLOY.md`](docs/DEPLOY.md) e
+> [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ---
 
@@ -39,7 +40,7 @@ bucket. 2 minuti e sei a posto.
 5. **MAI** incollarla in chat / issue / commit
 
 ### 3. [8 min] **Deploy della demo su Vercel** ⭐ PRIORITÀ
-Questo è l'unica cosa utile che puoi fare oggi con Fly bloccato.
+Per il frontend usa Vercel; per il backend usa il VPS canonico e segui i runbook aggiornati.
 
 1. https://vercel.com → InstaeditLogin → **Settings → Environment Variables**
 2. Aggiungi:
@@ -63,144 +64,42 @@ vedere a chiunque** (investitori, designer, amici, gatto). ✅
 
 ---
 
-## 🎯 Decisione del giorno (10 min di pensiero, 0 comandi)
+## 🧭 Architettura corrente
 
-Scegli UNO dei tre path. **Non iniziare a lavorare sui due che non scegli.**
+| Area | Percorso supportato |
+|---|---|
+| Frontend | Vercel (`web/`, `vercel.json`) |
+| Backend | VPS con Docker Compose (`api`, `worker`, `migrate`) |
+| Database | PostgreSQL privato nel Compose del VPS |
+| Object storage | MinIO privato nel Compose del VPS |
+| Proxy e TLS | Caddy gestito sul VPS (`ops/vps/Caddyfile`) |
+| Deploy frontend | Workflow Vercel documentato in `docs/DEPLOY.md` §7 |
+| Operations | `docs/OPERATIONS.md` e i runbook collegati |
 
-### Path A: "Aspetto che Fly si sblocchi"
-Se pensi che Fly ti riaccetti il pagamento entro 1-2 settimane (carta
-rifiutata spesso = errore temporaneo, non ban permanente).
-
-→ Vedi sezione [Se Fly funziona](#se-fly-funziona) in fondo.
-
-### Path B: "Droppo tutto tranne Meta + Vercel" (raccomandato per la beta privata)
-L'idea: 14 secret, non 27. Solo Meta come provider. Lanci la beta
-con Instagram/Facebook/Threads, il resto lo aggiungi dopo.
-
-→ Vedi sezione [Path B — beta privata solo Meta](#path-b--beta-privata-solo-meta).
-
-### Path C: "Basta cloud, mi prendo un Hetzner e ci metto tutto"
-L'idea: €30/mese su Hetzner CCX13, Docker Compose con Go API + worker
-+ Postgres + MinIO + Caddy. Zero vendor lock-in, dati tuoi.
-
-→ Vedi sezione [Path C — self-hosted su Hetzner](#path-c--self-hosted-su-hetzner).
+Questa è l'unica topologia production supportata. I documenti sotto
+`docs/archive/legacy-fly/` sono materiale storico e non sono istruzioni
+operative.
 
 ---
 
-## 📌 Se Fly funziona (riprendi il piano originale)
+## 🌐 Workflow production canonico
+
+La procedura completa e vincolante è [`docs/DEPLOY.md`](docs/DEPLOY.md):
+include provisioning VPS, secret production, Compose, Caddy, verifiche e
+deploy Vercel. Per DNS, TLS, monitoring e recovery usa
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+Controlli pubblici minimi:
 
 ```bash
-# 1. Genera (se non l'hai già fatto) i 3 secret locali
-openssl rand -hex 32   # JWT_SECRET
-openssl rand -base64 32 # valore da iniettare nel secret manager come ENCRYPTION_KEYS=1:<base64-key>
-openssl rand -hex 32   # ADMIN_INVITE_TOKEN
-
-# 2. Crea l'app Fly
-flyctl auth login
-flyctl apps create instaedit-login
-flyctl postgres create --name instaedit-production --region iad \
-  --vm-size shared-cpu-1x --volume-size 1 --ha-replica-count 1
-flyctl postgres attach instaedit-production --app instaedit-login
-
-# 3. Crea .env.production (NON committare)
-cp .env.production.example .env.production
-# Riempi TUTTI i 27 secret, tra cui:
-#   - JWT_SECRET, ENCRYPTION_KEYS, ACTIVE_ENCRYPTION_KEY_ID, ADMIN_INVITE_TOKEN
-#   - S3_ACCESS_KEY, S3_SECRET_KEY (la NUOVA, post-rotazione)
-#   - DATABASE_URL (POOLED, dall'output di flyctl postgres create)
-#   - META_APP_ID, META_APP_SECRET (dalla Meta Dev Console)
-#   - Le 7 redirect_uri (pubbliche, già in fly.toml)
-
-# 4. Push + deploy
-make fly-secrets-dry-run    # deve uscire 0
-make fly-secrets            # stage su Fly
-make fly-secrets-verify     # conferma 27/27
-make fly-verify             # sanity-check fly.toml
-make fly-deploy             # build + migrate + rollout
-
-# 5. Verifica live
 curl https://api.instaedit.org/api/v1/health   # → 200
-curl https://api.instaedit.org/ready           # → 200, workers_ready: true
-
-# 6. Vercel: togli VITE_DEMO_MODE, reimposta VITE_API_BASE_URL=https://api.instaedit.org
-# → Redeploy
-```
-
-Tempo stimato: 1-2 ore se fila liscio.
-
----
-
-## 🥇 Path B — beta privata solo Meta
-
-L'obiettivo: 14 secret invece di 27, una sola integrazione OAuth, vai
-in produzione in mezza giornata.
-
-### Cosa droppi
-- TikTok (richiede App Review 2-4 settimane)
-- YouTube (richiede OAuth consent screen verification)
-- LinkedIn (richiede product approval)
-- X/Twitter (richiede App Review 1-2 settimane)
-- Stripe (non monetizzi ancora)
-- Resend (non wirato, non serve)
-- Sentry (non wirato, usa i logs)
-
-### Cosa tieni
-- Vercel ✅
-- Meta (Instagram + Facebook + Pages) ✅
-- Postgres (Fly) ✅
-- S3 / Tigris ✅
-- JWT + ENCRYPTION_KEYS + ADMIN_INVITE_TOKEN ✅
-
-### Step pratici
-
-```bash
-# 1. Rimuovi i 13 secret non più necessari dalla hosted-platform secrets manifest
-#    (LinkedIn, TikTok, YouTube, X — 12 secret + EMAIL_PROVIDER_KEY = 13)
-#    → portalo da 27 a 14
-
-# 2. Crea l'app Meta business (https://developers.facebook.com/apps)
-#    Aggiungi "Facebook Login for Business"
-#    Redirect URIs:
-#      https://api.instaedit.org/api/v1/auth/instagram/callback
-#      https://api.instaedit.org/api/v1/auth/facebook/callback
-#      https://api.instaedit.org/api/v1/auth/threads/callback
-#    → copia META_APP_ID + META_APP_SECRET
-
-# 3. Fly + .env.production + make fly-secrets + make fly-deploy
-
-# 4. Crea il primo utente (da te, manualmente, via DB o endpoint protetto)
-
-# 5. Invita 5-10 amici fidati → beta privata
+curl https://api.instaedit.org/ready           # → 200
+curl -fsSI https://app.instaedit.org/          # → 200 o redirect configurato
 ```
 
 ---
 
-## 🏠 Path C — self-hosted su Hetzner
 
-L'obiettivo: €30/mese tutto compreso (VPS + dominio + backup), zero
-dipendenze "in forse", dati tuoi.
-
-### Cosa ti serve
-1. Hetzner Cloud → Cloud Server CCX13 (4 vCPU / 16GB / 160GB NVMe) → €30/mese
-2. Dominio (già hai `instaedit.org`)
-3. 1 ora per il setup iniziale
-
-### Cosa installi
-- **Docker + Docker Compose**
-- **Caddy** (reverse proxy + Let's Encrypt automatico)
-- **Go binary** (build del `Dockerfile` esistente)
-- **Postgres 16** (volume persistente, WAL archiving giornaliero su Hetzner Storage Box €3/mese)
-- **MinIO** (S3-compatible, docker image ufficiale)
-- **(opzionale) Postfix** per email
-
-### Step pratici
-1. Crea account Hetzner + carta valida (carta italiana funziona)
-2. `hcloud server create --name instaedit --type ccx13 --image ubuntu-24.04 --location nbg1`
-3. Punta `api.instaedit.org` e `app.instaedit.org` all'IP del server
-4. SSH dentro, installa Docker
-5. (Quando pronto) chiedimi: ti genero `docker-compose.yml` con tutto
-
----
 
 ## 🌅 Se hai tempo / vuoi fare altro
 
@@ -210,8 +109,8 @@ I mock attualmente ritornano array vuoti. Se vuoi che la demo mostri
 qualche fixture in `web/src/lib/demo.ts`. Tempo: 5 min.
 
 ### Aggiungi il job "MinIO → Drive per cold storage"
-Solo se hai scelto Path C. È un worker Go che periodicamente fa
-`mc mirror minio/bucket drive:/InstaEdit-Archive`. 30 min di codice.
+È un task separato di storage e backup; prima di implementarlo aggiorna il
+runbook in `docs/DEPLOY.md` e `docs/OPERATIONS.md`. 30 min di codice.
 
 ### Self-host email (Postfix)
 Se vuoi inviare magic-link dalla tua VPS, configurazione Postfix +
@@ -219,7 +118,7 @@ DKIM + SPF + DMARC. Mezza giornata. Per ora skippa — l'email
 transazionale non è wirata comunque.
 
 ### Self-host error tracking (GlitchTip)
-Solo se diventi grande. Per ora `fly logs` basta.
+È una feature separata e non modifica la topologia Vercel + VPS.
 
 ---
 
@@ -230,12 +129,12 @@ Solo se diventi grande. Per ora `fly logs` basta.
 | Codice Go (API + worker) | ✅ pronto |
 | Codice React (SPA) | ✅ pronto |
 | Demo mode (frontend senza backend) | ✅ pronto (test 178/178 verdi) |
-| Tigris bucket creato | ✅ ma key leakata |
-| Fly payment | ❌ rifiutato |
-| Meta app | ⏸️ non ancora creata |
-| DNS api.instaedit.org | ⏸️ non ancora configurato |
-| Beta privata | ⏸️ bloccata su Fly |
-| Migrazione VPS | ⏸️ opzionale |
+| Object storage production | ✅ MinIO nel Compose del VPS |
+| Frontend production | ✅ Vercel |
+| Meta app | ⏸️ da verificare secondo il provider |
+| DNS `api.instaedit.org` | ⏳ verificare in `docs/OPERATIONS.md` |
+| Secret production | ⏳ gestire in `docs/DEPLOY.md` §3 |
+| Migrazione infrastrutturale | ✅ topologia Vercel + VPS definita |
 
 ---
 
@@ -357,13 +256,13 @@ curl -X POST http://localhost:8080/api/v1/booking_events \
    - URL risultante: `https://calendar.app.google/<NEW_ID>`.
 2. **Sostituisci ID in `web/src/lib/booking.ts`** (riga 31 circa)
    - In-source: rimpiazza la stringa fallback `QTmr3puFKCX42i9Q8` con `<NEW_ID>`.
-   - **OPPURE** (rotazione senza commit code-side): setta `VITE_BOOKING_URL=https://calendar.app.google/<NEW_ID>?utm_source=instagram_landing` come **build-arg** su Vercel o Fly. Vedi il callout al commento `web/src/lib/booking.ts:11-14`. ⚠️ **NON** usare `flyctl secrets set VITE_BOOKING_URL=…` — è runtime-only e Vite non lo vede a build-time.
+   - **OPPURE** (rotazione senza commit code-side): setta `VITE_BOOKING_URL=https://calendar.app.google/<NEW_ID>?utm_source=instagram_landing` come variabile di build nel progetto Vercel. Vedi il callout al commento `web/src/lib/booking.ts:11-14`.
 3. **Rebuild frontend**
    - Vercel: push su `main` trigger auto-rebuild.
    - Locale: `cd InstaeditLogin/web && npm ci && npx tsc --noEmit -p tsconfig.app.json && npm run build`.
 4. **Deploy**
    - Vercel: si pubblica automaticamente dopo il commit.
-   - Fly: `flyctl deploy --build-arg VITE_BOOKING_URL=<NEW_URL>` (oppure setta `[build.args]` in `fly.toml`).
+   - Vercel: il push su `main` pubblica automaticamente il frontend; per una rotazione senza commit aggiorna la variabile di build e avvia un redeploy.
 5. **Smoke test anonimo (3 min)**
    - Apri `https://instaedit.org` in incognito.
    - Click CTA *"Schedule Your Free Strategy Call"* → completa le 3 domande → Submit.
@@ -386,10 +285,12 @@ curl -X POST http://localhost:8080/api/v1/booking_events \
 
 ---
 
-## 🔍 Tigris-vs-MinIO cutover audit (2026-07-25, post-Fly-destroy)
+## 🗃️ Archivio non operativo: Tigris-vs-MinIO cutover audit (2026-07-25)
 
-> **Verdict: ⚠️ NOT YET SAFE TO REMOVE TIGRIS.** Code-side ✅ GREEN;
-> bucket-side + VPS runtime ⏸️ UNCLEAR (needs operator execution on VPS).
+> **ARCHIVIO STORICO — NON ESEGUIRE.** Questa sezione conserva evidenze del
+> vecchio cutover e non modifica la topologia supportata. Per il runtime
+> corrente usare esclusivamente [`docs/DEPLOY.md`](docs/DEPLOY.md) e
+> [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ### Audit gate (4-step user spec from chat)
 
@@ -866,11 +767,11 @@ docker compose exec minio mc encrypt set sse-s3 minio/instaedit-local
 
 ---
 
-## ⚠️ Cascade-destroy warning: Tigris Fly-managed
+## 🗃️ Archivio non operativo: Cascade-destroy warning Tigris Fly-managed
 
-> Rischio non-Fly-side ma REALE: bucket Fly-managed può essere rimosso
-> automaticamente da `fly apps destroy` anche se i nostri script
-> sono OUT-OF-SCOPE in spirit.
+> **ARCHIVIO STORICO — NON ESEGUIRE.** Il contenuto seguente documenta un
+> rischio del vecchio deployment Fly/Tigris e non è una procedura corrente.
+> La topologia supportata resta Vercel + VPS; seguire i runbook canonici.
 
 **Contesto storico:** `docs/archive/legacy-fly/provision-tigris.sh` documentava una
 variante **Fly-managed**; il file è archiviato e non operativo:

@@ -240,7 +240,7 @@ La piattaforma production è ibrida e controllata direttamente:
 
 - Vercel serve il frontend React su `https://app.instaedit.org`.
 - Il server proprietario esegue API, worker, PostgreSQL e MinIO con Docker Compose.
-- Caddy sul server espone `https://dev.instaedit.org` verso l'API e blocca `/internal/*`.
+- Caddy sul VPS espone `https://api.instaedit.org` verso l'API e blocca `/internal/*`.
 - Fly.io, Railway, Render e Kubernetes non fanno parte del percorso supportato.
 
 ### Secret del backend self-hosted
@@ -253,7 +253,7 @@ I valori OAuth production devono essere:
 
 ```env
 FRONTEND_URL=https://app.instaedit.org
-YOUTUBE_REDIRECT_URI=https://dev.instaedit.org/api/v1/auth/youtube/callback
+YOUTUBE_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/youtube/callback
 CORS_ALLOWED_ORIGINS=https://app.instaedit.org
 COOKIE_DOMAIN=.instaedit.org
 ```
@@ -261,7 +261,7 @@ COOKIE_DOMAIN=.instaedit.org
 ### Backend: avvio self-hosted
 
 ```bash
-cd /opt/instaedit/app
+cd /opt/instaedit/InstaeditLogin
 INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production \
   docker compose \
     --env-file /opt/instaedit/secrets/.env.production \
@@ -273,8 +273,10 @@ INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production \
 Compose attende PostgreSQL healthy, esegue `instaedit-migrate` e avvia API e
 worker solo dopo il completamento delle migrazioni. L'API resta su
 `127.0.0.1:8080`; database e MinIO non sono pubblicati sull'host.
-Usa [ops/production/Caddyfile](ops/production/Caddyfile) come riferimento per
+Usa [ops/vps/Caddyfile](ops/vps/Caddyfile) come riferimento per
 il reverse proxy API. Il frontend e le sue route web restano su Vercel.
+Per la topologia, il cutover e le verifiche usa [`docs/DEPLOY.md`](docs/DEPLOY.md);
+per DNS, TLS, monitoring e recovery usa [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ### Frontend: Vercel
 
@@ -293,20 +295,21 @@ Il bundle deve contenere `https://api.instaedit.org`, mai `dev.instaedit.org`,
 ### Verifica dopo il deploy
 
 ```bash
-curl -fsS https://dev.instaedit.org/api/v1/health
-curl -fsS https://dev.instaedit.org/ready
+curl -fsS https://api.instaedit.org/api/v1/health
+curl -fsS https://api.instaedit.org/ready
 INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production \
   docker compose --env-file /opt/instaedit/secrets/.env.production \
     -f docker-compose.yml -f docker-compose.production.yml ps
 ```
 
 Durante un nuovo collegamento Google l'URL deve contenere esclusivamente:
-`redirect_uri=https://dev.instaedit.org/api/v1/auth/youtube/callback`.
+`redirect_uri=https://api.instaedit.org/api/v1/auth/youtube/callback`.
 
 ### Note storiche sui deploy non supportati
 
-Le vecchie istruzioni su Fly, Railway e altri provider sono mantenute solo
-come storico e non descrivono il percorso operativo corrente.
+Le configurazioni e istruzioni storiche di provider alternativi sono archiviate
+soltanto per audit; il percorso operativo corrente è Vercel + VPS ed è descritto
+in [`docs/DEPLOY.md`](docs/DEPLOY.md) e [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 ## Sicurezza
 
 - Token OAuth **mai** salvati in chiaro (AES-256-GCM)

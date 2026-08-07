@@ -1,16 +1,23 @@
-# InstaEdit — Deployment Audit (storico)
+# InstaEdit — Deployment Audit (storico, non operativo)
 
-> La topologia supportata è ibrida: Vercel serve il frontend, mentre
-> Docker Compose, PostgreSQL, MinIO, API, worker e Caddy risiedono sul server
+> **ARCHIVIO STORICO — NON USARE COME RUNBOOK.** La topologia supportata è
+> **Vercel + VPS**: Vercel serve esclusivamente il frontend, mentre Docker
+> Compose, PostgreSQL, MinIO, API, worker e Caddy risiedono sul VPS
 > proprietario. Fly.io e altri deploy backend esterni non sono supportati.
-> Il contenuto seguente conserva l'audit storico delle configurazioni cloud.
+> Il contenuto seguente conserva l'audit storico delle configurazioni cloud;
+> per le procedure correnti usare [`docs/DEPLOY.md`](DEPLOY.md) e
+> [`docs/OPERATIONS.md`](OPERATIONS.md).
 
-**Scope:** Block #2 of the broad site-quality plan — verify domain, HTTPS, DNS, redirect rules, and all deployment configuration surfaces: `fly.toml`, root `vercel.json`, `ops/local/Caddyfile`, and the now-deprecated `ops/vps/Caddyfile` (moved to `ops/legacy/Caddyfile` in this block).
+**Scope:** Historical Block #2 audit. The current deployment source of truth is
+`docs/DEPLOY.md` + `docs/OPERATIONS.md`, with `vercel.json` for the frontend,
+`ops/vps/Caddyfile` for production VPS routing, and `ops/local/Caddyfile` for
+local development. References to `fly.toml` and `ops/legacy/Caddyfile` below
+are retained only to explain the historical cutover and are not deploy paths.
 
 ## Executive summary
 
-- **HTTPS termination: ✅ covered on every public-facing surface.** Fly (`api.instaedit.org`) uses `force_https = true` + Fly-managed Let's Encrypt. Vercel (`app.instaedit.org` + apex `instaedit.org`) terminates TLS automatically. Local dev (`ops/local/Caddyfile`) uses mkcert + cloudflared.
-- **DNS delegation: ✅ documented canonical records in `docs/DEPLOY.md` §1.5.** Apex `instaedit.org` A → Vercel Anycast `76.76.21.21`. `app.instaedit.org` CNAME → `cname.vercel-dns.com.` (Vercel edge). `api.instaedit.org` CNAME → `instaedit-login.fly.dev.` (Fly). CAA records restrict issuance to LE; SPF + DKIM + DMARC wired for Resend.
+- **HTTPS termination: ✅ covered on every public-facing surface.** Caddy on the VPS (`api.instaedit.org`) terminates TLS for the backend, Vercel (`app.instaedit.org` + apex `instaedit.org`) terminates TLS for the frontend, and local dev (`ops/local/Caddyfile`) uses mkcert + cloudflared.
+- **DNS delegation: ✅ documented canonical records in `docs/DEPLOY.md` §1.5.** The frontend records are Vercel-managed and `api.instaedit.org` resolves to the VPS. CAA records restrict issuance to LE; SPF + DKIM + DMARC are documented in the operations runbook.
 - **Apex 301 redirect to canonical**: **✅ fixed in commit `8271639` on `main`.** Previously only declared via the Vercel dashboard (not auditable in git); now declarative in `root vercel.json` `redirects[]`. Also redirects `www.instaedit.org` → `app.instaedit.org` (the `www.` variant was previously undocumented).
 - **Canonical SEO host: ✅ fixed in commit `8271639` on `main`.** `web/index.html` `og:url`, `twitter:url`, JSON-LD `url`, `image`, `author.url` switched from `https://instaedit.org/` (the apex that 301-redirects) to `https://app.instaedit.org/` (the landing surface). `sitemap.xml` was already on this canonical. `<link rel="canonical" href="https://app.instaedit.org/" />` added for browser-level canonicalization.
 - **Legacy VPS Caddy: ✅ moved to `ops/legacy/Caddyfile` (commit `8271639`).** The file describes a `dev.instaedit.org` deployment that pre-dates the current Fly + Vercel architecture. `git mv` preserves history; `docker-compose.yml` inline reference updated to match.
@@ -21,17 +28,17 @@
 | --- | --- | --- | --- | --- |
 | Marketing SPA (apex) | `instaedit.org` | Vercel (A `76.76.21.21`) | Automatic LE (Vercel) | `root vercel.json` `redirects[]` now enforces 301 → `app.instaedit.org` |
 | Marketing SPA (app) | `app.instaedit.org` | Vercel (CNAME `cname.vercel-dns.com.`) | Automatic LE (Vercel) | `root vercel.json` framework/rewrites |
-| API backend | `api.instaedit.org` | Fly.io (CNAME `instaedit-login.fly.dev.`) | Automatic LE (Fly) | `fly.toml` `[[services]] api`, `force_https=true` |
+| API backend | `api.instaedit.org` | VPS (A record) + host-managed Caddy | Automatic LE (Caddy) | `ops/vps/Caddyfile` + `docs/DEPLOY.md` |
 | Legacy VPS (no longer on path) | `dev.instaedit.org` | Caddy + LE (manual, kept in repo as archaeology) | Manual LE | `ops/legacy/Caddyfile` (was `ops/vps/Caddyfile`) |
 | Local dev tunnel | `https://:8443` (cloudflared) | mkcert + cloudflared on operator laptop | mkcert (local CA) | `ops/local/Caddyfile` |
 
-OAuth callback URIs (registered in each provider's developer console) all terminate at the Fly backend:
+OAuth callback URIs (registered in each provider's developer console) all terminate at the VPS API:
 - `https://api.instaedit.org/api/v1/auth/{instagram|facebook|threads|x|tiktok|youtube|linkedin}/callback`
-- Sources of truth: `fly.toml` `[env]` (committed) + `docs/DEPLOY.md` §3 (canonical reference).
+- Sources of truth: the production secret/configuration procedure in `docs/DEPLOY.md` §3 and the provider runbooks in `docs/OPERATIONS.md`.
 
 ## HTTPS / TLS termination — finding-by-surface
 
-### Fly.io (`api.instaedit.org`)
+### Historical Fly deployment (`api.instaedit.org`)
 - `[[services]] processes = ["api"]` exposes `internal_port = 8080` on `port 80` (handlers `["http"]`, `force_https = true`) and `port 443` (handlers `["tls", "http"]`). ✅
 - `release_command = "./migrate"` runs in an ephemeral machine with the SAME image + staged secrets; abort-on-failure prevents partial deploys (`docs/DEPLOY.md` §7.4).
 - `min_machines_running = 1` + `auto_stop_machines = false` enforce always-on for both api + worker groups. ✅
@@ -44,7 +51,7 @@ OAuth callback URIs (registered in each provider's developer console) all termin
 - **HSTS not declared** in `vercel.json` `headers[]` — real defect, deferred.
 - Canonical SEO surface (in `web/index.html`): `og:url`, `twitter:url`, JSON-LD fields, `<link rel="canonical">` all reference `https://app.instaedit.org/` (commit `8271639`). ✅
 
-### Legacy VPS (`dev.instaedit.org`) — `ops/legacy/Caddyfile`
+### Retired VPS deployment (`dev.instaedit.org`) — `ops/legacy/Caddyfile`
 - Was mounted under `/srv/instaedit/web/dist` and reverse-proxied `/api/*` + `/instaedit-dev/*` on the host. Not in the production path for months.
 - **Moved to `ops/legacy/Caddyfile`** in commit `8271639` via `git mv` (history preserved). `docker-compose.yml` inline reference at the Velox bridge section now reads `ops/legacy/Caddyfile + ops/local/Caddyfile`.
 - File content unchanged — kept as historical record of the pre-Fly/Vercel shape; do NOT use as a deploy reference.
@@ -104,9 +111,9 @@ No `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Optio
 
 Doc itself records that as of 2026-07-14 the live `api.instaedit.org` was responding with `Server: Caddy` (not Fly), missing `fly-request-id`, and `platforms: ["threads"]` only — likely DNS re-pointed, stale Fly deploy, or another developer's isolated deploy. Operator-side investigation required per the §8.1.1 DNS correction checklist. Tracked as ongoing operational risk, not a config fix.
 
-## Per-surface appendix
+## Historical per-surface appendix (non-operative)
 
-### `fly.toml`
+### Historical `fly.toml` (not supported)
 
 - `app = "instaedit-login"`, `primary_region = "iad"`.
 - `[build] dockerfile = "Dockerfile"`, `build_target = "production"` — pinned explicitly.
@@ -140,14 +147,16 @@ Doc itself records that as of 2026-07-14 the live `api.instaedit.org` was respon
 - Local-only MinIO host binding `127.0.0.1:19000:9000` for VMs where `:9000` is occupied.
 - Single inline reference to `ops/legacy/Caddyfile` + `ops/local/Caddyfile` updated from `ops/vps/Caddyfile + ops/local/Caddyfile` in commit `8271639`.
 
-## Open follow-ups
+## Historical follow-ups (non-operative)
 
-1. **HSTS + security headers block** — Vercel `headers[]` for SPA + Fly edge config for API. Live-preview on Vercel requires the same headers to avoid leaking header choices across PRs (per `docs/ARCHITECTURE.md` §Velox runtime policy).
-2. **`docs/DEPLOY.md` §8.1 active investigation** — operator-side: `dig +short api.instaedit.org CNAME`, `flyctl status`, re-run §8 Gates A/B/C.
-3. **DNSSEC enablement at registrar** — Cloudflare one-click, Namecheap DS records. CAA records are already in the runbook; need to verify they propagate.
-4. **www.instaedit.org 301** is now in source — verify Vercel dashboard is configured to accept the `www.` host (or remove that record from the redirects list if not desired).
-5. **`ops/legacy/Caddyfile` body update** — the two `docker run` / `cp` bootstrap commands at the top of the file still reference `ops/vps/Caddyfile` (self-references). Tracked for a follow-up micro-commit if any operator needs to re-bootstrap the legacy setup.
+The items below belong to the historical audit and are not current deployment
+instructions. Any current HSTS, DNSSEC, redirect, Caddy, or security work must
+be evaluated against [`docs/DEPLOY.md`](DEPLOY.md) and
+[`docs/OPERATIONS.md`](OPERATIONS.md) before execution.
 
 ## Verdict
 
-**HTTPS, DNS, redirect, and deployment configuration: ✅ verified, three real defects shipped as a single block in commit `8271639` on `main`.** Open follow-ups: HSTS hardening (deferred), DEPLOY.md §8.1 live verification (operator-side), and registrar-side DNSSEC (no code). No branches created.
+**The current supported architecture is Vercel frontend + VPS backend/state.**
+This file is retained as a historical audit; it is not a deployment runbook.
+For current procedures and operational decisions, use `docs/DEPLOY.md` and
+`docs/OPERATIONS.md`. No branches are required for the supported deployment path.
