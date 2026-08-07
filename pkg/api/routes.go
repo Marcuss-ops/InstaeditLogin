@@ -55,6 +55,7 @@ func (r *Router) Setup() http.Handler {
 		CSRFMiddleware:        r.editorBFFCSRFMiddleware,
 		YouTubeVideoEditStore: r.youtubeVideoEditStore,
 		WorkspaceStore:        r.workspaceStore,
+		TeamStore:             r.teamStore,
 	}))
 	reg.Register(NewIntegrationsModule(IntegrationsModuleDeps{
 		ExternalDestinationStore: r.externalDestinations,
@@ -308,16 +309,26 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodPut, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/draft", r.protected(saveDraftByProjectHandler.ServeHTTP))
 
 	// POST /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata
-	// NVIDIA AI metadata generation. Read-only step BEFORE publish:
-	// generates title, description, tags, languages and translations
-	// via NVIDIA API. The operator reviews + optionally edits the
-	// generated values before submitting through /publish. CSRF
-	// semantics match the publish endpoint.
+	// ASYNC NVIDIA AI metadata generation kick-off (migration 113):
+	// enqueues a metadata_generation_jobs row and returns 202
+	// immediately — the POST never blocks on the 60-180s NVIDIA call.
+	// The operator polls GET /generate-metadata/jobs/{job_id} until
+	// completed, reviews + optionally edits the generated title,
+	// description, tags, languages and translations, then submits
+	// through /publish. CSRF semantics match the publish endpoint.
 	var generateNVIDIAMetadataHandler http.Handler = http.HandlerFunc(r.handleGenerateNVIDIAMetadata)
 	if r.csrfMiddleware != nil {
 		generateNVIDIAMetadataHandler = r.csrfMiddleware(generateNVIDIAMetadataHandler)
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata", r.protected(generateNVIDIAMetadataHandler.ServeHTTP))
+
+	// GET /api/v1/youtube/editor-sessions/generate-metadata/jobs/{job_id}
+	// Poll endpoint for the async metadata generation job. Read-only;
+	// no CSRF (GET exempt by spec). Ownership is verified via the
+	// job's workspace (enumerable BIGSERIAL ids never leak cross-
+	// tenant — non-owners get 404).
+	var getMetadataGenerationJobHandler http.Handler = http.HandlerFunc(r.handleGetMetadataGenerationJob)
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/generate-metadata/jobs/{job_id}", r.protected(getMetadataGenerationJobHandler.ServeHTTP))
 
 	var publishEditorSessionHandler http.Handler = http.HandlerFunc(r.handlePublishYouTubeEditorSession)
 	if r.csrfMiddleware != nil {

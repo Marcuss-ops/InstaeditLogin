@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -59,6 +60,8 @@ const (
 	ScopeVeloxWorkersRead = veloxcontract.ScopeVeloxWorkersRead
 	ScopeVeloxAssetsRead  = veloxcontract.ScopeVeloxAssetsRead
 	ScopeVeloxAssetsWrite = veloxcontract.ScopeVeloxAssetsWrite
+	ScopeVeloxEditorRead  = veloxcontract.ScopeVeloxEditorRead
+	ScopeVeloxEditorWrite = veloxcontract.ScopeVeloxEditorWrite
 )
 
 // signControlToken issues a short-lived HS256 JWT for the InstaEdit→
@@ -87,6 +90,18 @@ const (
 // jwt.NewWithClaims and jwt.ParseWithClaims work without custom
 // getter methods.
 func signControlToken(secret []byte, userID, workspaceID int64, scopes []string) (string, error) {
+	return signControlTokenForProject(secret, userID, workspaceID, "", scopes)
+}
+
+// signControlTokenForProject issues the same short-lived control JWT as
+// signControlToken, optionally binding it to one editor project. The
+// project claim is only present for project-scoped editor calls; legacy
+// jobs/workers/assets calls remain workspace-scoped.
+func signControlTokenForProject(secret []byte, userID, workspaceID int64, projectID string, scopes []string) (string, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID != "" && (len(projectID) > 128 || strings.ContainsAny(projectID, "\r\n") || !strings.HasPrefix(projectID, "ve_")) {
+		return "", fmt.Errorf("veloxclient: invalid project_id")
+	}
 	if len(secret) == 0 {
 		return "", fmt.Errorf("veloxclient: control JWT secret is empty (VELOX_CONTROL_JWT_SECRET not configured)")
 	}
@@ -117,6 +132,9 @@ func signControlToken(secret []byte, userID, workspaceID int64, scopes []string)
 		"scopes":       scopes,
 		"exp":          now.Add(tokenTTL).Unix(), // int64, NOT NumericDate
 		"jti":          jti,
+	}
+	if projectID != "" {
+		claims["project_id"] = projectID
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(secret)

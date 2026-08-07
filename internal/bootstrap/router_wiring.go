@@ -43,6 +43,13 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	rateLimitSvc := services.NewRateLimitServiceWithMemory(rateLimitRepo, s.memoryLimiter)
 	analyticsClock := analytics.RealClock{}
 
+	veloxControlClient := veloxclient.New(s.cfg.Velox.VeloxControlURL, s.cfg.Velox.VeloxControlJWTSecret)
+	if veloxControlClient == nil {
+		slog.Info("velox control client not configured — jobs and project-scoped editor bridges remain unmounted")
+	} else {
+		slog.Info("velox control client configured", "control_url", s.cfg.Velox.VeloxControlURL)
+	}
+
 	// Booking-event repo backing POST /api/v1/booking_events
 	// (anonymous strategy-call capture from the marketing
 	// BookingProvider modal). Wired unconditionally — the
@@ -99,18 +106,19 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		// + CSRF middlewares mirror the destinations route wiring so the
 		// /api/v1/velox/* chain is: auth → CSRF → handler.
 		api.WithVeloxJobRegistry(veloxjobs.NewDefaultRegistry()),
-		func() api.RouterOption {
-			vc := veloxclient.New(s.cfg.Velox.VeloxControlURL, s.cfg.Velox.VeloxControlJWTSecret)
-			if vc == nil {
-				slog.Info("velox BFF client not configured (VELOX_CONTROL_URL or VELOX_CONTROL_JWT_SECRET empty) — /api/v1/velox/* routes not mounted")
-				return func(*api.Router) {} // no-op option
-			}
-			slog.Info("velox BFF client configured",
-				"control_url", s.cfg.Velox.VeloxControlURL)
-			return api.WithVeloxBFFClient(vc)
-		}(),
+		api.WithVeloxBFFClient(veloxControlClient),
+		api.WithEditorBFFClient(veloxControlClient),
 		api.WithVeloxBFFAuthMiddleware(s.authMgr.Middleware),
 		api.WithVeloxBFFCSRFMiddleware(func(next http.Handler) http.Handler {
+			return auth.NewCSRF(auth.CSRFConfig{
+				Secure:       true,
+				Path:         "/",
+				CookieDomain: s.cfg.HTTP.CookieDomain,
+				SameSite:     http.SameSiteNoneMode,
+			}, next)
+		}),
+		api.WithEditorBFFAuthMiddleware(s.authMgr.Middleware),
+		api.WithEditorBFFCSRFMiddleware(func(next http.Handler) http.Handler {
 			return auth.NewCSRF(auth.CSRFConfig{
 				Secure:       true,
 				Path:         "/",
@@ -189,13 +197,22 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	// (even with empty key) so the nil-guard is in the handler, not
 	// in the wiring — a future env-var reload (unlikely but
 	// architecturally sound) would pick up the key without a restart.
-	nvidiaSvc := services.NewMetadataGenerator(s.cfg.AI.NVIDIAAPIKey)
+	nvidiaSvc := services.NewMetadataGenerator(s.cfg.AI.NVIDIAAPIKey, services.WithModel(s.cfg.AI.NVIDIAModel))
 	if s.cfg.AI.NVIDIAAPIKey != "" {
-		slog.Info("NVIDIA AI metadata generator configured")
+		if s.cfg.AI.NVIDIAModel != "" {
+			slog.Info("NVIDIA AI metadata generator configured", "model", s.cfg.AI.NVIDIAModel)
+		} else {
+			slog.Info("NVIDIA AI metadata generator configured (default model)")
+		}
 	} else {
 		slog.Info("NVIDIA AI metadata generator NOT configured (NVIDIA_API_KEY empty) — /generate-metadata returns 503, manual entry still works")
 	}
 	opts = append(opts, api.WithNvidiaMetadataService(nvidiaSvc))
+	// Async metadata generation jobs (migration 113): the POST
+	// /generate-metadata endpoint enqueues a row here and returns 202;
+	// the MetadataGenerationWorker claims + processes it in the
+	// background; GET /generate-metadata/jobs/{id} polls the result.
+	opts = append(opts, api.WithMetadataGenerationStore(repository.NewMetadataGenerationJobRepository(s.db)))
 
 	// Wire the YouTube service into the router for editor-sessions
 	// and validate-account endpoints. Hard-fail when YouTubeClientID

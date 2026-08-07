@@ -1,6 +1,6 @@
 // Package editor implements the Editor BFF module. It exposes a
 // single bounded catch-all route under /api/v1/editor/* that proxies
-// the Dark Editor SPA's API calls to the Velox master. The route is
+// the InstaEditor SPA's API calls to the Velox master. The route is
 // protected by InstaEdit's session authentication and CSRF middleware;
 // the module signs a short-lived control JWT so the Velox master can
 // verify the request came from the InstaEdit BFF and enforce workspace
@@ -19,6 +19,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -37,22 +39,18 @@ type ProxyClient interface {
 	Proxy(ctx context.Context, method, path string, userID, workspaceID int64, body io.Reader, contentType string, scopes []string) (*http.Response, error)
 }
 
-// scopesForMethod maps the proxied HTTP method to the control-JWT
-// scopes signed into the outbound request (per-operation grants,
-// architect verdict Q2). Reads carry only jobs.read; mutating methods
-// carry the write-side grants. Velox's per-route middleware accepts
-// "exact OR superset" (HasAllScopes), so a write route needing only
-// jobs.write is satisfied while a read token can never mutate.
-func scopesForMethod(method string) []string {
-	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return []string{veloxcontract.ScopeVeloxJobsRead}
-	default:
-		return []string{
-			veloxcontract.ScopeVeloxJobsWrite,
-			veloxcontract.ScopeVeloxAssetsWrite,
-		}
+type projectProxyClient interface {
+	ProxyForProject(ctx context.Context, method, path string, userID, workspaceID int64, projectID string, body io.Reader, contentType string, scopes []string) (*http.Response, error)
+}
+
+// scopesForPath maps an editor operation to the narrow editor grant.
+// Editor requests never borrow jobs/assets scopes: the Velox editor route
+// requires both a project claim and an editor-specific scope.
+func scopesForPath(method, path string) []string {
+	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+		return []string{veloxcontract.ScopeVeloxEditorRead}
 	}
+	return []string{veloxcontract.ScopeVeloxEditorWrite}
 }
 
 // Deps carries the injectable dependencies for the editor BFF module.
@@ -60,6 +58,9 @@ type Deps struct {
 	Client         ProxyClient
 	AuthMiddleware func(http.Handler) http.Handler
 	CSRFMiddleware func(http.Handler) http.Handler
+	// AuthorizeProject must resolve the InstaEdit-owned editor session
+	// for this user/workspace before any project-bound token is minted.
+	AuthorizeProject func(ctx context.Context, userID, workspaceID int64, projectID string, write bool) error
 }
 
 // EditorBFFModule mounts the /api/v1/editor/* catch-all proxy.
@@ -113,8 +114,33 @@ func (m *EditorBFFModule) proxyHandler() http.Handler {
 			path = path[len(prefix):]
 		}
 
+		projectID := projectIDFromEditorPath(path)
+		if projectID == "" {
+			writeError(w, http.StatusNotFound, "editor project context not found")
+			return
+		}
+		if m.deps.AuthorizeProject == nil {
+			writeError(w, http.StatusServiceUnavailable, "editor project authorization unavailable")
+			return
+		}
+		write := req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions
+		if err := m.deps.AuthorizeProject(req.Context(), userID, workspaceID, projectID, write); err != nil {
+			writeError(w, http.StatusNotFound, "editor project context not found")
+			return
+		}
+
 		contentType := req.Header.Get("Content-Type")
-		resp, err := m.deps.Client.Proxy(req.Context(), req.Method, path, userID, workspaceID, req.Body, contentType, scopesForMethod(req.Method))
+		scopes := scopesForPath(req.Method, path)
+		var resp *http.Response
+		var err error
+		if projectID != "" {
+			projectClient, ok := m.deps.Client.(projectProxyClient)
+			if !ok {
+				writeError(w, http.StatusNotImplemented, "project-scoped editor bridge unavailable")
+				return
+			}
+			resp, err = projectClient.ProxyForProject(req.Context(), req.Method, path, userID, workspaceID, projectID, req.Body, contentType, scopes)
+		}
 		if err != nil {
 			slog.Error("editor bff: proxy failed", "workspace_id", workspaceID, "err", err)
 			writeError(w, http.StatusBadGateway, "upstream editor call failed")
@@ -133,6 +159,22 @@ func (m *EditorBFFModule) proxyHandler() http.Handler {
 			slog.Error("editor bff: copy upstream response failed", "workspace_id", workspaceID, "err", err)
 		}
 	})
+}
+
+var editorProjectIDPattern = regexp.MustCompile(`^ve_[A-Za-z0-9_-]{1,125}$`)
+
+func projectIDFromEditorPath(path string) string {
+	const prefix = "/projects/"
+	if !strings.HasPrefix(path, prefix) || strings.ContainsAny(path, "\r\n") {
+		return ""
+	}
+	remainder := strings.TrimPrefix(path, prefix)
+	projectID, _, _ := strings.Cut(remainder, "/")
+	projectID = strings.TrimSpace(projectID)
+	if !editorProjectIDPattern.MatchString(projectID) {
+		return ""
+	}
+	return projectID
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

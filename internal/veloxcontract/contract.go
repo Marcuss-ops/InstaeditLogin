@@ -279,4 +279,8 @@ const (
 	ScopeVeloxWorkersRead = "workers.read"
 	ScopeVeloxAssetsRead  = "assets.read"
 	ScopeVeloxAssetsWrite = "assets.write"
+	// Editor scopes are reserved for the project-scoped bridge. They
+	// must never be used for catalog or workspace-wide operations.
+	ScopeVeloxEditorRead  = "editor.read"
+	ScopeVeloxEditorWrite = "editor.write"
 )

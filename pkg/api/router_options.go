@@ -473,10 +473,21 @@ func WithBookingEventStore(store BookingEventStore) RouterOption {
 // used by the /generate-metadata endpoint. When nil (the default),
 // the endpoint returns 503 and manual metadata entry still works.
 // Production wiring in internal/bootstrap/app.go passes
-// services.NewMetadataGenerator(cfg.AI.NVIDIAAPIKey).
+// services.NewMetadataGenerator(cfg.AI.NVIDIAAPIKey,
+// services.WithModel(cfg.AI.NVIDIAModel)).
 func WithNvidiaMetadataService(svc *services.MetadataGenerator) RouterOption {
 	return func(r *Router) {
 		r.nvidiaMetadataSvc = svc
+	}
+}
+
+// WithMetadataGenerationStore wires the async metadata generation job
+// store (migration 113). When nil (the default), the
+// /generate-metadata endpoints return 503. Production wiring passes
+// repository.NewMetadataGenerationJobRepository(app.DB).
+func WithMetadataGenerationStore(store MetadataGenerationStore) RouterOption {
+	return func(r *Router) {
+		r.metadataGenerationStore = store
 	}
 }
 

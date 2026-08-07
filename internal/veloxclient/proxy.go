@@ -14,7 +14,7 @@ import (
 // returns the upstream response verbatim. The caller is responsible
 // for closing resp.Body.
 //
-// This is used by the EditorBFFModule so the Dark Editor SPA can talk
+// This is used by the EditorBFFModule so the InstaEditor SPA can talk
 // to the Velox private master through InstaEdit's authenticated BFF
 // without ever seeing the control secret.
 //
@@ -32,7 +32,18 @@ import (
 //     lives at the call site where it is auditable, not hidden in
 //     the transport client.
 func (c *Client) Proxy(ctx context.Context, method, path string, userID, workspaceID int64, body io.Reader, contentType string, scopes []string) (*http.Response, error) {
-	token, err := signControlToken(c.secret, userID, workspaceID, scopes)
+	return c.proxyForProject(ctx, method, path, userID, workspaceID, "", body, contentType, scopes)
+}
+
+// ProxyForProject forwards an editor request bound to one opaque project
+// handle. The project_id is signed into the control JWT and cannot be
+// replaced by a browser-supplied header or query parameter at Velox.
+func (c *Client) ProxyForProject(ctx context.Context, method, path string, userID, workspaceID int64, projectID string, body io.Reader, contentType string, scopes []string) (*http.Response, error) {
+	return c.proxyForProject(ctx, method, path, userID, workspaceID, projectID, body, contentType, scopes)
+}
+
+func (c *Client) proxyForProject(ctx context.Context, method, path string, userID, workspaceID int64, projectID string, body io.Reader, contentType string, scopes []string) (*http.Response, error) {
+	token, err := signControlTokenForProject(c.secret, userID, workspaceID, projectID, scopes)
 	if err != nil {
 		return nil, fmt.Errorf("veloxclient: sign token: %w", err)
 	}

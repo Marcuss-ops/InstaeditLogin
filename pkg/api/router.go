@@ -17,6 +17,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/editor"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
 
@@ -241,6 +242,10 @@ type Router struct {
 	// internal/veloxclient and signs a short-lived JWT with
 	// VELOX_CONTROL_JWT_SECRET before calling the Velox master.
 	veloxBFFClient veloxapi.Client
+	// editorBFFClient is the project-scoped bridge to the separate Velox
+	// editor runtime. It is deliberately distinct from the jobs/assets
+	// client so editor requests cannot inherit workspace-global routes.
+	editorBFFClient editor.ProxyClient
 	// veloxJobRegistry resolves the technical job_type definitions used by
 	// the canonical POST /api/v1/jobs boundary.
 	veloxJobRegistry *veloxjobs.Registry
@@ -248,7 +253,9 @@ type Router struct {
 	// veloxBFFCSRFMiddleware (P2 Velox BFF) wraps the user-facing
 	// /api/v1/velox/* routes with the project's canonical CSRF
 	// check. Mirrors csrfMiddleware used by the destinations route.
-	veloxBFFCSRFMiddleware func(http.Handler) http.Handler
+	veloxBFFCSRFMiddleware  func(http.Handler) http.Handler
+	editorBFFAuthMiddleware func(http.Handler) http.Handler
+	editorBFFCSRFMiddleware func(http.Handler) http.Handler
 
 	// veloxBFFAuthMiddleware (P2 Velox BFF) mirrors veloxBFFCSRFMiddleware
 	// for the JWT identity layer on /api/v1/velox/*. nil when not wired;
@@ -309,6 +316,14 @@ type Router struct {
 	// 503 and the manual metadata flow remains fully functional.
 	// Wired via WithNvidiaMetadataService in internal/bootstrap/app.go.
 	nvidiaMetadataSvc *services.MetadataGenerator
+	// metadataGenerationStore persists the async NVIDIA metadata
+	// generation jobs (migration 113). The POST /generate-metadata
+	// endpoint enqueues a job and returns 202 immediately; the
+	// background MetadataGenerationWorker processes it; GET
+	// /generate-metadata/jobs/{id} polls the result. When nil, both
+	// endpoints return 503 (nil-guard feature-flag pattern). Wired
+	// via WithMetadataGenerationStore.
+	metadataGenerationStore MetadataGenerationStore
 
 	// youtubeGroupVideosConfig controls the group-video read projection.
 	// It is immutable after construction; youtubeGroupVideosCache is
@@ -318,13 +333,14 @@ type Router struct {
 	youtubeGroupVideosCacheMu sync.Mutex
 	youtubeGroupVideosCache   map[string]youtubeGroupVideosCacheEntry
 
-	// dashboardTopVideosCache caches the dashboard's cross-channel
-	// "Migliori video" ranking per (user, days) so repeated dashboard
-	// loads do not burn YouTube quota on the fan-out. Protected by
-	// dashboardTopVideosCacheMu; entries expire after
-	// dashboardTopVideosCacheTTL.
-	dashboardTopVideosCacheMu sync.Mutex
-	dashboardTopVideosCache   map[string]dashboardTopVideosCacheEntry
+	// dashboardAnalyticsCache caches the full dashboard analytics
+	// response (aggregates + per-channel rows + top videos) per
+	// (user, days) so repeated dashboard loads skip both the DB
+	// metric-history read and the YouTube top-videos fan-out.
+	// Protected by dashboardAnalyticsCacheMu; entries expire after
+	// dashboardAnalyticsCacheTTL.
+	dashboardAnalyticsCacheMu sync.Mutex
+	dashboardAnalyticsCache   map[string]dashboardAnalyticsCacheEntry
 
 	// youtubeVideoEditStore persists thumbnail editor sessions for
 	// YouTube videos. Wired via WithYouTubeVideoEditStore.
