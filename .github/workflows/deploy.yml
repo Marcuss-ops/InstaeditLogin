@@ -237,7 +237,11 @@ jobs:
             "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID" > .vercel/project.json
 
           # Routing: apex redirects + SPA rewrite (quoted heredoc keeps
-          # $1 literal inside the JSON).
+          # $1 literal inside the JSON). A stale index.html (browser tab
+          # opened before a deploy) may reference hashed chunks that no
+          # longer exist: serving the SPA fallback for /assets/* would hand
+          # HTML to the module loader, so return 404 instead and let the
+          # app's chunk-load recovery (lib/chunkLoadRecovery.ts) reload.
           cat > .vercel/output/config.json <<'JSON'
           {
             "version": 3,
@@ -256,6 +260,7 @@ jobs:
               },
               { "handle": "filesystem" },
               { "src": "/api/(.*)", "dest": "https://api.instaedit.org/api/$1" },
+              { "src": "/assets/(.*)", "status": 404 },
               { "src": "/(.*)", "dest": "/index.html" }
             ]
           }
