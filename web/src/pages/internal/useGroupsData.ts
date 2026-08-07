@@ -237,7 +237,9 @@ export function useGroupsData() {
         method: "PATCH",
         body: JSON.stringify({ name: trimmedName }),
       });
-      await load();
+      // Silent reload: the inline rename editor closes on success and the
+      // panel must stay mounted in the current group (no loading flash).
+      await load(true);
     }, [load]);
 
     const handleCreateGroup = useCallback(async () => {
