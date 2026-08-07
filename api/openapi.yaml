@@ -1,7 +1,7 @@
 # =========================================================
-# API AUDIT SUMMARY (1 dropped, 25 kept endpoints)
+# API AUDIT SUMMARY (1 dropped; public and inter-service paths)
 # =========================================================
-# KEPT: 25 PUBLIC_INTER_SERVICE paths across:
+# KEPT PUBLIC/INTER_SERVICE paths across:
 #   * Auth          — /auth/exchange, /auth/logout, /auth/me,
 #                     /auth/{provider}/callback, /auth/{provider}/login
 #   * Auth/API key  — /api-keys, /api-keys/{id}, /api-keys/{id}/rotate
@@ -12,7 +12,10 @@
 #   * Velox Internal— /internal/v1/deliveries,
 #                     /internal/v1/deliveries/{id},
 #                     /internal/v1/destinations/{id}/validate
-#   * YouTube       — /api/v1/youtube/editor-sessions/{id}/thumbnail
+#   * YouTube       — the complete editor-session lifecycle under
+#                     /api/v1/youtube/editor-sessions (create/list,
+#                     project and session lookup, draft autosave,
+#                     metadata generation, thumbnail handoff, publish)
 #   * Livestreams   — /api/v1/livestreams (GET/POST),
 #                     /api/v1/livestreams/channels (GET — wizard
 #                     preflight), /api/v1/livestreams/{id}
@@ -1332,6 +1335,294 @@ paths:
           description: Media store not configured on this server.
         '503':
           description: YouTube video edit store not configured.
+
+  /api/v1/youtube/editor-sessions:
+    post:
+      tags: [YouTube]
+      operationId: createYouTubeEditorSession
+      summary: Create or reuse an editable YouTube thumbnail session.
+      description: |
+        Creates an idempotent session for the workspace, channel and
+        YouTube video tuple. An existing non-terminal session is reused;
+        the response keeps the persisted `session_id` and
+        `velox_project_id`. `editor_url` is a compatibility wire field
+        consumed by the InstaEditor handoff and must not be renamed.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YouTubeEditorSessionCreateRequest'
+      responses:
+        '201':
+          description: Editor session created or resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorSessionCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+    get:
+      tags: [YouTube]
+      operationId: listYouTubeEditorSessions
+      summary: List YouTube editor sessions in a workspace.
+      description: |
+        Returns `{sessions: []}` when there are no matching rows. The
+        workspace query is required to make the tenant boundary explicit;
+        status filtering accepts a comma-separated list. The response
+        uses the persisted `editor_url` compatibility field.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: account_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: status
+          in: query
+          required: false
+          description: Comma-separated editor session statuses.
+          schema: { type: string }
+        - name: include_terminal
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+      responses:
+        '200':
+          description: Matching editor sessions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorSessionListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+  /api/v1/youtube/editor-sessions/by-project/{velox_project_id}:
+    parameters:
+      - name: velox_project_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: Stable Velox project handle held by InstaEditor.
+    get:
+      tags: [YouTube]
+      operationId: getYouTubeEditorSessionByProject
+      summary: Fetch an editor session by Velox project id.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Full editor-session detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorSessionDetail'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+    patch:
+      tags: [YouTube]
+      operationId: updateYouTubeEditorSessionByProject
+      summary: Update editable YouTube session fields by project id.
+      description: |
+        Legacy-compatible thumbnail handoff keyed by `velox_project_id`.
+        The handler accepts only a verified `thumbnail_media_id`; session
+        and workspace fields remain server-owned. Terminal/publishing
+        sessions are rejected by the handler's CAS rules. New callers may
+        use the session-id variant at `/api/v1/youtube/editor-sessions/{id}/thumbnail`.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YouTubeEditorSessionUpdateRequest'
+      responses:
+        '200':
+          description: Updated editor-session detail.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, thumbnail_media_id]
+                properties:
+                  session_id: { type: string }
+                  thumbnail_media_id: { type: string, nullable: true }
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '501':
+          description: Media store not configured on this server.
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+  /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/draft:
+    put:
+      tags: [YouTube]
+      operationId: saveYouTubeEditorSessionDraft
+      summary: Autosave an incomplete editor-session draft.
+      description: |
+        Persists incomplete form values without publish-boundary validation.
+        The CAS guard prevents a draft from overwriting a concurrent publish;
+        a publish or terminal transition returns 409.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: velox_project_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YouTubeEditorSessionDraftRequest'
+      responses:
+        '200':
+          description: Draft saved and echoed by the server.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorSessionDraftResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+  /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata:
+    post:
+      tags: [YouTube]
+      operationId: generateYouTubeEditorMetadata
+      summary: Generate reviewable YouTube metadata with NVIDIA AI.
+      description: |
+        Generates title, description, tags, language and translations for
+        operator review. This endpoint never publishes and returns 503 when
+        NVIDIA AI is not configured; manual metadata entry remains available.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: velox_project_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YouTubeEditorMetadataGenerateRequest'
+      responses:
+        '200':
+          description: Generated metadata for operator review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorMetadataGenerateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: NVIDIA returned an invalid response or failed upstream.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+  /api/v1/youtube/editor-sessions/{id}:
+    get:
+      tags: [YouTube]
+      operationId: getYouTubeEditorSessionById
+      summary: Fetch an editor session by session id.
+      description: The opaque session id is accepted in both legacy UUID and `ytedit_<uuid>` formats.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Full editor-session detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorSessionDetail'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
 
   /api/v1/youtube/editor-sessions/{id}/publish:
     post:
@@ -2686,6 +2977,136 @@ components:
             off-profile; `unknown` = never probed.
 
     # ────── YouTube editor session publish contract ──────────
+    YouTubeEditorSessionCreateRequest:
+      type: object
+      required: [workspace_id, platform_account_id, youtube_video_id]
+      properties:
+        workspace_id: { type: integer, format: int64, minimum: 1 }
+        platform_account_id: { type: integer, format: int64, minimum: 1 }
+        youtube_video_id: { type: string, minLength: 1 }
+        source_thumbnail_url: { type: string, format: uri }
+    YouTubeEditorSessionCreateResponse:
+      type: object
+      required: [session_id, velox_project_id, editor_url]
+      properties:
+        session_id: { type: string }
+        velox_project_id: { type: string }
+        editor_url:
+          type: string
+          format: uri-reference
+          description: Legacy-compatible InstaEditor handoff URL; wire name is stable.
+    YouTubeEditorSessionListResponse:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/YouTubeEditorSessionListEntry'
+    YouTubeEditorSessionListEntry:
+      type: object
+      required: [id, youtube_video_id, velox_project_id, editor_url, status, desired_privacy]
+      properties:
+        id: { type: string }
+        youtube_video_id: { type: string }
+        velox_project_id: { type: string }
+        editor_url: { type: string, format: uri-reference }
+        status: { type: string }
+        thumbnail_media_id: { type: string }
+        desired_privacy: { type: string, enum: [public, unlisted, private] }
+        publish_at: { type: string, format: date-time, nullable: true }
+        actual_privacy: { type: string, enum: [public, unlisted, private], nullable: true }
+        youtube_sync_status: { type: string, nullable: true }
+    YouTubeEditorSessionDetail:
+      type: object
+      required: [id, workspace_id, platform_account_id, youtube_video_id, velox_project_id, desired_privacy, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        workspace_id: { type: integer, format: int64 }
+        platform_account_id: { type: integer, format: int64 }
+        channel_id: { type: string }
+        youtube_video_id: { type: string }
+        velox_project_id: { type: string }
+        source_thumbnail_url: { type: string, format: uri }
+        thumbnail_media_id: { type: string, nullable: true }
+        desired_privacy: { type: string, enum: [public, unlisted, private] }
+        publish_at: { type: string, format: date-time, nullable: true }
+        status: { type: string }
+        last_error: { type: string }
+        actual_privacy: { type: string, enum: [public, unlisted, private], nullable: true }
+        youtube_sync_status: { type: string, nullable: true }
+        draft_title: { type: string, nullable: true }
+        draft_description: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    YouTubeEditorSessionUpdateRequest:
+      type: object
+      required: [thumbnail_media_id]
+      properties:
+        thumbnail_media_id:
+          type: string
+          minLength: 1
+          description: Verified ready media asset id to attach to the session.
+    YouTubeEditorSessionDraftRequest:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        default_language: { type: string }
+        default_audio_language: { type: string }
+        translations:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/YouTubeTranslation'
+        desired_privacy: { type: string, enum: [public, unlisted, private] }
+        publish_at: { type: string, format: date-time, nullable: true }
+    YouTubeEditorSessionDraftResponse:
+      type: object
+      required: [velox_project_id, draft_title, draft_description, draft_tags, draft_default_language, draft_default_audio_language, draft_translations, draft_desired_privacy, draft_updated_at]
+      properties:
+        velox_project_id: { type: string }
+        draft_title: { type: string }
+        draft_description: { type: string }
+        draft_tags:
+          type: array
+          items: { type: string }
+        draft_default_language: { type: string }
+        draft_default_audio_language: { type: string }
+        draft_translations:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/YouTubeTranslation'
+        draft_desired_privacy: { type: string, enum: [public, unlisted, private] }
+        draft_publish_at: { type: string, format: date-time, nullable: true }
+        draft_updated_at: { type: string, format: date-time }
+    YouTubeEditorMetadataGenerateRequest:
+      type: object
+      properties:
+        prompt: { type: string }
+    YouTubeEditorMetadataGenerateResponse:
+      type: object
+      required: [title, description, tags, default_language, default_audio_language, translations]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        default_language: { type: string }
+        default_audio_language: { type: string }
+        translations:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/YouTubeTranslation'
+    YouTubeTranslation:
+      type: object
+      required: [title, description]
+      properties:
+        title: { type: string }
+        description: { type: string }
     YouTubeEditorSessionPublishRequest:
       type: object
       properties:
@@ -3106,6 +3527,16 @@ components:
         caption:
           type: string
           maxLength: 5000
+        language:
+          type: string
+          description: |
+            OPTIONAL source language of the post content (BCP-47 /
+            ISO 639-1, e.g. `it`, `en`). Persisted in post metadata
+            as `source_language`. When a target channel declares a
+            DIFFERENT language in its account metadata, the publish
+            worker translates title + caption into the channel's
+            language before publishing (per-channel-language
+            posting). Empty = unknown (the translator infers it).
         media:
           type: array
           minItems: 1
