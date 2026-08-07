@@ -66,6 +66,7 @@ done
 TMP_DIR=$(mktemp -d -t post-deploy-smoke-XXXXXX)
 chmod 700 "$TMP_DIR"
 COOKIE_JAR="$TMP_DIR/cookies.txt"
+touch "$COOKIE_JAR"
 chmod 600 "$COOKIE_JAR"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
