@@ -87,7 +87,7 @@ func (r *Router) writeAttachThumbnailError(w http.ResponseWriter, err error) {
 // attachThumbnailRequest is the body accepted by
 // POST /api/v1/youtube/editor-sessions/{id}/thumbnail. This is the
 // "direct" handoff endpoint (Blocco #5 P0 #4): callers (typically the
-// dark editor SPA, post-upload) supply a verified media_assets.id
+// InstaEditor SPA, post-upload) supply a verified media_assets.id
 // instead of going through Velox's PATCH-by-project flow. The handler
 // validates asset existence + readiness + workspace accessibility, then
 // atomically links the asset to the session via a single UPDATE with a

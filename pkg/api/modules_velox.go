@@ -92,7 +92,7 @@ func (m *VeloxModule) Register(mux chi.Router) {
 	// PRIVATE_UPLOADED (state machine §10 in
 	// docs/velox-instaedit-contract.md). Creates a
 	// youtube_video_edits row with editor_session_id in the
-	// ytedit_<uuid> format; the dark-editor SPA reads it back via
+	// ytedit_<uuid> format; the InstaEditor SPA reads it back via
 	// GET /api/v1/youtube/editor-sessions/{id}.
 	if m.deps.YouTubeVideoEditStore != nil {
 		mux.Method(http.MethodPost, "/internal/v1/thumbnail-sessions",

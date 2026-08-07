@@ -4,7 +4,7 @@ import "time"
 
 // YouTubeVideoEdit persists an InstaEdit-managed thumbnail editing
 // session for a specific YouTube video. It links the InstaEdit
-// workspace/account, the YouTube video, and the Velox dark-editor
+// workspace/account, the YouTube video, and the Velox InstaEditor
 // project used to produce the thumbnail.
 //
 // ActualPrivacy and YouTubeSyncStatus are the YouTube-side

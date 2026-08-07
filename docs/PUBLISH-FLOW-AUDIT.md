@@ -4,7 +4,7 @@
 > ancora da chiudere per realizzare il flusso:
 >
 > `/content/new` → upload → POST /posts (private) → pagina canale →
-> "Modifica copertina" → Dark Editor → nuova thumbnail + nuova
+> "Modifica copertina" → InstaEditor → nuova thumbnail + nuova
 > privacy → verifica su pagina canale + YouTube Studio.
 
 Questo documento è il punto di partenza per i commit successivi del
@@ -67,8 +67,8 @@ Tutti i contratti lato server sono **già implementati e testati**:
 | `GET /api/v1/posts/{id}/targets`                  | `handleGetPostTargets`                     | ⚠ **GAP**: implementazione attualmente restituisce `{targets: []}` perché `postStore.ListByPost` non è ancora wirato. Vedi "Gap" sotto. |
 | `POST /api/v1/youtube/editor-sessions`            | `handleCreateYouTubeEditorSession` (youtube_editor_sessions.go) | Click-idempotente (FindOrCreate). Helper condiviso con worker. Restituisce `{session_id, velox_project_id, editor_url}`. |
 | `GET /api/v1/youtube/editor-sessions/by-project/{vp_id}` | youtube_editor_sessions_by_project.go | Session lookup by velox_project_id. |
-| `POST /api/v1/youtube/editor-sessions/by-project/{vp_id}/publish` | idem | Publish del Dark Editor. Response con `actual_privacy` e `youtube_sync_status` (P0#7). |
-| `PATCH /api/v1/youtube/editor-sessions/by-project/{vp_id}` | handleUpdateYouTubeEditorSession | Upload thumbnail asset a session (post-Dark Editor). |
+| `POST /api/v1/youtube/editor-sessions/by-project/{vp_id}/publish` | idem | Publish del InstaEditor. Response con `actual_privacy` e `youtube_sync_status` (P0#7). |
+| `PATCH /api/v1/youtube/editor-sessions/by-project/{vp_id}` | handleUpdateYouTubeEditorSession | Upload thumbnail asset a session (post-InstaEditor). |
 | `GET /api/v1/youtube/editor-sessions`            | listEditorSessionsHandler                  | Lista "code da modificare" (già usato in YouTubeStudio). |
 | `POST /api/v1/youtube/editor-sessions/{id}/thumbnail` | youtube_editor_sessions.go             | Attach thumbnail asset a session. |
 | `POST /api/v1/youtube/editor-sessions/{id}/publish` | publishEditorSessionHandler              | Publish by session_id (alternativa a by-project). |
@@ -264,7 +264,7 @@ Per minimizzare il numero di commit e appoggiarsi al riuso:
   `web/src/components/marketing/`, `web/src/components/editor/`,
   `web/src/pages/internal/Uploads.tsx`, `Posts.tsx` (eccetto per
   piccolo extension al link "Open status").
-- `web/src/pages/internal/YouTubeStudio.tsx`: è il Dark Editor,
+- `web/src/pages/internal/YouTubeStudio.tsx`: è il InstaEditor,
   mantiene la sua logica. Solo verificare che pubblicando si torni
   alla pagina canale con refresh.
 

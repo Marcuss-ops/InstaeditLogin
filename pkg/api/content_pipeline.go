@@ -320,7 +320,7 @@ func buildContentPipelineResponse(entry *repository.ContentPipelineEntry, editor
 	return resp
 }
 
-// buildEditorURL constructs the dark-editor URL for a YT pub row.
+// buildEditorURL constructs the InstaEditor URL for a YT pub row.
 // When the row has no velox_project_id the function returns "" so
 // the field stays empty in the response (no fallback URLs that
 // would silently redirect to a wrong SPA).

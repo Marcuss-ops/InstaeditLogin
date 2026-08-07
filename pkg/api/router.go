@@ -346,7 +346,7 @@ type Router struct {
 	// in internal/bootstrap/app.go.
 	contentPipelineStore ContentPipelineStore
 
-	// editorURL is the base URL of the dark editor SPA. When empty,
+	// editorURL is the base URL of the InstaEditor SPA. When empty,
 	// frontendURL is used as a fallback.
 	editorURL string
 

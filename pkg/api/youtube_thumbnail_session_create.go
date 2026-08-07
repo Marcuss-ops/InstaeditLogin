@@ -26,7 +26,7 @@ import (
 //   - SKIPS the YouTube videos.list round-trip (Velox has already
 //     uploaded the video as private; we trust the caller);
 //   - accepts a video_title hint that we stamp onto DraftTitle so
-//     the dark-editor SPA pre-fills the title input;
+//     the InstaEditor SPA pre-fills the title input;
 //   - accepts a final_privacy hint that we stamp onto DesiredPrivacy
 //     (default: "public");
 //   - uses a ytedit_<uuid> id format (manually-created sessions use
@@ -58,7 +58,7 @@ type createThumbnailSessionRequest struct {
 // endpoint still returns bare uuid format).
 //
 // ThumbnailStatus reflects the initial state (pending) so the
-// dark-editor SPA can immediately distinguish "thumbnail needs to be
+// InstaEditor SPA can immediately distinguish "thumbnail needs to be
 // applied" from "thumbnail already applied" on its first GET.
 type createThumbnailSessionResponse struct {
 	EditorSessionID   string `json:"editor_session_id"`
@@ -89,7 +89,7 @@ type createThumbnailSessionResponse struct {
 //     returns the existing row with its existing ids untouched).
 //  3. Call FindOrCreateEditableSession to find or create the row.
 //  4. On a fresh INSERT, stamp DraftTitle (from VideoTitle) +
-//     DesiredPrivacy (from FinalPrivacy) so the dark-editor SPA
+//     DesiredPrivacy (from FinalPrivacy) so the InstaEditor SPA
 //     sees the operator-supplied title + final-privacy hint on its
 //     first read.
 //
@@ -184,7 +184,7 @@ func (m *VeloxModule) CreateThumbnailSessionForDelivery(ctx context.Context, in 
 	if !duplicate {
 		title := strings.TrimSpace(in.VideoTitle)
 		// Truncate to YouTube's 100-char title limit so the
-		// dark-editor SPA doesn't crash on a 5000-char title
+		// InstaEditor SPA doesn't crash on a 5000-char title
 		// hint during the next save-draft cycle.
 		const maxTitle = 100
 		if len(title) > maxTitle {
@@ -361,7 +361,7 @@ func (m *VeloxModule) editorURLForVeloxProject(projectID string) string {
 //
 // Centralised here (not in the handler body) so future
 // refactors that add a third id format (e.g. ve_<uuid> for
-// future dark-editor sessions) only touch one function.
+// future InstaEditor sessions) only touch one function.
 func editorSessionFormat(id string) string {
 	if strings.HasPrefix(id, "ytedit_") {
 		return "ytedit"

@@ -471,7 +471,7 @@ func TestHandleCreateThumbnailSession_ReplayMixedFormat(t *testing.T) {
 
 // TestHandleCreateThumbnailSession_TitleTruncation verifies that a
 // video_title longer than YouTube's 100-char limit is truncated
-// when stamped onto DraftTitle (defence-in-depth so the dark-editor
+// when stamped onto DraftTitle (defence-in-depth so the InstaEditor
 // SPA doesn't 500 on a too-long title during the next save-draft).
 func TestHandleCreateThumbnailSession_TitleTruncation(t *testing.T) {
 	store, ws, users := freshHarnessForThumbnail()

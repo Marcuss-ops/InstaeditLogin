@@ -14,7 +14,7 @@ import (
 // Companion to handleGetYouTubeEditorSessionByProject
 // (pkg/api/youtube_editor_sessions_by_project.go) — same DTO
 // shape (youTubeEditorSessionDetail), keyed by session_id rather
-// than velox_project_id. The Thumbnail Maker (Velox dark-editor
+// than velox_project_id. The Thumbnail Maker (Velox InstaEditor
 // SPA) and any caller that already has an editor_session_id
 // (typically returned by the auto-provisioner
 // POST /internal/v1/thumbnail-sessions) reach the session via

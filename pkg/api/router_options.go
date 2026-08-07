@@ -416,7 +416,7 @@ func WithContentPipelineStore(store ContentPipelineStore) RouterOption {
 	}
 }
 
-// WithEditorURL wires the base URL of the dark editor SPA. When
+// WithEditorURL wires the base URL of the InstaEditor SPA. When
 // empty, frontendURL is used as a fallback when building editor_url.
 func WithEditorURL(url string) RouterOption {
 	return func(r *Router) {

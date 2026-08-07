@@ -18,7 +18,7 @@ import (
 // presigned URL on the row at create time; the URL expires; the
 // worker fires 24h later; the platform API call fails with 403.
 //
-// All publishers (YouTube, Drive, Velox, ingest workers, dark editor
+// All publishers (YouTube, Drive, Velox, ingest workers, InstaEditor
 // surface) call this resolver IMMEDIATELY before the platform API
 // call. The resolver constructs a fresh SigV4 presigned URL with the
 // configured TTL per call — multiple calls in the same publish job

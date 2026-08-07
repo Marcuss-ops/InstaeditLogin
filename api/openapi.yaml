@@ -87,7 +87,7 @@ tags:
       per RFC 7235 + the Velox retry contract.
   - name: YouTube
     description: |
-      YouTube thumbnail-editor session endpoints (the dark-editor
+      YouTube thumbnail-editor session endpoints (the InstaEditor
       SPA integrates against these). Pair with the Velox BFF module
       for the actual rendering work; this tag covers the
       InstaEdit-side session lifecycle (create / link thumbnail /
@@ -1223,7 +1223,7 @@ paths:
   # ──────────── YouTube editor sessions ──────────────────────────────────────
   #
   # Direct handoff endpoint (Blocco #5 P0 #4): callers (typically the
-  # dark editor SPA after uploading the rendered thumbnail to InstaEdit
+  # InstaEditor SPA after uploading the rendered thumbnail to InstaEdit
   # storage) supply a verified media_assets.id and the handler
   # atomically links it to the session in a single UPDATE statement
   # with a CAS predicate `status IN ('editing','failed')`. Coexists
@@ -1408,7 +1408,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Velox project id (the dark editor's project handle).
+          description: Velox project id (the InstaEditor's project handle).
       requestBody:
         required: true
         content:

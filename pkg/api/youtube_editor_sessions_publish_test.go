@@ -152,7 +152,7 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 
 // TestPublishYouTubeEditorSession_HappyPathResponseContainsStatus is the
 // P0 contract lock for the by-id publish pathway
-// (POST /api/v1/youtube/editor-sessions/{id}/publish). The dark editor's
+// (POST /api/v1/youtube/editor-sessions/{id}/publish). InstaEditor's
 // publish handler reads publishResult.status and broadcasts it on the
 // BroadcastChannel -- a missing or wrong JSON key there breaks the live
 // card update for every session published via this endpoint. The

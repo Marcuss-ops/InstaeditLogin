@@ -5,7 +5,7 @@ import "time"
 // groupYouTubeVideosFanoutConcurrency bounds the number of concurrent
 // YouTube `channels.list → playlistItems.list → videos.list` chains
 // performed per request. Empirically YouTube tolerates ~10
-// simultaneous requests per access token, but the dark-editor dashboard
+// simultaneous requests per access token, but the InstaEditor dashboard
 // renders this endpoint on every click — keeping the fan-out at 4
 // keeps the upstream pressure at a fraction of the quota while still
 // aggregating a group with ~16 channels well under the 5s SLA.

@@ -486,7 +486,7 @@ Field reference:
 ## 9. Thumbnail session contract
 
 After `PRIVATE_UPLOADED`, InstaEdit provisions a session bound to the
-uploaded video. The Thumbnail Maker (SPA / dark editor) consumes only
+uploaded video. The InstaEditor thumbnail-editor SPA consumes only
 the session handle. OAuth tokens never reach the browser.
 
 ### 9.1 Session payload (returned to the Thumbnail Maker)

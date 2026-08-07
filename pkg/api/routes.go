@@ -303,7 +303,7 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/{id}", r.protected(getEditorSessionByIDHandler.ServeHTTP))
 
 	// Direct handoff endpoint (Blocco #5 P0 #4): callers (typically the
-	// dark editor SPA after uploading the rendered thumbnail to
+	// InstaEditor SPA after uploading the rendered thumbnail to
 	// InstaEdit storage) supply a verified media_assets.id and the
 	// handler atomically links it to the session. Coexists with the
 	// PATCH-by-project flow (which goes through Velox) — the direct

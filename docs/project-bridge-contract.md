@@ -530,7 +530,7 @@ The current codebase already has the following compatible pieces:
   that does not require a channel or video;
 - Velox's current BFF contract is workspace-scoped and uses narrow job,
   worker and asset scopes;
-- Velox's retired Dark Editor and YouTube domain migrations confirm that
+- Velox's retired legacy InstaEditor surface (formerly called Dark Editor) and YouTube domain migrations confirm that
   editor project ownership moved out of the Velox render-farm database.
 
 The following are compatibility gaps, not permission to weaken this contract:

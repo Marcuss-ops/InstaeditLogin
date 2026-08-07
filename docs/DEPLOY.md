@@ -293,7 +293,7 @@ requests to `/internal/*`.
 Use the tracked `ops/vps/Caddyfile` as the production source to review.
 It contains a single `api.instaedit.org` block: API on `127.0.0.1:8080`,
 `/internal/*` aborted. The legacy `dev.instaedit.org` compatibility host
-(Dark Editor, MinIO proxy, SPA redirects) was removed on 2026-08-07 — the
+(Dark Editor deployment, now branded InstaEditor, MinIO proxy, SPA redirects) was removed on 2026-08-07 — the
 frontend is served exclusively by Vercel. Install the file on the VPS,
 validate it, and reload Caddy without editing the live file by hand:
 

@@ -175,7 +175,7 @@ func TestPublishYouTubeEditorSessionByProject_200_ResponseContainsStatus(t *test
 	// `json:"status"` to a different tag the struct decode above would
 	// still report the right value (because the test round-trips the
 	// body), but the wire payload would not contain the literal
-	// `"status":"published"` key, breaking the dark editor's
+	// `"status":"published"` key, breaking InstaEditor's
 	// `publishResult.status` consumer.
 	if !strings.Contains(rec.Body.String(), `"status":"published"`) {
 		t.Fatalf("expected raw wire body to contain literal `\"status\":\"published\"`, got %s", rec.Body.String())

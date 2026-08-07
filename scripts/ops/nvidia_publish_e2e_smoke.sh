@@ -2,7 +2,7 @@
 # scripts/ops/nvidia_publish_e2e_smoke.sh
 #
 # End-to-end smoke test for the NVIDIA metadata publish flow.
-# Exercises the complete Dark Editor → YouTube publish pipeline:
+# Exercises the complete InstaEditor → YouTube publish pipeline:
 #
 #   1. Magic-link login (or reuse existing session)
 #   2. POST /api/v1/media/presign → get upload URL

@@ -13,7 +13,7 @@ import "time"
 //   - youtube_upload_status    — Drive→Storage→YouTube upload state machine.
 //   - youtube_processing_status — raw YouTube API processingStatus echo,
 //     polled after the upload lands.
-//   - editor_session_id + velox_project_id — Velox dark-editor session
+//   - editor_session_id + velox_project_id — Velox InstaEditor session
 //     opened per (per-target, video) once
 //     processing reaches 'processed'.
 //   - thumbnail_media_id       — media_assets.id (TEXT, no FK constraint by

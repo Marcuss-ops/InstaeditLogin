@@ -23,7 +23,7 @@
 # * PRIMARY APP is InstaEdit Social (Vite on 127.0.0.1:5173, SPA
 #   fallback handler at the bottom of this site block). The browser
 #   enters at `/` and navigates to /groups/:groupId/videos, /login, etc.
-# * SECONDARY APP is the Dark Editor (Next.js on 127.0.0.1:3001) and it
+# * SECONDARY APP is InstaEditor (Next.js on 127.0.0.1:3001) and it
 #   is reachable EXCLUSIVELY under the Next basePath `/dark_editor_v2/*`.
 #   Next emits its `_next/*` assets under the basePath automatically, so
 #   they are intercepted by `handle /dark_editor_v2/*` below. There is
@@ -40,14 +40,14 @@
 # * AUTHORIZATION IS NOT PERFORMED BY CADDY. Caddy is pure routing.
 #   Authorization lives in:
 #     (a) Go auth/CSRF middleware on `/api/v1/*`, and
-#     (b) the Dark Editor session-loader which MUST call
+#     (b) the InstaEditor session-loader which MUST call
 #         GET /api/v1/youtube/editor-sessions/by-project/{projectId}
 #         BEFORE mounting the Canvas. A direct hit to
 #         /dark_editor_v2/editor/{unknown-id} returns 404 from the
 #         backend, the gate refuses to mount, and the page redirects
 #         back to /groups or /dashboard-channels.
 # * TEST ENTRYPOINTS MUST start from `/` (InstaEdit Social) →
-#   `/groups/:groupId/videos` → click "Apri Dark Editor" → use the
+#   `/groups/:groupId/videos` → click "Apri InstaEditor" → use the
 #   `editor_url` returned by POST /api/v1/youtube/editor-sessions.
 #   Never short-circuit straight to /dark_editor_v2/editor/<fabricated>
 #   in E2E tests.
@@ -94,7 +94,7 @@ https://:8443 {
         reverse_proxy 127.0.0.1:8080
     }
 
-    # Dark Editor: applicazione Next.js secondaria, accessibile solo sotto /dark_editor_v2
+    # InstaEditor: applicazione Next.js secondaria, accessibile solo sotto /dark_editor_v2
     # Next.js ha basePath: '/dark_editor_v2', quindi anche gli asset /_next/* sono serviti sotto questo path
     handle /dark_editor_v2/* {
         reverse_proxy 127.0.0.1:3001

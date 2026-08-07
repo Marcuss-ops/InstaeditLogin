@@ -258,7 +258,7 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 }
 
 // handleUpdateYouTubeEditorSession updates a thumbnail editor session.
-// It is used by the dark editor after uploading the generated thumbnail
+// It is used by InstaEditor after uploading the generated thumbnail
 // to InstaEdit storage so the session keeps a reference to the verified
 // asset (thumbnail_media_id) before the user clicks Publish.
 //

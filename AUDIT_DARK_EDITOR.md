@@ -1,4 +1,4 @@
-# Audit Dark Editor autonomo
+# Audit InstaEditor autonomo
 
 **Data:** 2026-08-03  
 **Repository:** `InstaeditLogin`  
@@ -6,11 +6,13 @@
 **Commit di partenza:** `2c7fb0b` (`test(db): cover thumbnail restore migration contract`)  
 **Tipo di intervento:** audit documentale read-only; nessuna modifica funzionale.
 
+> **Nota di rebranding (2026):** il nome commerciale della superficie descritta in questo audit è oggi **InstaEditor**. Il filename storico `AUDIT_DARK_EDITOR.md` e gli identificatori tecnici o di compatibilità (per esempio path ed env legacy) sono mantenuti intenzionalmente.
+
 ## 1. Perimetro e risultato sintetico
 
 L’audit ha coperto:
 
-- frontend React/Vite e punti di ingresso al Dark Editor;
+- frontend React/Vite e punti di ingresso al InstaEditor;
 - API HTTP, middleware e registrazione delle route;
 - modelli, repository e wiring dei servizi;
 - migrazioni e vincoli PostgreSQL;
@@ -21,7 +23,7 @@ L’audit ha coperto:
 
 ### Risultato principale
 
-Il repository contiene già una **base backend significativa per il modello autonomo** `ThumbnailProjectModule`, ma il Dark Editor utilizzabile dall’utente resta ancora principalmente il flusso YouTube-specifico basato su `youtube_video_edits`.
+Il repository contiene già una **base backend significativa per il modello autonomo** `ThumbnailProjectModule`, ma il InstaEditor utilizzabile dall’utente resta ancora principalmente il flusso YouTube-specifico basato su `youtube_video_edits`.
 
 In particolare:
 
@@ -172,7 +174,7 @@ snapshot persistito → renderer canonico → media asset ready → thumbnail_ex
 
 ### 5.3 API YouTube ancora dominante
 
-Le API frontend/server per aprire il Dark Editor sono ancora centrate su:
+Le API frontend/server per aprire il InstaEditor sono ancora centrate su:
 
 ```text
 POST /api/v1/youtube/editor-sessions
@@ -197,7 +199,7 @@ File rilevanti:
 - `web/src/pages/internal/YouTubeStudioSessionRow.tsx` e `YouTubePublishCard.tsx` — visualizzazione sessione/editor URL;
 - `web/src/pages/internal/useMediaLibrary.ts` — picker di asset pronti per il wizard livestream;
 - `web/src/features/publishing/api/mediaApi.ts` e `useUploadMedia.ts` — upload presign → PUT → complete;
-- `web/src/pages/Editor.tsx` e `web/src/components/editor/*` — pagina marketing “One raw idea. Every platform.”, non il canvas persistente del Dark Editor.
+- `web/src/pages/Editor.tsx` e `web/src/components/editor/*` — pagina marketing “One raw idea. Every platform.”, non il canvas persistente del InstaEditor.
 
 ### 6.2 Assenze frontend rilevate
 
@@ -331,7 +333,7 @@ Non risultano test completi per:
 - backup/restore operativo di progetto, revisioni, export e asset;
 - query di controllo asset orfani in una pipeline reale.
 
-Gli E2E presenti coprono soprattutto pipeline YouTube/Velox/OAuth, non la Definition of Done del Dark Editor autonomo.
+Gli E2E presenti coprono soprattutto pipeline YouTube/Velox/OAuth, non la Definition of Done del InstaEditor autonomo.
 
 ## 10. Matrice di conformità iniziale
 
@@ -430,6 +432,6 @@ internal/services/media_resolver.go
 
 Il repository è in una fase intermedia coerente con una separazione architetturale già iniziata:
 
-> **Il modello autonomo esiste nel backend, ma il prodotto Dark Editor autonomo non è ancora certificabile end-to-end.**
+> **Il modello autonomo esiste nel backend, ma il prodotto InstaEditor autonomo non è ancora certificabile end-to-end.**
 
 La parte già implementata va preservata come modulo separato. Il flusso YouTube-specifico deve continuare a usare `youtube_video_edits` per sessione/publish, mentre il nuovo editor deve usare `thumbnail_projects` e le sue revisioni. La presenza di tabelle e repository non deve essere considerata Definition of Done finché frontend, renderer, export, assignment e scenari di persistenza/restart/browser non sono coperti da test pratici.

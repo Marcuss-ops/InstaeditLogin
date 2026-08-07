@@ -16,7 +16,7 @@ real Velox `/dark_editor_v2` instance).
 | State machine transitions inside the app (publish status, channel content refetch, editor-sessions double-click guard) | **Locked offline** via Vitest state-machine assertions. |
 | Visual rendering (header, filter chips, video card highlight, error states) | **Locked offline** via Vitest + RenderHook renders. |
 | **Real YouTube upload + thumbnail write** | **Live infra only** — MUST be executed by the operator against a staging backend + OAuth tokens + a real YouTube sandbox channel. The Vitest suite mocks `authedFetch` and never leaves the sandbox. |
-| **Real Velox Dark Editor (postMessage contract)** | **Live infra only** — the Velox editor must actually load at `/dark_editor_v2/editor/{velox_project_id}` and the user must interact with it. Vertex's iframe postMessage contract is verified at the schema level by `pkg/api/internal_velox_validate_test.go` but the iframe-to-client UX is unverifiable without the live Velox. |
+| **Real Velox InstaEditor (postMessage contract)** | **Live infra only** — the Velox InstaEditor must actually load at `/dark_editor_v2/editor/{velox_project_id}` and the user must interact with it. Vertex's iframe postMessage contract is verified at the schema level by `pkg/api/internal_velox_validate_test.go` but the iframe-to-client UX is unverifiable without the live Velox. |
 
 ## 11 PASS matrix
 

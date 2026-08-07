@@ -74,7 +74,7 @@ import (
 
 // TestPublishPipeline_StatusPresentInByProjectResponse closes the
 // by-project gap analogue to HappyPathResponseContainsStatus (which
-// covers by-id). The dark editor reads publishResult.status and
+// covers by-id). InstaEditor reads publishResult.status and
 // broadcasts it on BroadcastChannel('instaedit-publish') — a missing
 // JSON key on the by-project pathway silently breaks the live card
 // update for every session published via that endpoint.
