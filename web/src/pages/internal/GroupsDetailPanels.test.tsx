@@ -228,7 +228,7 @@ describe("GroupDetailPanel batch settings", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveValue("");
+    expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveAttribute("title", "Lingua non impostata · clicca per cambiare");
     rerender(
       <MemoryRouter>
         <GroupDetailPanel
@@ -242,7 +242,7 @@ describe("GroupDetailPanel batch settings", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveValue("it"));
+    await waitFor(() => expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveAttribute("title", "Italiano · clicca per cambiare"));
   });
 
   it("auto-saves uniquely detected title languages and flags generic titles for manual review", async () => {
@@ -286,13 +286,13 @@ describe("GroupDetailPanel batch settings", () => {
       expect.stringContaining("/api/v1/accounts/101"),
       expect.objectContaining({ method: "PATCH", body: JSON.stringify({ metadata: { language: "it" } }) }),
     );
-    expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveValue("it");
-    expect(screen.getByLabelText("Language for BoxeClubFr")).toHaveValue("fr");
-    expect(screen.getByLabelText("Language for BoxeClubEs")).toHaveValue("es");
-    expect(screen.getByLabelText("Language for BoxeClubPt")).toHaveValue("pt");
-    expect(screen.getByLabelText("Language for RedGloveTR")).toHaveValue("tr");
-    expect(screen.getByLabelText("Language for RedGloveRU")).toHaveValue("ru");
-    expect(screen.getByLabelText("Language for BoxeClubDE")).toHaveValue("de");
+    expect(screen.getByLabelText("Language for BoxeClubITA")).toHaveAttribute("title", "Italiano · clicca per cambiare");
+    expect(screen.getByLabelText("Language for BoxeClubFr")).toHaveAttribute("title", "Français · clicca per cambiare");
+    expect(screen.getByLabelText("Language for BoxeClubEs")).toHaveAttribute("title", "Español · clicca per cambiare");
+    expect(screen.getByLabelText("Language for BoxeClubPt")).toHaveAttribute("title", "Português · clicca per cambiare");
+    expect(screen.getByLabelText("Language for RedGloveTR")).toHaveAttribute("title", "Türkçe · clicca per cambiare");
+    expect(screen.getByLabelText("Language for RedGloveRU")).toHaveAttribute("title", "Русский · clicca per cambiare");
+    expect(screen.getByLabelText("Language for BoxeClubDE")).toHaveAttribute("title", "Deutsch · clicca per cambiare");
     expect(screen.getByLabelText("Avviso lingua: Lingua non determinabile per «Boxing Prime»: revisione manuale necessaria.")).toBeInTheDocument();
     expect(screen.getByLabelText("Avviso lingua: Lingua non determinabile per «Boxing Zone»: revisione manuale necessaria.")).toBeInTheDocument();
     expect(screen.getByText(/2 da verificare/)).toBeInTheDocument();
@@ -335,7 +335,7 @@ describe("GroupDetailPanel batch settings", () => {
       }),
     ));
     expect(confirmMock).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Language for WWE Italia")).toHaveValue("it");
+    expect(screen.getByLabelText("Language for WWE Italia")).toHaveAttribute("title", "Italiano · clicca per cambiare");
     expect(screen.getByLabelText("Avviso lingua: Titolo ambiguo: possibili lingue it, en.")).toBeInTheDocument();
     expect(screen.getByText(/1 da verificare/)).toBeInTheDocument();
     // The ambiguous title is never converted into a suggestion.
@@ -364,7 +364,7 @@ describe("GroupDetailPanel batch settings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
     expect(screen.getByLabelText(/Avviso lingua: Titolo ambiguo/)).toBeInTheDocument();
-    expect(screen.getByLabelText("Language for Italia English Wrestling")).toHaveValue("fr");
+    expect(screen.getByLabelText("Language for Italia English Wrestling")).toHaveAttribute("title", "Français · clicca per cambiare");
   });
 
   it("flags a title without a reliable marker for manual review", () => {
@@ -480,7 +480,7 @@ describe("GroupDetailPanel batch settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Analizza lingue dai titoli" }));
     // The failed auto-save restores the detected suggestion ("it") and keeps
     // it pending so the operator can retry without re-running detection.
-    await waitFor(() => expect(screen.getByLabelText("Language for WWE Italia")).toHaveValue("it"));
+    await waitFor(() => expect(screen.getByLabelText("Language for WWE Italia")).toHaveAttribute("title", "Italiano · clicca per cambiare"));
     expect(screen.getByRole("button", { name: /Applica suggerimenti \(1\)/ })).toBeInTheDocument();
     expect(screen.getByLabelText(/salvataggio lingua non riuscito/)).toBeInTheDocument();
   });
@@ -511,8 +511,9 @@ describe("GroupDetailPanel batch settings", () => {
     // dropdown — the select is disabled while a save is in flight.
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByLabelText(/modifica lingua non riuscita/)).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("Language for WWE Italia"), { target: { value: "en" } });
-    await waitFor(() => expect(screen.getByLabelText("Language for WWE Italia")).toHaveValue("it"));
+    fireEvent.click(screen.getByLabelText("Language for WWE Italia"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "English" }));
+    await waitFor(() => expect(screen.getByLabelText("Language for WWE Italia")).toHaveAttribute("title", "Italiano · clicca per cambiare"));
     expect(screen.getByRole("button", { name: /Applica suggerimenti \(1\)/ })).toBeInTheDocument();
     expect(screen.getByLabelText(/modifica lingua non riuscita/)).toBeInTheDocument();
   });
@@ -535,7 +536,8 @@ describe("GroupDetailPanel batch settings", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.change(screen.getByLabelText("Language for channel-one"), { target: { value: "it" } });
+    fireEvent.click(screen.getByLabelText("Language for channel-one"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Italiano" }));
     fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(

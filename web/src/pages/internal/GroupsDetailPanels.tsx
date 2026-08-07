@@ -17,7 +17,7 @@ import { cn } from "../../lib/utils";
 import { type PlatformAccount, type TreeNode } from "./groupsTypes";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 import { ProviderBadge } from "../../components/brand/PlatformLogos";
-import { LanguageFlag, LANGUAGE_OPTIONS, languageLabel } from "../../components/brand/LanguageFlag";
+import { LanguagePicker } from "../../components/brand/LanguagePicker";
 import { detectChannelLanguage } from "./groupChannelLanguage";
 
 export function GroupDetailPanel({
@@ -445,7 +445,7 @@ export function GroupDetailPanel({
               </button>
               {Object.keys(languageWarning).length > 0 ? (
                 <span className="text-[11px] font-medium text-amber-200" title="Alcuni titoli richiedono una revisione manuale">
-                  ⚠ {Object.keys(languageWarning).length} da verificare
+                  {Object.keys(languageWarning).length} da verificare
                 </span>
               ) : null}
               {languageSuggestionIds.size > 0 ? (
@@ -469,22 +469,19 @@ export function GroupDetailPanel({
             {visibleAccounts.map((a) => (
               <div key={a.id} className="flex items-center gap-1 rounded-lg border border-white/[0.10] bg-white/[0.04] p-1.5">
                 <div className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1">
-                  <span title={languageLabel(languages[a.id]) ?? "Lingua non impostata"} className="inline-flex">
-                    <LanguageFlag code={languages[a.id]} className="h-4 w-4 shrink-0" />
-                  </span>
                   <button type="button" onClick={() => onPickAccount(a.id)} className="truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username}`}>{a.username || a.platform_user_id}</button>
                 </div>
-                <div className={cn("flex max-w-[170px] items-center gap-1 rounded-lg border bg-black/20 py-0.5 pl-1 pr-1.5", languageSuggestionIds.has(a.id) ? "border-amber-300/70 ring-1 ring-amber-300/30" : "border-white/[0.10]")}>
-                  <LanguageFlag code={languages[a.id]} className="h-4 w-4 shrink-0" />
-                  <select value={languages[a.id] ?? ""} disabled={savingLanguageId === a.id || languageApplyBusy} onChange={(event) => void saveManualLanguage(a.id, event.target.value)} aria-label={`Language for ${a.username}`} className="cursor-pointer truncate bg-transparent text-[11px] font-medium text-white outline-none disabled:cursor-progress disabled:opacity-50">
-                    <option value="">Lingua</option>
-                    {LANGUAGE_OPTIONS.map(({ code, name }) => <option key={code} value={code}>{name}</option>)}
-                  </select>
-                </div>
+                <LanguagePicker
+                  value={languages[a.id]}
+                  label={`Language for ${a.username || a.platform_user_id}`}
+                  disabled={savingLanguageId === a.id || languageApplyBusy}
+                  error={Boolean(languageError[a.id])}
+                  onChange={(language) => void saveManualLanguage(a.id, language)}
+                />
                 {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]} aria-label={languageError[a.id]}>!</span> : null}
                 {languageWarning[a.id] ? (
                   <span className="max-w-[180px] text-[10px] leading-tight text-amber-200" title={languageWarning[a.id]} aria-label={`Avviso lingua: ${languageWarning[a.id]}`}>
-                    ⚠ {languageWarning[a.id]}
+                    {languageWarning[a.id]}
                   </span>
                 ) : null}
                 <button type="button" onClick={() => void removeAccount(a.id, a.username)} disabled={saving} className="rounded-md p-2 text-[#9aa0aa] hover:bg-amber-500/15 hover:text-amber-300 disabled:cursor-progress disabled:opacity-50" aria-label={`Rimuovi ${a.username || `canale #${a.id}`} dalla cartella`} title="Rimuovi dalla cartella — il canale resta collegato"><FolderMinus size={14} /></button>

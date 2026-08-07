@@ -1,29 +1,26 @@
-import {
-  CheckCircle2, Globe
-} from "lucide-react";
-import {
-  LANGUAGES
-} from "./shared";
+import { CheckCircle2, Globe } from "lucide-react";
+import { LanguageFlag } from "../brand/LanguageFlag";
+import { LANGUAGES } from "./shared";
 
 export function EditorTranslate() {
   const previewLines = [
     {
-      flag: "🇮🇹",
+      code: "it",
       lang: "Italiano",
       text: "It used to take a team of five. Now an afternoon is enough.",
     },
     {
-      flag: "🇯🇵",
+      code: "ja",
       lang: "日本語",
       text: "It used to take a team of five. Now one person finishes it in an afternoon.",
     },
     {
-      flag: "🇧🇷",
+      code: "pt",
       lang: "Português",
       text: "It used to take five. Now I do it in an afternoon.",
     },
     {
-      flag: "🇩🇪",
+      code: "de",
       lang: "Deutsch",
       text: "It used to take five people. Today an afternoon is enough.",
     },
@@ -116,7 +113,7 @@ export function EditorTranslate() {
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-eyebrow text-zinc-500">Original</div>
                   <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400">
-                    <span className="text-base leading-none">🇬🇧</span>
+                    <LanguageFlag code="en" className="h-4 w-6 rounded-[4px]" />
                     EN
                   </span>
                 </div>
@@ -136,7 +133,7 @@ export function EditorTranslate() {
                       className="text-2xl leading-none flex-shrink-0 mt-0.5"
                       aria-hidden="true"
                     >
-                      {p.flag}
+                      <LanguageFlag code={p.code} className="h-6 w-9 rounded-[5px] ring-1 ring-white/15" />
                     </span>
                     <div className="min-w-0">
                       <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">
@@ -170,9 +167,7 @@ export function EditorTranslate() {
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full surface-glass border border-white/10 hover:border-white/25 transition-colors"
                   title={`${lang.name} · ${lang.code}`}
                 >
-                  <span className="text-base leading-none" aria-hidden="true">
-                    {lang.flag}
-                  </span>
+                  <LanguageFlag code={lang.code} className="h-4 w-6 rounded-[4px] ring-1 ring-white/15" />
                   <span className="text-[12px] text-zinc-200">{lang.name}</span>
                   <span className="text-[10px] text-zinc-500 tabular-nums">
                     {lang.code}

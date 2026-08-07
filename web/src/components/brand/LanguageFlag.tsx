@@ -20,7 +20,40 @@ export type LanguageFlagProps = SVGProps<SVGSVGElement> & {
   className?: string;
 };
 
-const KNOWN_FLAG_CODES = new Set<string>(["it", "fr", "de", "pl", "ru", "id", "en", "es", "pt", "tr", "hi", "ar"]);
+export const LANGUAGE_OPTIONS = [
+  { code: "it", name: "Italiano" },
+  { code: "en", name: "English" },
+  { code: "es", name: "Español" },
+  { code: "fr", name: "Français" },
+  { code: "de", name: "Deutsch" },
+  { code: "pt", name: "Português" },
+  { code: "nl", name: "Nederlands" },
+  { code: "pl", name: "Polski" },
+  { code: "sv", name: "Svenska" },
+  { code: "da", name: "Dansk" },
+  { code: "no", name: "Norsk" },
+  { code: "fi", name: "Suomi" },
+  { code: "cs", name: "Čeština" },
+  { code: "el", name: "Ελληνικά" },
+  { code: "tr", name: "Türkçe" },
+  { code: "ru", name: "Русский" },
+  { code: "uk", name: "Українська" },
+  { code: "ar", name: "العربية" },
+  { code: "he", name: "עברית" },
+  { code: "hi", name: "हिन्दी" },
+  { code: "bn", name: "বাংলা" },
+  { code: "th", name: "ไทย" },
+  { code: "vi", name: "Tiếng Việt" },
+  { code: "id", name: "Bahasa Indonesia" },
+  { code: "ms", name: "Bahasa Melayu" },
+  { code: "tl", name: "Filipino" },
+  { code: "ja", name: "日本語" },
+  { code: "ko", name: "한국어" },
+  { code: "zh", name: "中文" },
+  { code: "zh-hant", name: "繁體中文" },
+] as const;
+
+const KNOWN_FLAG_CODES = new Set<string>(LANGUAGE_OPTIONS.map(({ code }) => code));
 
 const STRIPES = {
   it: {
@@ -35,6 +68,13 @@ const STRIPES = {
   pl: { colors: ["#F1F2F1", "#DC143C"], layout: "horizontal" as const },
   ru: { colors: ["#F1F2F1", "#0039A6", "#D52B1E"], layout: "horizontal" as const },
   id: { colors: ["#CE1126", "#F1F2F1"], layout: "horizontal" as const },
+  nl: { colors: ["#AE1C28", "#F1F2F1", "#21468B"], layout: "horizontal" as const },
+  cs: { colors: ["#F1F2F1", "#D7141A", "#11457E"], layout: "horizontal" as const },
+  uk: { colors: ["#0057B7", "#FFD700"], layout: "horizontal" as const },
+  th: { colors: ["#A51931", "#F4F5F8", "#2D2A4A", "#F4F5F8", "#A51931"], layout: "horizontal" as const },
+  vi: { colors: ["#DA251D", "#DA251D"], layout: "horizontal" as const },
+  zh: { colors: ["#DE2910", "#DE2910"], layout: "horizontal" as const },
+  "zh-hant": { colors: ["#0057B7", "#F1F2F1", "#D0181E"], layout: "horizontal" as const },
 } as const;
 
 /** 5-point star polygon points (used by the simplified Turkish flag). */
@@ -65,7 +105,13 @@ function FlagArtwork({ code }: { code: string }) {
     case "de":
     case "pl":
     case "ru":
-    case "id": {
+    case "id":
+    case "nl":
+    case "cs":
+    case "uk":
+    case "th":
+    case "zh":
+    case "zh-hant": {
       const stripe = STRIPES[code];
       return <StripesFlag colors={stripe.colors} layout={stripe.layout} />;
     }
@@ -96,6 +142,96 @@ function FlagArtwork({ code }: { code: string }) {
           <rect x={0} width={10} height={16} fill="#046A38" />
           <rect x={10} width={14} height={16} fill="#DA291C" />
           <circle cx={10.5} cy={8} r={1.9} fill="#FFE900" />
+        </>
+      );
+    case "vi":
+      return (
+        <>
+          <rect width={24} height={16} fill="#DA251D" />
+          <polygon points="12,3.3 13.3,6.6 16.8,6.7 14,8.8 15,12.1 12,10.1 9,12.1 10,8.8 7.2,6.7 10.7,6.6" fill="#FFCD00" />
+        </>
+      );
+    case "sv":
+      return (
+        <>
+          <rect width={24} height={16} fill="#006AA7" />
+          <rect x={7} width={3} height={16} fill="#FECC00" />
+          <rect y={6.5} width={24} height={3} fill="#FECC00" />
+        </>
+      );
+    case "da":
+      return (
+        <>
+          <rect width={24} height={16} fill="#C8102E" />
+          <rect x={7} width={2} height={16} fill="#F1F2F1" />
+          <rect y={7} width={24} height={2} fill="#F1F2F1" />
+        </>
+      );
+    case "no":
+      return (
+        <>
+          <rect width={24} height={16} fill="#BA0C2F" />
+          <rect x={6} width={5} height={16} fill="#F1F2F1" />
+          <rect x={7.5} width={2} height={16} fill="#00205B" />
+          <rect y={5.5} width={24} height={5} fill="#F1F2F1" />
+          <rect y={7} width={24} height={2} fill="#00205B" />
+        </>
+      );
+    case "fi":
+      return (
+        <>
+          <rect width={24} height={16} fill="#F1F2F1" />
+          <rect x={6} width={3} height={16} fill="#003580" />
+          <rect y={6.5} width={24} height={3} fill="#003580" />
+        </>
+      );
+    case "el":
+      return (
+        <>
+          <rect width={24} height={16} fill="#0D5EAF" />
+          {[2, 6, 10, 14].map((y) => <rect key={y} y={y} width={24} height={2} fill="#F1F2F1" />)}
+          <rect width={8} height={8} fill="#0D5EAF" />
+          <rect x={3} width={2} height={8} fill="#F1F2F1" />
+          <rect y={3} width={8} height={2} fill="#F1F2F1" />
+        </>
+      );
+    case "he":
+      return (
+        <>
+          <rect width={24} height={16} fill="#F1F2F1" />
+          <rect y={2} width={24} height={2} fill="#0038B8" />
+          <rect y={12} width={24} height={2} fill="#0038B8" />
+        </>
+      );
+    case "bn":
+      return (
+        <>
+          <rect width={24} height={16} fill="#006A4E" />
+          <circle cx={11} cy={8} r={4.5} fill="#F42A41" />
+        </>
+      );
+    case "ms":
+    case "tl":
+      return (
+        <>
+          <rect width={24} height={16} fill={code === "ms" ? "#CC0001" : "#CE1126"} />
+          <rect width={10} height={8} fill={code === "ms" ? "#010066" : "#0038A8"} />
+          <polygon points="4,2 5,4.5 7.7,4.5 5.5,6 6.5,8.5 4,7 1.5,8.5 2.5,6 0.3,4.5 3,4.5" fill="#FCD116" />
+        </>
+      );
+    case "ja":
+      return (
+        <>
+          <rect width={24} height={16} fill="#F1F2F1" />
+          <circle cx={12} cy={8} r={4.4} fill="#BC002D" />
+        </>
+      );
+    case "ko":
+      return (
+        <>
+          <rect width={24} height={16} fill="#F1F2F1" />
+          <path d="M12 4.7a3.3 3.3 0 1 0 0 6.6 1.65 1.65 0 1 1 0-3.3 1.65 1.65 0 1 0 0-3.3" fill="#CD2E3A" />
+          <path d="M12 11.3a3.3 3.3 0 1 0 0-6.6 1.65 1.65 0 1 1 0 3.3 1.65 1.65 0 1 0 0 3.3" fill="#0047A0" />
         </>
       );
     case "tr":
@@ -144,25 +280,9 @@ export function LanguageFlag({ code, className = "h-4 w-4", ...rest }: LanguageF
 }
 
 /**
- * Single source of truth for the language selector: the Groups UI builds its
- * dropdown/flag buttons from this list, and languageLabel resolves labels.
- * Keep it aligned with LANGUAGE_MARKERS in groupChannelLanguage.ts.
+ * Single source of truth for the language selector: the Groups UI and the
+ * editor use this list for labels, codes, and the shared SVG flags.
  */
-export const LANGUAGE_OPTIONS = [
-  { code: "it", name: "Italiano" },
-  { code: "en", name: "English" },
-  { code: "es", name: "Español" },
-  { code: "fr", name: "Français" },
-  { code: "de", name: "Deutsch" },
-  { code: "pt", name: "Português" },
-  { code: "pl", name: "Polski" },
-  { code: "ru", name: "Русский" },
-  { code: "tr", name: "Türkçe" },
-  { code: "hi", name: "हिन्दी" },
-  { code: "id", name: "Bahasa Indonesia" },
-  { code: "ar", name: "العربية" },
-] as const;
-
 export function languageLabel(code?: string): string | null {
   const normalized = code?.trim().toLowerCase() ?? "";
   return LANGUAGE_OPTIONS.find((option) => option.code === normalized)?.name ?? null;

@@ -1,13 +1,14 @@
+import { LANGUAGE_OPTIONS } from "../brand/LanguageFlag";
+
 /* ----------------------------------------------------------------------------
  * Curated list of supported translation markets. Headline copy claims
- * 50+; this list shows the 30 most-requested locales with flag emoji +
- * ISO code + native name so the row reads as a real product surface,
- * not a vague claim. Append here to add a market.
+ * 50+; this list shows the 30 most-requested locales with a shared
+ * vector language marker, ISO code, and native name so every surface
+ * uses the same visual language. Append here to add a market.
  *
- * Code uses BCP-47 syntax for split locales (e.g. zh-Hant). Flag emojis
- * are used as the visual kink — they're rendered as glyphs, no Twemoji
- * dependency — so flag rendering falls back gracefully on platforms
- * that strip emoji (Linux server-side, headless email).
+ * Code uses BCP-47 syntax for split locales (e.g. zh-Hant). The visual
+ * marker is rendered by the shared LanguageFlag component rather than
+ * platform-dependent emoji glyphs.
  * -------------------------------------------------------------------------- */
 export const SHORT_DEMOS: ReadonlyArray<{ id: string; title: string }> = [
   { id: "MVwXsmRLnwM", title: "YouTube Shorts demo MVwXsmRLnwM" },
@@ -31,38 +32,7 @@ export const CONTACT_EMAIL_DISPLAY = "futurimilionariposta@…";
 // import between `editor/shared` and `lib/booking`.
 export { BOOKING_URL as CONTACT_BOOKING_URL } from "../../lib/booking";
 
-export const LANGUAGES = [
-  { code: "en", name: "English", flag: "🇬🇧" },
-  { code: "es", name: "Español", flag: "🇪🇸" },
-  { code: "pt", name: "Português", flag: "🇵🇹" },
-  { code: "fr", name: "Français", flag: "🇫🇷" },
-  { code: "de", name: "Deutsch", flag: "🇩🇪" },
-  { code: "it", name: "Italiano", flag: "🇮🇹" },
-  { code: "nl", name: "Nederlands", flag: "🇳🇱" },
-  { code: "pl", name: "Polski", flag: "🇵🇱" },
-  { code: "sv", name: "Svenska", flag: "🇸🇪" },
-  { code: "da", name: "Dansk", flag: "🇩🇰" },
-  { code: "no", name: "Norsk", flag: "🇳🇴" },
-  { code: "fi", name: "Suomi", flag: "🇫🇮" },
-  { code: "cs", name: "Čeština", flag: "🇨🇿" },
-  { code: "el", name: "Ελληνικά", flag: "🇬🇷" },
-  { code: "tr", name: "Türkçe", flag: "🇹🇷" },
-  { code: "ru", name: "Русский", flag: "🇷🇺" },
-  { code: "uk", name: "Українська", flag: "🇺🇦" },
-  { code: "ar", name: "العربية", flag: "🇸🇦" },
-  { code: "he", name: "עברית", flag: "🇮🇱" },
-  { code: "hi", name: "हिन्दी", flag: "🇮🇳" },
-  { code: "bn", name: "বাংলা", flag: "🇧🇩" },
-  { code: "th", name: "ไทย", flag: "🇹🇭" },
-  { code: "vi", name: "Tiếng Việt", flag: "🇻🇳" },
-  { code: "id", name: "Bahasa Indonesia", flag: "🇮🇩" },
-  { code: "ms", name: "Bahasa Melayu", flag: "🇲🇾" },
-  { code: "tl", name: "Filipino", flag: "🇵🇭" },
-  { code: "ja", name: "日本語", flag: "🇯🇵" },
-  { code: "ko", name: "한국어", flag: "🇰🇷" },
-  { code: "zh", name: "中文", flag: "🇨🇳" },
-  { code: "zh-Hant", name: "繁體中文", flag: "🇹🇼" },
-] as const;
+export const LANGUAGES = LANGUAGE_OPTIONS;
 
 /* ----------------------------------------------------------------------------
  * Top nav — same shape as Landing but with "InstaEdit" reading as a `Back to`
