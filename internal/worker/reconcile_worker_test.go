@@ -9,7 +9,7 @@
 // mockAsyncProvider, mockProvider, mockCredentialVault) plus the
 // mockReconcilePostStore defined here (bounded dirty-queue + publishing
 // surface). The fact that the reconciler cannot accidentally call
-// SetProviderIdempotencyKey / ClaimQueuedTarget is enforced at compile
+// SetProviderIdempotencyKey / ClaimQueuedTargetWithLease is enforced at compile
 // time by the ReconcilePostStore interface boundary.
 
 package worker

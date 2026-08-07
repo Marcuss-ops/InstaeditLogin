@@ -1061,8 +1061,8 @@ paths:
       operationId: postTargetsRetry
       summary: Manually re-queue a `failed` or `partially_published` target.
       description: |
-        Transitions the target back to `queued` (next worker tick will
-        re-claim via `ClaimQueuedTarget`). Pass `force: true` to allow
+        Transitions the target back to `queued` (the next worker tick will
+        re-claim it through the lease-aware claim path). Pass `force: true` to allow
         retrying from `partially_published` or `waiting_provider`
         (default behavior allows `failed` only).
       security:

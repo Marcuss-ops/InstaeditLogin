@@ -170,7 +170,7 @@ The authoritative mapping "which platforms currently satisfy which capability" l
 
 The publish worker (`internal/worker/publish_worker.go::Run`) ticks every `interval` (default 30s) and on each tick calls `runOnce` → `tick`. For each `post_targets` row whose `status='queued'` AND whose parent `posts.scheduled_at <= now()`:
 
-1. **Atomic claim** via `ClaimQueuedTarget(id)` (`UPDATE post_targets SET status='publishing' WHERE id=? AND status='queued'`). The single UPDATE uses `status='queued'` as a logical lock so 2+ worker replicas cannot double-publish. This is the verdict-§10 atomic-claim primitive; Redis-style SKIP LOCKED is not needed because each row's transition is owned by exactly one worker at a time.
+1. **Atomic claim** via `ClaimQueuedTargetWithLease(id, ownerID, leaseTTL)`. The repository selects the claimable target with `FOR UPDATE SKIP LOCKED`, then transitions it to `publishing` while stamping the replica lease. This is the canonical verdict-§10 claim primitive: competing worker replicas do not wait on the row, and lease expiry makes crashed ownership reclaimable.
 2. Load parent `Post` via `FindByID`.
 3. Load `PlatformAccount` via `FindPlatformAccountByID`.
 4. Refresh OAuth token via `vault.Renew` (the `CredentialVault` serialises concurrent refreshes with a `pg_advisory_xact_lock`).
@@ -208,7 +208,7 @@ The reconcile worker (`internal/worker/reconcile_worker.go::Run`) ticks every `i
 
 | Transition | Owner goroutine | Atomicity / side-effects |
 | --- | --- | --- |
-| `queued → publishing` | `PublishWorker` (`ClaimQueuedTarget`) | DB row-level lock via `WHERE status='queued'` guard. **Verdict §10.** |
+| `queued → publishing` | `PublishWorker` (`ClaimQueuedTargetWithLease`) | `SELECT FOR UPDATE SKIP LOCKED` plus a durable `(lease_owner_id, leased_until)` lease. **Verdict §10.** |
 | `queued → failed` (vanished post / missing capability / platform publlish error / setKey conflict) | `PublishWorker` (`markFailed`) | Works on the row the claim already won; idempotent on the terminal update. |
 | `publishing → published` | `ReconcileWorker` (`UpdateStatus`) on `AsyncPublisher.Reconcile(*PublishResult, nil)` | Idempotent terminal — second reconciler racing on the same row writes the same value, second UPDATE no-ops. |
 | `publishing → failed` (terminal Reconcile error, incl. transient 5xx under the Reconcile contract) | `ReconcileWorker` (`markFailedAndReturn` via `UpdateStatus`) | Idempotent terminal — same property as above. |
@@ -307,7 +307,7 @@ if err != nil {
 Mechanics of the requeue path (`internal/worker/publish_worker_retry.go::markRateLimited` + `internal/repository/post_repo_retry.go::MarkRateLimitedRetry`):
 
 - The Retry-After hint is extracted via `services.RetryAfterFromError` (handles BOTH `*RateLimitError` and `*ProviderError{Code: rate_limited}`). A missing/zero hint falls back to a 60s default backoff (`defaultRateLimitBackoff`) so a misbehaving provider cannot busy-loop the driver.
-- The repo-side UPDATE flips `status` back to `'queued'`, bumps `attempt_count`, stamps `next_attempt_at` + `rate_limit_reset_at`, and sets `last_error_code='RATE_LIMITED'`. It is guarded by `WHERE status='publishing'` — the driver's lease-less claim ownership — NOT by the SPRINT 5.2 lease CAS (the `ClaimQueuedTarget` path stamps no lease, so a lease-CAS would match zero rows and strand the row).
+- The repo-side UPDATE flips `status` back to `'queued'`, bumps `attempt_count`, stamps `next_attempt_at` + `rate_limit_reset_at`, and sets `last_error_code='RATE_LIMITED'`. In production it uses `MarkRateLimitedRetryWithLease`, guarded by the driver's `lease_owner_id` CAS; the lease is cleared only by the current owner. The legacy lease-less claim path was removed in `aed59e5f`.
 - `ListPending` (`qSelectPendingTargets`) was extended with `AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= NOW())` so requeued rows stay invisible to the driver until the platform's window opens.
 - A rescheduled rate-limit is NOT counted as a tick error; a FAILED reschedule (DB error) is surfaced so the tick counter and operators see the stall.
 
