@@ -269,7 +269,6 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		writeError(w, http.StatusUnauthorized, "missing user identity")
 		return
 	}
-
 	var payload createYouTubeEditorSessionRequest
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -297,6 +296,17 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		return
 	}
 
+	// Fail before any repository or provider mutation. A missing
+	// INSTAEDITOR_URL is an operator configuration error, not a reason
+	// to create an orphan editor session that cannot be opened. The
+	// gate sits AFTER the ownership check so a foreign-tenant probe
+	// cannot distinguish editor configuration state (404-as-foreign
+	// must win over 503), matching the by-id/by-project GET handlers.
+	if strings.TrimSpace(r.editorURL) == "" {
+		writeError(w, http.StatusServiceUnavailable, "Editor unavailable / misconfigured")
+		return
+	}
+
 	edit, err := r.CreateEditorSession(req.Context(), CreateEditorSessionInput{
 		WorkspaceID:        payload.WorkspaceID,
 		PlatformAccountID:  payload.PlatformAccountID,
@@ -309,6 +319,8 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		return
 	}
 
+	// The gate above guarantees a non-empty editorURL, so the launcher
+	// URL is always available here (the session handle is never empty).
 	editorURL := r.editorURLForProject(edit.VeloxProjectID)
 	writeJSON(w, http.StatusCreated, createYouTubeEditorSessionResponse{
 		SessionID:      edit.ID,

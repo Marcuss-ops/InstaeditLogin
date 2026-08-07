@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -232,6 +233,10 @@ func (m *VeloxModule) CreateThumbnailSessionForDelivery(ctx context.Context, in 
 //   - 404: workspace or platform_account not found.
 //   - 500: real *sql.DB error from the repository layer.
 func (m *VeloxModule) handleCreateThumbnailSession(w http.ResponseWriter, req *http.Request) {
+	if strings.TrimSpace(m.deps.EditorBaseURL) == "" {
+		writeError(w, http.StatusServiceUnavailable, "Editor unavailable / misconfigured")
+		return
+	}
 	if m.deps.YouTubeVideoEditStore == nil {
 		writeError(w, http.StatusServiceUnavailable, "youtube video edit store not configured")
 		return
@@ -332,24 +337,17 @@ func (m *VeloxModule) handleCreateThumbnailSession(w http.ResponseWriter, req *h
 	})
 }
 
-// editorURLForVeloxProject is the VeloxModule-local helper that
-// constructs the canonical editor URL from a velox_project_id.
-// Mirrors Router.editorURLForProject (in youtube_editor_sessions.go)
-// but lives on the VeloxModule so the internal handler doesn't
-// need a *Router receiver for a single helper call.
-//
-// The VeloxModuleDeps struct carries an optional EditorBaseURL
-// (production wiring passes cfg.EditorBaseURL). When empty we
-// fall back to the canonical production hostname
-// "https://editor.instaedit.org" — same default as
-// Router.editorURLForProject so the two paths return URLs of the
-// same shape.
+// editorURLForVeloxProject constructs a URL for the separately deployed
+// InstaEditor. An empty base is intentionally surfaced as an empty URL;
+// the API must not invent a local or production editor destination when
+// the operator has not configured one.
 func (m *VeloxModule) editorURLForVeloxProject(projectID string) string {
-	base := m.deps.EditorBaseURL
-	if base == "" {
-		base = "https://editor.instaedit.org"
+	base := strings.TrimRight(strings.TrimSpace(m.deps.EditorBaseURL), "/")
+	projectID = strings.TrimSpace(projectID)
+	if base == "" || projectID == "" {
+		return ""
 	}
-	return strings.TrimRight(base, "/") + "/editor/" + projectID
+	return base + "/editor/" + url.PathEscape(projectID)
 }
 
 // editorSessionFormat discriminates between auto-provisioned

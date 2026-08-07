@@ -27,10 +27,10 @@ type VeloxModuleDeps struct {
 	YouTubeVideoEditStore    YouTubeVideoEditStore
 	VeloxAPIToken            string
 	VeloxValidateRateLimiter *validateRateLimiter
-	// EditorBaseURL is the base URL the auto-provisioner stamps
-	// into editor_url response fields. Optional; defaults to
-	// "https://editor.instaedit.org" when empty (same default as
-	// Router.editorURLForProject).
+	// EditorBaseURL is the configured base URL of the separately
+	// deployed InstaEditor. It is intentionally empty when the editor
+	// is unavailable; handlers then return an empty editor_url rather
+	// than falling back to the InstaEdit frontend or a fabricated host.
 	EditorBaseURL string
 }
 
@@ -95,6 +95,9 @@ func (m *VeloxModule) Register(mux chi.Router) {
 	// ytedit_<uuid> format; the InstaEditor SPA reads it back via
 	// GET /api/v1/youtube/editor-sessions/{id}.
 	if m.deps.YouTubeVideoEditStore != nil {
+		// Keep the route mounted when the editor URL is missing so the
+		// authenticated caller receives an explicit 503 misconfiguration
+		// response instead of an indistinguishable 404.
 		mux.Method(http.MethodPost, "/internal/v1/thumbnail-sessions",
 			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleCreateThumbnailSession)))
 	}

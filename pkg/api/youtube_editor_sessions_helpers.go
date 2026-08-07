@@ -85,18 +85,15 @@ func (r *Router) userCanAccessWorkspace(userID int64, workspace *models.Workspac
 	return workspace.OwnerID == userID
 }
 
-// editorURLForProject returns the canonical editor URL for a newly
-// created project. When an editor URL is configured explicitly it is
-// used; otherwise the frontend URL is used as a fallback.
+// editorURLForProject returns the server-issued URL for the separately
+// deployed InstaEditor. It intentionally returns an empty string when
+// INSTAEDITOR_URL is missing: FRONTEND_URL, EDITOR_URL, and hardcoded
+// hostnames must never become silent editor destinations.
 func (r *Router) editorURLForProject(projectID string) string {
-	base := r.editorURL
-	if base == "" {
-		base = r.frontendURL
+	base := strings.TrimRight(strings.TrimSpace(r.editorURL), "/")
+	projectID = strings.TrimSpace(projectID)
+	if base == "" || projectID == "" {
+		return ""
 	}
-	base = strings.TrimRight(base, "/")
-	if base == "" {
-		// Last-resort fallback for test environments.
-		base = "https://editor.instaedit.org"
-	}
-	return fmt.Sprintf("%s/editor/%s", base, projectID)
+	return fmt.Sprintf("%s/editor/%s", base, url.PathEscape(projectID))
 }
