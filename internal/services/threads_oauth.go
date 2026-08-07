@@ -364,7 +364,7 @@ func (s *ThreadsOAuthService) CheckPublishStatus(ctx context.Context, accessToke
 		return "", fmt.Errorf("read status response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("threads status returned %d: %s", resp.StatusCode, truncateForLog(string(body), 200))
+		return "", NewProviderError(models.PlatformThreads, resp.StatusCode, string(body), resp.Header, nil)
 	}
 	var result struct {
 		Status string `json:"status"`
@@ -418,11 +418,11 @@ func (s *ThreadsOAuthService) Reconcile(ctx context.Context, accessToken, publis
 		}
 		return s.publishContainer(ctx, accessToken, profile.PlatformUserID, publishID)
 	case threadsStateError:
-		return nil, fmt.Errorf("threads container in error state (container_id=%s)", publishID)
+		return nil, NewTerminalPublishError(state, fmt.Errorf("threads container in error state (container_id=%s)", publishID))
 	case threadsStateExpired:
-		return nil, fmt.Errorf("threads container expired (container_id=%s)", publishID)
+		return nil, NewTerminalPublishError(state, fmt.Errorf("threads container expired (container_id=%s)", publishID))
 	default:
-		return nil, fmt.Errorf("threads reconcile: unknown status %q", state)
+		return nil, NewPermanentPublishError(fmt.Errorf("threads reconcile: unknown status %q", state))
 	}
 }
 

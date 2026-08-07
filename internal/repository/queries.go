@@ -267,11 +267,12 @@ const qUpdateTargetStatusWithLease = `UPDATE post_targets
 // has not claimed the row yet. Terminal transitions release the lease.
 const qUpdateTargetStatusWithReconcileLease = `UPDATE post_targets
  SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
-     provider_state = $6, container_id = $7,
+     provider_state = $6, container_id = $7, last_error_code = $8,
+     completed_at = CASE WHEN $1 IN ('failed', 'dlq', 'blocked_auth') THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
      reconcile_owner_id = NULL, reconcile_until = NULL, reconcile_heartbeat_at = NULL
  WHERE id = $5
    AND status = 'publishing'
-   AND reconcile_owner_id = $8
+   AND reconcile_owner_id = $9
    AND reconcile_until > NOW()`
 
 const qDeletePost = `DELETE FROM posts WHERE id = $1`
@@ -312,10 +313,12 @@ const qClaimWaitingProviderTargetSelect = `SELECT id FROM post_targets
 
 // --- post_dispatch.go ---
 
-const qClaimQueuedTargetSelect = `SELECT id FROM post_targets
- WHERE id = $1 AND status = 'queued'
- FOR UPDATE SKIP LOCKED`
-
+// qClaimQueuedTargetUpdate flips a locked target to 'publishing'. It is
+// shared by ClaimQueuedTargetWithLease (after its lease-stamping SELECT)
+// and ClaimWaitingProviderTarget (which claims rows already in
+// 'waiting_provider'). The WHERE clause is intentionally loose — the
+// caller has already locked the row, so the UPDATE is the last
+// ownership write before commit.
 const qClaimQueuedTargetUpdate = `UPDATE post_targets SET status = 'publishing' WHERE id = $1`
 
 const qClaimQueuedTargetWithLeaseSelect = `SELECT id FROM post_targets
@@ -356,19 +359,19 @@ const qMarkDeadLetter = `UPDATE post_targets
      completed_at = NOW()
  WHERE id = $1 AND lease_owner_id = $2`
 
-// qMarkRateLimitedRetry (OPEN GAP closure — see ARCHITECTURE.md §Rate
+// qMarkRateLimitedRetry (legacy fallback — see ARCHITECTURE.md §Rate
 // limiting (d)) requeues a claimed target after the platform answered
-// the FINAL publish call with 429/Retry-After. Unlike qMarkRetrying /
-// qMarkRateLimited this does NOT CAS on lease_owner_id: the publish
-// driver claims via ClaimQueuedTarget (no lease stamp), so a
-// lease-CAS UPDATE would silently match zero rows and strand the row
-// in 'publishing'. The `status = 'publishing'` guard plays the same
+// the FINAL publish call with 429/Retry-After. Unlike
+// qMarkRateLimitedRetryWithLease this does NOT CAS on lease_owner_id:
+// it is retained only for the worker's legacy fallback path when a
+// store does not implement LeaseAwarePublisherPostStore (test
+// doubles). The `status = 'publishing'` guard plays the same
 // ownership role — only the claim winner's row is in 'publishing'.
 //
 // status returns to 'queued' so the existing ListPending /
-// ClaimQueuedTarget pickup path re-picks it once next_attempt_at
-// elapses (ListPending filters next_attempt_at <= NOW()).
-// attempt_count is bumped so the retry budget stays bounded.
+// ClaimQueuedTargetWithLease pickup path re-picks it once
+// next_attempt_at elapses (ListPending filters next_attempt_at <=
+// NOW()). attempt_count is bumped so the retry budget stays bounded.
 const qMarkRateLimitedRetry = `UPDATE post_targets
  SET status = 'queued',
      attempt_count = attempt_count + 1,
@@ -465,8 +468,11 @@ const qReleaseReconcileTarget = `UPDATE post_targets
    AND status = 'publishing'`
 
 const qScheduleNextReconcile = `UPDATE post_targets
- SET reconcile_attempt = reconcile_attempt + 1,
+ SET reconcile_attempt = reconcile_attempt + CASE WHEN $5 THEN 1 ELSE 0 END,
      next_reconcile_at = $2,
+     error_message = CASE WHEN $7 <> '' THEN $7 ELSE error_message END,
+     last_error_code = CASE WHEN $6 <> '' THEN $6 ELSE last_error_code END,
+     rate_limit_reset_at = CASE WHEN $6 = 'RATE_LIMITED' THEN $2 ELSE rate_limit_reset_at END,
      reconcile_owner_id = NULL,
      reconcile_until = NULL,
      reconcile_heartbeat_at = NULL

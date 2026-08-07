@@ -45,9 +45,10 @@ func (r *PostRepository) Save(target *models.PostTarget) error {
 
 // SetProviderIdempotencyKey (Taglio 4.7 LEVEL 2, migration 022) writes
 // the per-target provider-side idempotency key onto the post_target
-// row. The worker calls this AFTER the atomic ClaimQueuedTarget and
-// BEFORE the publish call, so the key is stamped on the same row across
-// retries (same input → same key via deterministic SHA-256 prefix).
+// row. The worker calls this AFTER the atomic lease-aware claim
+// (ClaimQueuedTargetWithLease) and BEFORE the publish call, so the key
+// is stamped on the same row across retries (same input → same key via
+// deterministic SHA-256 prefix).
 //
 // Behaviour:
 //   - 23505 with constraint `post_targets_platform_provider_uniq` →
@@ -264,7 +265,7 @@ func (r *PostRepository) ScheduleNextReconcile(id int64, ownerID string, expecte
 	if next.IsZero() {
 		return fmt.Errorf("schedule next reconcile: next time must be non-zero")
 	}
-	result, err := r.db.Exec(qScheduleNextReconcile, id, next, expectedAttempt, ownerID)
+	result, err := r.db.Exec(qScheduleNextReconcile, id, next, expectedAttempt, ownerID, true, "", "")
 	if err != nil {
 		return fmt.Errorf("schedule next reconcile for target %d: %w", id, err)
 	}

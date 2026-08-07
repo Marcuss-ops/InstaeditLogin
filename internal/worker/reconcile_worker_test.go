@@ -17,13 +17,13 @@ package worker
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // ------------------------------------------------------------------
@@ -44,22 +44,25 @@ type mockReconcilePostStore struct {
 	updateCalls          int
 
 	// Function fields — each test overrides only what it exercises.
-	listPublishingFn     func() ([]models.PostTarget, error)
-	listPublishingLimit  int
-	listPublishingLimits []int
-	scheduleCalls        int
-	scheduleIDs          []int64
-	scheduleTimes        []time.Time
-	scheduleAttempts     []int
-	scheduleFn           func(id int64, expectedAttempt int, next time.Time) error
-	claimPublishingFn    func(id int64) (bool, error)
-	updateStatusFn       func(*models.PostTarget) error
-	dirtyPostIDsFn       func(limit int) ([]int64, error)
-	repairDirtyPostFn    func(postID int64) error
-	dirtyPostIDsCalls    int
-	repairDirtyPostCalls int
-	dirtyPostIDsLimit    int
-	repairedPostIDs      []int64
+	listPublishingFn      func() ([]models.PostTarget, error)
+	listPublishingLimit   int
+	listPublishingLimits  []int
+	scheduleCalls         int
+	scheduleIDs           []int64
+	scheduleTimes         []time.Time
+	scheduleAttempts      []int
+	scheduleIncrement     []bool
+	scheduleErrorCodes    []string
+	scheduleErrorMessages []string
+	scheduleFn            func(id int64, expectedAttempt int, next time.Time) error
+	claimPublishingFn     func(id int64) (bool, error)
+	updateStatusFn        func(*models.PostTarget) error
+	dirtyPostIDsFn        func(limit int) ([]int64, error)
+	repairDirtyPostFn     func(postID int64) error
+	dirtyPostIDsCalls     int
+	repairDirtyPostCalls  int
+	dirtyPostIDsLimit     int
+	repairedPostIDs       []int64
 
 	// Captured targets from UpdateStatus — lets tests inspect the
 	// final status (published vs failed) and assert on the worker
@@ -99,12 +102,15 @@ func (m *mockReconcilePostStore) ReleaseReconcileTarget(id int64, ownerID string
 	return nil
 }
 
-func (m *mockReconcilePostStore) ScheduleNextReconcileWithLease(id int64, ownerID string, expectedAttempt int, next time.Time) error {
+func (m *mockReconcilePostStore) ScheduleNextReconcileWithLease(id int64, ownerID string, expectedAttempt int, next time.Time, incrementAttempt bool, errorCode, errorMessage string) error {
 	m.mu.Lock()
 	m.scheduleCalls++
 	m.scheduleIDs = append(m.scheduleIDs, id)
 	m.scheduleTimes = append(m.scheduleTimes, next)
 	m.scheduleAttempts = append(m.scheduleAttempts, expectedAttempt)
+	m.scheduleIncrement = append(m.scheduleIncrement, incrementAttempt)
+	m.scheduleErrorCodes = append(m.scheduleErrorCodes, errorCode)
+	m.scheduleErrorMessages = append(m.scheduleErrorMessages, errorMessage)
 	m.mu.Unlock()
 	if m.scheduleFn == nil {
 		return nil
@@ -218,11 +224,9 @@ func TestReconcileTarget_PublishComplete_TransitionsToPublished(t *testing.T) {
 	}
 }
 
-// TestReconcileTarget_Failed_TransitionsToFailed covers the failure
-// terminal state: Reconcile returns (nil, err) for FAILED-state AND
-// for transient 5xx (both collapse to terminal per the interface
-// contract). The reconciler must transition to 'failed' with the
-// error message.
+// TestReconcileTarget_Failed_TransitionsToFailed covers an explicit
+// provider FAILED state. The terminal marker is distinct from transport
+// errors so an authoritative provider failure is still final.
 func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
 	posts := &mockReconcilePostStore{}
 	users := &mockUserStore{
@@ -233,7 +237,7 @@ func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
 	svc := &mockAsyncProvider{
 		baseMockProvider: baseMockProvider{platform: "tiktok"},
 		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-			return nil, errors.New("publish failed: tiktok returned status FAILED")
+			return nil, services.NewTerminalPublishError("FAILED", errors.New("publish failed: tiktok returned status FAILED"))
 		},
 	}
 	vault := &mockCredentialVault{
@@ -450,16 +454,11 @@ func TestReconcileTarget_ClaimLoss_SkipsWithoutSideEffects(t *testing.T) {
 	}
 }
 
-// TestReconcileTarget_TransientError_TerminalFailure covers the
-// post-refactor behavioural change: under Reconcile's contract,
-// ANY error from Reconcile — including transient 5xx — is terminal.
-// The platform impl collapses both FAILED-state and transient errors
-// into (nil, err); the worker treats that as a 'failed' transition.
-// (Pre-refactor: transient errors left the target alone for next
-// tick. The reviewer's documented choice was to trust Reconcile's
-// contract; per-target retry is the outbox dispatcher's job at the
-// platform-decoupled level.)
-func TestReconcileTarget_TransientError_TerminalFailure(t *testing.T) {
+// TestReconcileTarget_TransientError_SchedulesRetry covers a plain
+// provider transport error (the shape used by timeout/reset paths).
+// It must leave the target publishing and advance the lease-protected
+// reconcile schedule rather than marking the target failed.
+func TestReconcileTarget_TransientError_SchedulesRetry(t *testing.T) {
 	posts := &mockReconcilePostStore{}
 	users := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
@@ -481,25 +480,24 @@ func TestReconcileTarget_TransientError_TerminalFailure(t *testing.T) {
 
 	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
 	if err != nil {
-		t.Fatalf("reconcileTarget: %v (reconciler surface error must NOT propagate as tick error)", err)
+		t.Fatalf("reconcileTarget: %v", err)
 	}
-	if !reconciled || !wasFailed {
-		t.Errorf("reconciled=%v wasFailed=%v: want (true, true) — transient errors are terminal under Reconcile's contract", reconciled, wasFailed)
+	if reconciled || wasFailed {
+		t.Errorf("reconciled=%v wasFailed=%v: want (false, false) — transient errors must be retried", reconciled, wasFailed)
 	}
 	if posts.claimPublishingCalls != 1 {
-		t.Errorf("ClaimPublishingTarget calls: want 1 (claim always fires first), got %d", posts.claimPublishingCalls)
+		t.Errorf("ClaimPublishingTarget calls: want 1, got %d", posts.claimPublishingCalls)
 	}
-	if posts.updateCalls != 1 {
-		t.Errorf("UpdateStatus calls: want 1 (transition publishing→failed), got %d", posts.updateCalls)
+	if posts.updateCalls != 0 {
+		t.Errorf("UpdateStatus calls: want 0 (transient retry keeps publishing), got %d", posts.updateCalls)
 	}
-	final := posts.updateTargets[0]
-	if final.Status != models.PostStatusFailed {
-		t.Errorf("final status: want failed, got %q", final.Status)
+	if posts.scheduleCalls != 1 {
+		t.Errorf("ScheduleNextReconcile calls: want 1, got %d", posts.scheduleCalls)
 	}
-	if !strings.Contains(final.ErrorMessage, "502") {
-		t.Errorf("ErrorMessage should propagate the platform error: %q", final.ErrorMessage)
+	if posts.scheduleAttempts[0] != 0 {
+		t.Errorf("scheduled attempt: want 0, got %d", posts.scheduleAttempts[0])
 	}
-	if final.ProviderState != "FAILED" {
-		t.Errorf("provider_state: want FAILED, got %q", final.ProviderState)
+	if posts.scheduleTimes[0].Before(time.Now().Add(4 * time.Second)) {
+		t.Errorf("transient retry scheduled too early: %v", posts.scheduleTimes[0])
 	}
 }

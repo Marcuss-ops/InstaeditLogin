@@ -91,7 +91,7 @@ func (r *PostRepository) ReleaseReconcileTarget(id int64, ownerID string) error 
 
 // ScheduleNextReconcileWithLease advances adaptive backoff and releases the
 // lease in one owner-CAS update. A stale worker cannot move the schedule.
-func (r *PostRepository) ScheduleNextReconcileWithLease(id int64, ownerID string, expectedAttempt int, next time.Time) error {
+func (r *PostRepository) ScheduleNextReconcileWithLease(id int64, ownerID string, expectedAttempt int, next time.Time, incrementAttempt bool, errorCode, errorMessage string) error {
 	if ownerID == "" {
 		return fmt.Errorf("reconcile lease owner is empty")
 	}
@@ -101,7 +101,7 @@ func (r *PostRepository) ScheduleNextReconcileWithLease(id int64, ownerID string
 	if next.IsZero() {
 		return fmt.Errorf("next reconcile time must be non-zero")
 	}
-	result, err := r.db.Exec(qScheduleNextReconcile, id, next, expectedAttempt, ownerID)
+	result, err := r.db.Exec(qScheduleNextReconcile, id, next, expectedAttempt, ownerID, incrementAttempt, errorCode, errorMessage)
 	if err != nil {
 		return fmt.Errorf("schedule next reconcile for target %d: %w", id, err)
 	}
@@ -145,7 +145,8 @@ func (r *PostRepository) UpdateReconcileStatusWithLease(target *models.PostTarge
 	}
 	result, err := tx.Exec(qUpdateTargetStatusWithReconcileLease,
 		target.Status, target.PlatformPostID, target.ErrorMessage,
-		target.PublishedAt, target.ID, target.ProviderState, target.ContainerID, ownerID)
+		target.PublishedAt, target.ID, target.ProviderState, target.ContainerID,
+		target.LastErrorCode, ownerID)
 	if err != nil {
 		return fmt.Errorf("update reconcile status for target %d: %w", target.ID, err)
 	}

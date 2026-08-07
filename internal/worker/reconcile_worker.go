@@ -22,12 +22,13 @@
 // Per-tick body: drain a bounded dirty-post repair queue, then
 // ListPublishing → for each row → lookup account → lookup AsyncPublisher
 // capability → vault.Renew token → AsyncPublisher.Reconcile (single GET +
-// transition decision). On
-// PUBLISH_COMPLETE transition to status='published'; on FAILED
-// (including transient 5xx under the Reconcile contract) transition
-// to status='failed'; on in-flight leave for next tick.
+// transition decision). On PUBLISH_COMPLETE transition to status='published';
+// on explicit provider FAILED/permanent errors transition to status='failed';
+// on transient errors schedule a bounded retry; on in-flight schedule the
+// next poll without consuming the transient-failure budget.
 // provider_state is written ONLY on terminal transitions (so the
 // column is a terminal-state log, not a per-tick snapshot).
+
 package worker
 
 import (
@@ -82,8 +83,9 @@ type ReconcilePostStore interface {
 	// while ownerID still owns a non-expired lease, then releases it.
 	UpdateReconcileStatusWithLease(target *models.PostTarget, ownerID string) error
 	// ScheduleNextReconcileWithLease advances adaptive polling using owner +
-	// attempt CAS, then releases the lease.
-	ScheduleNextReconcileWithLease(id int64, ownerID string, expectedAttempt int, next time.Time) error
+	// attempt CAS, optionally increments the transient-failure budget, records
+	// diagnostics, and releases the lease.
+	ScheduleNextReconcileWithLease(id int64, ownerID string, expectedAttempt int, next time.Time, incrementAttempt bool, errorCode, errorMessage string) error
 	// ListDirtyAggregatePostIDs returns a bounded snapshot of parent posts
 	// marked dirty by post-target transitions. It must never scan all posts.
 	ListDirtyAggregatePostIDs(limit int) ([]int64, error)
@@ -114,7 +116,7 @@ type ReconcileUserStore = PublisherUserStore
 // platform-decoupled equivalent for failures; the per-target retry
 // state machine (next_attempt_at / attempt_count columns, migration
 // 018) is an option for async platforms that want
-// at-most-N-attempts-per-row semantics inside the row itself.
+// at-most-N-transient-failures-per-row semantics inside the row itself.
 type ReconcileWorker struct {
 	postRepo      ReconcilePostStore
 	userRepo      ReconcileUserStore
@@ -204,6 +206,10 @@ const (
 	reconcilePollingBatchSize     = 100
 	reconcileBackoffCap           = 120 * time.Second
 	reconcileLeaseTTL             = 60 * time.Second
+	// A target is dead-lettered only after this many reconciler retries.
+	// Explicit provider terminal states and permanent errors fail immediately;
+	// transient transport/provider errors get this bounded retry budget.
+	reconcileMaxAttempts = 5
 )
 
 var reconcileBackoffSchedule = [...]time.Duration{
@@ -252,9 +258,9 @@ func (w *ReconcileWorker) repairDirtyAggregates() (int, error) {
 // platform_account, looks up the AsyncPublisher capability,
 // refreshes the OAuth token, and calls Reconcile (single GET +
 // transition decision). On PUBLISH_COMPLETE it transitions to
-// 'published'; on FAILED (including transient 5xx under the
-// Reconcile contract) it transitions to 'failed'; on any
-// in-flight state it leaves the target alone for the next tick.
+// 'published'; explicit provider FAILED/permanent errors transition to
+// 'failed'; transient errors are retried with backoff; in-flight states
+// are rescheduled without consuming the transient-failure budget.
 //
 // Safety: this goroutine claims each row via ClaimPublishingTarget
 // before reading it (SKIP LOCKED). If another reconciler replica
@@ -302,19 +308,15 @@ func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed
 // three terminal-stable outcomes per its interface contract:
 //
 //	(*PublishResult, nil)    — PUBLISH_COMPLETE → status='published'
-//	(nil, err)               — FAILED          → status='failed' (terminal).
-//	                            Includes transient 5xx/network errors: the
-//	                            interface contract is "errors are terminal
-//	                            too, retry is the worker's responsibility".
-//	                            The dispatcher's retry counter + decorrelated-
-//	                            jitter backoff on outbox_events is the retry
-//	                            mechanism at the platform-decoupled level;
-//	                            per-target retry on this row is via the
-//	                            post_targets.next_attempt_at / attempt_count//                            columns.
-//	(nil, nil)               — in-flight → leave alone, retry next tick.
+//	(nil, err)               — explicit provider terminal/permanent failure →
+//	                            status='failed'; transient transport/provider
+//	                            errors → retry with backoff until the bounded
+//	                            retry budget is exhausted, then status='dlq'.
+//	(nil, nil)               — in-flight → schedule the next check without
+//	                            consuming the transient-failure budget.
 //
-// Per-capability setup (account/oauth lookup, vault.Renew) is
-// The state-string switch (`switch state { case "PUBLISH_COMPLETE":
+// Per-capability setup (account/oauth lookup, vault.Renew) is performed
+// before delegation. The state-string switch (`switch state { case "PUBLISH_COMPLETE":
 // ... }`) is gone — Reconcile owns the transition decision; the
 // worker just records it.
 //
@@ -417,13 +419,24 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	// 4. Delegate to platform's Reconcile (single GET + transition decision).
 	res, err := ap.Reconcile(leaseCtx, oauthToken.AccessToken, target.PlatformPostID)
 	if err != nil {
-		// Terminal failure — includes FAILED-state and transient 5xx
-		// (the platform impl collapses both into a non-nil error per
-		// the Reconcile contract; retry is up to the outbox dispatcher
-		// or the post_targets retry state machine).
-		w.logger.Warn("publish reconcile terminal error",
-			"target_id", target.ID, "publish_id", target.PlatformPostID, "error", err)
-		return w.markFailedAndReturn(target, w.workerID, fmt.Sprintf("publish failed: %v", err))
+		isRateLimit := services.IsRateLimitError(err)
+		if !isRateLimit && w.isPermanentReconcileError(err) {
+			w.logger.Warn("publish reconcile permanent error",
+				"target_id", target.ID, "publish_id", target.PlatformPostID, "error", err)
+			return w.markFailedAndReturn(target, w.workerID, fmt.Sprintf("publish failed: %v", err))
+		}
+		// Transport failures, timeouts, 5xx/provider-unavailable and
+		// rate limits are not proof that the remote publish failed. Keep
+		// the target publishing and use the shared retry-after carrier or
+		// adaptive backoff instead of turning a transient outage terminal.
+		// Rate limits are provider-directed waiting, not a failed
+		// reconcile attempt. They record diagnostics and Retry-After,
+		// but never consume the transient budget or trigger DLQ.
+		if !isRateLimit && target.ReconcileAttempt >= reconcileMaxAttempts-1 {
+			return w.markDeadLetterAndReturn(target, w.workerID,
+				fmt.Sprintf("publish retry budget exhausted after %d transient failures: %v", reconcileMaxAttempts, err))
+		}
+		return w.scheduleRetry(target, services.RetryAfterFromError(err), err)
 	}
 	if res == nil {
 		// In-flight — no state string available (Reconcile hides it).
@@ -463,6 +476,83 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	return true, false, nil
 }
 
+// isPermanentReconcileError centralises the provider/transport policy for
+// errors returned by AsyncPublisher.Reconcile. Explicit provider terminal
+// states and typed permanent errors fail immediately. Canonical provider
+// errors marked non-retryable (4xx/auth/content rejection) also fail
+// immediately. Rate limits and provider-unavailable errors are retryable;
+// untyped transport errors (timeout, reset, EOF) are conservatively treated
+// as transient because they do not prove the remote publish failed.
+func (w *ReconcileWorker) isPermanentReconcileError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, services.ErrPublishTerminal) ||
+		errors.Is(err, services.ErrPublishPermanent) ||
+		errors.Is(err, services.ErrPermanentUpload) {
+		return true
+	}
+	if providerErr, ok := services.IsProviderError(err); ok {
+		return !providerErr.Retryable
+	}
+	return false
+}
+
+// scheduleRetry applies the shared Retry-After policy. A positive provider
+// hint is honored as-is; absent or invalid hints use the bounded adaptive
+// schedule. The target remains in publishing and the repository CAS advances
+// only the transient-failure budget, records diagnostics, and releases the lease.
+func (w *ReconcileWorker) scheduleRetry(target *models.PostTarget, retryAfter time.Duration, cause error) (reconciled bool, wasFailed bool, err error) {
+	attempt := target.ReconcileAttempt
+	if attempt < 0 {
+		attempt = 0
+	}
+	if retryAfter <= 0 {
+		retryAfter = reconcileBackoffForAttempt(attempt)
+	}
+	next := time.Now().Add(retryAfter)
+	incrementAttempt := !services.IsRateLimitError(cause)
+	if err := w.postRepo.ScheduleNextReconcileWithLease(target.ID, w.workerID, attempt, next, incrementAttempt, reconcileErrorCode(cause), cause.Error()); err != nil {
+		return false, false, fmt.Errorf("schedule retry for target %d: %w", target.ID, err)
+	}
+	if incrementAttempt {
+		target.ReconcileAttempt = attempt + 1
+	}
+	target.NextReconcileAt = &next
+	return false, false, nil
+}
+
+func reconcileErrorCode(err error) string {
+	if services.IsRateLimitError(err) {
+		return "RATE_LIMITED"
+	}
+	return "RECONCILE_TRANSIENT"
+}
+
+func reconcileBackoffForAttempt(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt >= len(reconcileBackoffSchedule) {
+		return reconcileBackoffSchedule[len(reconcileBackoffSchedule)-1]
+	}
+	return reconcileBackoffSchedule[attempt]
+}
+
+func (w *ReconcileWorker) markDeadLetterAndReturn(target *models.PostTarget, ownerID, reason string) (reconciled bool, wasFailed bool, err error) {
+	deadTarget := *target
+	deadTarget.Status = models.PostStatusDLQ
+	deadTarget.ProviderState = "FAILED"
+	deadTarget.LastErrorCode = "RECONCILE_RETRY_EXHAUSTED"
+	deadTarget.ErrorMessage = reason
+	if updateErr := w.postRepo.UpdateReconcileStatusWithLease(&deadTarget, ownerID); updateErr != nil {
+		return false, false, fmt.Errorf("transition to dlq: %w", updateErr)
+	}
+	*target = deadTarget
+	w.logger.Warn("reconcile target moved to dead letter queue", "target_id", target.ID, "post_id", target.PostID, "reason", reason)
+	return true, true, nil
+}
+
 // markFailedAndReturn transitions the target to status='failed' and
 // returns the bookkeeping so the reconciler can increment its
 // counters. The (true, true, nil) return values signal "yes, this
@@ -476,18 +566,14 @@ func (w *ReconcileWorker) scheduleInFlight(target *models.PostTarget) (reconcile
 	if attempt < 0 {
 		attempt = 0
 	}
-	backoff := reconcileBackoffSchedule[len(reconcileBackoffSchedule)-1]
-	if attempt < len(reconcileBackoffSchedule) {
-		backoff = reconcileBackoffSchedule[attempt]
-	}
+	backoff := reconcileBackoffForAttempt(attempt)
 	if backoff > reconcileBackoffCap {
 		backoff = reconcileBackoffCap
 	}
 	next := time.Now().Add(backoff)
-	if err := w.postRepo.ScheduleNextReconcileWithLease(target.ID, w.workerID, attempt, next); err != nil {
+	if err := w.postRepo.ScheduleNextReconcileWithLease(target.ID, w.workerID, attempt, next, false, "", ""); err != nil {
 		return false, false, fmt.Errorf("schedule next reconcile for target %d: %w", target.ID, err)
 	}
-	target.ReconcileAttempt = attempt + 1
 	target.NextReconcileAt = &next
 	return false, false, nil
 }
@@ -517,6 +603,9 @@ func (w *ReconcileWorker) markFailedAndReturn(target *models.PostTarget, ownerID
 	failedTarget.Status = models.PostStatusFailed
 	failedTarget.ProviderState = "FAILED"
 	failedTarget.ErrorMessage = reason
+	if failedTarget.LastErrorCode == "" {
+		failedTarget.LastErrorCode = "RECONCILE_FAILED"
+	}
 	if updateErr := w.postRepo.UpdateReconcileStatusWithLease(&failedTarget, ownerID); updateErr != nil {
 		return false, false, fmt.Errorf("transition to failed: %w", updateErr)
 	}

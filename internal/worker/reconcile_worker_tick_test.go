@@ -98,8 +98,8 @@ func TestReconcileWorker_AdaptiveBackoffCapsAtMaximum(t *testing.T) {
 	if posts.scheduleAttempts[0] != expectedAttempt {
 		t.Fatalf("expected attempt = %d, got %d", expectedAttempt, posts.scheduleAttempts[0])
 	}
-	if target.ReconcileAttempt != expectedAttempt+1 {
-		t.Fatalf("target attempt after scheduling = %d, want %d", target.ReconcileAttempt, expectedAttempt+1)
+	if target.ReconcileAttempt != expectedAttempt {
+		t.Fatalf("in-flight scheduling consumed transient attempt: got %d, want %d", target.ReconcileAttempt, expectedAttempt)
 	}
 	delta := posts.scheduleTimes[0].Sub(before)
 	if delta < reconcileBackoffCap-500*time.Millisecond || delta > reconcileBackoffCap+500*time.Millisecond {
@@ -142,6 +142,9 @@ func TestReconcileWorker_SchedulesAdaptiveBackoff(t *testing.T) {
 		}
 		if posts.scheduleAttempts[i] != i {
 			t.Fatalf("CAS expected attempt at step %d = %d, want %d", i, posts.scheduleAttempts[i], i)
+		}
+		if posts.scheduleIncrement[i] {
+			t.Fatalf("in-flight scheduling incremented attempt at step %d", i)
 		}
 	}
 	if posts.scheduleTimes[len(posts.scheduleTimes)-1].Sub(time.Now()) > reconcileBackoffCap+time.Second {

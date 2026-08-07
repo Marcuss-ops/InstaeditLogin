@@ -262,7 +262,7 @@ func (s *TikTokOAuthService) CheckPublishStatus(ctx context.Context, accessToken
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("tiktok status returned status %d: %s", resp.StatusCode, string(body))
+		return "", NewProviderError(models.PlatformTikTok, resp.StatusCode, string(body), resp.Header, nil)
 	}
 
 	var statusResult struct {
@@ -312,7 +312,7 @@ func (s *TikTokOAuthService) Reconcile(ctx context.Context, accessToken, publish
 	case "PUBLISH_COMPLETE":
 		return &models.PublishResult{PlatformMediaID: publishID}, nil
 	case "FAILED":
-		return nil, fmt.Errorf("tiktok publish failed: publish_id=%s state=%s", publishID, state)
+		return nil, NewTerminalPublishError(state, fmt.Errorf("tiktok publish failed: publish_id=%s state=%s", publishID, state))
 	default:
 		// PROCESSING_UPLOAD, PENDING_PUBLISH, IN_REVIEW — still in flight.
 		// Caller (reconciler goroutine) leaves the target as-is and

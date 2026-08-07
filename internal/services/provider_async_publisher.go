@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -30,6 +32,72 @@ import (
 // worker's tick with a separate reconciler goroutine. Publish()
 // returns immediately with the publish_id; the reconciler calls
 // Reconcile on every tick to advance the async state machine.
+// ErrPublishTerminal marks a provider response whose explicit state says
+// the asynchronous publish has permanently failed (for example FAILED,
+// ERROR, or EXPIRED). The reconciler uses this marker to distinguish an
+// authoritative provider terminal state from a transport error.
+var ErrPublishTerminal = errors.New("publish reached terminal provider state")
+
+// TerminalPublishError carries an explicit terminal state reported by a
+// provider. It is intentionally separate from generic errors: a timeout or
+// network reset must be retried, while this error must transition the target
+// to failed immediately.
+type TerminalPublishError struct {
+	State string
+	Err   error
+}
+
+func (e *TerminalPublishError) Error() string {
+	if e == nil {
+		return ErrPublishTerminal.Error()
+	}
+	if e.Err == nil {
+		return fmt.Sprintf("publish terminal state: %s", e.State)
+	}
+	return fmt.Sprintf("publish terminal state %s: %v", e.State, e.Err)
+}
+
+func (e *TerminalPublishError) Unwrap() error {
+	if e == nil {
+		return ErrPublishTerminal
+	}
+	return errors.Join(ErrPublishTerminal, e.Err)
+}
+
+// NewTerminalPublishError constructs the canonical terminal-state error.
+func NewTerminalPublishError(state string, err error) error {
+	return &TerminalPublishError{State: state, Err: err}
+}
+
+// ErrPublishPermanent marks a provider-side reconciliation error that is
+// known not to succeed by polling again (for example a channel mismatch).
+var ErrPublishPermanent = errors.New("publish reconciliation permanent error")
+
+// PermanentPublishError carries a non-retryable provider reconciliation
+// failure while preserving the underlying cause for diagnostics.
+type PermanentPublishError struct {
+	Err error
+}
+
+func (e *PermanentPublishError) Error() string {
+	if e == nil || e.Err == nil {
+		return ErrPublishPermanent.Error()
+	}
+	return e.Err.Error()
+}
+
+func (e *PermanentPublishError) Unwrap() error {
+	if e == nil {
+		return ErrPublishPermanent
+	}
+	return errors.Join(ErrPublishPermanent, e.Err)
+}
+
+// NewPermanentPublishError constructs the canonical non-retryable error.
+func NewPermanentPublishError(err error) error {
+	return &PermanentPublishError{Err: err}
+}
+
 type AsyncPublisher interface {
 	NameProvider
 
@@ -49,8 +117,10 @@ type AsyncPublisher interface {
 
 	// Reconcile queries the platform and decides the transition:
 	//   PUBLISH_COMPLETE → returns *PublishResult (success, terminal)
-	//   FAILED          → returns error (terminal)
-	//   in-flight       → returns (nil, nil) — caller should retry later
-	// The reconciler goroutine in the worker calls this on every tick.
+	//   explicit FAILED/ERROR/EXPIRED state → returns a TerminalPublishError
+	//   permanent provider rejection → returns a PermanentPublishError
+	//   transient transport/provider failure → returns the retryable error
+	//   in-flight       → returns (nil, nil) — caller should poll later
+	// The reconciler worker applies the common retry policy to these outcomes.
 	Reconcile(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error)
 }
