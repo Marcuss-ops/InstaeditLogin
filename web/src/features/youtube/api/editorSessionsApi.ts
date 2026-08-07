@@ -39,19 +39,18 @@
  *   built-in toast).
  *
  * Notes:
- *   - The editor-session resource is NOT idempotent at the
- *     transport layer. Each POST creates a fresh session row
- *     server-side. Pages should not retry the create call on
- *     5xx unless they want a double session.
+ *   - The editor-session endpoint is idempotent for an open
+ *     `(workspace_id, platform_account_id, youtube_video_id)` tuple:
+ *     the server reuses its existing session and `velox_project_id`,
+ *     while a published/terminal session may create a new edit session.
+ *     The client still avoids blind retries so callers do not create
+ *     an unintended new session after a terminal-state transition.
  *   - The payload key for `youtube_video_id` is canonical — server
  *     also accepts `video_id` as a legacy alias (migration 031) but
  *     new callers MUST send `youtube_video_id`.
- *   - `window.open(editor_url, "_blank", "noopener,noreferrer")` is
- *     a UI concern, not an API concern. Pages call this AFTER
- *     resolving the create promise; the openInstaEditorInNewTab helper
- *     below exists for the single-purpose `openVeloxEditor` shim
- *     used by AccountDetails/Calendar (YouTubeStudio inlines its own
- *     because it has post-open refresh logic).
+ *   - Navigation to `editor_url` is a UI concern, not an API concern.
+ *     Callers choose either the legacy new-tab helper or the explicit
+ *     top-level redirect helper below; neither embeds the editor.
  */
 
 import { authedFetch } from "../../../lib/auth";
@@ -154,9 +153,9 @@ export interface YouTubeEditorSessionDetail
 /**
  * POST /api/v1/youtube/editor-sessions.
  *
- * Returns the resolved `editor_url` — callers should open it via
- * {@link openInstaEditorInNewTab} (or pass through to a component that
- * already does the popup dance).
+ * Returns the resolved `editor_url` and stable `velox_project_id` —
+ * callers can pass it to the isolated Dark Editor SPA through either
+ * the legacy new-tab helper or the explicit top-level redirect helper.
  */
 export async function createYouTubeEditorSession(
   body: CreateYouTubeEditorSessionRequest,
@@ -271,19 +270,33 @@ export async function publishYouTubeEditorSession(
  * the sessions list right after open completes — different shape,
  * not a candidate for unification there.
  */
-export function openInstaEditorInNewTab(editorUrl: string): void {
+function validateEditorURL(editorUrl: string): URL {
   const parsed = new URL(editorUrl, window.location.origin);
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error("URL di InstaEditor non valido: il browser ha bloccato un collegamento locale.");
   }
+  return parsed;
+}
+
+export function openInstaEditorInNewTab(editorUrl: string): void {
+  validateEditorURL(editorUrl);
   window.open(editorUrl, "_blank", "noopener,noreferrer");
+}
+
+/** Navigate the current top-level document to the separate editor SPA. */
+export function redirectToInstaEditor(
+  editorUrl: string,
+  navigate: (url: string) => void = (url) => window.location.assign(url),
+): void {
+  const parsed = validateEditorURL(editorUrl);
+  navigate(parsed.toString());
 }
 
 // ─── Barrel helper (kept terse on purpose) ───────────────────────
 
 /**
- * Single-call helper for the common "Modifica copertina" flow:
- * create a session for a video, then open it in a new tab.
+ * Single-call helper for legacy "Modifica copertina" surfaces:
+ * resolve the idempotent session for a video, then open it in a new tab.
  *
  * Returns the created session response so callers can chain post-open
  * UI state updates (for example, refreshing the studio session list).
@@ -299,8 +312,17 @@ export async function createEditorSessionAndOpen(
   init: RequestInit = {},
 ): Promise<CreateYouTubeEditorSessionResponse> {
   const session = await createYouTubeEditorSession(body, init);
-  // Open immediately so the browser popup-blocker trusts us — the
-  // gesture chains through from the click handler unchanged.
   openInstaEditorInNewTab(session.editor_url);
+  return session;
+}
+
+/** Create/resolve the idempotent session, then leave InstaEdit for Velox. */
+export async function createEditorSessionAndRedirect(
+  body: CreateYouTubeEditorSessionRequest,
+  init: RequestInit = {},
+  navigate?: (url: string) => void,
+): Promise<CreateYouTubeEditorSessionResponse> {
+  const session = await createYouTubeEditorSession(body, init);
+  redirectToInstaEditor(session.editor_url, navigate);
   return session;
 }

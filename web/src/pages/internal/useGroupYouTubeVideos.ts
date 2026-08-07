@@ -5,7 +5,8 @@ import { ApiError, authedFetch, AuthError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import {
   createYouTubeEditorSession,
-  createEditorSessionAndOpen,
+  createEditorSessionAndRedirect,
+  redirectToInstaEditor,
 } from "../../features/youtube/api/editorSessionsApi";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import {
@@ -31,6 +32,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
   const navigate = useNavigate();
   const abortRef = useRef<AbortController | null>(null);
   const pollingAttemptsRef = useRef(0);
+  const openingVideoRef = useRef(false);
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [recencyDays, setRecencyDays] = useState<number>(90);
   const [openingVideoID, setOpeningVideoID] = useState<string | null>(null);
@@ -41,20 +43,31 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
   const toast = useToast();
 
   const openThumbnailEditor = useCallback(async (video: GroupYouTubeVideo) => {
-    if (openingVideoID) return;
+    if (openingVideoRef.current) return;
+    openingVideoRef.current = true;
     setOpeningVideoID(video.youtube_video_id);
     try {
-      // The group is the source of truth for the channel/workspace binding.
-      // Using the first global workspace can point the editor at a valid but
-      // unrelated workspace and produces "account not linked to workspace".
+      // The group-video projection already carries the authoritative
+      // InstaEditor project handle and URL when this video was opened
+      // before. Reuse them directly: no workspace lookup and no duplicate
+      // create request are needed for the common Groups → Modifica path.
+      if (video.velox_project_id && video.editor_url) {
+        redirectToInstaEditor(video.editor_url);
+        toast.success("InstaEditor aperto: il video resta privato finché non scegli di pubblicarlo.");
+        return;
+      }
+
+      // First open: resolve the group-owned workspace, then use the
+      // idempotent editor-session endpoint. The server validates the
+      // workspace/account/video binding and returns the stable
+      // velox_project_id + project URL before this SPA navigation.
       const workspaceID = await resolveGroupWorkspace(groupId);
-      await createEditorSessionAndOpen({
+      await createEditorSessionAndRedirect({
         workspace_id: workspaceID,
         platform_account_id: video.platform_account_id,
         youtube_video_id: video.youtube_video_id,
         ...(safeAssetUrl(video.thumbnail_url) ? { source_thumbnail_url: safeAssetUrl(video.thumbnail_url) } : {}),
       });
-      toast.success("InstaEditor aperto: il video resta privato finché non scegli di pubblicarlo.");
     } catch (error) {
       if (error instanceof AuthError) {
         navigate("/login", { replace: true });
@@ -62,9 +75,10 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
       }
       toast.error(error instanceof Error ? error.message : "Impossibile aprire InstaEditor.");
     } finally {
+      openingVideoRef.current = false;
       setOpeningVideoID(null);
     }
-  }, [groupId, navigate, openingVideoID, toast]);
+  }, [groupId, navigate, toast]);
 
   const openVideoPreview = useCallback((video: GroupYouTubeVideo) => {
     // Preview is deliberately local and deterministic: no NVIDIA metadata

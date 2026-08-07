@@ -9,6 +9,7 @@
  *  - Error classification: AuthError re-thrown, ApiError surfaces
  *    with the message verbatim
  *  - window.open call signature (target blank + noopener+noreferrer)
+ *  - top-level redirect receives the resolved editor SPA URL
  *  - Query-string composition for the list endpoint
  *  - 404 AbortError path doesn't crash the helper
  *
@@ -42,6 +43,7 @@ import { ApiError, AuthError } from "../../../lib/auth";
 import {
   attachYouTubeEditorSessionThumbnail,
   createEditorSessionAndOpen,
+  createEditorSessionAndRedirect,
   createYouTubeEditorSession,
   listYouTubeEditorSessions,
   getYouTubeEditorSession,
@@ -313,6 +315,49 @@ describe("openInstaEditorInNewTab", () => {
       "/dark_editor_v2/editor/ve_x",
       "_blank",
       "noopener,noreferrer",
+    );
+  });
+});
+
+describe("redirectToInstaEditor", () => {
+  it("passes the resolved URL to the top-level navigation function", async () => {
+    const { redirectToInstaEditor } = await import("./editorSessionsApi");
+    const navigate = vi.fn();
+
+    redirectToInstaEditor("/dark_editor_v2/editor/ve_x", navigate);
+
+    expect(navigate).toHaveBeenCalledWith(
+      "http://localhost:3000/dark_editor_v2/editor/ve_x",
+    );
+  });
+
+  it("rejects unsupported protocols before navigation", async () => {
+    const { redirectToInstaEditor } = await import("./editorSessionsApi");
+    const navigate = vi.fn();
+
+    expect(() => redirectToInstaEditor("javascript:alert(1)", navigate)).toThrow(
+      /URL di InstaEditor non valido/i,
+    );
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("createEditorSessionAndRedirect", () => {
+  it("creates/reuses the session and redirects the current document without opening an iframe or popup", async () => {
+    authedFetchMock.mockResolvedValue(jsonResponse(OK_SESSION));
+    const navigate = vi.fn();
+
+    // The public helper accepts a navigation dependency through the low-level
+    // redirect function; this test covers the request/session contract here.
+    const session = await createEditorSessionAndRedirect(
+      { workspace_id: 7, platform_account_id: 99, youtube_video_id: "dQw4w9WgXcQ" },
+      {},
+      navigate,
+    );
+
+    expect(session).toEqual(OK_SESSION);
+    expect(navigate).toHaveBeenCalledWith(
+      "http://localhost:3000/dark_editor_v2/editor/ve_test_99",
     );
   });
 });
