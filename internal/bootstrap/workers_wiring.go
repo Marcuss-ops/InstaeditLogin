@@ -19,7 +19,8 @@ import (
 // App is the wired runtime holding every dependency that the api and
 // worker binaries share. cmd/api reads App.HTTPHandler (and App.Cfg for
 // PORT); cmd/worker reads App.DB / App.Vault / App.CapRouter /
-// App.WebhookRepo to construct + supervise the 7 goroutines; cmd/server
+// App.WebhookRepo to construct and supervise the registered worker set;
+// cmd/server
 // (the wrapper) reads both halves.
 
 // assetsAdapter bridges *repository.MediaAssetRepository to the
@@ -78,10 +79,10 @@ func (a *routerEditorSessionAdapter) CreateEditorSession(ctx context.Context, in
 	})
 }
 
-// registerPublishWorker wires goroutine 1: the publish worker driver —
+// publishWorkerSpec wires goroutine 1: the publish worker driver —
 // queued → publishing transition.
-func (a *App) registerPublishWorker() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) publishWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "publish",
 		Critical: true,
 		Run: func(ctx context.Context) error {
@@ -91,18 +92,12 @@ func (a *App) registerPublishWorker() {
 			// assetsAdapter wraps *repository.MediaAssetRepository and applies
 			// workspace-scoped ownership before the resolver mints a URL. The
 			// adapter is function-local to keep the wiring change contained.
-			mediaAssetRepoForResolver := repository.NewMediaAssetRepository(a.DB)
-			resolver := services.NewMediaDownloadResolver(
-				a.StorageProvider,
-				assetsAdapter{repo: mediaAssetRepoForResolver},
-				slog.Default(),
-			)
 			pw := worker.NewPublishWorker(
 				repository.NewPostRepository(a.DB),
 				repository.NewUserRepository(a.DB),
 				a.CapRouter,
 				a.Vault,
-				resolver,
+				a.runtime.mediaDownloadResolver,
 				a.WorkerID,
 				a.MemoryLimiter,
 				time.Duration(a.Cfg.Worker.PublishWorkerIntervalSeconds)*time.Second,
@@ -158,16 +153,16 @@ func (a *App) registerPublishWorker() {
 			// the upload worker uses — the youtube_target_publications
 			// table is the contract boundary for the Blocco #1
 			// two-phase split (Phase-1 stamps, Phase-2 reads + videos.update).
-			pw.SetYouTubeTargetPublicationStore(repository.NewYouTubeTargetPublicationRepository(a.DB))
+			pw.SetYouTubeTargetPublicationStore(a.runtime.youtubeTargetPublicationStore)
 			return pw.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerReconcileWorker wires goroutine 2: the reconcile worker —
+// reconcileWorkerSpec wires goroutine 2: the reconcile worker —
 // publishing → published | failed transition.
-func (a *App) registerReconcileWorker() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) reconcileWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "reconcile",
 		Critical: true,
 		Run: func(ctx context.Context) error {
@@ -183,13 +178,13 @@ func (a *App) registerReconcileWorker() {
 			)
 			return rw.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerOutboxDispatcher wires goroutine 3: the outbox dispatcher —
+// outboxWorkerSpec wires goroutine 3: the outbox dispatcher —
 // materialises publish_jobs audit rows.
-func (a *App) registerOutboxDispatcher() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) outboxWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "outbox",
 		Critical: true,
 		Run: func(ctx context.Context) error {
@@ -201,13 +196,13 @@ func (a *App) registerOutboxDispatcher() {
 			})
 			return ds.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerWebhookWorker wires goroutine 4: the webhook worker — drains
+// webhookWorkerSpec wires goroutine 4: the webhook worker — drains
 // webhook_deliveries.
-func (a *App) registerWebhookWorker() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) webhookWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "webhook",
 		Critical: true,
 		Run: func(ctx context.Context) error {
@@ -220,39 +215,33 @@ func (a *App) registerWebhookWorker() {
 			})
 			return ww.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerMetricsCollector wires goroutine 5: the metrics collector —
+// metricsWorkerSpec wires goroutine 5: the metrics collector —
 // periodic gauges. When the YouTube OAuth Client Pool is configured
 // (YOUTUBE_OAUTH_CLIENT_A/B_* env vars), the pool registry's client
 // Keys() are passed to the collector so youtube_oauth_pool_health is
 // zero-filled for every configured client (a client with no grants yet
 // emits 0 / healthy instead of vanishing from /metrics).
-func (a *App) registerMetricsCollector() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) metricsWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "metrics",
 		Critical: true,
 		Run: func(ctx context.Context) error {
 			opts := []metrics.CollectorOption{}
-			if poolRegistry, regErr := services.NewYouTubeOAuthClientRegistryFromConfig(a.Cfg); regErr != nil {
-				// Half-configured A/B env vars degrade the health-gauge
-				// zero-fill only — warn instead of failing the metrics
-				// goroutine (the router wiring already hard-fails on the
-				// same error at boot, so this is unreachable in practice).
-				slog.Warn("metrics collector: youtube oauth pool registry unavailable; pool health zero-fill skipped", "error", regErr)
-			} else if poolRegistry != nil {
-				opts = append(opts, metrics.WithYouTubeOAuthPoolKeys(poolRegistry.Keys()))
+			if a.runtime.youtubeOAuthClientRegistry != nil {
+				opts = append(opts, metrics.WithYouTubeOAuthPoolKeys(a.runtime.youtubeOAuthClientRegistry.Keys()))
 			}
 			return metrics.RunPeriodicCollector(ctx, a.DB, metrics.DefaultCollectorInterval, slog.Default(), opts...)
 		},
-	})
+	}
 }
 
-// registerSessionsCleanupWorker wires goroutine 6: the sessions cleanup
+// sessionsCleanupWorkerSpec wires goroutine 6: the sessions cleanup
 // worker — retention policy.
-func (a *App) registerSessionsCleanupWorker() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) sessionsCleanupWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "sessions_cleanup",
 		Critical: true,
 		Run: func(ctx context.Context) error {
@@ -263,16 +252,16 @@ func (a *App) registerSessionsCleanupWorker() {
 			)
 			return scw.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerAssetCleanupWorker wires the asset cleanup worker (Blocco
+// assetCleanupWorkerSpec wires the asset cleanup worker (Blocco
 // Carosello cleanup) — hard-deletes media_assets whose YouTube publish
 // pipeline has fully run AND aged past the operator-configured
 // retention buffer (default 7d). NOT critical: a transient DB failure
 // here MUST NOT take the process down.
-func (a *App) registerAssetCleanupWorker() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) assetCleanupWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "asset_cleanup",
 		Critical: false,
 		Run: func(ctx context.Context) error {
@@ -284,14 +273,14 @@ func (a *App) registerAssetCleanupWorker() {
 			)
 			return acw.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerVeloxDownloader wires goroutine 7: the Velox handoff
+// veloxDownloaderWorkerSpec wires goroutine 7: the Velox handoff
 // consumer — polls external_deliveries for accepted rows and registers
 // each claimed row as an upload_jobs row.
-func (a *App) registerVeloxDownloader() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) veloxDownloaderWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "velox_downloader",
 		Critical: true,
 		Run: func(ctx context.Context) error {
@@ -307,14 +296,14 @@ func (a *App) registerVeloxDownloader() {
 			)
 			return downloader.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerUploadWorker wires goroutine 8: the upload worker —
+// uploadWorkerSpec wires goroutine 8: the upload worker —
 // background import of public or authenticated Google Drive videos
 // into S3 + posts + publish queue.
-func (a *App) registerUploadWorker() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) uploadWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "upload",
 		Critical: true,
 		Run: func(ctx context.Context) error {
@@ -371,13 +360,8 @@ func (a *App) registerUploadWorker() {
 			// here (post-construction of UploadWorker) so the setter
 			// pattern keeps the constructor signature stable across
 			// wires (production + tests).
-			uw.SetYouTubeTargetPublishStore(repository.NewYouTubeTargetPublicationRepository(a.DB))
-			mediaAssetRepoForResolver := repository.NewMediaAssetRepository(a.DB)
-			uw.SetMediaDownloadResolver(services.NewMediaDownloadResolver(
-				a.StorageProvider,
-				assetsAdapter{repo: mediaAssetRepoForResolver},
-				slog.Default(),
-			))
+			uw.SetYouTubeTargetPublishStore(a.runtime.youtubeTargetPublicationStore)
+			uw.SetMediaDownloadResolver(a.runtime.mediaDownloadResolver)
 			// Migration 092 — wire the ffprobe pass so every asset the
 			// upload worker ingests gets duration/resolution/FPS/audio
 			// probed (the live wizard's compatibility badge reads from
@@ -386,13 +370,13 @@ func (a *App) registerUploadWorker() {
 			uw.SetMediaProber(worker.NewFFprobeProberWithRegistry(a.RenderRegistry))
 			return uw.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerDriveBatchCrawler wires goroutine 9: the Drive batch
+// driveBatchCrawlerWorkerSpec wires goroutine 9: the Drive batch
 // crawler — drains import_batches rows.
-func (a *App) registerDriveBatchCrawler() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) driveBatchCrawlerWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "drive_batch_crawler",
 		Critical: true,
 		Run: func(ctx context.Context) error {
@@ -422,18 +406,18 @@ func (a *App) registerDriveBatchCrawler() {
 			)
 			return dbcc.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerTokenRefreshSweepWorker wires goroutine 11: the token
+// tokenRefreshSweepWorkerSpec wires goroutine 11: the token
 // refresh sweep — renews dormant OAuth grants before Google
 // garbage-collects them (~6-month inactivity policy). NON-critical:
 // a transient failure here must not take the process down (maintenance
 // task, same classification as asset_cleanup). Refreshers are wired
 // only for the Google providers present in the CapabilityRouter; a
 // deployment without YouTube/Drive simply runs an idle sweep.
-func (a *App) registerTokenRefreshSweepWorker() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) tokenRefreshSweepWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "token_refresh_sweep",
 		Critical: false,
 		Run: func(ctx context.Context) error {
@@ -466,10 +450,10 @@ func (a *App) registerTokenRefreshSweepWorker() {
 			)
 			return sw.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerSnapshotRefreshSweepWorker wires the snapshot refresh sweep:
+// snapshotRefreshSweepWorkerSpec wires the snapshot refresh sweep:
 // the background half of the strict rule "opening a channel page never
 // calls the provider". The read path (GET /accounts and GET
 // /accounts/{id}) serves the cached snapshot and stamps
@@ -483,8 +467,8 @@ func (a *App) registerTokenRefreshSweepWorker() {
 // registration time, so a provider-shape change surfaces at boot
 // wiring instead of silently leaving the fetcher map empty. Refreshers
 // reuse the OAuth capability map, exactly like the token refresh sweep.
-func (a *App) registerSnapshotRefreshSweepWorker() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) snapshotRefreshSweepWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "snapshot_refresh_sweep",
 		Critical: false,
 		Run: func(ctx context.Context) error {
@@ -514,10 +498,10 @@ func (a *App) registerSnapshotRefreshSweepWorker() {
 			)
 			return sw.Run(ctx)
 		},
-	})
+	}
 }
 
-// registerYouTubeProcessingReconciler wires goroutine 10: the YouTube
+// youtubeProcessingReconcilerWorkerSpec wires goroutine 10: the YouTube
 // processing reconciler — polls youtube_target_publications rows in
 // 'processed' state that haven't been linked to an editor session
 // (editor_session_id IS NULL) and creates the per-target Velox editor
@@ -525,12 +509,12 @@ func (a *App) registerSnapshotRefreshSweepWorker() {
 // routerEditorSessionAdapter. 1-per-target contract preserved (every
 // call mints fresh uuids). MarkEditorSessionCreated's atomic CAS-link
 // guards concurrent reconciler replicas from double-stamping.
-func (a *App) registerYouTubeProcessingReconciler() {
-	a.WorkerRegistry.Register(worker.WorkerSpec{
+func (a *App) youtubeProcessingReconcilerWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
 		Name:     "youtube_processing_reconciler",
 		Critical: true,
 		Run: func(ctx context.Context) error {
-			ytPubRepo := repository.NewYouTubeTargetPublicationRepository(a.DB)
+			ytPubRepo := a.runtime.youtubeTargetPublicationStore
 			uploadRepo := repository.NewUploadJobRepository(a.DB)
 			adapter := &routerEditorSessionAdapter{router: a.Router}
 			ypr := worker.NewYoutubeProcessingReconciler(
@@ -542,10 +526,31 @@ func (a *App) registerYouTubeProcessingReconciler() {
 			)
 			return ypr.Run(ctx)
 		},
-	})
+	}
 }
 
-// RunWorkers starts the 12 background goroutines (publish, reconcile,
+// workerSpecs is the single lifecycle plan. It deliberately returns the
+// existing worker.WorkerSpec values rather than introducing another registry:
+// RunWorkers registers these specs on App.WorkerRegistry in this exact order.
+func (a *App) workerSpecs() []worker.WorkerSpec {
+	return []worker.WorkerSpec{
+		a.publishWorkerSpec(),
+		a.reconcileWorkerSpec(),
+		a.outboxWorkerSpec(),
+		a.webhookWorkerSpec(),
+		a.metricsWorkerSpec(),
+		a.sessionsCleanupWorkerSpec(),
+		a.assetCleanupWorkerSpec(),
+		a.veloxDownloaderWorkerSpec(),
+		a.uploadWorkerSpec(),
+		a.driveBatchCrawlerWorkerSpec(),
+		a.youtubeProcessingReconcilerWorkerSpec(),
+		a.tokenRefreshSweepWorkerSpec(),
+		a.snapshotRefreshSweepWorkerSpec(),
+	}
+}
+
+// RunWorkers starts the 13 background workers (publish, reconcile,
 // outbox, webhook, metrics, sessions_cleanup, asset_cleanup,
 // velox_downloader, upload, drive_batch_crawler,
 // youtube_processing_reconciler, token_refresh_sweep,
@@ -554,7 +559,7 @@ func (a *App) registerYouTubeProcessingReconciler() {
 // that exits with a non-context error aborts the whole process by
 // returning the error from RunWorkers.
 //
-// The per-worker construction closures live in the register* methods
+// The per-worker construction closures live in the *WorkerSpec factories
 // above (one per goroutine, in registration order) so this function
 // stays a thin orchestration loop: register all → StartAll → block on
 // critical-error-or-cancel → StopAll with the shared 15s drain budget.
@@ -565,30 +570,18 @@ func (a *App) RunWorkers(ctx context.Context) error {
 	if a.WorkerRegistry == nil {
 		return fmt.Errorf("RunWorkers called with nil App.WorkerRegistry")
 	}
-
-	// Registration order is load-bearing for log/readability parity
-	// with the historical inline blocks — keep new workers appended in
-	// the same numbered order as their register* method comments.
-	registrations := []func(){
-		a.registerPublishWorker,               // 1. publish driver
-		a.registerReconcileWorker,             // 2. reconciler
-		a.registerOutboxDispatcher,            // 3. outbox
-		a.registerWebhookWorker,               // 4. webhook
-		a.registerMetricsCollector,            // 5. metrics
-		a.registerSessionsCleanupWorker,       // 6. sessions_cleanup
-		a.registerAssetCleanupWorker,          //    asset_cleanup (non-critical)
-		a.registerVeloxDownloader,             // 7. velox_downloader
-		a.registerUploadWorker,                // 8. upload
-		a.registerDriveBatchCrawler,           // 9. drive_batch_crawler
-		a.registerYouTubeProcessingReconciler, // 10. youtube_processing_reconciler
-		a.registerTokenRefreshSweepWorker,     // 11. token_refresh_sweep (non-critical)
-		a.registerSnapshotRefreshSweepWorker,  // 12. snapshot_refresh_sweep (non-critical)
-	}
-	for _, register := range registrations {
-		register()
+	if _, err := a.requireRuntime(); err != nil {
+		return fmt.Errorf("RunWorkers capability validation failed: %w", err)
 	}
 
-	slog.Info("12 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / token_refresh_sweep / snapshot_refresh_sweep")
+	// The plan is the single source of truth for worker count, order and
+	// criticality. Each spec still contains a lazy Run closure; no worker
+	// dependency is constructed before StartAll invokes it.
+	for _, spec := range a.workerSpecs() {
+		a.WorkerRegistry.Register(spec)
+	}
+
+	slog.Info("13 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / asset_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / token_refresh_sweep / snapshot_refresh_sweep")
 
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 
