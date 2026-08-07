@@ -362,6 +362,18 @@ describe("GroupsPage", () => {
     expect(within(freeCard!).queryByText("WWE")).not.toBeInTheDocument();
   });
 
+  it("sorts tray cards with grouped channels first and free channels last", () => {
+    // Feed the tray with the free channel FIRST in the source array: the
+    // sort must still surface the grouped channel before the free one.
+    makeMock({ availableYouTubeAccounts: [secondYouTubeAccount, groupedAccount] });
+    renderPage();
+
+    const tray = screen.getByTestId("youtube-channels-tray");
+    const cards = Array.from(tray.querySelectorAll("[data-account-id]"));
+    const order = cards.map((el) => Number(el.getAttribute("data-account-id")));
+    expect(order).toEqual([groupedAccount.id, secondYouTubeAccount.id]);
+  });
+
   it("colors the tray group badge with the group's stable accent", () => {
     renderPage();
     const tray = screen.getByTestId("youtube-channels-tray");

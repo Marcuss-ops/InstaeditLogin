@@ -70,6 +70,13 @@ export function GroupsPage() {
   const filteredYouTubeAccounts = availableYouTubeAccounts.filter((account) => (
     matchesChannelView(account, channelSearch, channelFilter, assignedToAnyGroup)
   ));
+  // Tray order: channels that already live in a group first, free ones
+  // last (stable sort keeps the source order inside each bucket), so the
+  // operator always sees the assigned channels and the assignable ones at
+  // a glance.
+  const trayAccounts = [...filteredYouTubeAccounts].sort(
+    (a, b) => Number(assignedToAnyGroup.has(b.id)) - Number(assignedToAnyGroup.has(a.id)),
+  );
   const visibleSelectedIDs = filteredYouTubeAccounts
     .filter((account) => selectedChannelIds.has(account.id))
     .map((account) => account.id);
@@ -299,7 +306,7 @@ export function GroupsPage() {
 
         {state.kind === "ready" && (
           <YouTubeChannelsTray
-            accounts={filteredYouTubeAccounts}
+            accounts={trayAccounts}
             totalAccounts={availableYouTubeAccounts.length}
             search={channelSearch}
             filter={channelFilter}
