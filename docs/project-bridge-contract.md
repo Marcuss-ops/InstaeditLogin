@@ -88,6 +88,44 @@ UNIQUE(project_id)
 UNIQUE(external_project_id)
 ```
 
+### 2.0 Persistence allowlist and explicit exclusions
+
+The `contract_version` value is wire-only protocol metadata: it is required
+in API requests/responses but is not stored as a column in
+`velox_project_bridges`. The `velox_project_bridges` table may persist **only**
+the following bridge fields:
+
+- `project_id` — the InstaEdit application project reference;
+- `workspace_id` — the InstaEdit tenant boundary;
+- `external_project_id` — the opaque editor-project reference;
+- `editor_provider` — optional editor backend metadata;
+- `editor_status` — optional coarse editor status;
+- `last_editor_sync_at` — optional operational timestamp;
+- the bridge's technical timestamps and migration marker (`created_at`,
+  `updated_at`, `migration_run_id`).
+
+It MUST NOT persist, copy, mirror, snapshot, or administer any of the
+following in the bridge:
+
+- platform or provider identity;
+- platform account identifiers or account records;
+- channel identifiers, channel names, channel lists, or channel membership;
+- video identifiers, video metadata, or provider video records;
+- language or locale metadata;
+- groups, group identifiers, group membership, or group-to-channel
+  associations;
+- OAuth credentials, permissions, or workspace/user copies;
+- editor-internal state such as scenes, layers, timelines, revisions, assets,
+  or render state.
+
+These values may remain in their authoritative InstaEdit tables and may be
+consulted to authorize or validate an editor launch. They may be sent as
+short-lived, read-only launch context when strictly necessary, but they MUST
+never be written to `velox_project_bridges` or used to create a Velox-owned
+catalog. Migration cleanup removes legacy bridge columns only; it does not
+delete the authoritative InstaEdit accounts, channels, videos, languages,
+groups, or memberships.
+
 Both uniqueness constraints are global within one deployment/environment.
 A project identifier MUST NOT be rebound to another bridge, and a Velox
 project identifier MUST NOT be attached to another InstaEdit project.
@@ -130,10 +168,13 @@ parsing either identifier.
 
 ### 2.2 Context ownership (not part of the bridge)
 
-Channel, video, platform, language, group and membership context remains in
-InstaEdit-owned project/session/account records. It may be validated before an
-editor launch and may be sent as ephemeral launch context when strictly
-needed, but it is never persisted in this bridge.
+Channel, video, platform, account, language, group and membership context
+remains in InstaEdit-owned project/session/account records. It may be read for
+authorization and validated before an editor launch, and may be sent as
+strictly ephemeral, read-only launch context when needed. None of it is
+persisted in this bridge: in particular, `platform_account_id`, channel IDs,
+video IDs, language values, group IDs and membership lists MUST NOT appear in
+`velox_project_bridges`.
 
 For the current YouTube editor-session compatibility path, the minimum
 validated tuple is:
@@ -463,9 +504,12 @@ keyframes
 editor_snapshot
 ```
 
-The bridge stores the mapping (`project_id ↔ external_project_id`) and at most
-`editor_provider`, `editor_status` and `last_editor_sync_at`. Editor-internal
-representations are never persisted in InstaEdit.
+The bridge stores only the mapping (`project_id ↔ external_project_id`),
+`workspace_id`, and at most `editor_provider`, `editor_status` and
+`last_editor_sync_at` plus technical timestamps/markers. Platform, account,
+channel, video, language, group and membership data are never persisted in
+this bridge; editor-internal representations are never persisted in
+InstaEdit's bridge either.
 
 Specifically:
 
