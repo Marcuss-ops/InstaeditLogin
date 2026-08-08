@@ -15,7 +15,9 @@ import (
 // would already exist or be persisted by the service).
 type fakeEditorService struct {
 	createProjectFn func(ctx context.Context, req services.CreateEditorProjectRequest) (*services.EditorProject, error)
+	openProjectFn   func(ctx context.Context, req services.OpenEditorProjectRequest) (*services.EditorProject, error)
 	calls           []services.CreateEditorProjectRequest
+	openCalls       []services.OpenEditorProjectRequest
 }
 
 func (f *fakeEditorService) CreateProject(ctx context.Context, req services.CreateEditorProjectRequest) (*services.EditorProject, error) {
@@ -32,7 +34,11 @@ func (f *fakeEditorService) CreateProject(ctx context.Context, req services.Crea
 	}, nil
 }
 
-func (f *fakeEditorService) OpenProject(context.Context, services.OpenEditorProjectRequest) (*services.EditorProject, error) {
+func (f *fakeEditorService) OpenProject(ctx context.Context, req services.OpenEditorProjectRequest) (*services.EditorProject, error) {
+	f.openCalls = append(f.openCalls, req)
+	if f.openProjectFn != nil {
+		return f.openProjectFn(ctx, req)
+	}
 	return nil, services.ErrEditorProjectNotFound
 }
 

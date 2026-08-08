@@ -40,6 +40,17 @@ func bridgeTestRouter(t *testing.T, store *thumbnailProjectTestStore, ownerID in
 		store.bridge = &models.VeloxProjectBridge{ProjectID: req.ApplicationProjectID, WorkspaceID: req.WorkspaceID, ExternalProjectID: externalID, EditorProvider: "velox"}
 		return &services.EditorProject{ApplicationProjectID: req.ApplicationProjectID, WorkspaceID: req.WorkspaceID, ExternalProjectID: externalID, Created: len(editorService.calls) == 1}, nil
 	}
+	editorService.openProjectFn = func(_ context.Context, req services.OpenEditorProjectRequest) (*services.EditorProject, error) {
+		if store.bridge == nil || store.bridge.ProjectID != req.ApplicationProjectID || store.bridge.WorkspaceID != req.WorkspaceID {
+			return nil, services.ErrEditorProjectNotFound
+		}
+		return &services.EditorProject{
+			ApplicationProjectID: store.bridge.ProjectID,
+			ExternalProjectID:    store.bridge.ExternalProjectID,
+			WorkspaceID:          store.bridge.WorkspaceID,
+			State:                "ready",
+		}, nil
+	}
 	r.editorService = editorService
 	return r
 }
@@ -212,6 +223,13 @@ func TestVeloxProjectBridge_GetAndDeleteIsWorkspaceScoped(t *testing.T) {
 	var response veloxProjectBridgeResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || response.Bridge.ExternalProjectID != "vx_1" {
 		t.Fatalf("unexpected response: %s", w.Body.String())
+	}
+	if len(r.editorService.(*fakeEditorService).openCalls) != 1 {
+		t.Fatalf("existing bridge GET must open through EditorService exactly once, got %d calls", len(r.editorService.(*fakeEditorService).openCalls))
+	}
+	openCall := r.editorService.(*fakeEditorService).openCalls[0]
+	if openCall.UserID != 1 || openCall.WorkspaceID != 7 || openCall.ApplicationProjectID != "thumbproj_1" {
+		t.Fatalf("unexpected OpenProject request: %+v", openCall)
 	}
 	w, req = bridgeRequest(t, http.MethodDelete, "/api/v1/thumbnail-projects/thumbproj_1/velox-bridge?workspace_id=7", "")
 	r.Setup().ServeHTTP(w, req)

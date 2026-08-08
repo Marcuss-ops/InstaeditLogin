@@ -185,6 +185,30 @@ func (r *Router) handleGetVeloxProjectBridge(w http.ResponseWriter, req *http.Re
 		writeError(w, http.StatusNotFound, "project bridge not found")
 		return
 	}
+	if r.editorService == nil {
+		writeError(w, http.StatusServiceUnavailable, "Editor unavailable / misconfigured")
+		return
+	}
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.UserID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+	opened, err := r.editorService.OpenProject(req.Context(), services.OpenEditorProjectRequest{
+		UserID:               identity.UserID(),
+		WorkspaceID:          workspaceID,
+		ApplicationProjectID: projectID,
+	})
+	if err != nil {
+		mapEditorServiceError(w, err)
+		return
+	}
+	if opened == nil || opened.ApplicationProjectID != bridge.ProjectID ||
+		opened.WorkspaceID != bridge.WorkspaceID ||
+		opened.ExternalProjectID != bridge.ExternalProjectID {
+		mapEditorServiceError(w, services.ErrEditorProjectInvalid)
+		return
+	}
 	writeJSON(w, http.StatusOK, veloxProjectBridgeResponse{ContractVersion: models.ProjectBridgeContractVersion, Bridge: *bridge, EditorURL: r.editorURLForProject(bridge.ExternalProjectID)})
 }
 
