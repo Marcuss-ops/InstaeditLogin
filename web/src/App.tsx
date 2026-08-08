@@ -56,6 +56,11 @@ const GroupsPage = lazy(() =>
     default: m.GroupsPage,
   })),
 );
+const CoversPage = lazy(() =>
+  import("./pages/internal/Covers").then((m) => ({
+    default: m.CoversPage,
+  })),
+);
 const ChannelsPerformancePage = lazy(() =>
   import("./pages/internal/ChannelsPerformance").then((m) => ({
     default: m.ChannelsPerformancePage,
@@ -81,11 +86,6 @@ const LiveStreamNewPage = lazy(() =>
     default: m.LiveStreamNewPage,
   })),
 );
-export const RETIRED_COVERS_REDIRECT = "/app/youtube/studio";
-
-export function RetiredCoversRedirect() {
-  return <Navigate to={RETIRED_COVERS_REDIRECT} replace />;
-}
 
 function RouteLoadingFallback() {
   return (
@@ -175,16 +175,17 @@ function App() {
             >
               <Route index element={<Navigate to="dashboard" replace />} />
               <Route path="dashboard" element={<InternalDashboard />} />
-              {/*
-               * The standalone Covers library was retired with CoverEditor.
-               * Keep old bookmarks deterministic: an editor URL is only valid
-               * after InstaEdit has selected a video and minted its authorized
-               * editor session, so retired covers routes must enter YouTube
-               * Studio rather than rendering a stale autonomous-covers page.
-               */}
+              {/* Copertine hub: the in-app covers workspace. Old standalone
+                  Covers bookmarks and nested editor URLs land on the hub too
+                  — the SPA never navigates away; InstaEditor opens in a new
+                  tab from the video grid / preview modal. */}
               <Route
                 path="covers/*"
-                element={<RetiredCoversRedirect />}
+                element={
+                  <LazyRoute>
+                    <CoversPage />
+                  </LazyRoute>
+                }
               />
               <Route path="uploads" element={<InternalUploads />} />
               <Route

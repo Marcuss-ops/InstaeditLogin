@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
-const { authedFetchMock, redirectToInstaEditorMock, createEditorSessionAndRedirectMock, navigateMock, toastMock } = vi.hoisted(() => ({
+const { authedFetchMock, openInstaEditorWithLaunchMock, createEditorSessionAndOpenMock, navigateMock, toastMock } = vi.hoisted(() => ({
   authedFetchMock: vi.fn(),
-  redirectToInstaEditorMock: vi.fn(),
-  createEditorSessionAndRedirectMock: vi.fn(),
+  openInstaEditorWithLaunchMock: vi.fn(),
+  createEditorSessionAndOpenMock: vi.fn(),
   navigateMock: vi.fn(),
   toastMock: {
     success: vi.fn(),
@@ -35,8 +35,8 @@ vi.mock("../../lib/queryRegistry", () => ({
 
 vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
   createYouTubeEditorSession: vi.fn(),
-  createEditorSessionAndRedirect: createEditorSessionAndRedirectMock,
-  redirectToInstaEditor: redirectToInstaEditorMock,
+  createEditorSessionAndOpen: createEditorSessionAndOpenMock,
+  openInstaEditorWithLaunch: openInstaEditorWithLaunchMock,
 }));
 
 vi.mock("react-router-dom", () => ({
@@ -59,8 +59,8 @@ const video: GroupYouTubeVideo = {
 
 beforeEach(() => {
   authedFetchMock.mockReset();
-  redirectToInstaEditorMock.mockReset();
-  createEditorSessionAndRedirectMock.mockReset();
+  openInstaEditorWithLaunchMock.mockReset();
+  createEditorSessionAndOpenMock.mockReset();
   navigateMock.mockReset();
   toastMock.success.mockReset();
   toastMock.error.mockReset();
@@ -72,7 +72,7 @@ afterEach(() => {
 });
 
 describe("useGroupYouTubeVideos — Groups → Modifica", () => {
-  it("redirects directly to the existing project URL without recreating it", async () => {
+  it("opens the existing project URL in a new tab without recreating it", async () => {
     const existing = {
       ...video,
       velox_project_id: "ve_existing",
@@ -84,18 +84,21 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
       await result.current.openThumbnailEditor(existing);
     });
 
-    expect(redirectToInstaEditorMock).toHaveBeenCalledOnce();
-    expect(redirectToInstaEditorMock).toHaveBeenCalledWith(existing.editor_url);
-    expect(createEditorSessionAndRedirectMock).not.toHaveBeenCalled();
+    expect(openInstaEditorWithLaunchMock).toHaveBeenCalledOnce();
+    expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
+      existing.editor_url,
+      existing.velox_project_id,
+    );
+    expect(createEditorSessionAndOpenMock).not.toHaveBeenCalled();
     expect(authedFetchMock).toHaveBeenCalledTimes(1);
     expect(toastMock.error).not.toHaveBeenCalled();
   });
 
-  it("resolves the group workspace once, create-or-resolves the project, and redirects to the returned SPA URL", async () => {
+  it("resolves the group workspace once, create-or-resolves the project, and opens the returned editor URL in a new tab", async () => {
     authedFetchMock
       .mockResolvedValueOnce(jsonResponse({ videos: [] }))
       .mockResolvedValueOnce(jsonResponse({ workspace_id: 7 }));
-    createEditorSessionAndRedirectMock.mockResolvedValueOnce({
+    createEditorSessionAndOpenMock.mockResolvedValueOnce({
       session_id: "session-1",
       velox_project_id: "ve_created",
       editor_url: "https://editor.example.test/editor/ve_created",
@@ -111,8 +114,8 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
       2,
       "/api/v1/groups/7",
     );
-    expect(createEditorSessionAndRedirectMock).toHaveBeenCalledOnce();
-    expect(createEditorSessionAndRedirectMock).toHaveBeenCalledWith({
+    expect(createEditorSessionAndOpenMock).toHaveBeenCalledOnce();
+    expect(createEditorSessionAndOpenMock).toHaveBeenCalledWith({
       workspace_id: 7,
       platform_account_id: 42,
       youtube_video_id: "video-1",
@@ -131,7 +134,7 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
       await result.current.openThumbnailEditor(video);
     });
 
-    expect(createEditorSessionAndRedirectMock).not.toHaveBeenCalled();
+    expect(createEditorSessionAndOpenMock).not.toHaveBeenCalled();
     expect(toastMock.error).toHaveBeenCalledWith("Il gruppo non ha un workspace valido.");
   });
 
@@ -143,7 +146,7 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
       .mockImplementationOnce(() => new Promise((resolve) => {
         resolveWorkspace = resolve;
       }));
-    createEditorSessionAndRedirectMock.mockImplementationOnce(
+    createEditorSessionAndOpenMock.mockImplementationOnce(
       () => new Promise((resolve) => {
         resolveCreate = resolve;
       }),
@@ -157,12 +160,12 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
       second = result.current.openThumbnailEditor(video);
     });
 
-    expect(createEditorSessionAndRedirectMock).not.toHaveBeenCalled();
+    expect(createEditorSessionAndOpenMock).not.toHaveBeenCalled();
     resolveWorkspace?.(jsonResponse({ workspace_id: 7 }));
     await act(async () => {
       await Promise.resolve();
     });
-    expect(createEditorSessionAndRedirectMock).toHaveBeenCalledOnce();
+    expect(createEditorSessionAndOpenMock).toHaveBeenCalledOnce();
 
     resolveCreate?.({
       session_id: "session-1",

@@ -5,8 +5,8 @@ import { ApiError, authedFetch, AuthError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import {
   createYouTubeEditorSession,
-  createEditorSessionAndRedirect,
-  redirectToInstaEditor,
+  createEditorSessionAndOpen,
+  openInstaEditorWithLaunch,
 } from "../../features/youtube/api/editorSessionsApi";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import {
@@ -51,18 +51,21 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
       // InstaEditor project handle and URL when this video was opened
       // before. Reuse them directly: no workspace lookup and no duplicate
       // create request are needed for the common Groups → Modifica path.
+      // The editor always opens in a NEW TAB — the SPA never navigates
+      // away from the Copertine hub / Groups workspace.
       if (video.velox_project_id && video.editor_url) {
-        redirectToInstaEditor(video.editor_url);
-        toast.success("InstaEditor aperto: il video resta privato finché non scegli di pubblicarlo.");
+        await openInstaEditorWithLaunch(video.editor_url, video.velox_project_id);
+        toast.success("InstaEditor aperto in una nuova scheda: il video resta privato finché non scegli di pubblicarlo.");
         return;
       }
 
       // First open: resolve the group-owned workspace, then use the
       // idempotent editor-session endpoint. The server validates the
       // workspace/account/video binding and returns the stable
-      // velox_project_id + project URL before this SPA navigation.
+      // velox_project_id + project URL, which this helper mints a
+      // launch token for and opens in a new tab (no SPA navigation).
       const workspaceID = await resolveGroupWorkspace(groupId);
-      await createEditorSessionAndRedirect({
+      await createEditorSessionAndOpen({
         workspace_id: workspaceID,
         platform_account_id: video.platform_account_id,
         youtube_video_id: video.youtube_video_id,
