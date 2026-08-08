@@ -103,7 +103,7 @@ func TestPostRepository_UpdateReconcileStatusWithLease_CAS(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(300))
 	mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
-	mock.ExpectExec(`UPDATE post_targets SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4, provider_state = $6, container_id = $7, last_error_code = $8, completed_at = CASE WHEN $1 IN ('failed', 'dlq', 'blocked_auth') THEN COALESCE(completed_at, NOW()) ELSE completed_at END, reconcile_owner_id = NULL, reconcile_until = NULL, reconcile_heartbeat_at = NULL WHERE id = $5 AND status = 'publishing' AND reconcile_owner_id = $9 AND reconcile_until > NOW()`).
+	mock.ExpectExec(`UPDATE post_targets SET status = $1::text::post_status, platform_post_id = $2, error_message = $3, published_at = $4, provider_state = $6, container_id = $7, last_error_code = $8, completed_at = CASE WHEN $1::text IN ('failed', 'dlq', 'blocked_auth') THEN COALESCE(completed_at, NOW()) ELSE completed_at END, reconcile_owner_id = NULL, reconcile_until = NULL, reconcile_heartbeat_at = NULL WHERE id = $5 AND status = 'publishing' AND reconcile_owner_id = $9 AND reconcile_until > NOW()`).
 		WithArgs(models.PostStatusPublished, "provider-id", "", sqlmock.AnyArg(), int64(300), "PUBLISH_COMPLETE", "", "", "worker-a").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).

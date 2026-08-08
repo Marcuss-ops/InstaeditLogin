@@ -40,5 +40,3 @@ type UploadChannelUploader interface {
 	// returned video id.
 	UploadVideoAsPrivate(ctx context.Context, accessToken string, post *models.Post, videoURL string) (videoID string, err error)
 }
-
-

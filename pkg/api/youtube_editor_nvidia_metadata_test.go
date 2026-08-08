@@ -126,7 +126,7 @@ func metadataGenTestRouter(t *testing.T) (*Router, *fakeMetadataGenStore) {
 		// A non-empty dummy key exercises the enqueue path without making
 		// any NVIDIA network request; the handler only checks configuration
 		// before persisting the async job.
-		nvidiaMetadataSvc:       services.NewMetadataGenerator("test-nvidia-key"),
+		nvidiaMetadataSvc: services.NewMetadataGenerator("test-nvidia-key"),
 	}
 	return r, genStore
 }

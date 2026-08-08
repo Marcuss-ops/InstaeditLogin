@@ -154,7 +154,7 @@ func TestEditorBFFModuleMountsLaunchHandlerWhenIssuerConfigured(t *testing.T) {
 	proxy := &moduleEditorProxy{}
 
 	module := NewEditorBFFModule(EditorBFFModuleDeps{
-		Client:            editor.ProxyClient(proxy),
+		Client:                editor.ProxyClient(proxy),
 		YouTubeVideoEditStore: editStore,
 		WorkspaceStore:        workspaceStore,
 		TeamStore:             teamStore,
@@ -172,8 +172,8 @@ func TestEditorBFFModuleMountsLaunchHandlerWhenIssuerConfigured(t *testing.T) {
 		t.Fatalf("launch status = %d, want %d body=%s (issuer must be mounted, not shadowed by the proxy catch-all)", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 	var resp struct {
-		Token       string `json:"launch_token"`
-		ProjectID   string `json:"project_id"`
+		Token     string `json:"launch_token"`
+		ProjectID string `json:"project_id"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode launch response: %v", err)

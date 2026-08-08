@@ -252,12 +252,23 @@ const qUpdateTargetStatus = `UPDATE post_targets
  WHERE id = $5
    AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq'))`
 
+// qUpdateTargetStatusWithLease is the publish driver's intermediate/terminal
+// CAS. It keeps the per-replica lease while the row stays 'publishing' and
+// clears it on any other terminal/intermediate transition.
+//
+// ENUM PARAM PITFALL: post_targets.status is the post_status enum, so
+// `status = $1` deduces $1 = post_status. The CASE conditions compare $1
+// against string literals, which deduces $1 = text — two deductions for
+// one parameter abort with 42P08 ("inconsistent types deduced for
+// parameter $1"). The explicit casts pin BOTH usages to text:
+// `$1::text::post_status` for the column write and `$1::text` inside the
+// CASEs. Do not remove the casts or add new bare `$1 = '...'` conditions.
 const qUpdateTargetStatusWithLease = `UPDATE post_targets
- SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+ SET status = $1::text::post_status, platform_post_id = $2, error_message = $3, published_at = $4,
      provider_state = $6, container_id = $7,
-     lease_owner_id = CASE WHEN $1 = 'publishing' THEN lease_owner_id ELSE NULL END,
-     leased_until = CASE WHEN $1 = 'publishing' THEN leased_until ELSE NULL END,
-     heartbeat_at = CASE WHEN $1 = 'publishing' THEN heartbeat_at ELSE NULL END
+     lease_owner_id = CASE WHEN $1::text = 'publishing' THEN lease_owner_id ELSE NULL END,
+     leased_until = CASE WHEN $1::text = 'publishing' THEN leased_until ELSE NULL END,
+     heartbeat_at = CASE WHEN $1::text = 'publishing' THEN heartbeat_at ELSE NULL END
  WHERE id = $5
    AND lease_owner_id = $8
    AND status = 'publishing'`
@@ -265,10 +276,18 @@ const qUpdateTargetStatusWithLease = `UPDATE post_targets
 // qUpdateTargetStatusWithReconcileLease is the reconciler terminal CAS.
 // A stale replica cannot write after its lease expires, even if a successor
 // has not claimed the row yet. Terminal transitions release the lease.
+//
+// ENUM PARAM PITFALL (same class as qUpdateTargetStatusWithLease above):
+// post_targets.status is the post_status enum, so `status = $1` deduces
+// $1 = post_status while the IN-list of string literals deduces text —
+// two deductions for one parameter abort with 42P08 ("inconsistent types
+// deduced for parameter $1"). The explicit casts pin BOTH usages to
+// text: `$1::text::post_status` for the column write and `$1::text` in
+// the CASE. Do not remove the casts.
 const qUpdateTargetStatusWithReconcileLease = `UPDATE post_targets
- SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+ SET status = $1::text::post_status, platform_post_id = $2, error_message = $3, published_at = $4,
      provider_state = $6, container_id = $7, last_error_code = $8,
-     completed_at = CASE WHEN $1 IN ('failed', 'dlq', 'blocked_auth') THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+     completed_at = CASE WHEN $1::text IN ('failed', 'dlq', 'blocked_auth') THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
      reconcile_owner_id = NULL, reconcile_until = NULL, reconcile_heartbeat_at = NULL
  WHERE id = $5
    AND status = 'publishing'
