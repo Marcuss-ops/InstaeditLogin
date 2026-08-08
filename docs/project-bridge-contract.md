@@ -668,7 +668,18 @@ editor-session compatibility path:
 - the legacy `/dark_editor_v2/*` routes were reduced to a launcher/redirect
   mechanism (`312c6b8b` retires the legacy covers route);
 - the stable one-to-one `InstaEdit project_id ↔ velox_project_id` bridge is
-  complete (`bde2272c`).
+  complete (`bde2272c`);
+- no bidirectional group/channel/membership sync exists in any of the three
+  repos (`f66c5081`, guard `verify-no-velox-catalog-sync.sh` PASS) — there is
+  a single source of truth for content→group/channel membership (InstaEdit
+  DB);
+- demo/stale Velox data (fake groups `amish`/`odyssey_explorers`/`rapgame`,
+  test destinations, ~486 smoke/test/bench jobs) was removed from the live
+  Velox DB and **not** migrated; real content jobs and the bridge
+  relationships were preserved (`d8d866e2`);
+- visual rebranding to InstaEditor is complete (`e2217ebf`). Full status
+  matrix: `VELOX-FRONTEND-GROUPS-BOUNDARY.md` "Definition of Done — stato
+  avanzamento".
 
 Known non-blocking follow-up: `GET /api/v1/workspaces/{id}/channels` returns
 404 due to chi route shadowing between the team module and the auth module.

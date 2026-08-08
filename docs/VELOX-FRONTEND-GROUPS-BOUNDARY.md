@@ -178,3 +178,38 @@ il modulo auth (`/api/v1/workspaces`). Non impatta il DoD: la pagina Canali
 usa `/api/v1/accounts` e `/api/v1/workspaces` (verificato in
 `web/src/features/channels/api/channelsApi.ts`). Da risolvere separatamente se
 si vuole esporre quella route API.
+
+## Definition of Done — stato avanzamento (2026-08-08)
+
+Matrice consolidata dei requisiti della Definition of Done con evidenze.
+
+| Requisito DoD | Stato | Evidenza |
+|---|---|---|
+| InstaEditLogin unica source of truth (utenti, workspace, gruppi, canali, membership, lingue, video, permessi) | ✅ | DATA-OWNERSHIP-AUDIT; `velox_project_bridges` solo mapping |
+| Velox senza gruppi/canali operativi né copie da sincronizzare | ✅ | migrazioni drop 090/128; route catalogo `410 Gone`; cleanup `d8d866e2` |
+| Nessuna pagina Groups/Channels InstaEdit dipende da Velox | ✅ | `web/src` usa solo API InstaEdit; guardia `veloxBoundary.test.ts` |
+| Nessuna sincronizzazione bidirezionale InstaEdit ↔ Velox | ✅ | audit `f66c5081`; guardia `verify-no-velox-catalog-sync.sh` PASS |
+| DB separati; Velox solo dati editor/render | ✅ | schemi verificati; zero tabelle `velox_*` oltre il bridge |
+| Frontend separati: niente iframe, niente componenti Velox in InstaEdit | ✅ | verifica frontend; `Covers.tsx` solo redirect/launcher |
+| Apertura editor solo via launcher/redirect | ✅ | `312c6b8b` (retire legacy covers route); launch token `3f3d8fa6` |
+| Un solo ponte stabile `project_id ↔ velox_project_id` | ✅ | `bde2272c`; `velox_project_bridges` UNIQUE su entrambi |
+| Dati demo/stale eliminati e non migrati | ✅ | `d8d866e2` (gruppi fittizi amish/odyssey/rapgame, 486 job, destinazioni test) |
+| Progetti reali preservati; migrata solo la relazione | ✅ | 66 job contenuto reale + Outro template preservati; bridge relationship-only |
+| Backend InstaEdit accede a Velox via adapter/contratto editor | ✅ | `internal/veloxcontract` `Client` (solo jobs/editor); `editor_adapter.go` |
+| Groups/Channels/Posting/Drive non conoscono schema/route interne Velox | ✅ | audit VELOX_CONTROL_URL; `veloxcontract` scope guard |
+| Config editor esplicita `INSTAEDITOR_URL`, fail chiaro se mancante | ✅ | `7f1b7540`; `config_validation.go` (richiesto in production) |
+| Riferimenti visuali standardizzati Dark Editor → InstaEditor | ✅ | `e2217ebf` (zero riferimenti visuali residui) |
+| Vecchie route `/dark_editor_v2/*` ridotte a launcher/redirect | ✅ | `312c6b8b`; permessi verificati prima dell'apertura `caf43680` |
+| Permessi verificati da InstaEdit prima di aprire il progetto editor | ✅ | `caf43680` (gate pin); workspace authorization `c34b292c` |
+| Velox offline: tutto funziona tranne l'editing | ✅ | Test A (tabella sopra): solo EDITOR_PROXY fallisce (502) |
+| Rinomina/sposta gruppo in InstaEdit non richiede update Velox | ✅ | Test C; nessuna chiamata Velox dai flussi groups |
+| Aprire progetto esistente recupera `velox_project_id` senza duplicare | ✅ | bridge persist-or-resolve idempotente (§3.2 project-bridge-contract) |
+| Creare nuovo progetto crea il Velox project una volta e salva il mapping | ✅ | bridge create idempotente + UNIQUE; accettazione BRIDGE 201 |
+| Non esistono `SyncGroupsToVelox`/`SyncChannelsFromVelox`/mirror | ✅ | `f66c5081`; guardia PASS |
+| Non esistono due fonti concorrenti per l'appartenenza contenuto→gruppo/canale | ✅ | membership solo in InstaEdit (`groups`, `group_accounts`, `workspace_channels`) |
+
+**Punti aperti (non bloccanti):** `GET /api/v1/workspaces/{id}/channels` → 404
+per shadowing chi (vedi nota sopra); valutazione rename basePath
+`/dark_editor_v2` → `/instaeditor` completata con esito: consigliato tenere il
+path o alias 301 (vedi `REBRANDING_FINAL_AUDIT.md`), nessuna modifica
+applicata.

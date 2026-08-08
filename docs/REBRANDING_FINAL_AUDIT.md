@@ -167,6 +167,30 @@ tre i repo; ogni occorrenza rimanente appartiene alle categorie ammesse
 tecnico di tema `dark` (ThemeProvider, chiavi `dark-editor-theme`, classi
 CSS) non è stato toccato.
 
+## Valutazione 2026-08-08 — rename basePath `/dark_editor_v2` → `/instaeditor` (decisione aperta)
+
+Valutazione completata senza modifiche al codice. Esito: **il path va trattato
+come contratto tecnico stabile**; il rename è fattibile ma richiede una
+migrazione coordinata cross-repo con finestra di redirect 301.
+
+- **Punti da toccare in caso di rename:** `web/dark_editor/next.config.js`
+  (`basePath`), `web/dark_editor/lib/editor-runtime.ts`
+  (`EDITOR_COMPATIBILITY_BASE_PATH`), `web/vite.config.ts`, `web/vercel.json`,
+  `web/playwright.config.ts` + e2e (`web/e2e/**`, `sharedMocks.ts`),
+  `ops/local/Caddyfile` (matcher + redirect 301), `scripts/verify-instaeditor-routing.sh`
+  (grep che pinna il matcher, va aggiornato nello stesso commit),
+  `.env.dev.example`/`.env.production.example` + env live `INSTAEDITOR_URL`,
+  fixture in `internal/config/*_test.go`, docs.
+- **Rischi principali:** rottura link esistenti su
+  `/dark_editor_v2/editor/{id}` (mitigabile con 301 per ≥1 release);
+  disallineamento build Next.js vs config runtime (`INSTAEDITOR_URL`);
+  guardie CI che pinano il path; catena `dev.instaedit.org` in `web/vercel.json`
+  già instabile (host rimosso dal Caddy prod).
+- **Raccomandazione:** tenere `/dark_editor_v2` come basePath (nessun valore
+  per l'utente — la superficie visibile è già InstaEditor) oppure, se si vuole
+  eliminare il nome dagli URL, aggiungere un alias 301 a valle senza toccare
+  la build Next.js. Nessuna modifica applicata.
+
 ## Conclusione
 
 Il rebranding visuale e descrittivo è concluso. Le occorrenze residue sono intenzionali: compatibilità runtime, fallback backward-compatible, test di regressione o storia documentale. Nessun riferimento legacy residuo deve essere interpretato come autorizzazione a introdurre nuovo copy “Dark Editor”.

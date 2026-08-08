@@ -716,3 +716,20 @@ This contract is internal-only. The reverse proxy (Caddy / Cloudflare
   publish/upload/thumbnail flows in this contract keep working (POSTS 201,
   BRIDGE 201, GATE 200 with Velox ON and OFF) and only the editor-open
   operation fails with Velox OFF.
+- **2026-08-08 (follow-up)** — DoD progress consolidated. Additional
+  evidence recorded across the boundary docs:
+  - **No bidirectional group/channel/membership sync** anywhere in the three
+    repos (verified by search + git history + `verify-no-velox-catalog-sync.sh`
+    PASS; `f66c5081`). Velox consumes the targets/groups snapshots of this
+    contract transiently and never persists or mirrors them.
+  - **Demo/stale Velox data removed, not migrated** (`d8d866e2`): fake
+    groups (`amish`, `odyssey_explorers`, `rapgame`), test destinations,
+    legacy imports and ~486 test/smoke/bench jobs deleted from the live Velox
+    DB with a timestamped backup; 66 real content jobs preserved. No
+    delivery/publishing row for real content was affected.
+  - **Visual rebranding complete** (`e2217ebf`): zero “Dark Editor”
+    references left in UI or descriptive text; only technical/historical
+    matches remain (basePath `/dark_editor_v2`, env keys, migrations,
+    negative tests).
+  - Full status matrix: [`VELOX-FRONTEND-GROUPS-BOUNDARY.md`](./VELOX-FRONTEND-GROUPS-BOUNDARY.md)
+    and [`project-bridge-contract.md`](./project-bridge-contract.md) §12.
