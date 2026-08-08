@@ -3,7 +3,7 @@ import { EmptyState } from "../../components/feedback/EmptyState";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { GroupYouTubeVideoCard } from "./GroupYouTubeVideoCard";
 import { GroupYouTubeVideoPreviewModal } from "./GroupYouTubeVideoPreviewModal";
-import { DEFAULT_PAGE_SIZE, RECENCY_OPTIONS } from "./groupYouTubeVideosTypes";
+import { DEFAULT_PAGE_SIZE, RECENCY_OPTIONS, type GroupYouTubeVideo } from "./groupYouTubeVideosTypes";
 
 export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; groupName?: string }) {
   const {
@@ -24,6 +24,20 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
     refreshVideos,
     loadMoreVideos,
   } = useGroupYouTubeVideos(groupId, true, groupName);
+
+  // Open the destination tab synchronously inside the click gesture so a
+  // popup blocker cannot swallow the editor window while the session
+  // create + launch-token round-trips are in flight. Noopener is omitted
+  // on purpose: the returned Window reference is needed for the later
+  // navigation to the (first-party) editor origin.
+  const handleOpenThumbnail = (video: GroupYouTubeVideo) => {
+    const tab = window.open("about:blank", "_blank");
+    void openThumbnailEditor(video, { tab }).then((opened) => {
+      // The tab is still about:blank whenever the flow bailed out
+      // (loading/error/no session); close it instead of leaking it.
+      if (!opened) tab?.close();
+    });
+  };
 
   return (
     <section className="mb-6" data-testid="group-youtube-videos">
@@ -112,7 +126,7 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
                           video={video}
                           openingVideoID={openingVideoID}
                           onPreview={openVideoPreview}
-                          onThumbnail={openThumbnailEditor}
+                          onThumbnail={handleOpenThumbnail}
                         />
                       ))}
                     </div>
@@ -153,7 +167,7 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
           onDraftTitleChange={setDraftTitle}
           onDraftDescriptionChange={setDraftDescription}
           onSave={() => void saveVideoMetadata()}
-          onThumbnail={openThumbnailEditor}
+          onThumbnail={handleOpenThumbnail}
         />
       )}
     </section>

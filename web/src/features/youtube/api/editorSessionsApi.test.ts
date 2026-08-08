@@ -420,6 +420,48 @@ describe("openInstaEditorWithLaunch", () => {
       "noopener,noreferrer",
     );
   });
+
+  it("navigates a pre-opened tab instead of calling window.open (popup-proof)", async () => {
+    authedFetchMock.mockResolvedValueOnce(
+      jsonResponse({ launch_token: "launch-token-test" }),
+    );
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => null);
+    const tab = { closed: false, location: { href: "" } } as unknown as Window;
+
+    await openInstaEditorWithLaunch(
+      "https://editor.instaedit.test/editor/ve_x",
+      "ve_x",
+      { returnTo: "/app/covers?group=7", tab },
+    );
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(tab.location.href).toBe(
+      "https://editor.instaedit.test/editor/ve_x?return_to=%2Fapp%2Fcovers%3Fgroup%3D7#launch_token=launch-token-test",
+    );
+  });
+
+  it("falls back to window.open when no pre-opened tab is available", async () => {
+    authedFetchMock.mockResolvedValueOnce(
+      jsonResponse({ launch_token: "launch-token-test" }),
+    );
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => null);
+
+    await openInstaEditorWithLaunch(
+      "https://editor.instaedit.test/editor/ve_x",
+      "ve_x",
+      { tab: null },
+    );
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://editor.instaedit.test/editor/ve_x#launch_token=launch-token-test",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
 });
 
 describe("createEditorSessionAndRedirect", () => {

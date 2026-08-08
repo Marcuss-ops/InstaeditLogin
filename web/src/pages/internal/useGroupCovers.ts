@@ -91,9 +91,10 @@ export function useGroupCovers(groupId: number) {
     return () => abortRef.current?.abort();
   }, [groupId, refreshCovers]);
 
-  const openCoverEditor = useCallback(async (cover: GroupCover) => {
+  const openCoverEditor = useCallback(async (cover: GroupCover, tab?: Window | null): Promise<boolean> => {
     if (!cover.velox_project_id) {
-      return;
+      tab?.close();
+      return false;
     }
     setOpeningCoverId(cover.project_id);
     try {
@@ -103,16 +104,25 @@ export function useGroupCovers(groupId: number) {
       if (cover.editor_url) {
         // The editor Home pill links back to this group's Copertine hub
         // (return_to is a relative SPA path, stamped after validation).
+        // `tab` is the window opened synchronously in the click gesture,
+        // navigated once the launch URL is minted (popup-proof).
         await openInstaEditorWithLaunch(cover.editor_url, cover.velox_project_id, {
           returnTo: coversHubReturnTo(groupId),
+          tab,
         });
-        return;
+        return true;
       }
+      tab?.close();
+      return false;
     } catch (error) {
+      // Any failure means the reserved tab was never navigated (the
+      // navigation is the last step), so close it instead of leaking a
+      // blank tab.
+      tab?.close();
       if (error instanceof AuthError) {
         navigate("/login", { replace: true });
-        return;
       }
+      return false;
     } finally {
       setOpeningCoverId(null);
     }

@@ -127,6 +127,11 @@ function routeFetch({
   });
 }
 
+// Tabs "opened" by the component's synchronous window.open (popup-proof
+// pattern); the tests assert they are navigated (not closed) on success
+// and closed when the flow bails out, so no blank tab leaks.
+let fakeTabs: Array<{ closed: boolean; location: { href: string }; close: ReturnType<typeof vi.fn> }>;
+
 beforeEach(() => {
   authedFetchMock.mockReset();
   openInstaEditorWithLaunchMock.mockReset();
@@ -135,6 +140,14 @@ beforeEach(() => {
   toastMock.success.mockReset();
   toastMock.error.mockReset();
   toastMock.info.mockReset();
+  fakeTabs = [];
+  // The covers zone opens the destination tab synchronously in the click
+  // gesture (popup-proof); jsdom would otherwise throw on window.open.
+  vi.spyOn(window, "open").mockImplementation(() => {
+    const tab = { closed: false, location: { href: "" }, close: vi.fn() };
+    fakeTabs.push(tab);
+    return tab as unknown as Window;
+  });
 });
 
 afterEach(() => {
@@ -222,6 +235,9 @@ describe("GroupCovers", () => {
 
     fireEvent.click(screen.getByTestId("group-covers-create-header"));
 
+    // The tab is reserved synchronously inside the click gesture, then
+    // navigated once the launch URL is ready (immune to popup blockers).
+    expect(window.open).toHaveBeenCalledWith("about:blank", "_blank");
     await waitFor(() => {
       expect(createYouTubeEditorSessionMock).toHaveBeenCalledOnce();
     });
@@ -236,8 +252,30 @@ describe("GroupCovers", () => {
     expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
       "https://editor.instaedit.test/editor/ve_created",
       "ve_created",
-      { returnTo: "/app/covers?group=7" },
+      { returnTo: "/app/covers?group=7", tab: expect.anything() },
     );
+    // The reserved tab was handed to the editor (navigated), not closed.
+    expect(fakeTabs[0]?.close).not.toHaveBeenCalled();
+  });
+
+  it("opens InstaEditor for an existing cover through the synchronously-reserved tab", async () => {
+    routeFetch({ covers: [coverFixture()] });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
+    });
+    fireEvent.click(screen.getByRole("button", { name: /modifica in instaeditor/i }));
+
+    await waitFor(() => {
+      expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
+        "https://editor.instaedit.test/editor/ve_cover_1",
+        "ve_cover_1",
+        { returnTo: "/app/covers?group=7", tab: expect.anything() },
+      );
+    });
+    expect(fakeTabs[0]?.close).not.toHaveBeenCalled();
   });
 
   it("renders a short empty state with a Crea copertina button", async () => {
@@ -278,6 +316,8 @@ describe("GroupCovers", () => {
       );
     });
     expect(openInstaEditorWithLaunchMock).not.toHaveBeenCalled();
+    // The reserved tab is closed again so no blank tab is left behind.
+    expect(fakeTabs[0]?.close).toHaveBeenCalled();
   });
 
   it("filters by project status via the filter chips", async () => {

@@ -5,6 +5,7 @@ import { GroupCoverCard } from "./GroupCoverCard";
 import { useGroupCovers } from "./useGroupCovers";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { cn } from "../../lib/utils";
+import type { GroupCover } from "./groupCoversTypes";
 
 type CoverFilter = "all" | "draft" | "ready" | "archived";
 
@@ -31,10 +32,23 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
   const { quickCreateCover, openingVideoID } = useGroupYouTubeVideos(groupId, true, groupName);
   const [filter, setFilter] = useState<CoverFilter>("all");
 
+  // Both editor openings grab the destination tab SYNCHRONOUSLY inside
+  // the click gesture: once the async session/draft/launch round-trips
+  // complete, the already-open tab is navigated instead of issuing a
+  // window.open that popup blockers would silently swallow. Noopener is
+  // intentionally omitted here so the Window reference survives for the
+  // later navigation (the editor is a first-party app on its own origin).
   const handleCreateCover = () => {
-    void quickCreateCover().then((opened) => {
+    const tab = window.open("about:blank", "_blank");
+    void quickCreateCover(tab).then((opened) => {
+      if (!opened) tab?.close();
       if (opened) refreshCovers();
     });
+  };
+
+  const handleOpenCoverEditor = (cover: GroupCover) => {
+    const tab = window.open("about:blank", "_blank");
+    void openCoverEditor(cover, tab);
   };
 
   const visibleCovers = useMemo(() => {
@@ -160,7 +174,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
               cover={cover}
               previewUrl={cover.preview_media_id ? state.previewUrls[cover.preview_media_id] : undefined}
               opening={openingCoverId === cover.project_id}
-              onOpenEditor={openCoverEditor}
+              onOpenEditor={handleOpenCoverEditor}
             />
           ))}
         </div>

@@ -342,6 +342,15 @@ export async function publishYouTubeEditorSession(
  */
 export interface EditorLaunchOptions {
   returnTo?: string;
+  /**
+   * Window reference opened SYNCHRONOUSLY inside the triggering click
+   * handler (e.g. `window.open("about:blank", "_blank")`). The editor
+   * tab is then navigated to the launch URL once it is minted, which
+   * keeps the popup open even though several async round-trips happen
+   * in between — popup blockers would otherwise swallow a window.open
+   * issued outside the user-activation window.
+   */
+  tab?: Window | null;
 }
 
 /**
@@ -453,6 +462,13 @@ export async function openInstaEditorWithLaunch(
   opts: EditorLaunchOptions = {},
 ): Promise<void> {
   const target = await createEditorLaunchURL(editorUrl, projectId, opts);
+  // Popup-proof: when the caller already opened a tab synchronously in
+  // the click gesture, navigate it instead of issuing a fresh (and
+  // possibly popup-blocked) window.open after the async launch round-trip.
+  if (opts.tab && !opts.tab.closed) {
+    opts.tab.location.href = target;
+    return;
+  }
   window.open(target, "_blank", "noopener,noreferrer");
 }
 

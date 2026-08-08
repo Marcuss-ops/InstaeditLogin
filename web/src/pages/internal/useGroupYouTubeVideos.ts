@@ -92,7 +92,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
   // create-session request succeeded); callers such as the covers-hub
   // quick-create use it to decide whether to refresh the grid — the
   // hook never rejects, it surfaces failures via the toast.
-  const openThumbnailEditor = useCallback(async (video: GroupYouTubeVideo, opts?: { draftTitle?: string }): Promise<boolean> => {
+  const openThumbnailEditor = useCallback(async (video: GroupYouTubeVideo, opts?: { draftTitle?: string; tab?: Window | null }): Promise<boolean> => {
     if (openingVideoRef.current) return false;
     openingVideoRef.current = true;
     setOpeningVideoID(video.youtube_video_id);
@@ -108,6 +108,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
       if (video.velox_project_id && video.editor_url) {
         await openInstaEditorWithLaunch(video.editor_url, video.velox_project_id, {
           returnTo: coversHubReturnTo(groupId),
+          tab: opts?.tab,
         });
         toast.success("InstaEditor aperto in una nuova scheda: il video resta privato finché non scegli di pubblicarlo.");
         return true;
@@ -140,12 +141,14 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
         );
         await openInstaEditorWithLaunch(session.editor_url, session.velox_project_id, {
           returnTo: coversHubReturnTo(groupId),
+          tab: opts?.tab,
         });
         toast.success("InstaEditor aperto in una nuova scheda: il video resta privato finché non scegli di pubblicarlo.");
         return true;
       }
       await createEditorSessionAndOpen(buildSessionPayload(video, workspaceID), {}, {
         returnTo: coversHubReturnTo(groupId),
+        tab: opts?.tab,
       });
       return true;
     } catch (error) {
@@ -165,7 +168,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
   // away for the group's most recent private video and save the new
   // cover under a random name. Resolves to true when the editor opened;
   // surfaces failures (no private videos, workspace issues) via toast.
-  const quickCreateCover = useCallback(async (): Promise<boolean> => {
+  const quickCreateCover = useCallback(async (tab?: Window | null): Promise<boolean> => {
     if (state.kind === "loading") {
       toast.info("Caricamento video del gruppo…");
       return false;
@@ -184,7 +187,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     }
     // The random title embeds the group name (e.g. "Amish-Nebula-42") so
     // the cover reads as belonging to this group at a glance.
-    return openThumbnailEditor(firstVideo, { draftTitle: generateCoverName(groupName) });
+    return openThumbnailEditor(firstVideo, { draftTitle: generateCoverName(groupName), tab });
   }, [groupName, openThumbnailEditor, state, toast]);
 
   const openVideoPreview = useCallback((video: GroupYouTubeVideo) => {
