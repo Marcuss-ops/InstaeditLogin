@@ -108,6 +108,18 @@ Una scansione futura è accettabile quando ogni match è in una delle categorie 
 - test frontend mirati e suite frontend già verificata nel ciclo browser precedente;
 - code review dei cambiamenti di branding.
 
+## Aggiornamento 2026-08-08 — passata documentale VeloxFrontend
+
+Riscansione completa dei tre repo (InstaeditLogin, VeloxFrontend, VeloxEditiingg) per i riferimenti descrittivi correnti “Dark Editor”. I sorgenti (Go, TS/TSX) sono puliti; sono stati aggiornati a **InstaEditor** i riferimenti descrittivi non storici rimasti in VeloxFrontend:
+
+- `web/README.md` — sezione “InstaEditor configuration in `next.config.js`”;
+- `web/CONTRIBUTING.md` — heading “# InstaEditor (separate terminal)”;
+- `web/e2e/cross_repo_smoke.spec.ts` — commento “the real InstaEditor and Vite SPA shells”;
+- `docs/AMISH_DEMO_CLEANUP.md` — “The InstaEditor receives project context from InstaEdit…”;
+- `REFACTOR_PLAN.md` — heading “## 3. VeloxFrontend — InstaEditor (13 file)”.
+
+Restano intenzionali: path runtime `/dark_editor_v2` e `basePath` Next.js (contratto tecnico attivo), variabili `DARK_EDITOR_*`, chiavi localStorage tecniche, test/negative-pin, CHANGELOG e documenti storici che citano la migrazione o l’audit.
+
 ## Conclusione
 
 Il rebranding visuale e descrittivo è concluso. Le occorrenze residue sono intenzionali: compatibilità runtime, fallback backward-compatible, test di regressione o storia documentale. Nessun riferimento legacy residuo deve essere interpretato come autorizzazione a introdurre nuovo copy “Dark Editor”.
