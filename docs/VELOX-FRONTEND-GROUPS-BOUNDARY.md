@@ -92,6 +92,54 @@ Guardie di regressione (fail-closed):
 - **Test D — flusso Modifica:** progetto → editor → salvataggio timeline in
   Velox; su InstaEdit resta il mapping via `external_project_id`.
 
+## Verifica 2026-08-08 — nessuna sincronizzazione bidirezionale presente
+
+Audit completo su InstaeditLogin, VeloxEditiingg e VeloxFrontend: **non
+esiste alcuna funzione di sincronizzazione bidirezionale** InstaEdit ↔ Velox
+per gruppi, canali o membership.
+
+Evidenze:
+
+- Ricerca `SyncGroupsToVelox | SyncGroupToVelox | SyncChannelsFromVelox |
+  SyncChannelFromVelox | MirrorGroupMemberships | MirrorGroupMembership |
+  MirrorGroupsToVelox | MirrorChannelsToVelox` su tutto il codice runtime
+  (Go/TS/TSX/JS/sh): **zero match** in InstaeditLogin, VeloxEditiingg e
+  VeloxFrontend. Le uniche occorrenze sono questo documento e
+  `scripts/verify-no-velox-catalog-sync.sh` (guardia), entrambi vincoli
+  negativi intenzionali.
+- `git log --all -S` su quei simboli: **mai esistiti** nella storia del repo.
+- Guardia statica `scripts/verify-no-velox-catalog-sync.sh`: **PASS** —
+  nessun simbolo proibito e nessun riferimento a client Velox nei sorgenti
+  Groups/Channels runtime.
+- `internal/veloxcontract` `Client` interface: solo metodi jobs/editor
+  (`ListJobs`, `CreateJob`, `GetJob`, …); nessun metodo groups/channels/
+  membership. `scope_guard_test.go` pina che l'interfaccia e la tassonomia
+  scope non possano crescere metodi di catalogo.
+
+**Una sola fonte di verità per l'appartenenza gruppo/canale:** la membership
+vive esclusivamente nel DB InstaEdit (`groups`, `group_accounts`,
+`workspace_channels`). Velox non possiede gruppi/canali/membership:
+
+- in VeloxEditiingg le route catalogo `/api/v1/publishing/catalog` e
+  `/api/v1/publishing/targets` sono tombe `410 Gone`
+  (`editor_catalog_removed`, owner `instaedit`) pinne da
+  `publishing_catalog_test.go`; non esiste `/api/v1/instaedit/groups` o
+  `/api/v1/instaedit/channels` (pinne da `handler_test.go`);
+- gli snapshot `PublishingGroup`/`PublishingGroupMember`/`PublishingTarget`
+  in `socialclient/targets.go` sono **transitori** (ricevuti da InstaEdit
+  per la validazione di una singola delivery, mai persistiti o rispecchiati
+  — il commento del tipo lo dichiara esplicitamente); l'unico identificatore
+  che Velox può persistere è l'opaque `ExternalDestinationID`;
+- `resyncWorkspaceChannels` (InstaEdit) è una denormalizzazione **interna**:
+  ricalcola `workspace_channels.group_name` dalle proprie tabelle
+  `group_accounts` + `groups`. Non tocca Velox.
+
+**Conclusione DoD:** non esistono funzioni tipo `SyncGroupsToVelox`,
+`SyncChannelsFromVelox` o mirror equivalenti da rimuovere, e non esistono
+due fonti concorrenti per stabilire a quale gruppo/canale appartiene un
+contenuto: decide solo il DB InstaEdit; Velox riceve contesto transitorio
+per singola operazione.
+
 ## Esito Test A — accettazione finale Definition of Done (2026-08-08)
 
 Eseguito il test finale di accettazione: **Velox completamente spento**
