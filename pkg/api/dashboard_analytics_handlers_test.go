@@ -11,8 +11,9 @@ package api
 //     values (5, 30, 0, non-numeric, absent) fall back to 28.
 //  2. aggregate + per-channel views/revenue assembled from the
 //     metric-history batch; revenue pointer semantics preserved.
-//  3. top_videos fan-out: first load fetches per account, second
-//     load (same user+days) serves from the 5-min cache; a
+//  3. full-response cache: first load reads the history batch + runs
+//     the top-videos fan-out; second load (same user+days) serves the
+//     entire cached response without any DB or YouTube call; a
 //     per-channel failure degrades to an empty ranking without
 //     failing the request.
 
@@ -237,10 +238,24 @@ func TestHandleGetDashboardAnalytics_AggregatesViewsRevenue(t *testing.T) {
 	}
 }
 
-func TestHandleGetDashboardAnalytics_TopVideosFanOutAndCache(t *testing.T) {
+func TestHandleGetDashboardAnalytics_FullResponseCache(t *testing.T) {
 	inWindow := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)   // inside days=28 window (from 2026-07-03)
 	outOfWindow := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC) // before days=28 window
 
+	// History batch returns data so the cached payload carries
+	// non-zero aggregates (proving the whole response is cached,
+	// not just top_videos).
+	store := &fakeMetricHistoryStore{
+		getBatchFn: func(ids []int64, _, _ time.Time) (map[int64][]repository.AccountMetricPoint, error) {
+			out := make(map[int64][]repository.AccountMetricPoint, len(ids))
+			for _, id := range ids {
+				out[id] = []repository.AccountMetricPoint{
+					{Date: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), Views: 750, Subscribers: 5000, Videos: 10},
+				}
+			}
+			return out, nil
+		},
+	}
 	svc := &dashboardAnalyticsYouTubeService{
 		listContentFn: func(ctx context.Context, accessToken, platformUserID, cursor string, limit int, privacy string) (*models.AccountContentPage, error) {
 			if limit != dashboardTopVideosPerAccount {
@@ -269,12 +284,18 @@ func TestHandleGetDashboardAnalytics_TopVideosFanOutAndCache(t *testing.T) {
 		{ID: 11, UserID: 42, Platform: models.PlatformYouTube, Username: "channel-one", PlatformUserID: "UC1"},
 		{ID: 22, UserID: 42, Platform: models.PlatformYouTube, Username: "channel-two", PlatformUserID: "UC2"},
 	}
-	r := newDashboardAnalyticsRouter(t, accounts, &fakeMetricHistoryStore{}, svc)
+	r := newDashboardAnalyticsRouter(t, accounts, store, svc)
 
-	// First load: fan-out fetches both accounts (cache miss).
+	// First load (cache miss): one history batch + fan-out per account.
 	first := decodeDashboardResponse(t, doDashboardRequest(t, r, "28"))
 	if got := svc.listContentCalls.Load(); got != 2 {
 		t.Fatalf("list calls after first load = %d, want 2 (one per account)", got)
+	}
+	if store.getBatchCount != 1 {
+		t.Fatalf("history batch calls after first load = %d, want 1", store.getBatchCount)
+	}
+	if first.Aggregates.Views != 1500 {
+		t.Fatalf("aggregates.views = %d, want 1500 (750 per channel)", first.Aggregates.Views)
 	}
 	if len(first.TopVideos) != 2 {
 		t.Fatalf("top_videos = %d, want 2 (out-of-window item filtered)", len(first.TopVideos))
@@ -290,19 +311,29 @@ func TestHandleGetDashboardAnalytics_TopVideosFanOutAndCache(t *testing.T) {
 		t.Fatalf("top_videos[0] enrichment = %+v, want channel-one + youtube url", first.TopVideos[0])
 	}
 
-	// Second load (same user + days): served from the 5-min cache.
+	// Second load (same user + days): served entirely from the 1-hour
+	// cache — no history batch, no YouTube fan-out.
 	second := decodeDashboardResponse(t, doDashboardRequest(t, r, "28"))
 	if got := svc.listContentCalls.Load(); got != 2 {
-		t.Fatalf("list calls after cached load = %d, want still 2 (cache hit)", got)
+		t.Fatalf("list calls after cached load = %d, want still 2 (full-response cache hit)", got)
+	}
+	if store.getBatchCount != 1 {
+		t.Fatalf("history batch calls after cached load = %d, want still 1 (full-response cache hit)", store.getBatchCount)
+	}
+	if second.Aggregates.Views != first.Aggregates.Views {
+		t.Fatalf("cached aggregates drifted: got %d, want %d", second.Aggregates.Views, first.Aggregates.Views)
 	}
 	if len(second.TopVideos) != 2 || second.TopVideos[0].VideoID != "v1" {
 		t.Fatalf("cached top_videos = %+v, want same ranking", second.TopVideos)
 	}
 
-	// Different days → different cache key → fan-out runs again.
+	// Different days → different cache key → batch + fan-out run again.
 	decodeDashboardResponse(t, doDashboardRequest(t, r, "7"))
 	if got := svc.listContentCalls.Load(); got != 4 {
 		t.Fatalf("list calls after days=7 load = %d, want 4 (cache miss on new key)", got)
+	}
+	if store.getBatchCount != 2 {
+		t.Fatalf("history batch calls after days=7 load = %d, want 2 (cache miss on new key)", store.getBatchCount)
 	}
 }
 
@@ -312,7 +343,7 @@ func TestHandleGetDashboardAnalytics_TopVideosDegradation(t *testing.T) {
 		{ID: 22, UserID: 42, Platform: models.PlatformYouTube, Username: "channel-two", PlatformUserID: "UC2"},
 	}
 
-	t.Run("all channels fail -> empty ranking, request still 200", func(t *testing.T) {
+	t.Run("all channels fail -> empty ranking, request still 200, NOT cached", func(t *testing.T) {
 		svc := &dashboardAnalyticsYouTubeService{
 			listContentFn: func(context.Context, string, string, string, int, string) (*models.AccountContentPage, error) {
 				return nil, errors.New("youtube quota exceeded")
@@ -326,9 +357,16 @@ func TestHandleGetDashboardAnalytics_TopVideosDegradation(t *testing.T) {
 		if resp.Aggregates.Channels != 2 {
 			t.Fatalf("aggregates.channels = %d, want 2 (aggregates survive fan-out failure)", resp.Aggregates.Channels)
 		}
+		// Degraded responses must NOT be cached: a second request
+		// re-runs the fan-out (a transient outage must not be pinned
+		// for the full 1-hour TTL).
+		decodeDashboardResponse(t, doDashboardRequest(t, r, "28"))
+		if got := svc.listContentCalls.Load(); got != 4 {
+			t.Fatalf("list calls after second degraded load = %d, want 4 (degraded response was NOT cached)", got)
+		}
 	})
 
-	t.Run("one channel fails -> other channel's videos survive", func(t *testing.T) {
+	t.Run("one channel fails -> other channel's videos survive, NOT cached", func(t *testing.T) {
 		inWindow := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
 		svc := &dashboardAnalyticsYouTubeService{
 			listContentFn: func(ctx context.Context, accessToken, platformUserID, cursor string, limit int, privacy string) (*models.AccountContentPage, error) {
@@ -345,6 +383,12 @@ func TestHandleGetDashboardAnalytics_TopVideosDegradation(t *testing.T) {
 		resp := decodeDashboardResponse(t, doDashboardRequest(t, r, "28"))
 		if len(resp.TopVideos) != 1 || resp.TopVideos[0].VideoID != "v2" || resp.TopVideos[0].ChannelName != "channel-two" {
 			t.Fatalf("top_videos = %+v, want only channel-two v2", resp.TopVideos)
+		}
+		// Partial-degradation responses are NOT cached either: the
+		// second request re-runs the fan-out for both channels.
+		decodeDashboardResponse(t, doDashboardRequest(t, r, "28"))
+		if got := svc.listContentCalls.Load(); got != 4 {
+			t.Fatalf("list calls after second degraded load = %d, want 4 (partial response was NOT cached)", got)
 		}
 	})
 

@@ -46,6 +46,14 @@ func decodeCreatePostRequest(w http.ResponseWriter, req *http.Request) (CreatePo
 		writeError(w, http.StatusBadRequest, "status must be one of: draft, queued")
 		return CreatePostRequest{}, nil, true
 	}
+	if body.Content.Language != "" {
+		// Fail fast on a malformed source language: a bad code would
+		// otherwise block every localized publish at translation time.
+		if err := models.CheckBCP47Like("content.language", body.Content.Language); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return CreatePostRequest{}, nil, true
+		}
+	}
 	if len(body.Targets) == 0 {
 		writeError(w, http.StatusUnprocessableEntity, "at least one target is required")
 		return CreatePostRequest{}, nil, true
@@ -195,6 +203,15 @@ func (r *Router) createPostPersist(
 		// publish_at comes from the body's canonical-or-alias cursor.
 		PublishAt: publishAt,
 		Status:    status,
+	}
+	// Per-channel-language posting: stamp the optional source language
+	// into post.Metadata so the publish worker can compare it against
+	// each target channel's language and translate when they differ.
+	// The upload_worker path (Drive batches) flows its own
+	// job.Metadata through unchanged — operators can set
+	// source_language there too.
+	if lang := strings.TrimSpace(body.Content.Language); lang != "" {
+		post.Metadata = json.RawMessage(fmt.Sprintf(`{"source_language":%q}`, lang))
 	}
 	targets := make([]*models.PostTarget, 0, len(body.Targets))
 	for _, t := range body.Targets {

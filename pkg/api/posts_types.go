@@ -20,6 +20,14 @@ type CreatePostContent struct {
 	Title   string     `json:"title,omitempty"`
 	Caption string     `json:"caption,omitempty"`
 	Media   []MediaRef `json:"media,omitempty"`
+	// Language is the OPTIONAL source language of the post content
+	// (BCP-47 / ISO 639-1, e.g. "it", "en"). When a target channel
+	// declares a DIFFERENT language in its account metadata, the
+	// publish worker translates title + caption into the channel's
+	// language before publishing (per-channel-language posting).
+	// Persisted in post.Metadata under "source_language"; empty means
+	// "unknown — the translator infers it from the text".
+	Language string `json:"language,omitempty"`
 }
 
 type CreatePostTarget struct {

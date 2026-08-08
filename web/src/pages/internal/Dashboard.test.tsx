@@ -5,6 +5,7 @@ import { clearAccountsCache } from "../../features/channels/api/channelsApi";
 import { clearSessionCache } from "../../lib/auth";
 import { clearSharedQueryCache } from "../../lib/queryRegistry";
 import { InternalDashboard } from "./Dashboard";
+import { clearDashboardAnalyticsCache } from "./useDashboardAnalytics";
 
 function mockJsonResponse(data: unknown, ok = true, status = 200) {
   return {
@@ -74,6 +75,9 @@ describe("InternalDashboard", () => {
     clearAccountsCache();
     clearSessionCache();
     clearSharedQueryCache();
+    // The dashboard hook caches per (user, period) in module state +
+    // localStorage; clear it so every test starts from a cold cache.
+    clearDashboardAnalyticsCache();
   });
 
   it("renders the analytics heading and total KPI cards", async () => {

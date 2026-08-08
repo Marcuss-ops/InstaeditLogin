@@ -238,6 +238,15 @@ export function InternalDashboard() {
             <p className="text-[15px] text-[#9aa0aa] mt-1">
               Analytics totali di tutti i tuoi canali YouTube.
             </p>
+            {state.kind === "ready" && (
+              <p className="text-[12px] text-[#6b7280] mt-0.5">
+                Dati aggiornati alle{" "}
+                {new Date(state.data.generated_at).toLocaleTimeString(undefined, {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {DASHBOARD_PERIODS.map((p) => (
@@ -257,7 +266,7 @@ export function InternalDashboard() {
             ))}
             <button
               type="button"
-              onClick={() => void load(periodDays)}
+              onClick={() => void load(periodDays, { force: true })}
               className="ml-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
             >
               <RefreshCw size={14} /> Refresh
@@ -277,7 +286,7 @@ export function InternalDashboard() {
           <ErrorState
             title="Couldn't load dashboard analytics"
             message={state.message}
-            onRetry={() => void load(periodDays)}
+            onRetry={() => void load(periodDays, { force: true })}
             className="mb-8 bg-[#1f1f2e] border-white/[0.12]"
           />
         )}

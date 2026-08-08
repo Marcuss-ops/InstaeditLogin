@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -332,7 +333,7 @@ func buildEditorURL(editorBaseURL string, pub *models.YouTubeTargetPublication) 
 	if base == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/editor/%s", base, *pub.VeloxProjectID)
+	return fmt.Sprintf("%s/editor/%s", base, url.PathEscape(*pub.VeloxProjectID))
 }
 
 // statusUnknown is the sentinel for `no target has fed the top-level
