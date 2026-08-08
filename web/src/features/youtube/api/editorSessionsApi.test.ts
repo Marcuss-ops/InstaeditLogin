@@ -340,6 +340,11 @@ describe("redirectToInstaEditor", () => {
     expect(() => redirectToInstaEditor("javascript:alert(1)", navigate)).toThrow(
       "Editor unavailable / misconfigured",
     );
+    // Local file scheme is a security hazard (browser warns about
+    // links pointing to file://) — must never reach the editor launcher.
+    expect(() => redirectToInstaEditor("file:///etc/passwd", navigate)).toThrow(
+      "Editor unavailable / misconfigured",
+    );
     expect(navigate).not.toHaveBeenCalled();
   });
 
