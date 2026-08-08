@@ -151,3 +151,19 @@ func TestProxyHandlerRejectsUnscopedEditorPath(t *testing.T) {
 		t.Fatal("proxy was called for an unscoped editor path")
 	}
 }
+
+func TestProxyHandlerFailsClosedWhenAuthorizeProjectNil(t *testing.T) {
+	proxy := &fakeProjectProxy{}
+	module := NewEditorBFFModule(Deps{Client: proxy}) // AuthorizeProject nil
+
+	req := identityRequest(httptest.NewRequest(http.MethodGet, "/api/v1/editor/projects/ve_abc123/document", nil))
+	recorder := httptest.NewRecorder()
+	module.proxyHandler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if proxy.called {
+		t.Fatal("proxy was called when project authorization is unavailable")
+	}
+}
