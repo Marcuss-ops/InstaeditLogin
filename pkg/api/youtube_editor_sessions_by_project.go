@@ -59,11 +59,11 @@ type youTubeEditorSessionDetail struct {
 // the by-id and by-project GET handlers so the two endpoints can never
 // drift apart.
 //
-// The 503 branch is intentionally forward-compatible: editorURLForProject
-// currently falls back to the frontend URL (never empty), but once the
-// editorURL fail-fast change lands it returns "" when the editor is not
-// configured and this gate becomes live — "Editor unavailable /
-// misconfigured", never a silent redirect to the main frontend.
+// The 503 branch is the live fail-fast contract: with no INSTAEDITOR_URL
+// (or an empty project handle) editorURLForProject returns "" and this
+// gate answers 503 "Editor unavailable / misconfigured" — the API never
+// redirects to the main InstaEdit frontend or fabricates an editor
+// destination. Pinned by TestEditorURLForProject_EmptyWhenUnconfigured.
 func (r *Router) editorDetailWithURL(w http.ResponseWriter, detail youTubeEditorSessionDetail) (youTubeEditorSessionDetail, bool) {
 	detail.EditorURL = r.editorURLForProject(detail.VeloxProjectID)
 	if detail.EditorURL == "" {
