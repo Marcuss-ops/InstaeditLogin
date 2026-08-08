@@ -34,9 +34,10 @@ func (m *editorBFFModule) Register(mux chi.Router) {
 		return
 	}
 	editor.NewEditorBFFModule(editor.Deps{
-		Client:         m.deps.Client,
-		AuthMiddleware: m.deps.AuthMiddleware,
-		CSRFMiddleware: m.deps.CSRFMiddleware,
+		Client:            m.deps.Client,
+		AuthMiddleware:    m.deps.AuthMiddleware,
+		CSRFMiddleware:    m.deps.CSRFMiddleware,
+		LaunchTokenIssuer: m.deps.LaunchTokenIssuer,
 		AuthorizeProject: func(ctx context.Context, userID, workspaceID int64, projectID string, write bool) error {
 			if m.deps.YouTubeVideoEditStore == nil || m.deps.WorkspaceStore == nil {
 				return errors.New("editor project authorization stores are not configured")

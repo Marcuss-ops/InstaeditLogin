@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/editorlaunch"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/editor"
@@ -118,6 +120,66 @@ func TestEditorBFFAllowsViewerReadAndAdminWrite(t *testing.T) {
 	}
 	if !proxy.called {
 		t.Fatal("authorized admin did not reach project proxy")
+	}
+}
+
+// TestEditorBFFModuleMountsLaunchHandlerWhenIssuerConfigured is the
+// regression pin for the wiring bug where the wrapper did not forward
+// LaunchTokenIssuer to editor.Deps: the launch endpoint silently fell
+// into the /api/v1/editor/* catch-all and answered 404 "editor project
+// context not found" even for an authorized project, so "Apri
+// InstaEditor" could never mint its token. With the issuer wired the
+// module must register POST /api/v1/editor/launch and answer 201.
+func TestEditorBFFModuleMountsLaunchHandlerWhenIssuerConfigured(t *testing.T) {
+	issuer, err := editorlaunch.New("test-launch-secret-0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("new issuer: %v", err)
+	}
+	workspace := &models.Workspace{ID: 42, OwnerID: 1}
+	edit := &models.YouTubeVideoEdit{VeloxProjectID: "ve_project_1", WorkspaceID: workspace.ID}
+	editStore := &mockYouTubeVideoEditStore{findByProjectFn: func(_ context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+		if projectID != edit.VeloxProjectID {
+			return nil, nil
+		}
+		return edit, nil
+	}}
+	workspaceStore := &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) {
+		if id != workspace.ID {
+			return nil, nil
+		}
+		return workspace, nil
+	}}
+	teamStore := newFakeTeamStore()
+	teamStore.AddMember(workspace.ID, 7, "editor")
+	proxy := &moduleEditorProxy{}
+
+	module := NewEditorBFFModule(EditorBFFModuleDeps{
+		Client:            editor.ProxyClient(proxy),
+		YouTubeVideoEditStore: editStore,
+		WorkspaceStore:        workspaceStore,
+		TeamStore:             teamStore,
+		LaunchTokenIssuer:     editor.LaunchTokenIssuer(issuer),
+	})
+	mux := chi.NewRouter()
+	module.Register(mux)
+
+	req := requestWithIdentity(http.MethodPost, "/api/v1/editor/launch", 7, workspace.ID)
+	req.Body = io.NopCloser(strings.NewReader(`{"project_id":"ve_project_1"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("launch status = %d, want %d body=%s (issuer must be mounted, not shadowed by the proxy catch-all)", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp struct {
+		Token       string `json:"launch_token"`
+		ProjectID   string `json:"project_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode launch response: %v", err)
+	}
+	if resp.Token == "" || resp.ProjectID != "ve_project_1" {
+		t.Fatalf("launch response = %+v", resp)
 	}
 }
 
