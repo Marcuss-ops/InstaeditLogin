@@ -37,6 +37,7 @@ vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
   createYouTubeEditorSession: vi.fn(),
   createEditorSessionAndOpen: createEditorSessionAndOpenMock,
   openInstaEditorWithLaunch: openInstaEditorWithLaunchMock,
+  coversHubReturnTo: (groupId: number) => `/app/covers?group=${groupId}`,
 }));
 
 vi.mock("react-router-dom", () => ({
@@ -88,6 +89,7 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
     expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
       existing.editor_url,
       existing.velox_project_id,
+      { returnTo: "/app/covers?group=7" },
     );
     expect(createEditorSessionAndOpenMock).not.toHaveBeenCalled();
     expect(authedFetchMock).toHaveBeenCalledTimes(1);
@@ -115,12 +117,16 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
       "/api/v1/groups/7",
     );
     expect(createEditorSessionAndOpenMock).toHaveBeenCalledOnce();
-    expect(createEditorSessionAndOpenMock).toHaveBeenCalledWith({
-      workspace_id: 7,
-      platform_account_id: 42,
-      youtube_video_id: "video-1",
-      source_thumbnail_url: "https://i.ytimg.com/vi/video-1/hqdefault.jpg",
-    });
+    expect(createEditorSessionAndOpenMock).toHaveBeenCalledWith(
+      {
+        workspace_id: 7,
+        platform_account_id: 42,
+        youtube_video_id: "video-1",
+        source_thumbnail_url: "https://i.ytimg.com/vi/video-1/hqdefault.jpg",
+      },
+      {},
+      { returnTo: "/app/covers?group=7" },
+    );
     expect(toastMock.error).not.toHaveBeenCalled();
   });
 

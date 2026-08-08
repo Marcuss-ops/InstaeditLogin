@@ -42,12 +42,14 @@ vi.mock("../../../lib/auth", async (orig) => {
 import { ApiError, AuthError } from "../../../lib/auth";
 import {
   attachYouTubeEditorSessionThumbnail,
+  createEditorLaunchURL,
   createEditorSessionAndOpen,
   createEditorSessionAndRedirect,
   createYouTubeEditorSession,
   listYouTubeEditorSessions,
   getYouTubeEditorSession,
   openInstaEditorInNewTab,
+  openInstaEditorWithLaunch,
   publishYouTubeEditorSession,
 } from "./editorSessionsApi";
 
@@ -364,6 +366,62 @@ describe("redirectToInstaEditor", () => {
   });
 });
 
+describe("createEditorLaunchURL", () => {
+  it("stamps a relative return_to on the launch URL when provided", async () => {
+    authedFetchMock.mockResolvedValueOnce(
+      jsonResponse({ launch_token: "launch-token-test" }),
+    );
+
+    const url = await createEditorLaunchURL(
+      "https://editor.instaedit.test/editor/ve_test_99",
+      "ve_test_99",
+      { returnTo: "/app/covers?group=7" },
+    );
+
+    expect(url).toContain("?return_to=%2Fapp%2Fcovers%3Fgroup%3D7");
+    expect(url).toContain("#launch_token=launch-token-test");
+    expect(url.startsWith("https://editor.instaedit.test/editor/ve_test_99?")).toBe(true);
+  });
+
+  it("omits return_to when no return context is provided", async () => {
+    authedFetchMock.mockResolvedValueOnce(
+      jsonResponse({ launch_token: "launch-token-test" }),
+    );
+
+    const url = await createEditorLaunchURL(
+      "https://editor.instaedit.test/editor/ve_test_99",
+      "ve_test_99",
+    );
+
+    expect(url).toBe(
+      "https://editor.instaedit.test/editor/ve_test_99#launch_token=launch-token-test",
+    );
+  });
+});
+
+describe("openInstaEditorWithLaunch", () => {
+  it("opens the editor in a new tab carrying the return_to context", async () => {
+    authedFetchMock.mockResolvedValueOnce(
+      jsonResponse({ launch_token: "launch-token-test" }),
+    );
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => null);
+
+    await openInstaEditorWithLaunch(
+      "https://editor.instaedit.test/editor/ve_x",
+      "ve_x",
+      { returnTo: "/app/covers?group=7" },
+    );
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://editor.instaedit.test/editor/ve_x?return_to=%2Fapp%2Fcovers%3Fgroup%3D7#launch_token=launch-token-test",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+});
+
 describe("createEditorSessionAndRedirect", () => {
   it("creates/reuses the session and redirects the current document without opening an iframe or popup", async () => {
     authedFetchMock
@@ -404,6 +462,31 @@ describe("createEditorSessionAndOpen", () => {
     expect(session).toEqual(OK_SESSION);
     expect(openSpy).toHaveBeenCalledWith(
       "https://editor.instaedit.test/editor/ve_test_99#launch_token=launch-token-test",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("forwards the return_to context to the editor launch", async () => {
+    authedFetchMock
+      .mockResolvedValueOnce(jsonResponse(OK_SESSION))
+      .mockResolvedValueOnce(jsonResponse({ launch_token: "launch-token-test" }));
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => null);
+
+    await createEditorSessionAndOpen(
+      {
+        workspace_id: 1,
+        platform_account_id: 2,
+        youtube_video_id: "v",
+      },
+      {},
+      { returnTo: "/app/covers?group=7" },
+    );
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://editor.instaedit.test/editor/ve_test_99?return_to=%2Fapp%2Fcovers%3Fgroup%3D7#launch_token=launch-token-test",
       "_blank",
       "noopener,noreferrer",
     );

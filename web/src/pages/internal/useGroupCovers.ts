@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authedFetch, AuthError, ApiError } from "../../lib/auth";
-import { openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
+import { coversHubReturnTo, openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { CoversLoadState, GroupCover } from "./groupCoversTypes";
 
@@ -101,7 +101,11 @@ export function useGroupCovers(groupId: number) {
       // otherwise the create-session helper would be needed (rare — the
       // covers hub only lists covers that already have a session).
       if (cover.editor_url) {
-        await openInstaEditorWithLaunch(cover.editor_url, cover.velox_project_id);
+        // The editor Home pill links back to this group's Copertine hub
+        // (return_to is a relative SPA path, stamped after validation).
+        await openInstaEditorWithLaunch(cover.editor_url, cover.velox_project_id, {
+          returnTo: coversHubReturnTo(groupId),
+        });
         return;
       }
     } catch (error) {
@@ -112,7 +116,7 @@ export function useGroupCovers(groupId: number) {
     } finally {
       setOpeningCoverId(null);
     }
-  }, [navigate]);
+  }, [groupId, navigate]);
 
   return { state, refreshCovers, openCoverEditor, openingCoverId };
 }

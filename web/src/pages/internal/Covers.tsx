@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Image as ImageIcon, RefreshCw } from "lucide-react";
 import { useGroupsData } from "./useGroupsData";
 import { GroupCovers } from "./GroupCovers";
@@ -13,10 +14,29 @@ import type { TreeNode } from "./groupsTypes";
  * Pick a group, see every cover project created in it (current +
  * archived history, with rendered previews), and open a cover in
  * InstaEditor in a new tab — the SPA never navigates away.
+ *
+ * Supports `?group=<id>` as a deep-link: the editor launch flow
+ * stamps a relative `return_to` (e.g. `/app/covers?group=7`) so the
+ * editor Home pill can bring the user straight back to the group's
+ * hub they were working on.
  */
 export function CoversPage() {
   const { state, tree, selectedGroupId, setSelectedGroupId, load } = useGroupsData();
   const allGroups = useMemo(() => flattenTree(tree), [tree]);
+  const [searchParams] = useSearchParams();
+  const requestedGroupId = Number(searchParams.get("group"));
+
+  // Deep-link: when the hub opens with ?group=<id> (return from the
+  // editor, or a shared bookmark), preselect that group once its data
+  // is ready, so the grid below shows the covers of the group the
+  // user actually clicked before.
+  useEffect(() => {
+    if (state.kind !== "ready") return;
+    if (!Number.isInteger(requestedGroupId) || requestedGroupId <= 0) return;
+    if (!allGroups.some((node) => node.id === requestedGroupId)) return;
+    setSelectedGroupId(requestedGroupId);
+  }, [allGroups, requestedGroupId, setSelectedGroupId, state.kind]);
+
   const selectedGroup = allGroups.find((node) => node.id === selectedGroupId) ?? null;
 
   return (

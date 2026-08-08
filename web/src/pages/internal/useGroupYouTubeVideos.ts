@@ -6,6 +6,7 @@ import { useToast } from "../../components/toast";
 import {
   createYouTubeEditorSession,
   createEditorSessionAndOpen,
+  coversHubReturnTo,
   openInstaEditorWithLaunch,
 } from "../../features/youtube/api/editorSessionsApi";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
@@ -56,9 +57,13 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
       // before. Reuse them directly: no workspace lookup and no duplicate
       // create request are needed for the common Groups → Modifica path.
       // The editor always opens in a NEW TAB — the SPA never navigates
-      // away from the Copertine hub / Groups workspace.
+      // away from the Copertine hub / Groups workspace. The launch URL
+      // carries a relative return_to so the editor Home pill lands back
+      // on this group's Copertine hub.
       if (video.velox_project_id && video.editor_url) {
-        await openInstaEditorWithLaunch(video.editor_url, video.velox_project_id);
+        await openInstaEditorWithLaunch(video.editor_url, video.velox_project_id, {
+          returnTo: coversHubReturnTo(groupId),
+        });
         toast.success("InstaEditor aperto in una nuova scheda: il video resta privato finché non scegli di pubblicarlo.");
         return true;
       }
@@ -74,6 +79,8 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
         platform_account_id: video.platform_account_id,
         youtube_video_id: video.youtube_video_id,
         ...(safeAssetUrl(video.thumbnail_url) ? { source_thumbnail_url: safeAssetUrl(video.thumbnail_url) } : {}),
+      }, {}, {
+        returnTo: coversHubReturnTo(groupId),
       });
       return true;
     } catch (error) {

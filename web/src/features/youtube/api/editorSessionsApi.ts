@@ -333,6 +333,28 @@ export async function publishYouTubeEditorSession(
 // ─── Single-purpose helpers (UI-agnostic on purpose) ─────────────
 
 /**
+ * Optional launch-time context carried into the separately deployed
+ * editor so its in-editor navigation knows where to return the user.
+ * `returnTo` is a RELATIVE InstaEdit SPA path (for example
+ * `/app/covers?group=7`) — never an absolute URL: the editor combines
+ * it with its own configured InstaEdit origin, which keeps the value
+ * origin-agnostic and safe to embed in the launch URL.
+ */
+export interface EditorLaunchOptions {
+  returnTo?: string;
+}
+
+/**
+ * Relative SPA path that returns the user to the Copertine hub of a
+ * specific group (the destination of the in-editor Home pill). Kept in
+ * the editor client so every "Modifica copertina" entrypoint builds the
+ * same return URL and the group id can never drift between callers.
+ */
+export function coversHubReturnTo(groupId: number): string {
+  return `/app/covers?group=${groupId}`;
+}
+
+/**
  * Open the Velox / InstaEditor in a new tab.
  *
  * Centralized helper used by AccountDetails and Calendar (and
@@ -386,12 +408,22 @@ export function redirectToInstaEditor(
  * Mint a one-time project-scoped launch token before crossing into the
  * separately deployed editor. The token is placed in the URL fragment so
  * it is not sent in the initial editor HTTP request or reverse-proxy logs.
+ *
+ * `opts.returnTo` (a relative InstaEdit SPA path) is stamped as a
+ * `return_to` query parameter on the launch URL — AFTER the strict
+ * editor-URL validation — so the editor can link the in-app Home pill
+ * back to the exact surface the user came from (for example the
+ * Copertine hub of a specific group).
  */
 export async function createEditorLaunchURL(
   editorUrl: string,
   projectId: string,
+  opts: EditorLaunchOptions = {},
 ): Promise<string> {
   const parsed = validateEditorURL(editorUrl);
+  if (opts.returnTo) {
+    parsed.searchParams.set("return_to", opts.returnTo);
+  }
   const response = await authedFetch("/api/v1/editor/launch", {
     method: "POST",
     body: JSON.stringify({ project_id: projectId }),
@@ -409,16 +441,18 @@ export async function redirectToInstaEditorWithLaunch(
   editorUrl: string,
   projectId: string,
   navigate: (url: string) => void = (url) => window.location.assign(url),
+  opts: EditorLaunchOptions = {},
 ): Promise<void> {
-  navigate(await createEditorLaunchURL(editorUrl, projectId));
+  navigate(await createEditorLaunchURL(editorUrl, projectId, opts));
 }
 
 /** Mint a launch token and open the separate editor in a new tab. */
 export async function openInstaEditorWithLaunch(
   editorUrl: string,
   projectId: string,
+  opts: EditorLaunchOptions = {},
 ): Promise<void> {
-  const target = await createEditorLaunchURL(editorUrl, projectId);
+  const target = await createEditorLaunchURL(editorUrl, projectId, opts);
   window.open(target, "_blank", "noopener,noreferrer");
 }
 
@@ -436,13 +470,18 @@ export async function openInstaEditorWithLaunch(
  * list, YouTubeStudio had it in scope already. Centralizing means
  * callers provide the workspace lookup closure once instead of
  * duplicating the lookup + null-guard.
+ *
+ * `opts.returnTo` (relative SPA path, e.g. `/app/covers?group=7`) is
+ * forwarded to the editor launch so the editor Home pill returns the
+ * user to the Copertine hub of the group they came from.
  */
 export async function createEditorSessionAndOpen(
   body: CreateYouTubeEditorSessionRequest,
   init: RequestInit = {},
+  opts: EditorLaunchOptions = {},
 ): Promise<CreateYouTubeEditorSessionResponse> {
   const session = await createYouTubeEditorSession(body, init);
-  await openInstaEditorWithLaunch(session.editor_url, session.velox_project_id);
+  await openInstaEditorWithLaunch(session.editor_url, session.velox_project_id, opts);
   return session;
 }
 
@@ -451,8 +490,9 @@ export async function createEditorSessionAndRedirect(
   body: CreateYouTubeEditorSessionRequest,
   init: RequestInit = {},
   navigate?: (url: string) => void,
+  opts: EditorLaunchOptions = {},
 ): Promise<CreateYouTubeEditorSessionResponse> {
   const session = await createYouTubeEditorSession(body, init);
-  await redirectToInstaEditorWithLaunch(session.editor_url, session.velox_project_id, navigate);
+  await redirectToInstaEditorWithLaunch(session.editor_url, session.velox_project_id, navigate, opts);
   return session;
 }

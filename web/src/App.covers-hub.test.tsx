@@ -65,4 +65,48 @@ describe("covers hub route", () => {
       expect(window.location.pathname).toBe("/login");
     });
   });
+
+  it("preselects the group from the ?group= deep link (editor return)", async () => {
+    authedFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/v1/auth/me") {
+        return new Response(JSON.stringify({ workspace_id: 5 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.startsWith("/api/v1/groups/aggregate")) {
+        return new Response(
+          JSON.stringify({
+            groups: [
+              { id: 1, name: "Amish" },
+              { id: 7, name: "Wwe" },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.startsWith("/api/v1/accounts")) {
+        return new Response(JSON.stringify({ accounts: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      // covers responses (any group) come back empty
+      return new Response(JSON.stringify({ covers: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    window.history.replaceState({}, "", "/app/covers?group=7");
+    render(<App />);
+
+    // The hub must mount the covers grid for group 7 (the deep-linked
+    // group), not the first group in the tree.
+    await waitFor(() => {
+      expect(authedFetchMock).toHaveBeenCalledWith(
+        "/api/v1/groups/7/covers",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+  });
 });
