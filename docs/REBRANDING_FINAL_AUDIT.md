@@ -143,6 +143,30 @@ I dettagli dell'accettazione sono registrati in
 (sezione "Esito Test A") e in
 [`project-bridge-contract.md`](./project-bridge-contract.md) §12.
 
+## Riscansione 2026-08-08 (seconda) — esito finale sui tre repo
+
+Riscansione completa aggiornata di InstaeditLogin, `VeloxFrontend/web` e
+VeloxEditiingg per la frase esatta “Dark Editor” (case-insensitive):
+
+- **VeloxFrontend/web: 0 occorrenze** del testo “Dark Editor” (né UI, né
+  commenti, né docs).
+- **InstaeditLogin:** nessun riferimento visuale/UI; le sole occorrenze
+  testuali erano 2 righe descrittive non storiche, **corrette ora** a
+  InstaEditor: `docs/project-bridge-contract.md` §10 (“InstaEditor tests for
+  opaque project handles...”) e `docs/DEPLOY.md` §4 (parentesi riordinata a
+  “InstaEditor deployment, formerly Dark Editor”). Le altre occorrenze sono
+  path runtime `/dark_editor_v2`, chiavi `dark_editor_*`/`dark-editor-*`,
+  test negativi, migrazioni storiche immutabili e documenti di audit.
+- **VeloxEditiingg:** solo riferimenti storici/migrazioni/guardie
+  (`128_drop_dark_editor_domain.sql`, test di migrazione, ROADMAP/CHANGELOG/
+  DEPLOY-CHECKLIST che descrivono la rimozione già avvenuta, `check-no-legacy.sh`).
+
+Conclusione della verifica: **zero riferimenti visuali residui** in tutti e
+tre i repo; ogni occorrenza rimanente appartiene alle categorie ammesse
+(compatibilità runtime, test di regressione, storia documentale). Il concetto
+tecnico di tema `dark` (ThemeProvider, chiavi `dark-editor-theme`, classi
+CSS) non è stato toccato.
+
 ## Conclusione
 
 Il rebranding visuale e descrittivo è concluso. Le occorrenze residue sono intenzionali: compatibilità runtime, fallback backward-compatible, test di regressione o storia documentale. Nessun riferimento legacy residuo deve essere interpretato come autorizzazione a introdurre nuovo copy “Dark Editor”.

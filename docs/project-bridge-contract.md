@@ -614,7 +614,7 @@ The contract is enforced by:
 - InstaEdit bridge response/model tests for version, idempotency, ownership
   and forbidden fields;
 - Velox scope and route tests requiring `project_id` for editor operations;
-- Dark Editor tests for opaque project handles and `410 Gone` global catalog
+- InstaEditor tests for opaque project handles and `410 Gone` global catalog
   retirement;
 - the vendored OpenAPI synchronization check in VeloxFrontend.
 
