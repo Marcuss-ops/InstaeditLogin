@@ -357,6 +357,158 @@ describe("GroupCovers", () => {
     });
   });
 
+  it("renames a cover inline: clicking the title PUTs the partial {title} to the draft endpoint and updates the card", async () => {
+    routeFetch({
+      covers: [coverFixture({ draft_title: "Rap-Vortex-15" })],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
+    });
+
+    // Click the editable title → input appears with the current name.
+    fireEvent.click(screen.getByTestId("cover-title-edit"));
+    const input = screen.getByTestId("cover-title-input") as HTMLInputElement;
+    expect(input.value).toBe("Rap-Vortex-15");
+
+    // Type the new name and commit (blur).
+    fireEvent.change(input, { target: { value: "Nuovo Nome Copertina" } });
+    fireEvent.blur(input);
+
+    // Partial PUT — title only, never wiping description/tags/privacy.
+    await waitFor(() => {
+      const draftCall = authedFetchMock.mock.calls.find(([url]) =>
+        String(url).includes("/draft"),
+      );
+      expect(draftCall).toBeDefined();
+      const [, init] = draftCall as [string, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({ title: "Nuovo Nome Copertina" });
+    });
+    expect(toastMock.success).toHaveBeenCalledWith(
+      expect.stringMatching(/titolo copertina salvato/i),
+    );
+
+    // The card now shows the renamed title (optimistic local update).
+    await waitFor(() => {
+      expect(screen.getByText("Nuovo Nome Copertina")).toBeInTheDocument();
+    });
+  });
+
+  it("cancels the inline rename on Escape without PUTting anything", async () => {
+    routeFetch({
+      covers: [coverFixture({ draft_title: "Rap-Vortex-15" })],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByTestId("cover-title-edit"));
+    const input = screen.getByTestId("cover-title-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Da non salvare" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    // No draft PUT, card keeps the original title.
+    const draftCall = authedFetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/draft"),
+    );
+    expect(draftCall).toBeUndefined();
+    expect(screen.getByText("Rap-Vortex-15")).toBeInTheDocument();
+  });
+
+  it("skips the PUT when the renamed title is unchanged (no-op)", async () => {
+    routeFetch({
+      covers: [coverFixture({ draft_title: "Rap-Vortex-15" })],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByTestId("cover-title-edit"));
+    const input = screen.getByTestId("cover-title-input") as HTMLInputElement;
+    fireEvent.blur(input); // same value → no-op
+
+    const draftCall = authedFetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/draft"),
+    );
+    expect(draftCall).toBeUndefined();
+  });
+
+  it("commits exactly ONE draft PUT when committing via the ✓ button (no blur+click double-fire)", async () => {
+    routeFetch({
+      covers: [coverFixture({ draft_title: "Rap-Vortex-15" })],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByTestId("cover-title-edit"));
+    const input = screen.getByTestId("cover-title-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Titolo ✓" } });
+    fireEvent.click(screen.getByRole("button", { name: "Conferma titolo" }));
+
+    await waitFor(() => {
+      const draftCalls = authedFetchMock.mock.calls.filter(([url]) =>
+        String(url).includes("/draft"),
+      );
+      // The guard (committingRef) collapses blur + click into a single PUT.
+      expect(draftCalls).toHaveLength(1);
+    });
+  });
+
+  it("keeps the old title and toasts when the rename PUT fails", async () => {
+    routeFetch({
+      covers: [coverFixture({ draft_title: "Rap-Vortex-15" })],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
+    });
+
+    // Make the draft PUT fail (any non-2xx / rejection).
+    authedFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith("/api/v1/groups/7/covers")) {
+        return jsonResponse({ covers: [coverFixture({ draft_title: "Rap-Vortex-15" })] });
+      }
+      if (url.startsWith("/api/v1/groups/7/youtube/videos")) {
+        return jsonResponse({ videos: [] });
+      }
+      if (url === "/api/v1/groups/7") {
+        return jsonResponse({ workspace_id: 7 });
+      }
+      if (url.startsWith("/api/v1/youtube/editor-sessions/by-project/")) {
+        throw new Error("boom");
+      }
+      return jsonResponse({});
+    });
+
+    fireEvent.click(screen.getByTestId("cover-title-edit"));
+    const input = screen.getByTestId("cover-title-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Nome che non passa" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalled();
+    });
+    // Card keeps the DB title — no optimistic update on failure.
+    await waitFor(() => {
+      expect(screen.getByText("Rap-Vortex-15")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Nome che non passa")).not.toBeInTheDocument();
+  });
+
   it("surfaces an actionable error on failure", async () => {
     authedFetchMock.mockRejectedValue(new Error("boom"));
 

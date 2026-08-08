@@ -24,7 +24,7 @@ const FILTERS: Array<{ key: CoverFilter; label: string }> = [
  * that opens the editor in a new tab (the SPA never navigates away).
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, refreshCovers, openCoverEditor, openingCoverId } = useGroupCovers(groupId);
+  const { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId } = useGroupCovers(groupId);
   // Video manifest for the one-click create: quickCreateCover opens
   // InstaEditor directly on the group's most recent private video and
   // saves the new cover under a random name (no picker dialog). The name
@@ -174,7 +174,9 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
               cover={cover}
               previewUrl={cover.preview_media_id ? state.previewUrls[cover.preview_media_id] : undefined}
               opening={openingCoverId === cover.project_id}
+              renaming={renamingCoverId === cover.project_id}
               onOpenEditor={handleOpenCoverEditor}
+              onRenameCover={renameCover}
             />
           ))}
         </div>

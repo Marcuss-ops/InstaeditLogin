@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authedFetch, AuthError, ApiError } from "../../lib/auth";
+import { useToast } from "../../components/toast";
 import { coversHubReturnTo, openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { CoversLoadState, GroupCover } from "./groupCoversTypes";
@@ -30,6 +31,8 @@ export function useGroupCovers(groupId: number) {
   const abortRef = useRef<AbortController | null>(null);
   const [state, setState] = useState<CoversLoadState>({ kind: "loading" });
   const [openingCoverId, setOpeningCoverId] = useState<string | null>(null);
+  const [renamingCoverId, setRenamingCoverId] = useState<string | null>(null);
+  const toast = useToast();
 
   const loadCovers = useCallback(
     async (signal: AbortSignal) => {
@@ -91,6 +94,62 @@ export function useGroupCovers(groupId: number) {
     return () => abortRef.current?.abort();
   }, [groupId, refreshCovers]);
 
+  /**
+   * Inline rename of a cover from its card in the Copertine hub. The card
+   * title is editable; on commit we PUT a PARTIAL draft update ({ title }
+   * only) so the new name lands in youtube_video_edits.draft_title — the
+   * field the hub card renders. The backend merges the partial body, so
+   * description/tags/privacy are never wiped by a rename.
+   *
+   * Returns true when the rename was persisted (or was a no-op); false
+   * when the cover has no editor session or the PUT failed.
+   */
+  const renameCover = useCallback(
+    async (cover: GroupCover, newTitle: string): Promise<boolean> => {
+      const trimmed = newTitle.trim();
+      if (!cover.velox_project_id) {
+        toast.error("Copertina non associata a un progetto editor.");
+        return false;
+      }
+      const current = cover.draft_title || cover.name || "";
+      // No-op: same title (or empty → keep whatever the DB has).
+      if (!trimmed || trimmed === current.trim()) return true;
+      setRenamingCoverId(cover.project_id);
+      try {
+        await authedFetch(
+          `/api/v1/youtube/editor-sessions/by-project/${encodeURIComponent(cover.velox_project_id)}/draft`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ title: trimmed }),
+          },
+        );
+        // Optimistic local update so the card reflects the new name
+        // without a full grid reload.
+        setState((previous) => {
+          if (previous.kind !== "ready") return previous;
+          return {
+            ...previous,
+            covers: previous.covers.map((c) =>
+              c.project_id === cover.project_id ? { ...c, draft_title: trimmed } : c,
+            ),
+          };
+        });
+        toast.success("Titolo copertina salvato.");
+        return true;
+      } catch (error) {
+        if (error instanceof AuthError) {
+          navigate("/login", { replace: true });
+          return false;
+        }
+        toast.error(error instanceof Error ? error.message : "Impossibile salvare il titolo.");
+        return false;
+      } finally {
+        setRenamingCoverId(null);
+      }
+    },
+    [navigate, toast],
+  );
+
   const openCoverEditor = useCallback(async (cover: GroupCover, tab?: Window | null): Promise<boolean> => {
     if (!cover.velox_project_id) {
       tab?.close();
@@ -128,5 +187,5 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate]);
 
-  return { state, refreshCovers, openCoverEditor, openingCoverId };
+  return { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId };
 }
