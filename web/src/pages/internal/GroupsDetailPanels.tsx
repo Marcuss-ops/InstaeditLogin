@@ -339,7 +339,7 @@ export function GroupDetailPanel({
         )}
       </div>
 
-      <GroupYouTubeVideos groupId={group.id} />
+      <GroupYouTubeVideos groupId={group.id} groupName={group.name} />
 
       {addChannelsOpen ? (
         <AddChannelsDialog

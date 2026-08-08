@@ -53,7 +53,7 @@ vi.mock("react-router-dom", () => ({
   useNavigate: () => navigateMock,
 }));
 
-import { generateCoverName, useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
+import { generateCoverName, slugifyGroupName, useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import type { GroupYouTubeVideo } from "./groupYouTubeVideosTypes";
 
 function jsonResponse(data: unknown) {
@@ -209,7 +209,7 @@ describe("useGroupYouTubeVideos — quick create (Crea copertina)", () => {
       .mockResolvedValueOnce(jsonResponse({}));
     createYouTubeEditorSessionMock.mockResolvedValueOnce(createdSession);
 
-    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+    const { result } = renderHook(() => useGroupYouTubeVideos(7, true, "Amish"));
 
     await act(async () => {
       // Flush the initial videos load so state.kind becomes "ready".
@@ -229,13 +229,14 @@ describe("useGroupYouTubeVideos — quick create (Crea copertina)", () => {
       youtube_video_id: "video-1",
       source_thumbnail_url: "https://i.ytimg.com/vi/video-1/hqdefault.jpg",
     });
-    // The random name is written to the draft BEFORE the editor tab opens.
+    // The random name embeds the group name (Amish-<Noun>-<Number>) and is
+    // written to the draft BEFORE the editor tab opens.
     const draftCall = authedFetchMock.mock.calls.find(([url]) =>
       String(url).includes("/draft"),
     );
     expect(draftCall).toBeDefined();
     const draftBody = JSON.parse(String((draftCall as unknown[])[1] && (draftCall[1] as RequestInit).body));
-    expect(draftBody.title).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d+$/);
+    expect(draftBody.title).toMatch(/^Amish-[A-Z][a-z]+-\d{1,2}$/);
     expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
       createdSession.editor_url,
       createdSession.velox_project_id,
@@ -267,9 +268,26 @@ describe("useGroupYouTubeVideos — quick create (Crea copertina)", () => {
 });
 
 describe("generateCoverName", () => {
-  it("returns an Adjective-Noun-Number project name", () => {
+  it("embeds the group name when provided (Group-Noun-Number)", () => {
+    for (let i = 0; i < 50; i += 1) {
+      expect(generateCoverName("Amish")).toMatch(/^Amish-[A-Z][a-z]+-\d{1,2}$/);
+    }
+  });
+
+  it("falls back to an Adjective-Noun-Number name without a group name", () => {
     for (let i = 0; i < 50; i += 1) {
       expect(generateCoverName()).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d{1,2}$/);
+      expect(generateCoverName("")).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d{1,2}$/);
+      expect(generateCoverName("   ")).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d{1,2}$/);
     }
+  });
+});
+
+describe("slugifyGroupName", () => {
+  it("folds spaces and special chars to hyphens and strips accents", () => {
+    expect(slugifyGroupName("Wrestling Insider RU")).toBe("Wrestling-Insider-RU");
+    expect(slugifyGroupName("Città dei Sogni!")).toBe("Citta-dei-Sogni");
+    expect(slugifyGroupName("  Amish  ")).toBe("Amish");
+    expect(slugifyGroupName("123 & More")).toBe("123-More");
   });
 });

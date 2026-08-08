@@ -5,7 +5,7 @@ import { GroupYouTubeVideoCard } from "./GroupYouTubeVideoCard";
 import { GroupYouTubeVideoPreviewModal } from "./GroupYouTubeVideoPreviewModal";
 import { DEFAULT_PAGE_SIZE, RECENCY_OPTIONS } from "./groupYouTubeVideosTypes";
 
-export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
+export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; groupName?: string }) {
   const {
     state,
     recencyDays,
@@ -23,7 +23,7 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
     saveVideoMetadata,
     refreshVideos,
     loadMoreVideos,
-  } = useGroupYouTubeVideos(groupId);
+  } = useGroupYouTubeVideos(groupId, true, groupName);
 
   return (
     <section className="mb-6" data-testid="group-youtube-videos">

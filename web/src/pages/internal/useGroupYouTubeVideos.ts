@@ -16,10 +16,28 @@ import {
 const COVER_NAME_ADJECTIVES = ["Vibrant", "Neon", "Cosmic", "Electric", "Stealth", "Hyper", "Sonic", "Golden", "Pixel", "Astro"];
 const COVER_NAME_NOUNS = ["Nebula", "Blade", "Vortex", "Spark", "Zenith", "Echo", "Pulse", "Wave", "Grid", "Forge"];
 
-export function generateCoverName(): string {
-  const adjective = COVER_NAME_ADJECTIVES[Math.floor(Math.random() * COVER_NAME_ADJECTIVES.length)];
+// Turns a group display name into a name-safe segment for the random
+// cover title: accents stripped, non-alphanumerics folded to hyphens,
+// original casing preserved (e.g. "Wrestling Insider RU" →
+// "Wrestling-Insider-RU").
+export function slugifyGroupName(name: string): string {
+  const slug = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  return slug;
+}
+
+export function generateCoverName(groupName?: string): string {
   const noun = COVER_NAME_NOUNS[Math.floor(Math.random() * COVER_NAME_NOUNS.length)];
   const number = Math.floor(Math.random() * 99) + 1;
+  if (groupName) {
+    const slug = slugifyGroupName(groupName);
+    if (slug) return `${slug}-${noun}-${number}`;
+  }
+  const adjective = COVER_NAME_ADJECTIVES[Math.floor(Math.random() * COVER_NAME_ADJECTIVES.length)];
   return `${adjective}-${noun}-${number}`;
 }
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
@@ -56,7 +74,7 @@ function buildSessionPayload(video: GroupYouTubeVideo, workspaceID: number) {
   };
 }
 
-export function useGroupYouTubeVideos(groupId: number, enabled = true) {
+export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName?: string) {
   const navigate = useNavigate();
   const abortRef = useRef<AbortController | null>(null);
   const pollingAttemptsRef = useRef(0);
@@ -164,8 +182,10 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
       toast.error("Nessun video privato nel gruppo: carica un video su YouTube per crearci la copertina.");
       return false;
     }
-    return openThumbnailEditor(firstVideo, { draftTitle: generateCoverName() });
-  }, [openThumbnailEditor, state, toast]);
+    // The random title embeds the group name (e.g. "Amish-Nebula-42") so
+    // the cover reads as belonging to this group at a glance.
+    return openThumbnailEditor(firstVideo, { draftTitle: generateCoverName(groupName) });
+  }, [groupName, openThumbnailEditor, state, toast]);
 
   const openVideoPreview = useCallback((video: GroupYouTubeVideo) => {
     // Preview is deliberately local and deterministic: no NVIDIA metadata

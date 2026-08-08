@@ -58,10 +58,10 @@ vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
 
 import { GroupCovers } from "./GroupCovers";
 
-function renderPanel() {
+function renderPanel(groupName = "Amish") {
   return render(
     <MemoryRouter>
-      <GroupCovers groupId={7} />
+      <GroupCovers groupId={7} groupName={groupName} />
     </MemoryRouter>,
   );
 }
@@ -231,7 +231,8 @@ describe("GroupCovers", () => {
     );
     expect(draftCall).toBeDefined();
     const draftBody = JSON.parse(String((draftCall as unknown[])[1] && (draftCall[1] as RequestInit).body));
-    expect(draftBody.title).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d+$/);
+    // The random name embeds the group name (Amish-<Noun>-<Number>).
+    expect(draftBody.title).toMatch(/^Amish-[A-Z][a-z]+-\d{1,2}$/);
     expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
       "https://editor.instaedit.test/editor/ve_created",
       "ve_created",

@@ -106,7 +106,7 @@ export function CoversPage() {
         </div>
 
         {selectedGroup ? (
-          <GroupCovers groupId={selectedGroup.id} />
+          <GroupCovers groupId={selectedGroup.id} groupName={selectedGroup.name} />
         ) : (
           <EmptyState
             title="Seleziona un gruppo"

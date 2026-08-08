@@ -22,12 +22,13 @@ const FILTERS: Array<{ key: CoverFilter; label: string }> = [
  * preview, status, channel/video and a "Modifica in InstaEditor" CTA
  * that opens the editor in a new tab (the SPA never navigates away).
  */
-export function GroupCovers({ groupId }: { groupId: number }) {
+export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
   const { state, refreshCovers, openCoverEditor, openingCoverId } = useGroupCovers(groupId);
   // Video manifest for the one-click create: quickCreateCover opens
   // InstaEditor directly on the group's most recent private video and
-  // saves the new cover under a random name (no picker dialog).
-  const { quickCreateCover, openingVideoID } = useGroupYouTubeVideos(groupId);
+  // saves the new cover under a random name (no picker dialog). The name
+  // embeds the group name so the cover reads as belonging to this group.
+  const { quickCreateCover, openingVideoID } = useGroupYouTubeVideos(groupId, true, groupName);
   const [filter, setFilter] = useState<CoverFilter>("all");
 
   const handleCreateCover = () => {
