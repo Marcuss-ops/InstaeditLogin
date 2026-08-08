@@ -79,7 +79,13 @@ type YouTubeVideoEdit struct {
 	DraftDefaultAudioLanguage *string                       `json:"draft_default_audio_language,omitempty"`
 	DraftTranslations         map[string]YouTubeTranslation `json:"draft_translations,omitempty"`
 	DraftDesiredPrivacy       *string                       `json:"draft_desired_privacy,omitempty"`
-	DraftUpdatedAt            *time.Time                    `json:"draft_updated_at,omitempty"`
+	// DraftPublishAt mirrors the draft-side scheduling value
+	// (draft_publish_at). Distinct from PublishAt (the session row's
+	// publish-time column, stamped by the publish click) — a partial
+	// draft PUT that omits publish_at must merge from THIS column so a
+	// rename-only sync never clobbers a previously scheduled draft time.
+	DraftPublishAt *time.Time `json:"draft_publish_at,omitempty"`
+	DraftUpdatedAt *time.Time `json:"draft_updated_at,omitempty"`
 	// DirtyFlag stamps the dashboard's "unsaved changes" card pill.
 	// Set to TRUE by the SPA on form-change; set to FALSE in the same
 	// SQL as draft_updated_at by SaveDraft (a successful 200). The

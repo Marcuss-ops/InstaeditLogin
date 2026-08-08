@@ -155,28 +155,107 @@ func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, re
 		return
 	}
 
-	// Decode the draft payload. Empty body is a valid "operator
-	// cleared every field" intent — io.EOF is swallowed (NOT a 400,
-	// per code-reviewer verdict).
+	// Read the body once into bytes so we can both decode the typed
+	// payload and detect which keys the caller actually supplied
+	// (partial-update semantics below). Empty body is a valid no-op.
 	//
 	// 5 MB ceiling on a draft payload is plenty for the max-100-title
 	// + max-5000-description + translations combination; protects
 	// against hostile-large bodies.
-	var payload youTubeEditorSessionDraftRequest
+	var bodyBytes []byte
 	if req.Body != nil {
-		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
+		var readErr error
+		bodyBytes, readErr = io.ReadAll(io.LimitReader(req.Body, 5<<20))
+		if readErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body: "+readErr.Error())
+			return
+		}
+	}
+
+	// Decode the draft payload. Empty body is a valid no-op (per
+	// code-reviewer verdict, an empty body must NOT 400).
+	var payload youTubeEditorSessionDraftRequest
+	if len(bodyBytes) > 0 {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 	}
 
+	// Key-presence map: a field is written ONLY when its key is present
+	// in the JSON body — `publish_at: null` is present (explicit clear),
+	// an omitted publish_at is not (keep the current value).
+	present := map[string]bool{}
+	if len(bodyBytes) > 0 {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(bodyBytes, &raw); err == nil {
+			for key := range raw {
+				present[key] = true
+			}
+		}
+	}
+
+	// MERGE: partial-update semantics — absent fields keep the
+	// session's current draft value. This lets the InstaEditor sync
+	// just the renamed project title (PUT {"title": "..."}) without
+	// wiping the operator's description/tags/privacy. Every existing
+	// caller (SPA quick-create, SPA metadata save, editor form
+	// auto-save) sends the complete shape, so their behaviour is
+	// unchanged; an empty body `{}` is now a no-op instead of a full
+	// draft clear.
+	current, err := r.youtubeVideoEditStore.FindDraftByVeloxProjectID(req.Context(), veloxProjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find editor session draft: "+err.Error())
+		return
+	}
+	if current == nil {
+		current = &models.YouTubeVideoEdit{}
+	}
+
+	title := payload.Title
+	if !present["title"] {
+		title = draftStringValue(current.DraftTitle)
+	}
+	description := payload.Description
+	if !present["description"] {
+		description = draftStringValue(current.DraftDescription)
+	}
+	tags := payload.Tags
+	if !present["tags"] {
+		tags = current.DraftTags
+	}
+	defaultLanguage := payload.DefaultLanguage
+	if !present["default_language"] {
+		defaultLanguage = draftStringValue(current.DraftDefaultLanguage)
+	}
+	defaultAudioLanguage := payload.DefaultAudioLanguage
+	if !present["default_audio_language"] {
+		defaultAudioLanguage = draftStringValue(current.DraftDefaultAudioLanguage)
+	}
+	translations := payload.Translations
+	if !present["translations"] {
+		translations = current.DraftTranslations
+	}
+	desiredPrivacy := payload.DesiredPrivacy
+	if !present["desired_privacy"] {
+		desiredPrivacy = draftStringValue(current.DraftDesiredPrivacy)
+	}
+	publishAt := payload.PublishAt
+	if !present["publish_at"] {
+		// Merge from the draft's OWN scheduling column
+		// (draft_publish_at). The session row's publish_at is the
+		// publish-click stamp — using it here would wipe a scheduled
+		// draft time on a rename-only sync.
+		publishAt = current.DraftPublishAt
+	}
+
 	// Server-side trim/normalize for display values. We do NOT enforce
 	// length bounds here — the publish endpoint does that.
-	payload.Title = strings.TrimSpace(payload.Title)
-	payload.Description = strings.TrimSpace(payload.Description)
-	payload.DefaultLanguage = strings.TrimSpace(payload.DefaultLanguage)
-	payload.DefaultAudioLanguage = strings.TrimSpace(payload.DefaultAudioLanguage)
-	payload.DesiredPrivacy = strings.ToLower(strings.TrimSpace(payload.DesiredPrivacy))
+	title = strings.TrimSpace(title)
+	description = strings.TrimSpace(description)
+	defaultLanguage = strings.TrimSpace(defaultLanguage)
+	defaultAudioLanguage = strings.TrimSpace(defaultAudioLanguage)
+	desiredPrivacy = strings.ToLower(strings.TrimSpace(desiredPrivacy))
 
 	// Persist via the store's SaveDraft CAS. Returns 0-rows mapped to
 	// 409 by the repository contract (handler maps via errors.Is).
@@ -184,14 +263,14 @@ func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, re
 	if saveErr := r.youtubeVideoEditStore.SaveDraft(
 		req.Context(),
 		edit.ID,
-		payload.Title,
-		payload.Description,
-		payload.Tags,
-		payload.DefaultLanguage,
-		payload.DefaultAudioLanguage,
-		payload.Translations,
-		payload.DesiredPrivacy,
-		payload.PublishAt,
+		title,
+		description,
+		tags,
+		defaultLanguage,
+		defaultAudioLanguage,
+		translations,
+		desiredPrivacy,
+		publishAt,
 		draftUpdatedAt,
 	); saveErr != nil {
 		if errors.Is(saveErr, repository.ErrYouTubeVideoEditNotFound) {
@@ -210,24 +289,36 @@ func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, re
 	// follow-up GET. We do NOT project into the full YouTubeVideoEdit
 	// DTO — the response is a narrow draft-shaped echo so the SPA
 	// independent logic stays simple.
-	tagsCopy := payload.Tags
+	tagsCopy := tags
 	if tagsCopy == nil {
 		tagsCopy = []string{}
 	}
-	translationsCopy := payload.Translations
+	translationsCopy := translations
 	if translationsCopy == nil {
 		translationsCopy = map[string]models.YouTubeTranslation{}
 	}
 	writeJSON(w, http.StatusOK, youTubeEditorSessionDraftResponse{
 		VeloxProjectID:            edit.VeloxProjectID,
-		DraftTitle:                payload.Title,
-		DraftDescription:          payload.Description,
+		DraftTitle:                title,
+		DraftDescription:          description,
 		DraftTags:                 tagsCopy,
-		DraftDefaultLanguage:      payload.DefaultLanguage,
-		DraftDefaultAudioLanguage: payload.DefaultAudioLanguage,
+		DraftDefaultLanguage:      defaultLanguage,
+		DraftDefaultAudioLanguage: defaultAudioLanguage,
 		DraftTranslations:         translationsCopy,
-		DraftDesiredPrivacy:       payload.DesiredPrivacy,
-		DraftPublishAt:            payload.PublishAt,
+		DraftDesiredPrivacy:       desiredPrivacy,
+		DraftPublishAt:            publishAt,
 		DraftUpdatedAt:            draftUpdatedAt,
 	})
+}
+
+// draftStringValue dereferences an optional draft column value,
+// collapsing SQL NULL ("no draft yet") to the empty string for the
+// merge fallback. An absent field falls back to the current stored
+// value; a present field is written verbatim, so an explicit empty
+// string still means "operator cleared this field".
+func draftStringValue(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

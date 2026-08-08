@@ -75,6 +75,13 @@ type YouTubeVideoEditStore interface {
 	Create(ctx context.Context, edit *models.YouTubeVideoEdit) error
 	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
 	FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
+	// FindDraftByVeloxProjectID returns the current draft_* persistence
+	// columns (P2 auto-save) for the given velox project id, or
+	// (nil, nil) when no row matches. Used by the draft PUT handler
+	// to MERGE partial updates — a field absent from the request body
+	// keeps its current draft value instead of being overwritten (the
+	// InstaEditor rename-pill sync sends {"title": ...} only).
+	FindDraftByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
 	Update(ctx context.Context, edit *models.YouTubeVideoEdit) error
 	// MarkPublishing (Blocco #5 P0 #2) atomically transitions the row to
 	// status='publishing' WITH desired_privacy + publish_at stamped in the

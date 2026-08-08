@@ -30,6 +30,15 @@ type YouTubeVideoEditStore interface {
 	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
 	FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
 	Update(ctx context.Context, edit *models.YouTubeVideoEdit) error
+	// FindDraftByVeloxProjectID returns the current draft_* persistence
+	// columns (P2 auto-save) for the given velox project id, or
+	// (nil, nil) when no row matches. Used by the draft PUT handler
+	// to MERGE partial updates — a field absent from the request body
+	// keeps its current draft value instead of being overwritten. The
+	// regular FindByVeloxProjectID deliberately omits the draft
+	// columns (they are not needed by the session/read paths), so the
+	// draft path reads them here explicitly.
+	FindDraftByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
 	// MarkPublishing (Blocco #5 P0 #2) atomically transitions status →
 	// 'publishing' WITH desired_privacy + publish_at stamped in the
 	// same statement. CAS predicate (extended form):

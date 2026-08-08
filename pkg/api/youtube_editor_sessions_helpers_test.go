@@ -23,9 +23,16 @@ import (
 // (nil, repository.ErrYouTubeVideoEditNotFound) — mirrors the real
 // Postgres CAS behaviour for tests that don't inject markPublishingFn.
 type mockYouTubeVideoEditStore struct {
-	created                []*models.YouTubeVideoEdit
-	findFn                 func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
-	findByProjectFn        func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
+	created         []*models.YouTubeVideoEdit
+	findFn          func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
+	findByProjectFn func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
+	// findDraftFn (P2 partial draft merge) is the callback for the
+	// draft-columns read the PUT /draft handler uses to merge
+	// partial updates. Default returns (nil, nil) — "no draft
+	// columns yet". Tests that assert the merge keep-the-absent
+	// values semantics inject a closure returning a row with
+	// draft_* populated.
+	findDraftFn            func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
 	update                 func(ctx context.Context, edit *models.YouTubeVideoEdit) error
 	markPublishingMu       sync.Mutex
 	markPublishingAttempts int
@@ -91,6 +98,16 @@ func (m *mockYouTubeVideoEditStore) FindByID(ctx context.Context, id string) (*m
 func (m *mockYouTubeVideoEditStore) FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
 	if m.findByProjectFn != nil {
 		return m.findByProjectFn(ctx, projectID)
+	}
+	return nil, nil
+}
+
+// FindDraftByVeloxProjectID (P2 partial draft merge) routes to
+// findDraftFn when supplied; default returns (nil, nil) — the
+// merge then falls back to zero-values for absent fields.
+func (m *mockYouTubeVideoEditStore) FindDraftByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+	if m.findDraftFn != nil {
+		return m.findDraftFn(ctx, projectID)
 	}
 	return nil, nil
 }

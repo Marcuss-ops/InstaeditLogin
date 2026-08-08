@@ -369,6 +369,36 @@ func isPQUniqueViolation(err error) bool {
 	}
 	var pqErr *pq.Error
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
+} // FindDraftByVeloxProjectID returns the current draft_* persistence
+// columns for the given velox project id, or (nil, nil) when no row
+// matches. The regular select columns omit the draft fields on purpose
+// (the session/read paths do not need them), so the draft PUT handler
+// reads them here to merge partial updates without clobbering the
+// operator's other draft values. draft_publish_at is included so a
+// partial PUT that omits publish_at keeps the draft's own scheduling
+// value (the session row's publish_at is the publish-click stamp, not
+// the draft schedule).
+func (r *YouTubeVideoEditRepository) FindDraftByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+	edit := &models.YouTubeVideoEdit{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT draft_title, draft_description, draft_tags,
+		        draft_default_language, draft_default_audio_language,
+		        draft_translations, draft_desired_privacy, draft_publish_at
+		   FROM youtube_video_edits
+		  WHERE velox_project_id = $1`,
+		projectID,
+	).Scan(
+		&edit.DraftTitle, &edit.DraftDescription, &edit.DraftTags,
+		&edit.DraftDefaultLanguage, &edit.DraftDefaultAudioLanguage,
+		&edit.DraftTranslations, &edit.DraftDesiredPrivacy, &edit.DraftPublishAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("youtube video edit FindDraftByVeloxProjectID: %w", err)
+	}
+	return edit, nil
 }
 
 // SaveDraft (P2 — InstaEditor auto-save) atomically writes the operator's

@@ -77,6 +77,22 @@ func (f *fakeYouTubeVideoEditStore) FindByVeloxProjectID(_ context.Context, proj
 	return nil, nil
 }
 
+// FindDraftByVeloxProjectID satisfies the YouTubeVideoEditStore
+// interface (P2 partial draft merge). The fake mirrors the
+// production contract: the row (with its draft_* columns) is
+// returned for the matching velox_project_id, (nil, nil) when no
+// row matches.
+func (f *fakeYouTubeVideoEditStore) FindDraftByVeloxProjectID(_ context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.rows {
+		if row.VeloxProjectID == projectID {
+			return row, nil
+		}
+	}
+	return nil, nil
+}
+
 func (f *fakeYouTubeVideoEditStore) Create(_ context.Context, edit *models.YouTubeVideoEdit) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
