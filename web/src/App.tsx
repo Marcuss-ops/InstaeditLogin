@@ -81,6 +81,12 @@ const LiveStreamNewPage = lazy(() =>
     default: m.LiveStreamNewPage,
   })),
 );
+export const RETIRED_COVERS_REDIRECT = "/app/youtube/studio";
+
+export function RetiredCoversRedirect() {
+  return <Navigate to={RETIRED_COVERS_REDIRECT} replace />;
+}
+
 function RouteLoadingFallback() {
   return (
     <div
@@ -169,6 +175,17 @@ function App() {
             >
               <Route index element={<Navigate to="dashboard" replace />} />
               <Route path="dashboard" element={<InternalDashboard />} />
+              {/*
+               * The standalone Covers library was retired with CoverEditor.
+               * Keep old bookmarks deterministic: an editor URL is only valid
+               * after InstaEdit has selected a video and minted its authorized
+               * editor session, so retired covers routes must enter YouTube
+               * Studio rather than rendering a stale autonomous-covers page.
+               */}
+              <Route
+                path="covers/*"
+                element={<RetiredCoversRedirect />}
+              />
               <Route path="uploads" element={<InternalUploads />} />
               <Route
                 path="youtube/studio"
