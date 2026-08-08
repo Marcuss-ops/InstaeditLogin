@@ -176,3 +176,46 @@ Definition of Done acceptance:
 
 Cross-reference: [`project-bridge-contract.md`](./project-bridge-contract.md)
 §12 records the acceptance evidence for the bridge and editor launch flows.
+
+### Executed demo/stale cleanup (2026-08-08)
+
+The live Velox database (`/opt/velox/current/.velox/data/velox.db`) was
+cleaned in two transactional passes while `velox-server` was briefly
+stopped. Backup taken before deletion:
+`/opt/velox/current/.velox/data/velox.db.bak-demo-cleanup-20260808-080440`
+(plus the pre-existing `velox.db.bak-20260807-080441`).
+
+| Table | Before | After |
+|---|---:|---:|
+| `jobs` | 552 | **66** (only real content preserved) |
+| `job_delivery_plans` | 449 | 57 |
+| `job_deliveries` | 279 | 0 |
+| `job_attempts` | 182 | 9 |
+| `job_events` | 254 | 17 |
+| `job_history` | 292 | 59 |
+| `artifacts` | 352 | 18 |
+| `delivery_destinations` | 2 (test) | 0 |
+| `legacy_imports` / `legacy_json_registry` | 4 / 13 | 0 / 0 |
+| `drive_master_folders` (fake groups) | 18 | 11 (Outro templates + root only) |
+
+Removed, in particular: **all fake-group data** — `project_id='amish'`
+(26 jobs), `odyssey_explorers` (12), `rapgame` (2), the `amish` drive
+master folder (`youtube_group=amish`), the fake group folders
+(`hiphop/wwe/comedy/discovery/rap/boxing`), the test destinations
+(`comedy_test`, `five_boxers_test_drive`) and every smoke/test/bench/e2e/
+debug job (~486 jobs total). `amish` now matches **0** rows anywhere in the
+Velox DB (verified via full dump). **Nothing was migrated into the InstaEdit
+DB**; on the InstaEdit side only the acceptance-test artifacts created by
+our own runs were removed (7 `acc-test-*` sessions, 6 "Acceptance Test"
+projects and their 4 bridges) while the 7 real groups and 59 workspace
+channels were left untouched.
+
+Preserved as real content (not demo): `Mike Tyson financial story [xx]`
+localized series, `Jackie Chan Doc Voiceover`, `Comedian clips`, cinema
+history docs and `I segreti tecnologici dell'antica Roma` jobs, plus the
+Outro template folders. All four Velox services were restarted and verified
+active; InstaEdit login/groups/health return 200.
+
+Rollback: restore `velox.db` from the timestamped `.bak-demo-cleanup-*`
+file (with `velox-server` stopped) and re-apply the migration chain checks;
+InstaEdit deletions are fully recoverable from the migration reports.
