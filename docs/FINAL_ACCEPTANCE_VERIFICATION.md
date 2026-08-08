@@ -183,6 +183,31 @@ The clean-checkout run included the idempotent E2E schema bootstrap for `account
 2. Keep the reduced E2E schema synchronized with production read-path tables and migrations when new columns are added.
 3. Keep `Router.Setup()` as initialization and reuse the returned handler for concurrent requests; the current per-router mutex protects accidental repeated setup calls.
 
+## Addendum 2026-08-08 — Definition of Done decoupling acceptance
+
+The scalability acceptance above is unrelated to the editor decoupling
+Definition of Done. The decoupling acceptance was executed separately on
+2026-08-08: with **Velox completely offline** (all `velox-*` systemd services
+stopped, editor ports 3001/18084 closed, `VELOX_CONTROL_URL` unreachable),
+InstaEdit login, Groups, Channels, videos, Drive and Posting all returned the
+same success codes as with Velox ON, and **only** "Apri InstaEditor" failed
+(`502 upstream editor call failed`). Velox was restarted and verified
+afterwards (health 200).
+
+Two findings surfaced during that run:
+
+- **Fixed:** `LaunchTokenIssuer` was not forwarded by the `editorBFFModule`
+  wrapper, so `POST /api/v1/editor/launch` was never mounted and fell through
+  to the proxy catch-all (404 even with Velox up). Fix + regression test in
+  commit `3f3d8fa6`.
+- **Non-blocking pre-existing:** `GET /api/v1/workspaces/{id}/channels`
+  returns 404 due to chi route shadowing (team module vs auth module). The
+  Channels page does not use that route (it uses `/api/v1/accounts` and
+  `/api/v1/workspaces`), so the Definition of Done is unaffected.
+
+Full evidence: `VELOX-FRONTEND-GROUPS-BOUNDARY.md` ("Esito Test A") and
+`project-bridge-contract.md` §12.
+
 ## Worktree safety
 
 This report was created while unrelated local changes were present in:

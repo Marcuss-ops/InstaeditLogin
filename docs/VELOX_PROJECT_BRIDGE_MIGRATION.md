@@ -155,3 +155,24 @@ owned by InstaEdit.
 The command intentionally refuses to run when `DATABASE_URL` is unset. Never
 run `--apply` against production without first saving and reviewing the
 report. Keep both reports as migration evidence.
+
+## Status 2026-08-08 — completed against the Definition of Done
+
+The relationship-only migration is complete and verified as part of the final
+Definition of Done acceptance:
+
+- the bridge (`velox_project_bridges`) holds **only** the allowlisted
+  mapping/metadata/technical fields: `project_id`, `workspace_id`,
+  `external_project_id`, optional `editor_provider`/`editor_status`/
+  `last_editor_sync_at` and migration markers;
+- no platform/account/channel/video/language/group/membership values are
+  persisted in or administered by the bridge — those remain in InstaEdit-owned
+  tables (`bde2272c` completes the stable bridge lifecycle);
+- demo/stale Velox data (e.g. fake groups such as "Amish") was removed and is
+  **not** migrated; real Velox projects are preserved and only the InstaEdit
+  relationship is backfilled;
+- the acceptance test with Velox **offline** confirmed that bridge create/gate
+  and every non-editor flow keep working; only "Apri InstaEditor" fails.
+
+Cross-reference: [`project-bridge-contract.md`](./project-bridge-contract.md)
+§12 records the acceptance evidence for the bridge and editor launch flows.

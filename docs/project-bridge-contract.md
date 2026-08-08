@@ -4,7 +4,7 @@
 **Contract version:** `instaedit.velox.project-bridge.v1`
 **Owner:** InstaEdit
 **Applies to:** InstaEditLogin, the separate editor application (`VeloxFrontend` or its successor), and the VeloxEditiingg render farm
-**Last updated:** 2026-08-07
+**Last updated:** 2026-08-08
 **Canonical API entry point:** `POST|GET|DELETE /api/v1/thumbnail-projects/{id}/velox-bridge`
 
 This document defines the smallest durable bridge between an InstaEdit
@@ -638,3 +638,40 @@ An implementation conforms only when all of the following are true:
       InstaEdit-owned.
 - [ ] The publishing/delivery contract is not silently reused as a project
       ownership contract.
+
+## 12. Status 2026-08-08 — Definition of Done acceptance
+
+The final Definition of Done acceptance test was executed with **Velox
+completely offline** (all `velox-*` services dead, editor ports closed) while
+InstaEdit stayed fully operational:
+
+- login, Groups, Channels, videos, Drive and Posting all returned the same
+  success codes with Velox ON and OFF;
+- **only** "Apri InstaEditor" fails with Velox OFF (`502 upstream editor call
+  failed`) — the editor access is the single operation that depends on Velox;
+- Velox was restarted and verified afterwards (health 200).
+
+The acceptance checklist above is now verified for the YouTube
+editor-session compatibility path:
+
+- `workspace_id` and ownership/permission checks are performed by InstaEdit
+  before any editor launch (`c34b292c` centralizes workspace authorization;
+  `caf43680` pins the permission gate before opening the editor);
+- channel/video ownership is revalidated in InstaEdit and only short-lived,
+  read-only context reaches Velox; nothing is persisted in the bridge beyond
+  the allowlist in §2.0;
+- editor configuration is explicit via `INSTAEDITOR_URL`, which fails fast and
+  clearly when missing — no ambiguous fallback (`7f1b7540`);
+- the launch flow is now reliably mounted: the `LaunchTokenIssuer` wiring bug
+  in `modules_editor.go` (handler never registered) was fixed with a
+  regression test (`3f3d8fa6`);
+- the legacy `/dark_editor_v2/*` routes were reduced to a launcher/redirect
+  mechanism (`312c6b8b` retires the legacy covers route);
+- the stable one-to-one `InstaEdit project_id ↔ velox_project_id` bridge is
+  complete (`bde2272c`).
+
+Known non-blocking follow-up: `GET /api/v1/workspaces/{id}/channels` returns
+404 due to chi route shadowing between the team module and the auth module.
+It does not affect the Definition of Done because the Channels page uses
+`/api/v1/accounts` and `/api/v1/workspaces` (verified in
+`web/src/features/channels/api/channelsApi.ts`).

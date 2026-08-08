@@ -120,6 +120,29 @@ Riscansione completa dei tre repo (InstaeditLogin, VeloxFrontend, VeloxEditiingg
 
 Restano intenzionali: path runtime `/dark_editor_v2` e `basePath` Next.js (contratto tecnico attivo), variabili `DARK_EDITOR_*`, chiavi localStorage tecniche, test/negative-pin, CHANGELOG e documenti storici che citano la migrazione o l’audit.
 
+## Aggiornamento 2026-08-08 — stato Definition of Done (disaccoppiamento)
+
+Il test finale di accettazione della Definition of Done è stato eseguito con
+**Velox completamente spento**: login, Groups, Channels, video, Drive e
+Posting restano funzionanti (stessi codici con Velox ON e OFF) e **solo**
+"Apri InstaEditor" risulta non disponibile (502 upstream editor call failed).
+
+Durante il test è stato trovato e corretto un bug di wiring:
+`LaunchTokenIssuer` non veniva propagato nel wrapper `modules_editor.go`, per
+cui il launch handler non veniva mai montato e `POST /editor/launch` cadeva
+nel catch-all proxy (404 falso anche con Velox attivo). Fix + test di
+regressione, commit `3f3d8fa6`.
+
+Nota preesistente non bloccante (non impatta il DoD):
+`GET /api/v1/workspaces/{id}/channels` → 404 per shadowing chi tra il modulo
+team e il modulo auth; la pagina Canali usa `/api/v1/accounts` e
+`/api/v1/workspaces`, entrambi funzionanti.
+
+I dettagli dell'accettazione sono registrati in
+[`VELOX-FRONTEND-GROUPS-BOUNDARY.md`](./VELOX-FRONTEND-GROUPS-BOUNDARY.md)
+(sezione "Esito Test A") e in
+[`project-bridge-contract.md`](./project-bridge-contract.md) §12.
+
 ## Conclusione
 
 Il rebranding visuale e descrittivo è concluso. Le occorrenze residue sono intenzionali: compatibilità runtime, fallback backward-compatible, test di regressione o storia documentale. Nessun riferimento legacy residuo deve essere interpretato come autorizzazione a introdurre nuovo copy “Dark Editor”.

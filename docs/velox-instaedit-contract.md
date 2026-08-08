@@ -706,3 +706,13 @@ This contract is internal-only. The reverse proxy (Caddy / Cloudflare
 - **2026-07-29** — Initial version. Bound the wire-level contract
   for the Velox → InstaEdit publish handoff; locked state machine,
   safety invariant, idempotency format, security baseline.
+- **2026-08-08** — Decoupling status update (Definition of Done). This
+  document remains the publishing/delivery contract only; the editor-launch
+  path is governed by [`project-bridge-contract.md`](./project-bridge-contract.md)
+  and the single durable bridge `InstaEdit project_id ↔ velox_project_id`.
+  Editor configuration is explicit via `INSTAEDITOR_URL` (fail-fast, no
+  ambiguous fallback) and the launch handler is reliably mounted (wiring fix
+  `3f3d8fa6`). The final acceptance test with Velox **offline** passed: the
+  publish/upload/thumbnail flows in this contract keep working (POSTS 201,
+  BRIDGE 201, GATE 200 with Velox ON and OFF) and only the editor-open
+  operation fails with Velox OFF.

@@ -91,3 +91,42 @@ Guardie di regressione (fail-closed):
 - **Test C — rinomina gruppo in InstaEdit:** nessun aggiornamento in Velox.
 - **Test D — flusso Modifica:** progetto → editor → salvataggio timeline in
   Velox; su InstaEdit resta il mapping via `external_project_id`.
+
+## Esito Test A — accettazione finale Definition of Done (2026-08-08)
+
+Eseguito il test finale di accettazione: **Velox completamente spento**
+(4 servizi systemd `velox-*`/`instaedit-velox-proxy` dead, porte 3001/18084
+chiuse, `VELOX_CONTROL_URL` irraggiungibile) con lo stack InstaEdit attivo.
+
+| Operazione | Velox ON | Velox OFF | Esito |
+|---|---|---|---|
+| LOGIN | 200 | 200 | ✅ |
+| ME | 200 | 200 | ✅ |
+| GROUPS | 200 | 200 | ✅ |
+| ACCOUNTS (pagina Canali) | 200 | 200 | ✅ |
+| POSTS (posting) | 201 | 201 | ✅ |
+| PROJECT_CREATE (Drive/copertine) | 201 | 201 | ✅ |
+| BRIDGE_CREATE | 201 | 201 | ✅ |
+| GATE_BY_PROJECT (sessione editor) | 200 | 200 | ✅ |
+| EDITOR_LAUNCH (emissione token) | 201 | 201 | ✅ (InstaEdit-only) |
+| **EDITOR_PROXY ("Apri InstaEditor")** | 404 da Velox (progetto inesistente) | **502 upstream editor call failed** | ✅ **solo questa fallisce** |
+
+**La prova finale del DoD è superata:** con Velox offline, solo l'apertura
+dell'editor risulta non disponibile; login, Groups, Channels, video, Drive e
+Posting continuano a funzionare.
+
+Bug individuato e corretto durante il test:
+
+- **`LaunchTokenIssuer` non propagato** nel wrapper `modules_editor.go`: il
+  launch handler non veniva mai montato → `POST /editor/launch` cadeva nel
+  catch-all proxy con 404 falso, rendendo "Apri InstaEditor" inutilizzabile
+  anche con Velox attivo. Fix + test di regressione
+  (`TestEditorBFFModuleMountsLaunchHandlerWhenIssuerConfigured`), commit
+  `3f3d8fa6`.
+
+Nota preesistente non bloccante: `GET /api/v1/workspaces/{id}/channels` → 404
+puro per shadowing chi tra `registerTeamRoutes` (`/api/v1/workspaces/{id}`) e
+il modulo auth (`/api/v1/workspaces`). Non impatta il DoD: la pagina Canali
+usa `/api/v1/accounts` e `/api/v1/workspaces` (verificato in
+`web/src/features/channels/api/channelsApi.ts`). Da risolvere separatamente se
+si vuole esporre quella route API.
