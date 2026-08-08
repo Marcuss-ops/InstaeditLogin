@@ -45,6 +45,22 @@ export function GroupCovers({ groupId }: { groupId: number }) {
           )}
         </h3>
         <div className="flex items-center gap-2">
+          {/* Always-visible create CTA (Photoshop-style fixed button in the
+              covers zone): opens the same GroupCoverCreateDialog used by
+              the empty state, so a cover can be created even when the grid
+              is full. */}
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            aria-label="Crea copertina"
+            data-testid="group-covers-create-header"
+            className="group relative inline-flex h-9 w-9 items-center justify-center rounded-full border border-violet-500/30 bg-violet-500/[0.10] text-violet-200 shadow-lg transition-all duration-200 hover:scale-105 hover:border-violet-400/50 hover:bg-violet-500/[0.22] hover:text-violet-100"
+          >
+            <Plus size={17} aria-hidden="true" />
+            <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/[0.08] bg-[#0c0c12] px-2.5 py-1 text-[11px] font-semibold text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+              Crea copertina
+            </span>
+          </button>
           <div className="flex items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] p-1">
             {FILTERS.map((f) => (
               <button

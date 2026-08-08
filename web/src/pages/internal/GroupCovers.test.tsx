@@ -106,6 +106,32 @@ describe("GroupCovers", () => {
     expect(screen.getByText(/archiviata/i)).toBeInTheDocument();
   });
 
+  it("shows an always-visible Crea copertina button in the header that opens the create dialog even with a full grid", async () => {
+    authedFetchMock.mockResolvedValue(
+      jsonResponse({
+        covers: [
+          coverFixture(),
+          coverFixture({
+            project_id: "ytes_cover_2",
+            project_status: "archived",
+            channel_name: "Wwe Insider De",
+            youtube_video_id: "sY6Ce0bTuwo",
+          }),
+        ],
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(2);
+    });
+    // The + button lives in the covers header zone (not only in the empty
+    // state) so a cover can be created while the grid is full.
+    fireEvent.click(screen.getByTestId("group-covers-create-header"));
+    expect(screen.getByTestId("group-cover-create-dialog")).toBeInTheDocument();
+  });
+
   it("renders a short empty state with a Crea copertina button that opens the create dialog", async () => {
     authedFetchMock.mockResolvedValue(jsonResponse({ covers: [] }));
 
