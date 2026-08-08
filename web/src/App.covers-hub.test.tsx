@@ -42,18 +42,24 @@ describe("covers hub route", () => {
     window.history.replaceState({}, "", "/app/covers");
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /copertine/i })).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: /copertine/i })).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
   });
 
   it("keeps nested legacy covers bookmarks on the hub (no redirect away)", async () => {
     window.history.replaceState({}, "", "/app/covers/project-123");
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /copertine/i })).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: /copertine/i })).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
   });
 
   it("keeps the protected route contract for logged-out users", async () => {

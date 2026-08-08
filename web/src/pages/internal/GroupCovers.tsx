@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import { Image as ImageIcon, Loader2, Plus, RefreshCw } from "lucide-react";
 import { EmptyState } from "../../components/feedback/EmptyState";
 import { GroupCoverCard } from "./GroupCoverCard";
-import { GroupCoverCreateDialog } from "./GroupCoverCreateDialog";
 import { useGroupCovers } from "./useGroupCovers";
+import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { cn } from "../../lib/utils";
 
 type CoverFilter = "all" | "draft" | "ready" | "archived";
@@ -24,8 +24,17 @@ const FILTERS: Array<{ key: CoverFilter; label: string }> = [
  */
 export function GroupCovers({ groupId }: { groupId: number }) {
   const { state, refreshCovers, openCoverEditor, openingCoverId } = useGroupCovers(groupId);
+  // Video manifest for the one-click create: quickCreateCover opens
+  // InstaEditor directly on the group's most recent private video and
+  // saves the new cover under a random name (no picker dialog).
+  const { quickCreateCover, openingVideoID } = useGroupYouTubeVideos(groupId);
   const [filter, setFilter] = useState<CoverFilter>("all");
-  const [creating, setCreating] = useState(false);
+
+  const handleCreateCover = () => {
+    void quickCreateCover().then((opened) => {
+      if (opened) refreshCovers();
+    });
+  };
 
   const visibleCovers = useMemo(() => {
     if (state.kind !== "ready") return [];
@@ -46,17 +55,22 @@ export function GroupCovers({ groupId }: { groupId: number }) {
         </h3>
         <div className="flex items-center gap-2">
           {/* Always-visible create CTA (Photoshop-style fixed button in the
-              covers zone): opens the same GroupCoverCreateDialog used by
-              the empty state, so a cover can be created even when the grid
-              is full. */}
+              covers zone): quickCreateCover opens InstaEditor directly on
+              the group's most recent private video with a random project
+              name — works even when the grid is full. */}
           <button
             type="button"
-            onClick={() => setCreating(true)}
+            onClick={handleCreateCover}
+            disabled={openingVideoID != null}
             aria-label="Crea copertina"
             data-testid="group-covers-create-header"
-            className="group relative inline-flex h-9 w-9 items-center justify-center rounded-full border border-violet-500/30 bg-violet-500/[0.10] text-violet-200 shadow-lg transition-all duration-200 hover:scale-105 hover:border-violet-400/50 hover:bg-violet-500/[0.22] hover:text-violet-100"
+            className="group relative inline-flex h-9 w-9 items-center justify-center rounded-full border border-violet-500/30 bg-violet-500/[0.10] text-violet-200 shadow-lg transition-all duration-200 hover:scale-105 hover:border-violet-400/50 hover:bg-violet-500/[0.22] hover:text-violet-100 disabled:cursor-wait disabled:opacity-60"
           >
-            <Plus size={17} aria-hidden="true" />
+            {openingVideoID != null ? (
+              <Loader2 size={17} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <Plus size={17} aria-hidden="true" />
+            )}
             <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/[0.08] bg-[#0c0c12] px-2.5 py-1 text-[11px] font-semibold text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
               Crea copertina
             </span>
@@ -116,12 +130,17 @@ export function GroupCovers({ groupId }: { groupId: number }) {
               <div className="group relative mx-auto mt-1 inline-block">
                 <button
                   type="button"
-                  onClick={() => setCreating(true)}
+                  onClick={handleCreateCover}
+                  disabled={openingVideoID != null}
                   aria-label="Crea copertina"
                   data-testid="group-covers-create"
-                  className="flex h-14 w-14 items-center justify-center rounded-full border border-violet-500/30 bg-violet-500/[0.10] text-violet-200 shadow-lg transition-all duration-200 hover:scale-105 hover:border-violet-400/50 hover:bg-violet-500/[0.22] hover:text-violet-100"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-violet-500/30 bg-violet-500/[0.10] text-violet-200 shadow-lg transition-all duration-200 hover:scale-105 hover:border-violet-400/50 hover:bg-violet-500/[0.22] hover:text-violet-100 disabled:cursor-wait disabled:opacity-60"
                 >
-                  <Plus size={24} aria-hidden="true" />
+                  {openingVideoID != null ? (
+                    <Loader2 size={24} className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Plus size={24} aria-hidden="true" />
+                  )}
                 </button>
                 <span className="pointer-events-none absolute left-1/2 top-full mt-2.5 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/[0.08] bg-[#0c0c12] px-2.5 py-1 text-[11px] font-semibold text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
                   Crea copertina
@@ -146,16 +165,6 @@ export function GroupCovers({ groupId }: { groupId: number }) {
         </div>
       )}
 
-      {creating && (
-        <GroupCoverCreateDialog
-          groupId={groupId}
-          onClose={() => setCreating(false)}
-          onCreated={() => {
-            setCreating(false);
-            refreshCovers();
-          }}
-        />
-      )}
     </section>
   );
 }

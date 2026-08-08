@@ -1,9 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
-const { authedFetchMock } = vi.hoisted(() => ({
+const {
+  authedFetchMock,
+  openInstaEditorWithLaunchMock,
+  createYouTubeEditorSessionMock,
+  navigateMock,
+  toastMock,
+} = vi.hoisted(() => ({
   authedFetchMock: vi.fn(),
+  openInstaEditorWithLaunchMock: vi.fn(),
+  createYouTubeEditorSessionMock: vi.fn(),
+  navigateMock: vi.fn(),
+  toastMock: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+  },
 }));
 
 vi.mock("../../lib/auth", () => ({
@@ -19,21 +33,28 @@ vi.mock("../../lib/auth", () => ({
   },
 }));
 
-vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
-  openInstaEditorWithLaunch: vi.fn(),
+vi.mock("../../components/toast", () => ({
+  useToast: () => toastMock,
 }));
 
-vi.mock("./GroupCoverCreateDialog", () => {
-  const React = require("react");
+vi.mock("../../lib/queryRegistry", () => ({
+  useSharedPolling: () => vi.fn(async () => undefined),
+}));
+
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>();
   return {
-    GroupCoverCreateDialog: (props: { groupId: number }) =>
-      React.createElement(
-        "div",
-        { "data-testid": "group-cover-create-dialog", "data-group-id": String(props.groupId) },
-        "Crea copertina",
-      ),
+    ...actual,
+    useNavigate: () => navigateMock,
   };
 });
+
+vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
+  openInstaEditorWithLaunch: openInstaEditorWithLaunchMock,
+  createYouTubeEditorSession: createYouTubeEditorSessionMock,
+  createEditorSessionAndOpen: vi.fn(),
+  coversHubReturnTo: (groupId: number) => `/app/covers?group=${groupId}`,
+}));
 
 import { GroupCovers } from "./GroupCovers";
 
@@ -68,8 +89,52 @@ const coverFixture = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const privateVideoFixture = (overrides: Record<string, unknown> = {}) => ({
+  youtube_video_id: "video-1",
+  title: "Video privato",
+  thumbnail_url: "https://i.ytimg.com/vi/video-1/hqdefault.jpg",
+  platform_account_id: 42,
+  channel_name: "Wrestling Insider RU",
+  actual_privacy: "private",
+  ...overrides,
+});
+
+/**
+ * Route authedFetch by URL so the covers grid and the video manifest
+ * (needed by the one-click quick-create) each get the right payload.
+ */
+function routeFetch({
+  covers = [],
+  videos = [],
+}: {
+  covers?: unknown[];
+  videos?: unknown[];
+} = {}) {
+  authedFetchMock.mockImplementation(async (url: string) => {
+    if (url.startsWith("/api/v1/groups/7/covers")) {
+      return jsonResponse({ covers });
+    }
+    if (url.startsWith("/api/v1/groups/7/youtube/videos")) {
+      return jsonResponse({ videos });
+    }
+    if (url === "/api/v1/groups/7") {
+      return jsonResponse({ workspace_id: 7 });
+    }
+    if (url.startsWith("/api/v1/youtube/editor-sessions/by-project/")) {
+      return jsonResponse({});
+    }
+    return jsonResponse({});
+  });
+}
+
 beforeEach(() => {
   authedFetchMock.mockReset();
+  openInstaEditorWithLaunchMock.mockReset();
+  createYouTubeEditorSessionMock.mockReset();
+  navigateMock.mockReset();
+  toastMock.success.mockReset();
+  toastMock.error.mockReset();
+  toastMock.info.mockReset();
 });
 
 afterEach(() => {
@@ -78,19 +143,17 @@ afterEach(() => {
 
 describe("GroupCovers", () => {
   it("fetches the group covers endpoint on mount and renders the covers grid", async () => {
-    authedFetchMock.mockResolvedValue(
-      jsonResponse({
-        covers: [
-          coverFixture(),
-          coverFixture({
-            project_id: "ytes_cover_2",
-            project_status: "archived",
-            channel_name: "Wwe Insider De",
-            youtube_video_id: "sY6Ce0bTuwo",
-          }),
-        ],
-      }),
-    );
+    routeFetch({
+      covers: [
+        coverFixture(),
+        coverFixture({
+          project_id: "ytes_cover_2",
+          project_status: "archived",
+          channel_name: "Wwe Insider De",
+          youtube_video_id: "sY6Ce0bTuwo",
+        }),
+      ],
+    });
 
     renderPanel();
     expect(authedFetchMock).toHaveBeenCalledWith(
@@ -106,34 +169,78 @@ describe("GroupCovers", () => {
     expect(screen.getByText(/archiviata/i)).toBeInTheDocument();
   });
 
-  it("shows an always-visible Crea copertina button in the header that opens the create dialog even with a full grid", async () => {
-    authedFetchMock.mockResolvedValue(
-      jsonResponse({
-        covers: [
-          coverFixture(),
-          coverFixture({
-            project_id: "ytes_cover_2",
-            project_status: "archived",
-            channel_name: "Wwe Insider De",
-            youtube_video_id: "sY6Ce0bTuwo",
-          }),
-        ],
-      }),
-    );
+  it("shows an always-visible Crea copertina button in the header even with a full grid", async () => {
+    routeFetch({
+      covers: [
+        coverFixture(),
+        coverFixture({
+          project_id: "ytes_cover_2",
+          project_status: "archived",
+          channel_name: "Wwe Insider De",
+          youtube_video_id: "sY6Ce0bTuwo",
+        }),
+      ],
+    });
 
     renderPanel();
 
     await waitFor(() => {
       expect(screen.getAllByTestId("group-cover-card")).toHaveLength(2);
     });
-    // The + button lives in the covers header zone (not only in the empty
-    // state) so a cover can be created while the grid is full.
-    fireEvent.click(screen.getByTestId("group-covers-create-header"));
-    expect(screen.getByTestId("group-cover-create-dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("group-covers-create-header")).toBeInTheDocument();
   });
 
-  it("renders a short empty state with a Crea copertina button that opens the create dialog", async () => {
-    authedFetchMock.mockResolvedValue(jsonResponse({ covers: [] }));
+  it("opens InstaEditor directly from the header + on the most recent private video with a random name", async () => {
+    routeFetch({
+      videos: [
+        privateVideoFixture({
+          youtube_video_id: "video-2",
+          platform_account_id: 43,
+          desired_privacy: "private",
+        }),
+        privateVideoFixture(),
+      ],
+    });
+    createYouTubeEditorSessionMock.mockResolvedValueOnce({
+      session_id: "session-1",
+      velox_project_id: "ve_created",
+      editor_url: "https://editor.instaedit.test/editor/ve_created",
+    });
+
+    renderPanel();
+
+    // The header + is always visible, so wait for the video manifest load
+    // to land in hook state before clicking — the one-click create must
+    // see a ready group (not the initial loading state).
+    await waitFor(() => {
+      expect(authedFetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/groups/7/youtube/videos"),
+        expect.anything(),
+      );
+    });
+    await act(async () => {});
+
+    fireEvent.click(screen.getByTestId("group-covers-create-header"));
+
+    await waitFor(() => {
+      expect(createYouTubeEditorSessionMock).toHaveBeenCalledOnce();
+    });
+    // Draft PUT stamps the random name before the editor opens.
+    const draftCall = authedFetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/draft"),
+    );
+    expect(draftCall).toBeDefined();
+    const draftBody = JSON.parse(String((draftCall as unknown[])[1] && (draftCall[1] as RequestInit).body));
+    expect(draftBody.title).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d+$/);
+    expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
+      "https://editor.instaedit.test/editor/ve_created",
+      "ve_created",
+      { returnTo: "/app/covers?group=7" },
+    );
+  });
+
+  it("renders a short empty state with a Crea copertina button", async () => {
+    routeFetch();
 
     renderPanel();
 
@@ -144,21 +251,42 @@ describe("GroupCovers", () => {
     expect(
       screen.queryByText(/Quando crei una copertina per un video di questo gruppo/i),
     ).not.toBeInTheDocument();
+    expect(screen.getByTestId("group-covers-create")).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByTestId("group-covers-create"));
-    expect(screen.getByTestId("group-cover-create-dialog")).toBeInTheDocument();
+  it("surfaces a toast when the group has no private videos to draw a cover on", async () => {
+    routeFetch({ videos: [] });
+
+    renderPanel();
+
+    // Same deterministic wait: the empty-videos response must be applied
+    // to hook state before the click so quickCreateCover reports the
+    // missing-videos error instead of the loading toast.
+    await waitFor(() => {
+      expect(authedFetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/groups/7/youtube/videos"),
+        expect.anything(),
+      );
+    });
+    await act(async () => {});
+    fireEvent.click(screen.getByTestId("group-covers-create-header"));
+
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalledWith(
+        expect.stringMatching(/nessun video privato nel gruppo/i),
+      );
+    });
+    expect(openInstaEditorWithLaunchMock).not.toHaveBeenCalled();
   });
 
   it("filters by project status via the filter chips", async () => {
-    authedFetchMock.mockResolvedValue(
-      jsonResponse({
-        covers: [
-          coverFixture({ project_id: "ytes_draft", project_status: "draft", draft_title: "Draft cover" }),
-          coverFixture({ project_id: "ytes_ready", project_status: "ready", draft_title: "Ready cover" }),
-          coverFixture({ project_id: "ytes_arch", project_status: "archived", draft_title: "Archived cover" }),
-        ],
-      }),
-    );
+    routeFetch({
+      covers: [
+        coverFixture({ project_id: "ytes_draft", project_status: "draft", draft_title: "Draft cover" }),
+        coverFixture({ project_id: "ytes_ready", project_status: "ready", draft_title: "Ready cover" }),
+        coverFixture({ project_id: "ytes_arch", project_status: "archived", draft_title: "Archived cover" }),
+      ],
+    });
 
     renderPanel();
 
@@ -177,11 +305,9 @@ describe("GroupCovers", () => {
   });
 
   it("shows the draft title when present", async () => {
-    authedFetchMock.mockResolvedValue(
-      jsonResponse({
-        covers: [coverFixture({ draft_title: "Il mio nuovo design" })],
-      }),
-    );
+    routeFetch({
+      covers: [coverFixture({ draft_title: "Il mio nuovo design" })],
+    });
 
     renderPanel();
 

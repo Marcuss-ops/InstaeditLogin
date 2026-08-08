@@ -1,14 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
-const { authedFetchMock, openInstaEditorWithLaunchMock, createEditorSessionAndOpenMock, navigateMock, toastMock } = vi.hoisted(() => ({
+const {
+  authedFetchMock,
+  openInstaEditorWithLaunchMock,
+  createEditorSessionAndOpenMock,
+  createYouTubeEditorSessionMock,
+  navigateMock,
+  toastMock,
+} = vi.hoisted(() => ({
   authedFetchMock: vi.fn(),
   openInstaEditorWithLaunchMock: vi.fn(),
   createEditorSessionAndOpenMock: vi.fn(),
+  createYouTubeEditorSessionMock: vi.fn(),
   navigateMock: vi.fn(),
   toastMock: {
     success: vi.fn(),
     error: vi.fn(),
+    info: vi.fn(),
   },
 }));
 
@@ -34,7 +43,7 @@ vi.mock("../../lib/queryRegistry", () => ({
 }));
 
 vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
-  createYouTubeEditorSession: vi.fn(),
+  createYouTubeEditorSession: createYouTubeEditorSessionMock,
   createEditorSessionAndOpen: createEditorSessionAndOpenMock,
   openInstaEditorWithLaunch: openInstaEditorWithLaunchMock,
   coversHubReturnTo: (groupId: number) => `/app/covers?group=${groupId}`,
@@ -44,7 +53,7 @@ vi.mock("react-router-dom", () => ({
   useNavigate: () => navigateMock,
 }));
 
-import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
+import { generateCoverName, useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import type { GroupYouTubeVideo } from "./groupYouTubeVideosTypes";
 
 function jsonResponse(data: unknown) {
@@ -58,13 +67,28 @@ const video: GroupYouTubeVideo = {
   platform_account_id: 42,
 };
 
+// The hook's loadVideos filter keeps only videos whose privacy is
+// "private" (and not phantom), so quick-create fixtures must carry it.
+const privateVideo: GroupYouTubeVideo = {
+  ...video,
+  actual_privacy: "private",
+};
+
+const createdSession = {
+  session_id: "session-1",
+  velox_project_id: "ve_created",
+  editor_url: "https://editor.example.test/editor/ve_created",
+};
+
 beforeEach(() => {
   authedFetchMock.mockReset();
   openInstaEditorWithLaunchMock.mockReset();
   createEditorSessionAndOpenMock.mockReset();
+  createYouTubeEditorSessionMock.mockReset();
   navigateMock.mockReset();
   toastMock.success.mockReset();
   toastMock.error.mockReset();
+  toastMock.info.mockReset();
   authedFetchMock.mockResolvedValue(jsonResponse({ videos: [] }));
 });
 
@@ -100,11 +124,7 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
     authedFetchMock
       .mockResolvedValueOnce(jsonResponse({ videos: [] }))
       .mockResolvedValueOnce(jsonResponse({ workspace_id: 7 }));
-    createEditorSessionAndOpenMock.mockResolvedValueOnce({
-      session_id: "session-1",
-      velox_project_id: "ve_created",
-      editor_url: "https://editor.example.test/editor/ve_created",
-    });
+    createEditorSessionAndOpenMock.mockResolvedValueOnce(createdSession);
 
     const { result } = renderHook(() => useGroupYouTubeVideos(7));
 
@@ -173,14 +193,83 @@ describe("useGroupYouTubeVideos — Groups → Modifica", () => {
     });
     expect(createEditorSessionAndOpenMock).toHaveBeenCalledOnce();
 
-    resolveCreate?.({
-      session_id: "session-1",
-      velox_project_id: "ve_created",
-      editor_url: "https://editor.example.test/editor/ve_created",
-    });
+    resolveCreate?.(createdSession);
     await act(async () => {
       await first;
       await second;
     });
+  });
+});
+
+describe("useGroupYouTubeVideos — quick create (Crea copertina)", () => {
+  it("opens InstaEditor directly on the most recent private video and stamps a random draft title before opening", async () => {
+    authedFetchMock
+      .mockResolvedValueOnce(jsonResponse({ videos: [privateVideo] }))
+      .mockResolvedValueOnce(jsonResponse({ workspace_id: 7 }))
+      .mockResolvedValueOnce(jsonResponse({}));
+    createYouTubeEditorSessionMock.mockResolvedValueOnce(createdSession);
+
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+
+    await act(async () => {
+      // Flush the initial videos load so state.kind becomes "ready".
+      await Promise.resolve();
+    });
+
+    let opened = false;
+    await act(async () => {
+      opened = await result.current.quickCreateCover();
+    });
+
+    expect(opened).toBe(true);
+    // No picker dialog: the session is created for the first private video.
+    expect(createYouTubeEditorSessionMock).toHaveBeenCalledWith({
+      workspace_id: 7,
+      platform_account_id: 42,
+      youtube_video_id: "video-1",
+      source_thumbnail_url: "https://i.ytimg.com/vi/video-1/hqdefault.jpg",
+    });
+    // The random name is written to the draft BEFORE the editor tab opens.
+    const draftCall = authedFetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/draft"),
+    );
+    expect(draftCall).toBeDefined();
+    const draftBody = JSON.parse(String((draftCall as unknown[])[1] && (draftCall[1] as RequestInit).body));
+    expect(draftBody.title).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d+$/);
+    expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
+      createdSession.editor_url,
+      createdSession.velox_project_id,
+      { returnTo: "/app/covers?group=7" },
+    );
+  });
+
+  it("does not open the editor and surfaces a toast when the group has no private videos", async () => {
+    authedFetchMock.mockResolvedValueOnce(jsonResponse({ videos: [] }));
+
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    let opened = true;
+    await act(async () => {
+      opened = await result.current.quickCreateCover();
+    });
+
+    expect(opened).toBe(false);
+    expect(toastMock.error).toHaveBeenCalledWith(
+      expect.stringMatching(/nessun video privato nel gruppo/i),
+    );
+    expect(createYouTubeEditorSessionMock).not.toHaveBeenCalled();
+    expect(openInstaEditorWithLaunchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("generateCoverName", () => {
+  it("returns an Adjective-Noun-Number project name", () => {
+    for (let i = 0; i < 50; i += 1) {
+      expect(generateCoverName()).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d{1,2}$/);
+    }
   });
 });

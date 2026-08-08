@@ -9,6 +9,19 @@ import {
   coversHubReturnTo,
   openInstaEditorWithLaunch,
 } from "../../features/youtube/api/editorSessionsApi";
+
+// Same naming style as the InstaEditor's own generateRandomName, so a
+// freshly created cover reads as a proper project name (not the video's
+// E2E title) in both the editor and the Copertine hub card.
+const COVER_NAME_ADJECTIVES = ["Vibrant", "Neon", "Cosmic", "Electric", "Stealth", "Hyper", "Sonic", "Golden", "Pixel", "Astro"];
+const COVER_NAME_NOUNS = ["Nebula", "Blade", "Vortex", "Spark", "Zenith", "Echo", "Pulse", "Wave", "Grid", "Forge"];
+
+export function generateCoverName(): string {
+  const adjective = COVER_NAME_ADJECTIVES[Math.floor(Math.random() * COVER_NAME_ADJECTIVES.length)];
+  const noun = COVER_NAME_NOUNS[Math.floor(Math.random() * COVER_NAME_NOUNS.length)];
+  const number = Math.floor(Math.random() * 99) + 1;
+  return `${adjective}-${noun}-${number}`;
+}
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import {
   DEFAULT_PAGE_SIZE,
@@ -29,6 +42,20 @@ async function resolveGroupWorkspace(groupId: number): Promise<number> {
   return workspaceID;
 }
 
+// Shared editor-session payload for a group video: the binding the
+// idempotent create-or-resolve endpoint validates (workspace/account/video)
+// plus the thumbnail we hand the editor as its starting canvas.
+function buildSessionPayload(video: GroupYouTubeVideo, workspaceID: number) {
+  return {
+    workspace_id: workspaceID,
+    platform_account_id: video.platform_account_id,
+    youtube_video_id: video.youtube_video_id,
+    ...(safeAssetUrl(video.thumbnail_url)
+      ? { source_thumbnail_url: safeAssetUrl(video.thumbnail_url) }
+      : {}),
+  };
+}
+
 export function useGroupYouTubeVideos(groupId: number, enabled = true) {
   const navigate = useNavigate();
   const abortRef = useRef<AbortController | null>(null);
@@ -45,9 +72,9 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
 
   // Resolves to true only when the editor was actually opened (or the
   // create-session request succeeded); callers such as the covers-hub
-  // create dialog use it to decide whether to refresh the grid — the
+  // quick-create use it to decide whether to refresh the grid — the
   // hook never rejects, it surfaces failures via the toast.
-  const openThumbnailEditor = useCallback(async (video: GroupYouTubeVideo): Promise<boolean> => {
+  const openThumbnailEditor = useCallback(async (video: GroupYouTubeVideo, opts?: { draftTitle?: string }): Promise<boolean> => {
     if (openingVideoRef.current) return false;
     openingVideoRef.current = true;
     setOpeningVideoID(video.youtube_video_id);
@@ -71,15 +98,35 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
       // First open: resolve the group-owned workspace, then use the
       // idempotent editor-session endpoint. The server validates the
       // workspace/account/video binding and returns the stable
-      // velox_project_id + project URL, which this helper mints a
-      // launch token for and opens in a new tab (no SPA navigation).
+      // velox_project_id + project URL.
       const workspaceID = await resolveGroupWorkspace(groupId);
-      await createEditorSessionAndOpen({
-        workspace_id: workspaceID,
-        platform_account_id: video.platform_account_id,
-        youtube_video_id: video.youtube_video_id,
-        ...(safeAssetUrl(video.thumbnail_url) ? { source_thumbnail_url: safeAssetUrl(video.thumbnail_url) } : {}),
-      }, {}, {
+      // Quick-create path: the caller asks for a random project name, so
+      // stamp it as the session draft BEFORE opening the editor — the
+      // covers card renders draft_title and the editor pre-fills it. The
+      // session is created standalone (not via createEditorSessionAndOpen)
+      // so the draft write happens before the tab opens.
+      if (opts?.draftTitle) {
+        const session = await createYouTubeEditorSession(buildSessionPayload(video, workspaceID));
+        await authedFetch(
+          `/api/v1/youtube/editor-sessions/by-project/${encodeURIComponent(session.velox_project_id)}/draft`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              title: opts.draftTitle,
+              description: "",
+              tags: [],
+              desired_privacy: video.desired_privacy || "private",
+              publish_at: video.publish_at ?? null,
+            }),
+          },
+        );
+        await openInstaEditorWithLaunch(session.editor_url, session.velox_project_id, {
+          returnTo: coversHubReturnTo(groupId),
+        });
+        toast.success("InstaEditor aperto in una nuova scheda: il video resta privato finché non scegli di pubblicarlo.");
+        return true;
+      }
+      await createEditorSessionAndOpen(buildSessionPayload(video, workspaceID), {}, {
         returnTo: coversHubReturnTo(groupId),
       });
       return true;
@@ -96,6 +143,30 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
     }
   }, [groupId, navigate, toast]);
 
+  // One-click "Crea copertina" for the hub: open InstaEditor straight
+  // away for the group's most recent private video and save the new
+  // cover under a random name. Resolves to true when the editor opened;
+  // surfaces failures (no private videos, workspace issues) via toast.
+  const quickCreateCover = useCallback(async (): Promise<boolean> => {
+    if (state.kind === "loading") {
+      toast.info("Caricamento video del gruppo…");
+      return false;
+    }
+    if (state.kind === "error") {
+      toast.error(state.message);
+      return false;
+    }
+    const firstVideo = state.videos[0];
+    // The manifest is date-descending (most recent private video first)
+    // after the privacy/phantom filter, so the one-click create draws its
+    // canvas from the group's newest private video.
+    if (!firstVideo) {
+      toast.error("Nessun video privato nel gruppo: carica un video su YouTube per crearci la copertina.");
+      return false;
+    }
+    return openThumbnailEditor(firstVideo, { draftTitle: generateCoverName() });
+  }, [openThumbnailEditor, state, toast]);
+
   const openVideoPreview = useCallback((video: GroupYouTubeVideo) => {
     // Preview is deliberately local and deterministic: no NVIDIA metadata
     // request is needed just to inspect the thumbnail.
@@ -111,12 +182,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
       let projectId = preview.video.velox_project_id;
       if (!projectId) {
         const workspaceID = await resolveGroupWorkspace(groupId);
-        const session = await createYouTubeEditorSession({
-          workspace_id: workspaceID,
-          platform_account_id: preview.video.platform_account_id,
-          youtube_video_id: preview.video.youtube_video_id,
-          ...(safeAssetUrl(preview.video.thumbnail_url) ? { source_thumbnail_url: safeAssetUrl(preview.video.thumbnail_url) } : {}),
-        });
+        const session = await createYouTubeEditorSession(buildSessionPayload(preview.video, workspaceID));
         projectId = session.velox_project_id;
       }
       await authedFetch(`/api/v1/youtube/editor-sessions/by-project/${encodeURIComponent(projectId)}/draft`, {
@@ -276,6 +342,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
     setDraftDescription,
     savingMetadata,
     openThumbnailEditor,
+    quickCreateCover,
     openVideoPreview,
     saveVideoMetadata,
     refreshVideos,
