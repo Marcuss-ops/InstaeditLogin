@@ -110,6 +110,15 @@ type YouTubeVideoEditStore interface {
 	// tuple. See repository.YouTubeVideoEditRepository.ListByWorkspaceAccountIDs
 	// for the SQL contract + index hint.
 	ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
+	// ListCoversByGroupAccounts (covers hub) returns every cover
+	// project linked to the supplied group accounts — thumbnail
+	// projects joined through velox_project_bridges to their
+	// youtube_video_edits session, ordered by project update time
+	// DESC. Backs GET /api/v1/groups/{group_id}/covers so the SPA
+	// renders the per-group covers grid (current + archived history)
+	// in one SQL round-trip. See
+	// repository.YouTubeVideoEditRepository.ListCoversByGroupAccounts.
+	ListCoversByGroupAccounts(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.GroupCover, error)
 	// FindOrCreateEditableSession (P0#3 click-idempotency) returns the
 	// open (non-terminal) editor session for the given (workspace,
 	// account, video) triple, or inserts a fresh one.

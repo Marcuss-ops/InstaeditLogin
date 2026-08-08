@@ -48,6 +48,13 @@ type mockYouTubeVideoEditStore struct {
 	// default behaviour returns (nil, nil) so production callers
 	// that don't override see "no sessions yet".
 	listByAccountsFn func(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
+	// listCoversFn is the GET /api/v1/groups/{id}/covers callback
+	// that returns the cover projects linked to the supplied group
+	// accounts (thumbnail projects joined through their editor
+	// session). Tests supply a non-nil closure to assert on the
+	// covers-hub join; default returns (nil, nil) so callers that
+	// don't override see "no covers yet".
+	listCoversFn func(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.GroupCover, error)
 	// findOrCreateFn (P0#3 click-idempotency) is the production-click
 	// idempotency callback. The router's CreateEditorSession helper
 	// routes through it after YouTube validation to ensure the same
@@ -172,6 +179,19 @@ func (m *mockYouTubeVideoEditStore) ListByWorkspace(ctx context.Context, filter 
 func (m *mockYouTubeVideoEditStore) ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error) {
 	if m.listByAccountsFn != nil {
 		return m.listByAccountsFn(ctx, workspaceID, accountIDs)
+	}
+	if workspaceID <= 0 || len(accountIDs) == 0 {
+		return nil, nil
+	}
+	return nil, nil
+}
+
+// ListCoversByGroupAccounts (covers hub) routes to listCoversFn when
+// supplied; default returns (nil, nil) — "no covers in this group
+// yet" — mirroring the production empty-input collapse.
+func (m *mockYouTubeVideoEditStore) ListCoversByGroupAccounts(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.GroupCover, error) {
+	if m.listCoversFn != nil {
+		return m.listCoversFn(ctx, workspaceID, accountIDs)
 	}
 	if workspaceID <= 0 || len(accountIDs) == 0 {
 		return nil, nil

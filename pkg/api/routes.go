@@ -367,6 +367,14 @@ func (r *Router) Setup() http.Handler {
 	var listGroupYouTubeVideosHandler http.Handler = http.HandlerFunc(r.handleListGroupYouTubeVideos)
 	r.mux.Method(http.MethodGet, "/api/v1/groups/{group_id}/youtube/videos", r.protected(listGroupYouTubeVideosHandler.ServeHTTP))
 
+	// GET /api/v1/groups/{group_id}/covers — Copertine hub covers
+	// grid. Read-only, no CSRF (GET exempt). Returns the cover
+	// projects (thumbnail projects) linked to the group's accounts —
+	// current + archived history — in one SQL round-trip via
+	// ListCoversByGroupAccounts.
+	var listGroupCoversHandler http.Handler = http.HandlerFunc(r.handleListGroupCovers)
+	r.mux.Method(http.MethodGet, "/api/v1/groups/{group_id}/covers", r.protected(listGroupCoversHandler.ServeHTTP))
+
 	// Durable, idempotent batch application for private YouTube thumbnails.
 	var createYouTubeThumbnailBatchHandler http.Handler = http.HandlerFunc(r.handleCreateYouTubeThumbnailBatch)
 	if r.csrfMiddleware != nil {

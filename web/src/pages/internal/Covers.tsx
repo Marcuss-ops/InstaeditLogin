@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Image as ImageIcon, RefreshCw } from "lucide-react";
 import { useGroupsData } from "./useGroupsData";
-import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
+import { GroupCovers } from "./GroupCovers";
 import { EmptyState } from "../../components/feedback/EmptyState";
 import { groupAccent } from "./groupAccent";
 import { cn } from "../../lib/utils";
@@ -10,9 +10,8 @@ import type { TreeNode } from "./groupsTypes";
 /**
  * Copertine hub — the in-app covers workspace.
  *
- * Replaces the retired standalone Covers library (CoverEditor) and the
- * separate editor-dashboard detour: pick a group, see its recent private
- * videos with cover status, preview a video, and open the cover in
+ * Pick a group, see every cover project created in it (current +
+ * archived history, with rendered previews), and open a cover in
  * InstaEditor in a new tab — the SPA never navigates away.
  */
 export function CoversPage() {
@@ -30,8 +29,8 @@ export function CoversPage() {
               Copertine
             </h1>
             <p className="mt-1 text-[14px] text-[#9aa0aa] sm:text-[15px]">
-              Seleziona un gruppo per vedere i video privati recenti: apri o modifica la
-              copertina in InstaEditor senza lasciare l'app.
+              Seleziona un gruppo per vedere le copertine create al suo interno, comprese
+              quelle vecchie e archiviate: modificale in InstaEditor senza lasciare l'app.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -87,11 +86,11 @@ export function CoversPage() {
         </div>
 
         {selectedGroup ? (
-          <GroupYouTubeVideos groupId={selectedGroup.id} />
+          <GroupCovers groupId={selectedGroup.id} />
         ) : (
           <EmptyState
             title="Seleziona un gruppo"
-            description="Scegli un gruppo dalla barra sopra per vedere i video privati e le loro copertine."
+            description="Scegli un gruppo dalla barra sopra per vedere le copertine create al suo interno."
             icon={<ImageIcon size={24} />}
             className="mx-auto max-w-sm bg-white/[0.02] py-10 border-white/[0.08]"
           />

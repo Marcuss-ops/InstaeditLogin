@@ -92,6 +92,11 @@ type YouTubeVideoEditStore interface {
 	// volume is bounded by the chain cardinality). Caller-side
 	// join happens against the (account_id, video_id) tuple.
 	ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
+	// ListCoversByGroupAccounts (covers hub) — see
+	// YouTubeVideoEditRepository.ListCoversByGroupAccounts for the
+	// join contract. Returns the cover projects for the supplied
+	// group accounts, newest-project-update first.
+	ListCoversByGroupAccounts(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.GroupCover, error)
 	// FindOrCreateEditableSession (P0#3 click-idempotency) — returns
 	// the open (non-terminal) editor session for the given
 	// (workspace, account, video) triple, or inserts a fresh one
