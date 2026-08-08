@@ -86,16 +86,20 @@ describe("useActiveLiveCount", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // /auth/me 401 → one session-refresh attempt → 401 again → cached as
+    // unauthenticated. The refresh attempt is the intended new behaviour
+    // (an expired access JWT is healed transparently); it also 401s here
+    // because no refresh cookie exists, so the badge stays hidden.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.current).toBeNull();
 
     // The shared query schedules a later poll, but fetchSession has cached
     // the failed session lookup; advancing beyond that poll must not hit
-    // /auth/me again.
+    // /auth/me (or /auth/refresh) again.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_001);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     unmount();
   });
 });

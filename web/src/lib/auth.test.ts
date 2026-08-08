@@ -69,6 +69,19 @@ describe("authedFetch error contract", () => {
     );
   });
 
+  it("heals an expired access token: 401 → session refresh → retry → resolves", async () => {
+    // First call 401s (expired access JWT), the refresh returns 204
+    // (new cookies set), and the retried request succeeds.
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ error: "unauthorized" }, 401))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse({ user_id: 1, workspace_id: 2 }, 200));
+    const resp = await authedFetch("/api/v1/thumbnail-projects");
+    expect(resp.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/api/v1/auth/refresh");
+  });
+
   it("leaves ApiError.data undefined when the error body is not JSON", async () => {
     fetchMock.mockResolvedValue(new Response("plain text failure", { status: 500 }));
     const err = await authedFetch("/api/v1/x").catch((e: unknown) => e);

@@ -1,13 +1,31 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { AccountSwitcher } from "./AccountSwitcher";
+import { maybeRefreshSession } from "../../lib/session-refresh";
+
+/**
+ * Keeps the session alive while the app is open: the access JWT in the
+ * `session` cookie expires after ~15 minutes, so a proactive refresh
+ * (throttled to once per 10 min, visible tabs only, cross-tab safe) is
+ * scheduled here — the protected layout only mounts for authenticated
+ * routes. Falls back to the reactive refresh-on-401 in the fetch
+ * wrappers when the timer was missed (idle tab, hibernation).
+ */
+const HEARTBEAT_CHECK_MS = 60 * 1000;
 
 export function InternalLayout({ children }: { children?: ReactNode }) {
   const [collapsed, setCollapsed] = useState(true);
 
   const handleToggle = useCallback(() => {
     setCollapsed((value) => !value);
+  }, []);
+
+  useEffect(() => {
+    const tick = () => void maybeRefreshSession();
+    tick();
+    const id = setInterval(tick, HEARTBEAT_CHECK_MS);
+    return () => clearInterval(id);
   }, []);
 
   return (

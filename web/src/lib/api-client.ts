@@ -17,6 +17,7 @@
 import { API_BASE_URL } from "./api";
 import { readCookie } from "./cookie";
 import { handleDemoRequest, isDemoMode } from "./demo";
+import { withSessionRefresh } from "./session-refresh";
 
 // Backend CSRF protection (internal/auth/csrf.go): every unsafe method
 // MUST carry an X-CSRF-Token header matching the `csrf_token` cookie.
@@ -52,31 +53,39 @@ export async function apiClient<T = unknown>(
     }
   }
 
-  const headers = new Headers(options.headers);
   const method = (options.method ?? "GET").toUpperCase();
-  let body: string | undefined;
+  const body =
+    options.body !== undefined ? JSON.stringify(options.body) : undefined;
 
-  if (options.body !== undefined) {
-    body = JSON.stringify(options.body);
-    if (!headers.has("Content-Type")) {
+  // Headers (including the X-CSRF-Token injection) are built INSIDE
+  // the request closure on purpose: the session-refresh wrapper retries
+  // the request after rotating the session cookies, and /auth/refresh
+  // regenerates the csrf_token cookie — the retried unsafe request
+  // must send the FRESH token, not the one captured before the 401.
+  const request = (): Promise<Response> => {
+    const headers = new Headers(options.headers);
+    if (body !== undefined && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
-  }
-
-  if (UNSAFE_METHODS.has(method) && !headers.has("X-CSRF-Token")) {
-    const csrf = readCookie("csrf_token");
-    if (csrf) headers.set("X-CSRF-Token", csrf);
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    if (UNSAFE_METHODS.has(method) && !headers.has("X-CSRF-Token")) {
+      const csrf = readCookie("csrf_token");
+      if (csrf) headers.set("X-CSRF-Token", csrf);
+    }
+    return fetch(`${API_BASE_URL}${path}`, {
       ...options,
       method,
       headers,
       body,
       credentials: "include",
     });
+  };
+
+  let response: Response;
+  try {
+    // 401 → single session refresh + one retry (expired access JWT is
+    // healed transparently; a still-401 after the retry means the
+    // session is genuinely gone and the caller routes to /login).
+    response = await withSessionRefresh(request);
   } catch {
     // DNS failure, offline, CORS pre-flight rejection, etc. The typed
     // shape (status undefined) lets callers branch on "server was

@@ -18,6 +18,7 @@ import { apiClient } from "./api-client";
 import { readCookie } from "./cookie";
 import { toastBus } from "../components/toast";
 import { demoSession, handleDemoRequest, isDemoMode } from "./demo";
+import { withSessionRefresh } from "./session-refresh";
 
 export type Session = {
   userId: number;
@@ -142,10 +143,6 @@ export async function authedFetch(
     if (demoResp) return demoResp;
   }
 
-  const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
   // Backend CSRF protection (see internal/auth/csrf.go): unsafe
   // methods require a header matching the `csrf_token` cookie.
   // Auto-inject from document.cookie so callers don't have to thread
@@ -153,13 +150,29 @@ export async function authedFetch(
   // (e.g. session expired) leaves the header absent — the backend
   // will then 403 with `missing_csrf_header`, which is the
   // expected signal to re-authenticate.
+  //
+  // The header is built INSIDE the request closure on purpose: the
+  // session-refresh wrapper retries the request after rotating the
+  // session cookies, and /auth/refresh regenerates the csrf_token
+  // cookie — the retried unsafe request must send the FRESH token.
   const method = (init.method ?? "GET").toUpperCase();
-  if (UNSAFE_METHODS.has(method) && !headers.has("X-CSRF-Token")) {
-    const csrfToken = readCookie("csrf_token");
-    if (csrfToken) {
-      headers.set("X-CSRF-Token", csrfToken);
+  const request = (): Promise<Response> => {
+    const headers = new Headers(init.headers);
+    if (init.body && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
     }
-  }
+    if (UNSAFE_METHODS.has(method) && !headers.has("X-CSRF-Token")) {
+      const csrfToken = readCookie("csrf_token");
+      if (csrfToken) {
+        headers.set("X-CSRF-Token", csrfToken);
+      }
+    }
+    return fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
+  };
 
   // Network-level rejection (DNS, CORS pre-flight, offline). The toast
   // fires BEFORE the re-throw so pages that don't have their own
@@ -169,11 +182,10 @@ export async function authedFetch(
   // in-place — both surfaces win.
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      headers,
-      credentials: "include",
-    });
+    // 401 → single session refresh + one retry. An expired access JWT
+    // (default TTL 15 min) is healed transparently; only a refresh
+    // failure keeps the 401 so the caller can route to /login.
+    response = await withSessionRefresh(request);
   } catch (err) {
     const message =
       err instanceof TypeError
