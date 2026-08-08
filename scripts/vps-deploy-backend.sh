@@ -95,8 +95,11 @@ compose_run() {
   # ${API_HOST_PORT:-8080} from the shell env too, so an operator-exported
   # value (e.g. 8082 from the 2026-08-05 incident) would otherwise drift
   # the published port away from what Caddy proxies to.
+  #
+  # Global flags (--env-file, -f) MUST precede the subcommand in Compose v2
+  # (verified on 2.40.3: after `config` they fail with "unknown flag").
   INSTAEDIT_ENV_FILE="$ENV_FILE" API_HOST_PORT="$EXPECTED_API_PORT" \
-    docker compose "$@" "${COMPOSE_ARGS[@]}"
+    docker compose "${COMPOSE_ARGS[@]}" "$@"
 }
 
 # ─── Preflight ──────────────────────────────────────────────────────────
