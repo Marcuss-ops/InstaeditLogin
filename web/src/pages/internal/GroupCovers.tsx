@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { Image as ImageIcon, Loader2, RefreshCw } from "lucide-react";
+import { Image as ImageIcon, Loader2, Plus, RefreshCw } from "lucide-react";
 import { EmptyState } from "../../components/feedback/EmptyState";
 import { GroupCoverCard } from "./GroupCoverCard";
+import { GroupCoverCreateDialog } from "./GroupCoverCreateDialog";
 import { useGroupCovers } from "./useGroupCovers";
 import { cn } from "../../lib/utils";
 
@@ -24,6 +25,7 @@ const FILTERS: Array<{ key: CoverFilter; label: string }> = [
 export function GroupCovers({ groupId }: { groupId: number }) {
   const { state, refreshCovers, openCoverEditor, openingCoverId } = useGroupCovers(groupId);
   const [filter, setFilter] = useState<CoverFilter>("all");
+  const [creating, setCreating] = useState(false);
 
   const visibleCovers = useMemo(() => {
     if (state.kind !== "ready") return [];
@@ -91,13 +93,26 @@ export function GroupCovers({ groupId }: { groupId: number }) {
       {state.kind === "ready" && visibleCovers.length === 0 && (
         <EmptyState
           title={filter === "all" ? "Nessuna copertina in questo gruppo" : "Nessuna copertina in questo stato"}
-          description={
-            filter === "all"
-              ? "Quando crei una copertina per un video di questo gruppo (dalla pagina Groups → Modifica copertina), comparirà qui con la sua anteprima — anche le versioni precedenti e le copertine archiviate."
-              : "Cambia filtro per vedere le altre copertine del gruppo."
-          }
           icon={<ImageIcon size={24} />}
           className="mx-auto max-w-sm bg-white/[0.02] py-10 border-white/[0.08]"
+          cta={
+            filter === "all" ? (
+              <div className="group relative mx-auto mt-1 inline-block">
+                <button
+                  type="button"
+                  onClick={() => setCreating(true)}
+                  aria-label="Crea copertina"
+                  data-testid="group-covers-create"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-violet-500/30 bg-violet-500/[0.10] text-violet-200 shadow-lg transition-all duration-200 hover:scale-105 hover:border-violet-400/50 hover:bg-violet-500/[0.22] hover:text-violet-100"
+                >
+                  <Plus size={24} aria-hidden="true" />
+                </button>
+                <span className="pointer-events-none absolute left-1/2 top-full mt-2.5 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/[0.08] bg-[#0c0c12] px-2.5 py-1 text-[11px] font-semibold text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+                  Crea copertina
+                </span>
+              </div>
+            ) : undefined
+          }
         />
       )}
 
@@ -113,6 +128,17 @@ export function GroupCovers({ groupId }: { groupId: number }) {
             />
           ))}
         </div>
+      )}
+
+      {creating && (
+        <GroupCoverCreateDialog
+          groupId={groupId}
+          onClose={() => setCreating(false)}
+          onCreated={() => {
+            setCreating(false);
+            refreshCovers();
+          }}
+        />
       )}
     </section>
   );

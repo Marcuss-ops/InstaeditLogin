@@ -23,6 +23,18 @@ vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
   openInstaEditorWithLaunch: vi.fn(),
 }));
 
+vi.mock("./GroupCoverCreateDialog", () => {
+  const React = require("react");
+  return {
+    GroupCoverCreateDialog: (props: { groupId: number }) =>
+      React.createElement(
+        "div",
+        { "data-testid": "group-cover-create-dialog", "data-group-id": String(props.groupId) },
+        "Crea copertina",
+      ),
+  };
+});
+
 import { GroupCovers } from "./GroupCovers";
 
 function renderPanel() {
@@ -94,7 +106,7 @@ describe("GroupCovers", () => {
     expect(screen.getByText(/archiviata/i)).toBeInTheDocument();
   });
 
-  it("renders an empty state when the group has no covers yet", async () => {
+  it("renders a short empty state with a Crea copertina button that opens the create dialog", async () => {
     authedFetchMock.mockResolvedValue(jsonResponse({ covers: [] }));
 
     renderPanel();
@@ -102,6 +114,13 @@ describe("GroupCovers", () => {
     await waitFor(() => {
       expect(screen.getByText(/nessuna copertina in questo gruppo/i)).toBeInTheDocument();
     });
+    // The long explanatory description was removed on purpose.
+    expect(
+      screen.queryByText(/Quando crei una copertina per un video di questo gruppo/i),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("group-covers-create"));
+    expect(screen.getByTestId("group-cover-create-dialog")).toBeInTheDocument();
   });
 
   it("filters by project status via the filter chips", async () => {

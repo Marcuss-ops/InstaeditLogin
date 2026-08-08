@@ -42,8 +42,12 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
   const [savingMetadata, setSavingMetadata] = useState(false);
   const toast = useToast();
 
-  const openThumbnailEditor = useCallback(async (video: GroupYouTubeVideo) => {
-    if (openingVideoRef.current) return;
+  // Resolves to true only when the editor was actually opened (or the
+  // create-session request succeeded); callers such as the covers-hub
+  // create dialog use it to decide whether to refresh the grid — the
+  // hook never rejects, it surfaces failures via the toast.
+  const openThumbnailEditor = useCallback(async (video: GroupYouTubeVideo): Promise<boolean> => {
+    if (openingVideoRef.current) return false;
     openingVideoRef.current = true;
     setOpeningVideoID(video.youtube_video_id);
     try {
@@ -56,7 +60,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
       if (video.velox_project_id && video.editor_url) {
         await openInstaEditorWithLaunch(video.editor_url, video.velox_project_id);
         toast.success("InstaEditor aperto in una nuova scheda: il video resta privato finché non scegli di pubblicarlo.");
-        return;
+        return true;
       }
 
       // First open: resolve the group-owned workspace, then use the
@@ -71,12 +75,14 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true) {
         youtube_video_id: video.youtube_video_id,
         ...(safeAssetUrl(video.thumbnail_url) ? { source_thumbnail_url: safeAssetUrl(video.thumbnail_url) } : {}),
       });
+      return true;
     } catch (error) {
       if (error instanceof AuthError) {
         navigate("/login", { replace: true });
-        return;
+        return false;
       }
       toast.error(error instanceof Error ? error.message : "Impossibile aprire InstaEditor.");
+      return false;
     } finally {
       openingVideoRef.current = false;
       setOpeningVideoID(null);
