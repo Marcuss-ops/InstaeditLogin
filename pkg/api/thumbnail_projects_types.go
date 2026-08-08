@@ -53,6 +53,11 @@ type ThumbnailProjectStore interface {
 	CreateVeloxProjectBridge(ctx context.Context, bridge *models.VeloxProjectBridge) error
 	FindVeloxProjectBridge(ctx context.Context, workspaceID int64, projectID string) (*models.VeloxProjectBridge, error)
 	DeleteVeloxProjectBridge(ctx context.Context, workspaceID int64, projectID string) error
+	// EnsureThumbnailProjectForEditorSession idempotently mints the
+	// application project row (id = editor session id) that the
+	// velox_project_bridges foreign key requires when the "Modifica" flow
+	// uses the session row as its temporary application project.
+	EnsureThumbnailProjectForEditorSession(ctx context.Context, workspaceID int64, projectID string, createdBy int64) error
 }
 
 type createThumbnailProjectRequest struct {

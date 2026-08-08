@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -69,6 +70,7 @@ func TestCreateEditorSession_EnsuresEditorProjectBridge(t *testing.T) {
 	row.DesiredPrivacy = "private"
 
 	editorSvc := &fakeEditorService{}
+	tps := &thumbnailProjectTestStore{}
 	router := buildFindOrCreateRouter(t,
 		&models.Workspace{ID: workspaceID, OwnerID: 7}, accountID, channelID,
 		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
@@ -78,6 +80,7 @@ func TestCreateEditorSession_EnsuresEditorProjectBridge(t *testing.T) {
 			return row, nil
 		},
 		WithEditorService(editorSvc),
+		WithThumbnailProjectStore(tps),
 	)
 
 	got, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
@@ -88,6 +91,15 @@ func TestCreateEditorSession_EnsuresEditorProjectBridge(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CreateEditorSession: %v", err)
+	}
+	// The session is the temporary application project: the thumbnail
+	// project row that the bridge FK requires must be ensured before
+	// the EditorService is asked to create-or-reuse the mapping.
+	if tps.ensureCalls != 1 {
+		t.Fatalf("EnsureThumbnailProjectForEditorSession calls = %d, want 1", tps.ensureCalls)
+	}
+	if tps.lastEnsureWorkspaceID != workspaceID || tps.lastEnsureProjectID != sessID || tps.lastEnsureCreatedBy != 7 {
+		t.Fatalf("ensure scope mismatch: workspace=%d project=%q createdBy=%d", tps.lastEnsureWorkspaceID, tps.lastEnsureProjectID, tps.lastEnsureCreatedBy)
 	}
 	// The session's stable identity (and therefore the editor_url) must
 	// survive the bridge step untouched.
@@ -123,12 +135,14 @@ func TestCreateEditorSession_BridgeSkippedForBackgroundCaller(t *testing.T) {
 	row.DesiredPrivacy = "private"
 
 	editorSvc := &fakeEditorService{}
+	tps := &thumbnailProjectTestStore{}
 	router := buildFindOrCreateRouter(t,
 		&models.Workspace{ID: workspaceID, OwnerID: 7}, accountID, channelID,
 		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
 			return row, nil
 		},
 		WithEditorService(editorSvc),
+		WithThumbnailProjectStore(tps),
 	)
 
 	got, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
@@ -144,6 +158,47 @@ func TestCreateEditorSession_BridgeSkippedForBackgroundCaller(t *testing.T) {
 	}
 	if len(editorSvc.calls) != 0 {
 		t.Fatalf("CreateProject calls = %d, want 0 for background callers", len(editorSvc.calls))
+	}
+	if tps.ensureCalls != 0 {
+		t.Fatalf("background callers must not mint application projects, got %d ensure calls", tps.ensureCalls)
+	}
+}
+
+// TestCreateEditorSession_BridgeProjectEnsureFailureFailsClick: a
+// failure to mint the application project row must fail the whole
+// Modifica click (the bridge FK could not be satisfied) and stay typed
+// so the handler maps it like any other bridge error.
+func TestCreateEditorSession_BridgeProjectEnsureFailureFailsClick(t *testing.T) {
+	t.Parallel()
+	const workspaceID, accountID int64 = 11, 22
+	const videoID = "yt-bridge-ensure-err"
+	const channelID = "channel-bridge-ensure-err"
+
+	row := fakeEditableRow(workspaceID, accountID, videoID, "sess-ensure-err", "ve_bridge_ensure_err")
+	row.DesiredPrivacy = "private"
+
+	editorSvc := &fakeEditorService{}
+	tps := &thumbnailProjectTestStore{ensureErr: errors.New("ensure boom")}
+	router := buildFindOrCreateRouter(t,
+		&models.Workspace{ID: workspaceID, OwnerID: 7}, accountID, channelID,
+		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
+			return row, nil
+		},
+		WithEditorService(editorSvc),
+		WithThumbnailProjectStore(tps),
+	)
+
+	_, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+		WorkspaceID:       workspaceID,
+		PlatformAccountID: accountID,
+		YouTubeVideoID:    videoID,
+		UserID:            7,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ensure boom") {
+		t.Fatalf("want ensure failure propagated, got %v", err)
+	}
+	if len(editorSvc.calls) != 0 {
+		t.Fatalf("CreateProject must not run after ensure failure, calls = %d", len(editorSvc.calls))
 	}
 }
 

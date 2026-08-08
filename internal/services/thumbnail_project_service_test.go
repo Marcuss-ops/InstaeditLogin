@@ -23,6 +23,9 @@ type thumbnailProjectServiceStore struct {
 	findErr           error
 	updateErr         error
 	statusErr         error
+	ensureWorkspaceID int64
+	ensureProjectID   string
+	ensureCreatedBy   int64
 }
 
 func (s *thumbnailProjectServiceStore) Create(_ context.Context, project *models.ThumbnailProject) error {
@@ -95,6 +98,10 @@ func (s *thumbnailProjectServiceStore) FindVeloxProjectBridge(context.Context, i
 func (s *thumbnailProjectServiceStore) DeleteVeloxProjectBridge(context.Context, int64, string) error {
 	return nil
 }
+func (s *thumbnailProjectServiceStore) EnsureThumbnailProjectForEditorSession(_ context.Context, workspaceID int64, projectID string, createdBy int64) error {
+	s.ensureWorkspaceID, s.ensureProjectID, s.ensureCreatedBy = workspaceID, projectID, createdBy
+	return nil
+}
 
 func TestThumbnailProjectServiceUpdateExportStatusRequiresWorkspace(t *testing.T) {
 	service := NewThumbnailProjectService(&thumbnailProjectServiceStore{})
@@ -146,6 +153,26 @@ func TestThumbnailProjectServiceStatusDelegatesScopedVersion(t *testing.T) {
 	}
 	if store.statusWorkspaceID != 7 || store.statusProjectID != "p" || store.status != models.ThumbnailProjectStatusArchived || store.statusVersion != 4 {
 		t.Fatalf("status delegation mismatch: %+v", store)
+	}
+}
+
+func TestThumbnailProjectServiceEnsureEditorSessionProjectDelegatesScoped(t *testing.T) {
+	store := &thumbnailProjectServiceStore{}
+	service := NewThumbnailProjectService(store)
+	if err := service.EnsureThumbnailProjectForEditorSession(context.Background(), 7, " sess-ensure ", 9); err != nil {
+		t.Fatalf("EnsureThumbnailProjectForEditorSession: %v", err)
+	}
+	if store.ensureWorkspaceID != 7 || store.ensureProjectID != "sess-ensure" || store.ensureCreatedBy != 9 {
+		t.Fatalf("ensure delegation mismatch: %+v", store)
+	}
+	if err := service.EnsureThumbnailProjectForEditorSession(context.Background(), 0, "sess", 9); !errors.Is(err, repository.ErrThumbnailProjectInvalid) {
+		t.Fatalf("want invalid workspace error, got %v", err)
+	}
+	if err := service.EnsureThumbnailProjectForEditorSession(context.Background(), 7, " ", 9); !errors.Is(err, repository.ErrThumbnailProjectInvalid) {
+		t.Fatalf("want invalid project error, got %v", err)
+	}
+	if err := service.EnsureThumbnailProjectForEditorSession(context.Background(), 7, "sess", 0); !errors.Is(err, repository.ErrThumbnailProjectInvalid) {
+		t.Fatalf("want invalid creator error, got %v", err)
 	}
 }
 

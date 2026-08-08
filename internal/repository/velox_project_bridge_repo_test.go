@@ -210,6 +210,40 @@ func TestVeloxProjectBridgeRepository_MapsExternalUniqueConflict(t *testing.T) {
 	}
 }
 
+func TestVeloxProjectBridgeRepository_EnsureEditorSessionProjectMintsRow(t *testing.T) {
+	db, mock := newVeloxBridgeMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	mock.ExpectExec(`INSERT INTO thumbnail_projects`).
+		WithArgs("ytsess_ensure_pg", int64(7), int64(9), "YouTube cover", models.ThumbnailProjectStatusDraft).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := repo.EnsureThumbnailProjectForEditorSession(context.Background(), 7, "ytsess_ensure_pg", 9); err != nil {
+		t.Fatalf("EnsureThumbnailProjectForEditorSession: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVeloxProjectBridgeRepository_EnsureEditorSessionProjectValidates(t *testing.T) {
+	db, _ := newVeloxBridgeMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	for _, tc := range []struct {
+		name        string
+		workspaceID int64
+		projectID   string
+		createdBy   int64
+	}{
+		{"zero workspace", 0, "sess", 9},
+		{"blank project", 7, "  ", 9},
+		{"zero creator", 7, "sess", 0},
+	} {
+		if err := repo.EnsureThumbnailProjectForEditorSession(context.Background(), tc.workspaceID, tc.projectID, tc.createdBy); !errors.Is(err, repository.ErrThumbnailProjectInvalid) {
+			t.Fatalf("%s: want ErrThumbnailProjectInvalid, got %v", tc.name, err)
+		}
+	}
+}
+
 func TestVeloxProjectBridgeRepository_DeleteScopesWorkspace(t *testing.T) {
 	db, mock := newVeloxBridgeMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)

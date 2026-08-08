@@ -35,6 +35,11 @@ type ThumbnailProjectStore interface {
 	CreateVeloxProjectBridge(context.Context, *models.VeloxProjectBridge) error
 	FindVeloxProjectBridge(context.Context, int64, string) (*models.VeloxProjectBridge, error)
 	DeleteVeloxProjectBridge(context.Context, int64, string) error
+	// EnsureThumbnailProjectForEditorSession idempotently mints the
+	// application project row (id = editor session id) that the
+	// velox_project_bridges foreign key requires when the "Modifica" flow
+	// uses the session row as its temporary application project.
+	EnsureThumbnailProjectForEditorSession(context.Context, int64, string, int64) error
 }
 
 var _ ThumbnailProjectStore = (*repository.ThumbnailProjectRepository)(nil)
@@ -232,6 +237,16 @@ func (s *ThumbnailProjectService) DeleteVeloxProjectBridge(ctx context.Context, 
 		return err
 	}
 	return s.store.DeleteVeloxProjectBridge(ctx, workspaceID, strings.TrimSpace(projectID))
+}
+
+func (s *ThumbnailProjectService) EnsureThumbnailProjectForEditorSession(ctx context.Context, workspaceID int64, projectID string, createdBy int64) error {
+	if err := s.validateWorkspace(workspaceID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(projectID) == "" || createdBy <= 0 {
+		return fmt.Errorf("%w: project id and creator are required", repository.ErrThumbnailProjectInvalid)
+	}
+	return s.store.EnsureThumbnailProjectForEditorSession(ctx, workspaceID, strings.TrimSpace(projectID), createdBy)
 }
 
 func (s *ThumbnailProjectService) UpdateAssignmentStatus(ctx context.Context, workspaceID int64, assignmentID, status string) error {

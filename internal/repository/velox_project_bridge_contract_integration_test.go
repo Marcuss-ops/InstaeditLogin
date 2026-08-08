@@ -94,6 +94,62 @@ func TestVeloxProjectBridge_ContractPostgresSourceOfTruthAndIsolation(t *testing
 	}
 }
 
+// TestVeloxProjectBridge_SessionBackedProjectEnsureThenBridge is the
+// regression for the "Modifica" flow 500: a fresh editor-session row has
+// no thumbnail_projects row, so the bridge FK write fails with
+// ErrVeloxProjectBridgeNotFound. EnsureThumbnailProjectForEditorSession
+// must mint the application project first; then the bridge write and
+// read succeed, and a replay of the ensure stays a no-op that keeps the
+// bridge single-owner.
+func TestVeloxProjectBridge_SessionBackedProjectEnsureThenBridge(t *testing.T) {
+	db, cleanup := postgres.StartTestPostgres(t, postgres.WithDatabase("instaedit_bridge_modifica"))
+	defer cleanup()
+	if err := database.RunMigrationsUpTo(db, 116); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+	seedBridgeContractDatabase(t, db)
+
+	const (
+		workspaceID    int64 = 7711
+		sessionID            = "ytsess_modifica_pg"
+		veloxProjectID       = "vx_modifica_pg"
+	)
+	repo := repository.NewThumbnailProjectRepository(db)
+	bridge := &models.VeloxProjectBridge{
+		ProjectID: sessionID, WorkspaceID: workspaceID, ExternalProjectID: veloxProjectID,
+	}
+
+	// No thumbnail_projects row exists for the fresh session id, so a
+	// bridge write alone fails (the exact production 500).
+	if err := repo.CreateVeloxProjectBridge(context.Background(), bridge); !errors.Is(err, repository.ErrVeloxProjectBridgeNotFound) {
+		t.Fatalf("bridge without project must fail with not found, got %v", err)
+	}
+
+	if err := repo.EnsureThumbnailProjectForEditorSession(context.Background(), workspaceID, sessionID, 7711); err != nil {
+		t.Fatalf("ensure project for editor session: %v", err)
+	}
+	if err := repo.CreateVeloxProjectBridge(context.Background(), bridge); err != nil {
+		t.Fatalf("bridge after ensure must succeed: %v", err)
+	}
+	got, err := repo.FindVeloxProjectBridge(context.Background(), workspaceID, sessionID)
+	if err != nil || got == nil || got.ExternalProjectID != veloxProjectID {
+		t.Fatalf("unexpected bridge after ensure: %+v err=%v", got, err)
+	}
+
+	// Replay-safe: a second ensure is a no-op and the bridge still
+	// resolves exactly once.
+	if err := repo.EnsureThumbnailProjectForEditorSession(context.Background(), workspaceID, sessionID, 7711); err != nil {
+		t.Fatalf("replay ensure: %v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM velox_project_bridges WHERE external_project_id = $1`, veloxProjectID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("replay must leave one bridge, got %d", count)
+	}
+}
+
 func seedBridgeContractDatabase(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if _, err := db.Exec(`

@@ -54,6 +54,12 @@ type thumbnailProjectTestStore struct {
 	deleteBridgeErr    error
 	findByIDCalls      int
 	createBridgeCalls  int
+	// ensureEditorSessionProject surfaces for the Modifica bridge flow.
+	ensureCalls           int
+	ensureErr             error
+	lastEnsureWorkspaceID int64
+	lastEnsureProjectID   string
+	lastEnsureCreatedBy   int64
 }
 
 func (s *thumbnailProjectTestStore) Create(_ context.Context, project *models.ThumbnailProject) error {
@@ -173,6 +179,11 @@ func (s *thumbnailProjectTestStore) DeleteVeloxProjectBridge(_ context.Context, 
 	}
 	s.bridge = nil
 	return nil
+}
+func (s *thumbnailProjectTestStore) EnsureThumbnailProjectForEditorSession(_ context.Context, workspaceID int64, projectID string, createdBy int64) error {
+	s.ensureCalls++
+	s.lastEnsureWorkspaceID, s.lastEnsureProjectID, s.lastEnsureCreatedBy = workspaceID, projectID, createdBy
+	return s.ensureErr
 }
 
 func thumbnailProjectRouter(t *testing.T, store *thumbnailProjectTestStore, ws *mockWorkspaceStore) *Router {

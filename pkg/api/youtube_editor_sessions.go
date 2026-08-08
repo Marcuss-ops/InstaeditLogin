@@ -246,6 +246,20 @@ func (r *Router) ensureEditorProjectBridge(ctx context.Context, in CreateEditorS
 	if edit == nil || r.editorService == nil || in.UserID <= 0 {
 		return nil
 	}
+	// The "Modifica" flow uses the editor-session row as its temporary
+	// application project (project-bridge-contract §3.1). The
+	// velox_project_bridges foreign key requires a thumbnail_projects row
+	// with id = session id, so mint it idempotently BEFORE the service
+	// persists the mapping; otherwise the bridge INSERT-SELECT finds no
+	// project and fails with ErrVeloxProjectBridgeNotFound (the 500 the
+	// operator hit on the first Modifica click after the bridge gate).
+	// When the thumbnail store is not wired the bridge write itself
+	// fails closed, so the ensure can only help, never mask.
+	if r.thumbnailProjectStore != nil {
+		if err := r.thumbnailProjectStore.EnsureThumbnailProjectForEditorSession(ctx, in.WorkspaceID, edit.ID, in.UserID); err != nil {
+			return fmt.Errorf("ensure editor project bridge: %w", err)
+		}
+	}
 	created, err := r.editorService.CreateProject(ctx, services.CreateEditorProjectRequest{
 		UserID:               in.UserID,
 		WorkspaceID:          in.WorkspaceID,

@@ -151,6 +151,40 @@ func (r *ThumbnailProjectRepository) Create(ctx context.Context, project *models
 	return nil
 }
 
+// EnsureThumbnailProjectForEditorSession idempotently mints the
+// workspace-scoped application project that backs an editor session when
+// the "Modifica" flow uses the session row as its temporary application
+// project (project-bridge-contract §3.1). The velox_project_bridges
+// foreign key requires a thumbnail_projects row with id = session id
+// before the mapping can be persisted; this method closes that gap
+// without going through the user-facing Create handler. It is
+// replay-safe: a second call for the same id is a no-op (ON CONFLICT DO
+// NOTHING), and an existing row keeps its identity so the bridge
+// INSERT-SELECT resolves it. The workspace-membership guard mirrors
+// Create so a foreign-tenant caller can never mint a row.
+func (r *ThumbnailProjectRepository) EnsureThumbnailProjectForEditorSession(ctx context.Context, workspaceID int64, projectID string, createdBy int64) error {
+	projectID = strings.TrimSpace(projectID)
+	if workspaceID <= 0 || projectID == "" || createdBy <= 0 {
+		return fmt.Errorf("%w: workspace, project id, and creator are required", ErrThumbnailProjectInvalid)
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO thumbnail_projects
+			(id, workspace_id, created_by, name, canvas_width, canvas_height, status)
+		 SELECT $1, $2, $3, $4, 1920, 1080, $5
+		   FROM workspaces w
+		  WHERE w.id = $2
+		    AND (w.owner_id = $3 OR EXISTS (
+				SELECT 1 FROM workspace_members wm
+				 WHERE wm.workspace_id = w.id AND wm.user_id = $3
+			))
+		 ON CONFLICT (id) DO NOTHING`,
+		projectID, workspaceID, createdBy, "YouTube cover", models.ThumbnailProjectStatusDraft)
+	if err != nil {
+		return fmt.Errorf("ensure thumbnail project for editor session: %w", err)
+	}
+	return nil
+}
+
 // FindByID returns a project only within the supplied workspace. Deleted
 // projects remain addressable for internal lifecycle operations but the API
 // treats them as unavailable to normal reads.
