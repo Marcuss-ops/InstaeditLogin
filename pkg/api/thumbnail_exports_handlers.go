@@ -91,7 +91,7 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 	if !ok {
 		return
 	}
-	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID)
+	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleEditor)
 	if !ok {
 		return
 	}
@@ -345,7 +345,7 @@ func (r *Router) handleGetThumbnailExport(w http.ResponseWriter, req *http.Reque
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleViewer); !ok {
 		return
 	}
 	exportID := strings.TrimSpace(chi.URLParam(req, "export_id"))

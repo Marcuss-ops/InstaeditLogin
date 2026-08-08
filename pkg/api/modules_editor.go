@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
-
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/editor"
@@ -51,20 +49,11 @@ func (m *editorBFFModule) Register(mux chi.Router) {
 			if err != nil || workspace == nil {
 				return errors.New("editor project not found")
 			}
-			if workspace.OwnerID == userID {
-				return nil
+			minimumRole := workspaceRoleViewer
+			if write {
+				minimumRole = workspaceRoleEditor
 			}
-			if m.deps.TeamStore == nil {
-				return errors.New("editor project not found")
-			}
-			role, err := m.deps.TeamStore.GetRole(workspaceID, userID)
-			if err != nil {
-				return errors.New("editor project not found")
-			}
-			if write && role != repository.RoleEditor && role != repository.RoleAdmin {
-				return errors.New("editor project not found")
-			}
-			if !write && role != repository.RoleViewer && role != repository.RoleEditor && role != repository.RoleAdmin {
+			if !workspaceRoleAllowed(userID, workspace, m.deps.TeamStore, minimumRole) {
 				return errors.New("editor project not found")
 			}
 			return nil

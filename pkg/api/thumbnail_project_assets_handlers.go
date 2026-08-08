@@ -45,7 +45,7 @@ func (r *Router) handleAddThumbnailProjectAsset(w http.ResponseWriter, req *http
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleEditor); !ok {
 		return
 	}
 	projectID, ok := parseThumbnailProjectID(w, req)
@@ -82,7 +82,7 @@ func (r *Router) handleListThumbnailProjectAssets(w http.ResponseWriter, req *ht
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleViewer); !ok {
 		return
 	}
 	projectID, ok := parseThumbnailProjectID(w, req)
@@ -113,7 +113,7 @@ func (r *Router) handleDeleteThumbnailProjectAsset(w http.ResponseWriter, req *h
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleEditor); !ok {
 		return
 	}
 	projectID, ok := parseThumbnailProjectID(w, req)

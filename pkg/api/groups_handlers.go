@@ -64,9 +64,10 @@ func mapGroupError(err error) (int, string) {
 	}
 }
 
-// requireWorkspaceOwnership loads the workspace and verifies the caller
-// owns it. Cross-tenant GET/POST/PATCH/DELETE returns 404 (existence-leak
-// avoidance, mirrors handleGetWorkspace / handleDeleteWorkspace).
+// requireWorkspaceOwnership loads the workspace and preserves the existing
+// owner-only Groups catalog policy. Group names, hierarchy, memberships and
+// channel bindings remain controlled by the workspace owner; team roles are
+// used by the editor/project surfaces, not to create a second catalog policy.
 func (r *Router) requireWorkspaceOwnership(w http.ResponseWriter, req *http.Request, workspaceID int64) (bool, *models.Workspace) {
 	callerID, ok := requireUserID(w, req, r)
 	if !ok {
@@ -86,7 +87,7 @@ func (r *Router) requireWorkspaceOwnership(w http.ResponseWriter, req *http.Requ
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return false, nil
 	}
-	if ws.OwnerID != callerID {
+	if !r.userOwnsWorkspace(callerID, ws) {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return false, nil
 	}

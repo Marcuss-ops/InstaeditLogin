@@ -140,7 +140,7 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		writeError(w, http.StatusInternalServerError, "find workspace: "+err.Error())
 		return
 	}
-	if workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+	if workspace == nil || !r.userCanEditWorkspace(identity.UserID(), workspace) {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}

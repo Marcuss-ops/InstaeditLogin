@@ -107,7 +107,7 @@ func (r *Router) handleCreateYouTubeThumbnailBatch(w http.ResponseWriter, req *h
 		return
 	}
 	workspace, err := r.workspaceStore.FindByID(group.WorkspaceID)
-	if err != nil || workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+	if err != nil || workspace == nil || !r.userCanEditWorkspace(identity.UserID(), workspace) {
 		writeError(w, http.StatusNotFound, "group not found")
 		return
 	}

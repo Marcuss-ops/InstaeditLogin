@@ -64,7 +64,7 @@ func TestCreateEditorSession_EnsuresEditorProjectBridge(t *testing.T) {
 
 	editorSvc := &fakeEditorService{}
 	router := buildFindOrCreateRouter(t,
-		&models.Workspace{ID: workspaceID, OwnerID: 1}, accountID, channelID,
+		&models.Workspace{ID: workspaceID, OwnerID: 7}, accountID, channelID,
 		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
 			if wsID != workspaceID || aID != accountID || vid != videoID {
 				return nil, nil
@@ -118,7 +118,7 @@ func TestCreateEditorSession_BridgeSkippedForBackgroundCaller(t *testing.T) {
 
 	editorSvc := &fakeEditorService{}
 	router := buildFindOrCreateRouter(t,
-		&models.Workspace{ID: workspaceID, OwnerID: 1}, accountID, channelID,
+		&models.Workspace{ID: workspaceID, OwnerID: 7}, accountID, channelID,
 		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
 			return row, nil
 		},
@@ -160,7 +160,7 @@ func TestCreateEditorSession_BridgeFailurePropagates(t *testing.T) {
 		},
 	}
 	router := buildFindOrCreateRouter(t,
-		&models.Workspace{ID: workspaceID, OwnerID: 1}, accountID, channelID,
+		&models.Workspace{ID: workspaceID, OwnerID: 7}, accountID, channelID,
 		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
 			return row, nil
 		},
@@ -201,7 +201,7 @@ func TestCreateEditorSession_BridgeMismatchRejected(t *testing.T) {
 		},
 	}
 	router := buildFindOrCreateRouter(t,
-		&models.Workspace{ID: workspaceID, OwnerID: 1}, accountID, channelID,
+		&models.Workspace{ID: workspaceID, OwnerID: 7}, accountID, channelID,
 		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
 			return row, nil
 		},

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -58,10 +59,46 @@ var _ interface {
 	CreateEditorSession(context.Context, CreateEditorSessionInput) (*models.YouTubeVideoEdit, error)
 } = (*Router)(nil)
 
-// userCanAccessWorkspace reports whether the user owns the workspace.
-// For the editor session creation flow, workspace ownership is the
-// required authorization gate; future iterations may also accept team
-// members via the team store.
+const (
+	workspaceRoleViewer = repository.RoleViewer
+	workspaceRoleEditor = repository.RoleEditor
+)
+
+// workspaceRoleAllowed is the single InstaEdit authorization primitive for
+// workspace-scoped application data. Workspace ownership is authoritative
+// and grants the highest role; non-owners must be present in
+// workspace_members. Velox/editor services are deliberately not consulted.
+func workspaceRoleAllowed(userID int64, workspace *models.Workspace, teamStore TeamStore, minimumRole string) bool {
+	if workspace == nil || userID <= 0 {
+		return false
+	}
+	if workspace.OwnerID == userID {
+		return true
+	}
+	if teamStore == nil {
+		return false
+	}
+	role, err := teamStore.GetRole(workspace.ID, userID)
+	if err != nil {
+		return false
+	}
+	return roleRank[role] >= roleRank[minimumRole] && roleRank[minimumRole] > 0
+}
+
+func (r *Router) userOwnsWorkspace(userID int64, workspace *models.Workspace) bool {
+	return workspace != nil && workspace.OwnerID == userID
+}
+
+// userCanAccessWorkspace is the read gate for workspace-scoped InstaEdit
+// data. Write callers must use userCanEditWorkspace explicitly.
+func (r *Router) userCanAccessWorkspace(userID int64, workspace *models.Workspace) bool {
+	return workspaceRoleAllowed(userID, workspace, r.teamStore, workspaceRoleViewer)
+}
+
+func (r *Router) userCanEditWorkspace(userID int64, workspace *models.Workspace) bool {
+	return workspaceRoleAllowed(userID, workspace, r.teamStore, workspaceRoleEditor)
+}
+
 // safeEditorAssetURL accepts only browser-fetchable absolute HTTP(S) URLs.
 // Local browser URLs such as file://, blob://, and data:// must never be
 // persisted as editor thumbnails because the server-side publisher cannot
@@ -76,13 +113,6 @@ func safeEditorAssetURL(raw string) string {
 		return ""
 	}
 	return candidate
-}
-
-func (r *Router) userCanAccessWorkspace(userID int64, workspace *models.Workspace) bool {
-	if workspace == nil {
-		return false
-	}
-	return workspace.OwnerID == userID
 }
 
 // editorURLForProject returns the server-issued URL for the separately

@@ -86,6 +86,13 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	if err != nil || workspace == nil {
 		return nil, ErrEditorSessionWorkspaceNotFound
 	}
+	// Authenticated creation is intentionally owner-only. Background
+	// workers leave UserID at zero and are allowed to validate/create the
+	// technical session; HTTP callers must not bypass this gate by invoking
+	// the shared helper through a future route.
+	if in.UserID > 0 && !r.userOwnsWorkspace(in.UserID, workspace) {
+		return nil, ErrEditorSessionWorkspaceNotFound
+	}
 	if r.userRepo == nil {
 		return nil, ErrEditorSessionAccountNotFound
 	}
@@ -284,9 +291,8 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		return
 	}
 
-	// Workspace ownership check (handler-only gate; the helper trusts
-	// the caller to supply a valid workspace_id and doesn't re-verify
-	// ownership — the handler is the HTTP boundary and DOES verify).
+	// Workspace ownership check is repeated at the shared helper boundary;
+	// keeping it here fails closed before any editor/session side effect.
 	workspace, err := r.workspaceStore.FindByID(payload.WorkspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "find workspace: "+err.Error())
@@ -296,7 +302,7 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	if !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+	if !r.userOwnsWorkspace(identity.UserID(), workspace) {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}

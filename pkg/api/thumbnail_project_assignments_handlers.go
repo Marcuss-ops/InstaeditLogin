@@ -69,7 +69,7 @@ func (r *Router) handleListThumbnailAssignments(w http.ResponseWriter, req *http
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleViewer); !ok {
 		return
 	}
 	projectID, ok := parseThumbnailProjectID(w, req)
@@ -106,7 +106,7 @@ func (r *Router) handleCreateThumbnailAssignments(w http.ResponseWriter, req *ht
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleEditor); !ok {
 		return
 	}
 	exportID := strings.TrimSpace(chi.URLParam(req, "export_id"))

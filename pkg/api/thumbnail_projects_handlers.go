@@ -16,7 +16,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-func (r *Router) thumbnailProjectWorkspace(w http.ResponseWriter, req *http.Request, workspaceID int64) (int64, bool) {
+func (r *Router) thumbnailProjectWorkspace(w http.ResponseWriter, req *http.Request, workspaceID int64, requiredRole string) (int64, bool) {
 	identity := auth.IdentityFromContext(req.Context())
 	if identity == nil || identity.UserID() <= 0 {
 		writeError(w, http.StatusUnauthorized, "missing user identity")
@@ -31,7 +31,7 @@ func (r *Router) thumbnailProjectWorkspace(w http.ResponseWriter, req *http.Requ
 		writeError(w, http.StatusInternalServerError, "find workspace: "+err.Error())
 		return 0, false
 	}
-	if workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+	if !workspaceRoleAllowed(identity.UserID(), workspace, r.teamStore, requiredRole) {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return 0, false
 	}
@@ -137,7 +137,7 @@ func (r *Router) handleCreateThumbnailProject(w http.ResponseWriter, req *http.R
 		writeError(w, http.StatusBadRequest, "workspace_id is required and must be positive")
 		return
 	}
-	userID, ok := r.thumbnailProjectWorkspace(w, req, body.WorkspaceID)
+	userID, ok := r.thumbnailProjectWorkspace(w, req, body.WorkspaceID, workspaceRoleEditor)
 	if !ok {
 		return
 	}
@@ -166,7 +166,7 @@ func (r *Router) handleListThumbnailProjects(w http.ResponseWriter, req *http.Re
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleViewer); !ok {
 		return
 	}
 	items, err := r.thumbnailProjectStore.ListByWorkspace(req.Context(), workspaceID)
@@ -189,7 +189,7 @@ func (r *Router) handleGetThumbnailProject(w http.ResponseWriter, req *http.Requ
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleViewer); !ok {
 		return
 	}
 	id, ok := parseThumbnailProjectID(w, req)
@@ -217,7 +217,7 @@ func (r *Router) handleUpdateThumbnailProject(w http.ResponseWriter, req *http.R
 	if !ok {
 		return
 	}
-	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID)
+	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleEditor)
 	if !ok {
 		return
 	}
@@ -285,7 +285,7 @@ func (r *Router) handleSaveThumbnailProjectSnapshot(w http.ResponseWriter, req *
 	if !ok {
 		return
 	}
-	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID)
+	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleEditor)
 	if !ok {
 		return
 	}
@@ -323,7 +323,7 @@ func (r *Router) handleListThumbnailProjectRevisions(w http.ResponseWriter, req 
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleViewer); !ok {
 		return
 	}
 	projectID, ok := parseThumbnailProjectID(w, req)
@@ -350,7 +350,7 @@ func (r *Router) handleGetThumbnailProjectRevision(w http.ResponseWriter, req *h
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleViewer); !ok {
 		return
 	}
 	projectID, ok := parseThumbnailProjectID(w, req)
@@ -378,7 +378,7 @@ func (r *Router) handleRestoreThumbnailProjectRevision(w http.ResponseWriter, re
 	if !ok {
 		return
 	}
-	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID)
+	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleEditor)
 	if !ok {
 		return
 	}
@@ -425,7 +425,7 @@ func (r *Router) changeThumbnailProjectStatus(w http.ResponseWriter, req *http.R
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleEditor); !ok {
 		return
 	}
 	id, ok := parseThumbnailProjectID(w, req)

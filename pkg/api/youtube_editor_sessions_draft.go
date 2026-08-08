@@ -148,7 +148,7 @@ func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, re
 		writeError(w, http.StatusInternalServerError, "find workspace: "+err.Error())
 		return
 	}
-	if workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+	if workspace == nil || !r.userCanEditWorkspace(identity.UserID(), workspace) {
 		// Same 404-as-foreign pattern as the other endpoints: the caller
 		// cannot tell "not found" from "not yours".
 		writeError(w, http.StatusNotFound, "editor session not found")

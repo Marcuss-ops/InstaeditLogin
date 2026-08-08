@@ -35,7 +35,7 @@ func (r *Router) attachThumbnailToSession(ctx context.Context, identity auth.Ide
 	if err != nil {
 		return nil, fmt.Errorf("find workspace: %w", err)
 	}
-	if workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+	if workspace == nil || !r.userCanEditWorkspace(identity.UserID(), workspace) {
 		return nil, errAttachWorkspaceNotAccessible
 	}
 

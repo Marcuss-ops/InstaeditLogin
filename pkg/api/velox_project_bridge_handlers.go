@@ -48,8 +48,8 @@ func mapVeloxProjectBridgeError(w http.ResponseWriter, err error) {
 	}
 }
 
-func (r *Router) authorizeThumbnailProjectBridge(w http.ResponseWriter, req *http.Request, workspaceID int64, projectID string) (int64, *models.ThumbnailProject, bool) {
-	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID)
+func (r *Router) authorizeThumbnailProjectBridge(w http.ResponseWriter, req *http.Request, workspaceID int64, projectID string, requiredRole string) (int64, *models.ThumbnailProject, bool) {
+	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, requiredRole)
 	if !ok {
 		return 0, nil, false
 	}
@@ -101,7 +101,7 @@ func (r *Router) handleCreateVeloxProjectBridge(w http.ResponseWriter, req *http
 		writeError(w, http.StatusBadRequest, "workspace_id is required and must be positive")
 		return
 	}
-	if _, _, ok := r.authorizeThumbnailProjectBridge(w, req, body.WorkspaceID, projectID); !ok {
+	if _, _, ok := r.authorizeThumbnailProjectBridge(w, req, body.WorkspaceID, projectID, workspaceRoleEditor); !ok {
 		return
 	}
 	if r.editorService == nil {
@@ -173,7 +173,7 @@ func (r *Router) handleGetVeloxProjectBridge(w http.ResponseWriter, req *http.Re
 	if !ok {
 		return
 	}
-	if _, _, ok := r.authorizeThumbnailProjectBridge(w, req, workspaceID, projectID); !ok {
+	if _, _, ok := r.authorizeThumbnailProjectBridge(w, req, workspaceID, projectID, workspaceRoleViewer); !ok {
 		return
 	}
 	bridge, err := r.thumbnailProjectStore.FindVeloxProjectBridge(req.Context(), workspaceID, projectID)
@@ -201,7 +201,7 @@ func (r *Router) handleDeleteVeloxProjectBridge(w http.ResponseWriter, req *http
 	if !ok {
 		return
 	}
-	if _, _, ok := r.authorizeThumbnailProjectBridge(w, req, workspaceID, projectID); !ok {
+	if _, _, ok := r.authorizeThumbnailProjectBridge(w, req, workspaceID, projectID, workspaceRoleEditor); !ok {
 		return
 	}
 	if err := r.thumbnailProjectStore.DeleteVeloxProjectBridge(req.Context(), workspaceID, projectID); err != nil {

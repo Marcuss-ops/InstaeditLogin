@@ -61,7 +61,7 @@ func (r *Router) handleResolveThumbnailProjectMedia(w http.ResponseWriter, req *
 	if !ok {
 		return
 	}
-	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID, workspaceRoleViewer); !ok {
 		return
 	}
 	if _, ok := parseThumbnailProjectID(w, req); !ok {
