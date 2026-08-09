@@ -70,10 +70,10 @@ export function LanguagePicker({
         aria-expanded={open}
         title={`${currentLabel} · clicca per cambiare`}
         onClick={() => setOpen((current) => !current)}
-        className={`group/pill inline-flex h-7 w-8 items-center justify-center rounded-lg border bg-white/[0.04] px-1.5 transition-colors hover:border-white/25 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-progress disabled:opacity-50 ${error ? "border-red-300/70" : "border-white/[0.10]"}`}
+        className={`group/pill inline-flex h-8 w-12 items-center justify-center gap-1 rounded-lg border bg-white/[0.04] px-2 transition-colors hover:border-white/25 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-progress disabled:opacity-50 ${error ? "border-red-300/70" : "border-white/[0.10]"}`}
       >
-        <LanguageFlag code={value} className="h-4 w-6 rounded-[3px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
-        <ChevronDown size={10} className={`text-[#9aa0aa] transition-transform group-hover/pill:text-white ${open ? "rotate-180" : ""}`} aria-hidden="true" />
+        <LanguageFlag code={value} className="h-5 w-7 shrink-0 rounded-[3px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
+        <ChevronDown size={11} className={`shrink-0 text-[#9aa0aa] transition-transform group-hover/pill:text-white ${open ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
 
       {open ? (
@@ -111,7 +111,7 @@ export function LanguagePicker({
               onClick={() => choose(code)}
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-zinc-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:bg-white/10 focus-visible:outline-none"
             >
-              <LanguageFlag code={code} className="h-4 w-6 rounded-[3px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
+              <LanguageFlag code={code} className="h-5 w-7 shrink-0 rounded-[3px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
               <span className="flex-1">{name}</span>
               {selectedIndex === index ? <Check size={13} className="text-violet-300" aria-hidden="true" /> : null}
             </button>
