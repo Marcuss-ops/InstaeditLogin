@@ -438,3 +438,18 @@ func (a *App) youtubeProcessingReconcilerWorkerSpec() worker.WorkerSpec {
 		},
 	}
 }
+
+func (a *App) youtubeCopyrightWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
+		Name: "youtube_copyright_checker", Critical: false,
+		Run: func(ctx context.Context) error {
+			cw := worker.NewYouTubeCopyrightWorker(
+				a.runtime.youtubeTargetPublicationStore,
+				repository.NewUserRepository(a.DB), a.CapRouter, a.Vault,
+				time.Duration(a.Cfg.Worker.YouTubeCopyrightCheckIntervalSeconds)*time.Second,
+				a.Logger,
+			)
+			return cw.Run(ctx)
+		},
+	}
+}

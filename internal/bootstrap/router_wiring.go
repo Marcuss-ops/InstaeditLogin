@@ -186,6 +186,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		api.WithLivestreamStore(s.livestreamRepo),
 		api.WithThumbnailProjectStore(s.thumbnailProjectService),
 		api.WithContentPipelineStore(s.contentPipelineRepo),
+		api.WithYouTubeCopyrightAlertStore(repository.NewYouTubeTargetPublicationRepository(s.db)),
 		api.WithEditorURL(s.cfg.HTTP.EditorURL),
 		// Blocco #2 P0 — wire the env-driven publish-horizon +
 		// retention-buffer values into the Router so handleRescheduleUpload,

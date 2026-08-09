@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authedFetch, ApiError, AuthError } from "../../lib/auth";
-import type { CalendarGroup, FetchState, Post, Workspace } from "./calendarTypes";
+import type { CalendarGroup, FetchState, Post, Workspace, YouTubeCopyrightAlert } from "./calendarTypes";
 import { STORAGE_KEYS } from "../../lib/storageKeys";
 
 export function useCalendarPosts() {
@@ -23,7 +23,7 @@ export function useCalendarPosts() {
     try {
       const from = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
       const to = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString();
-      const [postsResp, workspacesResp, groupsResp, uploadsResp] = await Promise.all([
+      const [postsResp, workspacesResp, groupsResp, uploadsResp, copyrightResp] = await Promise.all([
         authedFetch("/api/v1/posts", { signal: controller.signal }),
         authedFetch("/api/v1/workspaces", { signal: controller.signal }).catch(
           () => null,
@@ -34,6 +34,7 @@ export function useCalendarPosts() {
         authedFetch(`/api/v1/uploads?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`, { signal: controller.signal }).catch(
           () => null,
         ),
+        authedFetch("/api/v1/youtube/copyright-alerts", { signal: controller.signal }).catch(() => null),
       ]);
       if (controller.signal.aborted) return;
       const data = (await postsResp.json()) as { posts: Post[] };
@@ -51,6 +52,18 @@ export function useCalendarPosts() {
             source_type?: string;
           }> }
         : { uploads: [] };
+      const copyrightData = copyrightResp && copyrightResp.ok
+        ? (await copyrightResp.json()) as { alerts?: YouTubeCopyrightAlert[] }
+        : { alerts: [] };
+      const alertsByPost = new Map<number, YouTubeCopyrightAlert[]>();
+      for (const alert of copyrightData.alerts ?? []) {
+        for (const key of [alert.post_id, alert.upload_job_id]) {
+          if (!key) continue;
+          const existing = alertsByPost.get(key) ?? [];
+          existing.push(alert);
+          alertsByPost.set(key, existing);
+        }
+      }
       const scheduledUploads: Post[] = (uploadsData.uploads ?? [])
         .filter((upload) => Boolean(upload.publish_at || upload.scheduled_at))
         .map((upload) => ({
@@ -64,6 +77,7 @@ export function useCalendarPosts() {
           targets: upload.targets ?? [],
           source_type: upload.source_type,
           source: "upload",
+          copyright_alerts: alertsByPost.get(upload.id),
         }));
       let workspaces: Workspace[] = [];
       if (workspacesResp && workspacesResp.ok) {
@@ -77,7 +91,8 @@ export function useCalendarPosts() {
         const groupsData = (await groupsResp.json()) as { groups?: CalendarGroup[] };
         groups = groupsData.groups ?? [];
       }
-      setState({ kind: "ready", posts: [...(data.posts ?? []), ...scheduledUploads], workspaces, groups });
+      const posts = (data.posts ?? []).map((post) => ({ ...post, copyright_alerts: alertsByPost.get(post.id) }));
+      setState({ kind: "ready", posts: [...posts, ...scheduledUploads], workspaces, groups });
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) {

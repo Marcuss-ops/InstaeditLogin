@@ -182,7 +182,10 @@ func (w *PublishWorker) publishDriveExport(ctx context.Context, target *models.P
 			}
 		}
 	}
-	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, deliveryURL, config)
+	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
+		ID:          mediaReferenceValue(post.MediaAssetID),
+		ContentType: "video/mp4",
+	}, deliveryURL, config)
 	return nil
 }
 

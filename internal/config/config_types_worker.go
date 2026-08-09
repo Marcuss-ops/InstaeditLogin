@@ -2,6 +2,9 @@ package config
 
 // WorkerConfig holds background-worker tuning parameters.
 type WorkerConfig struct {
+	// YouTubeCopyrightCheckIntervalSeconds is the cadence of post-upload
+	// YouTube copyright/restriction checks. Default: 20 minutes.
+	YouTubeCopyrightCheckIntervalSeconds int
 	// PublishWorkerIntervalSeconds is the cadence of the publish worker.
 	PublishWorkerIntervalSeconds int
 	// MetadataGenerationWorkerIntervalSeconds is the cadence of the

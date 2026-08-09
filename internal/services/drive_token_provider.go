@@ -62,7 +62,9 @@ func NewDriveVaultTokenProvider(vault DriveTokenVault, oauth *GoogleDriveOAuthSe
 // Future exposure (Task 9/10 hardening): add the account_id
 // scope check so a stolen account_id from a different workspace
 // cannot be used to mint an upload token. Today the upload
-// scope is enforced by GoogleDriveOAuthService.RefreshOAuthToken// (the refresh-token bearer inherits the originally-granted
+// scope is enforced by GoogleDriveOAuthService.RefreshOAuthToken
+// (the refresh-token bearer inherits the originally-granted scopes selected
+// by GOOGLE_DRIVE_OAUTH_SCOPE for import or delivery).
 //
 //	scopes, which are drive.readonly + userinfo.profile per the
 //	Task 3/10 consent screen alignment documented in

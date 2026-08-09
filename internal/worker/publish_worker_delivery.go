@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
+	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -172,9 +174,32 @@ func (w *PublishWorker) dispatchPostCompletion(
 				_ = resp.Body.Close()
 			}
 		}
+		// Private MinIO objects may reject HEAD at the public gateway even
+		// when the resolver returned a valid signed GET URL. Recover the
+		// total from the signed range response; the Drive chunk streamer
+		// uses the same URL and Content-Range contract.
+		if asset.SizeBytes <= 0 {
+			if req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil); err == nil {
+				req.Header.Set("Range", "bytes=0-0")
+				if resp, err := http.DefaultClient.Do(req); err == nil {
+					contentRange := resp.Header.Get("Content-Range")
+					if slash := strings.LastIndex(contentRange, "/"); slash >= 0 {
+						if total, parseErr := strconv.ParseInt(contentRange[slash+1:], 10, 64); parseErr == nil {
+							asset.SizeBytes = total
+						}
+					}
+					if asset.ContentType == "" {
+						asset.ContentType = resp.Header.Get("Content-Type")
+					}
+					_ = resp.Body.Close()
+				}
+			}
+		}
 	}
 	if asset.ID == "" && sourceURL != "" {
-		asset.ID = path.Base(sourceURL)
+		if parsed, err := url.Parse(sourceURL); err == nil {
+			asset.ID = path.Base(parsed.Path)
+		}
 	}
 
 	res, deliverErr := provider.Deliver(ctx, asset, dest, targetKey(target))
@@ -187,6 +212,7 @@ func (w *PublishWorker) dispatchPostCompletion(
 			"target_id", target.ID,
 			"platform", account.Platform,
 			"provider", provider.Name(),
+			"delivery_class", deliveryErrorCode(deliverErr),
 			"error", deliverErr,
 		)
 		return
@@ -240,6 +266,51 @@ func (w *PublishWorker) dispatchPostCompletion(
 		"status", res.Status,
 		"remote_id", res.RemoteID,
 	)
+}
+
+// deliveryErrorCode keeps delivery diagnostics useful after the global
+// logger redacts error text. It intentionally returns only stable, non-secret
+// categories; the original error remains redacted in production logs.
+func deliveryErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	for _, code := range []string{
+		"ERR_DRIVE_CONFIG",
+		"ERR_DRIVE_NO_REFRESH_TOKEN",
+		"ERR_DRIVE_INVALID_ACCOUNT_ID",
+		"ERR_DRIVE_IDEMPOTENCY_CONFLICT",
+		"ERR_DRIVE_SESSION_EXPIRED",
+	} {
+		if strings.Contains(s, code) {
+			return code
+		}
+	}
+	for _, status := range []string{"returned 401", "returned 403", "returned 404", "returned 408", "returned 429", "returned 500", "returned 502", "returned 503"} {
+		if strings.Contains(s, status) {
+			return strings.ReplaceAll(status, " returned ", "_")
+		}
+	}
+	for _, marker := range []string{
+		"lookupByAppProperty",
+		"FindByIdempotencyKey",
+		"GetAccessToken",
+		"postInitiateSession",
+		"initiate POST",
+		"encryptor.Encrypt",
+		"sessionStore.Create",
+		"decrypt session URI",
+		"source Range GET",
+		"streamChunks",
+		"sessionStore.MarkCompleted",
+		"sessionStore",
+	} {
+		if strings.Contains(s, marker) {
+			return strings.ToUpper(strings.ReplaceAll(marker, " ", "_"))
+		}
+	}
+	return "DELIVERY_ERROR"
 }
 
 // evaluateDriveRequiredGate is the pure predicate that decides

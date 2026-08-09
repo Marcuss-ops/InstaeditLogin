@@ -22,6 +22,20 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 
 	key := services.BuildUploadKey(job.UserID, job.SourceID)
 	mediaURL := w.storage.AssetURL(key)
+	var storageObjectKey, bucket *string
+	if job.SourceType == models.UploadJobSourceVeloxArtifact {
+		// Velox artifacts are already materialised in media_assets by the
+		// Velox ingest consumer. SourceID is the remote artifact URL, not
+		// the original upload source, so BuildUploadKey(UserID, SourceID)
+		// would manufacture a key that does not belong to assetID. Keep
+		// the canonical asset ID only; MediaDownloadResolver will resolve
+		// the actual media_assets row and its upload key by ownership.
+		mediaURL = ""
+	} else {
+		storageObjectKey = strPtr(key)
+		bucketValue := storageBucket(w.storage)
+		bucket = strPtr(bucketValue)
+	}
 
 	post := &models.Post{
 		WorkspaceID:      job.WorkspaceID,
@@ -30,8 +44,8 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 		Metadata:         append([]byte(nil), job.Metadata...),
 		MediaURL:         mediaURL,
 		MediaAssetID:     strPtr(assetID),
-		StorageObjectKey: strPtr(key),
-		Bucket:           strPtr(storageBucket(w.storage)),
+		StorageObjectKey: storageObjectKey,
+		Bucket:           bucket,
 		Status:           models.PostStatusQueued,
 		// P1#4 — IngestAfter is server-side DEFAULT NOW() at SQL
 		// level; we pass job.IngestAfter through so a queued

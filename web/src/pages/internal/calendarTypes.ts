@@ -9,6 +9,25 @@ export type Post = {
   source?: "post" | "upload";
   targets?: number[];
   source_type?: string;
+  copyright_alerts?: YouTubeCopyrightAlert[];
+};
+
+export type YouTubeCopyrightAlert = {
+  id: number;
+  post_id: number;
+  upload_job_id: number;
+  post_target_id: number;
+  platform_account_id: number;
+  youtube_video_id: string;
+  status: "claim" | "blocked" | "error";
+  message: string;
+  rejection_reason?: string;
+  failure_reason?: string;
+  processing_status?: string;
+  licensed_content?: boolean;
+  blocked_regions?: string[];
+  allowed_regions?: string[];
+  checked_at?: string;
 };
 
 export type Workspace = { id: number; name: string };

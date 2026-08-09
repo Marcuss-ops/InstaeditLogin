@@ -416,6 +416,12 @@ func WithContentPipelineStore(store ContentPipelineStore) RouterOption {
 	}
 }
 
+// WithYouTubeCopyrightAlertStore wires the workspace-scoped read side used
+// by Calendar to display post-upload YouTube copyright alerts.
+func WithYouTubeCopyrightAlertStore(store YouTubeCopyrightAlertStore) RouterOption {
+	return func(r *Router) { r.youtubeCopyrightAlertStore = store }
+}
+
 // WithEditorURL wires the base URL of the separately deployed InstaEditor SPA.
 // An empty value is preserved as unavailable; it never falls back to the
 // InstaEdit frontend or the legacy EDITOR_URL variable.

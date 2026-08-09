@@ -62,6 +62,21 @@ func TestGoogleDriveOAuthService_GetLoginURL(t *testing.T) {
 	}
 }
 
+func TestGoogleDriveOAuthService_GetLoginURL_WriteScope(t *testing.T) {
+	svc, _ := NewGoogleDriveOAuthService(&config.Config{
+		Auth: config.AuthConfig{
+			GoogleDriveClientID:     "client-id",
+			GoogleDriveClientSecret: "client-secret-01234567890123456789012345678901",
+			GoogleDriveRedirectURI:  "https://dev.instaedit.org/api/v1/auth/google-drive/callback",
+			GoogleDriveOAuthScope:   "write",
+		},
+	})
+	url := svc.GetLoginURL("write-state")
+	if !strings.Contains(url, "scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile") {
+		t.Fatalf("expected Drive write scope, got %s", url)
+	}
+}
+
 // ---- Task 3/10 tokeninfo contract tests -----------------------------------
 //
 // Acceptance: VerifyDriveTokenIsReadonly succeeds ONLY when the Google
@@ -117,6 +132,17 @@ func TestVerifyDriveTokenIsReadonly_Success(t *testing.T) {
 	svc := newDriveServiceForTokenInfo(t, srv.URL)
 	if err := svc.VerifyDriveTokenIsReadonly(t.Context(), "fake-bearer"); err != nil {
 		t.Fatalf("VerifyDriveTokenIsReadonly must accept drive.readonly in scope; got: %v", err)
+	}
+}
+
+func TestVerifyDriveTokenScope_WriteMode(t *testing.T) {
+	srv := fakeTokenInfoServer(t, http.StatusOK,
+		"https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.profile", "")
+	defer srv.Close()
+	svc := newDriveServiceForTokenInfo(t, srv.URL)
+	svc.cfg.Auth.GoogleDriveOAuthScope = "write"
+	if err := svc.VerifyDriveTokenScope(t.Context(), "fake-write-bearer"); err != nil {
+		t.Fatalf("VerifyDriveTokenScope must accept drive in write mode; got: %v", err)
 	}
 }
 

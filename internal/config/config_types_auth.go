@@ -39,10 +39,12 @@ type AuthConfig struct {
 	// must never enter the database, the logs or error messages.
 	YouTubeOAuthClientPool YouTubeOAuthClientPoolConfig
 
-	// Google Drive OAuth (read-only import of video clips)
+	// Google Drive OAuth scope policy. "readonly" is the default import
+	// grant; "write" is required by the Google Drive delivery/exporter.
 	GoogleDriveClientID     string
 	GoogleDriveClientSecret string
 	GoogleDriveRedirectURI  string
+	GoogleDriveOAuthScope   string
 
 	// LinkedIn OAuth
 	LinkedInClientID     string

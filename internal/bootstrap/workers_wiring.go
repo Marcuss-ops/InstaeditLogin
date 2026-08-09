@@ -25,6 +25,7 @@ func (a *App) workerSpecs() []worker.WorkerSpec {
 		a.uploadWorkerSpec(),
 		a.driveBatchCrawlerWorkerSpec(),
 		a.youtubeProcessingReconcilerWorkerSpec(),
+		a.youtubeCopyrightWorkerSpec(),
 		a.metadataGenerationWorkerSpec(),
 		a.tokenRefreshSweepWorkerSpec(),
 		a.snapshotRefreshSweepWorkerSpec(),
@@ -42,10 +43,10 @@ func (a *App) registerWorkerSpecs() []worker.WorkerSpec {
 	return specs
 }
 
-// RunWorkers starts the 14 background workers (publish, reconcile,
+// RunWorkers starts the 15 background workers (publish, reconcile,
 // outbox, webhook, metrics, sessions_cleanup, asset_cleanup,
 // velox_downloader, upload, drive_batch_crawler,
-// youtube_processing_reconciler, metadata_generation, token_refresh_sweep,
+// youtube_processing_reconciler, youtube_copyright_checker, metadata_generation, token_refresh_sweep,
 // snapshot_refresh_sweep) under the shared WorkerRegistry. The registry handles startup, heartbeat
 // tracking, supervision, logging, and shutdown. A critical worker
 // that exits with a non-context error aborts the whole process by
@@ -71,7 +72,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 	// dependency is constructed before StartAll invokes it.
 	a.registerWorkerSpecs()
 
-	slog.Info("14 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / asset_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / metadata_generation / token_refresh_sweep / snapshot_refresh_sweep")
+	slog.Info("15 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / asset_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / youtube_copyright_checker / metadata_generation / token_refresh_sweep / snapshot_refresh_sweep")
 
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 

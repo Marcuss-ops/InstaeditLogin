@@ -368,7 +368,8 @@ type Router struct {
 	// returns 503 (matches the nil-store pattern used by the
 	// other feature flags). Wired via WithContentPipelineStore
 	// in internal/bootstrap/app.go.
-	contentPipelineStore ContentPipelineStore
+	contentPipelineStore       ContentPipelineStore
+	youtubeCopyrightAlertStore YouTubeCopyrightAlertStore
 
 	// editorURL is the base URL of the separately deployed InstaEditor SPA.
 	// When empty, editor launchers fail closed; frontendURL is never used

@@ -197,6 +197,12 @@ for verification.
 
 The backend reads these environment variables at startup:
 
+`GOOGLE_DRIVE_OAUTH_SCOPE` defaults to `readonly`. Use `write` only for
+an environment that deliberately uses the Google Drive delivery/exporter;
+that mode requests `https://www.googleapis.com/auth/drive` and requires the
+corresponding restricted scope to be declared and approved in Google Auth
+Platform. The default import flow remains `drive.readonly`.
+
 | Environment | `APP_ENV` | `APP_MODE` | YouTube callback URL |
 | --- | --- | --- | --- |
 | Local development | `dev` | `dev` (local client only) | `http://localhost:8080/api/v1/auth/youtube/callback` |

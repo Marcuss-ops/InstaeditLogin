@@ -250,9 +250,8 @@ func TestVeloxArtifactDownloader_HappyPath(t *testing.T) {
 	if uj.Title != "hello" {
 		t.Errorf("Title = %q; want hello", uj.Title)
 	}
-	if uj.DefaultPrivacyLevel != "" {
-		// metadata doesn't set privacy_status in the default dummy payload
-		t.Errorf("DefaultPrivacyLevel = %q; want empty", uj.DefaultPrivacyLevel)
+	if uj.DefaultPrivacyLevel != "private" {
+		t.Errorf("DefaultPrivacyLevel = %q; want private fallback", uj.DefaultPrivacyLevel)
 	}
 }
 

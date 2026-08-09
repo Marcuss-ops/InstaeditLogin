@@ -55,6 +55,14 @@ func (c *Config) validate() error {
 	if c.HTTP.AppEnv == "production" && strings.TrimSpace(c.HTTP.EditorURL) == "" {
 		return fmt.Errorf("INSTAEDITOR_URL is required in production")
 	}
+	switch strings.ToLower(strings.TrimSpace(c.Auth.GoogleDriveOAuthScope)) {
+	case "", "readonly":
+		c.Auth.GoogleDriveOAuthScope = "readonly"
+	case "write":
+		c.Auth.GoogleDriveOAuthScope = "write"
+	default:
+		return fmt.Errorf("GOOGLE_DRIVE_OAUTH_SCOPE must be readonly or write (got %q)", c.Auth.GoogleDriveOAuthScope)
+	}
 	if err := validateInstaEditorURL(c.HTTP.EditorURL, c.HTTP.AppEnv); err != nil {
 		return err
 	}

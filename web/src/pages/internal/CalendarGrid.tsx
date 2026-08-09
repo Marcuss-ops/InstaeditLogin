@@ -7,6 +7,7 @@ import type { EventDropArg, EventInput } from "@fullcalendar/core";
 import { authedFetch, ApiError, AuthError } from "../../lib/auth";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
+import { AlertCircle } from "lucide-react";
 import type { Post } from "./calendarTypes";
 
 type PostStatus = "draft" | "queued" | "publishing" | "published" | "failed";
@@ -45,11 +46,14 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
+  const [alertOpen, setAlertOpen] = useState(false);
+  const alerts = post.copyright_alerts ?? [];
+  const firstAlert = alerts[0];
   return (
     <div
       className={cn(
-        "h-full w-full rounded-md border border-white/[0.12] bg-[#1f1f2e] p-1.5 text-left shadow-sm",
-        "hover:border-white/[0.30] hover:bg-[#252536] transition-colors cursor-grab active:cursor-grabbing overflow-hidden",
+        "relative h-full w-full rounded-md border border-white/[0.12] bg-[#1f1f2e] p-1.5 text-left shadow-sm",
+        "hover:border-white/[0.30] hover:bg-[#252536] transition-colors cursor-grab active:cursor-grabbing overflow-visible",
         busy && "opacity-60",
       )}
     >
@@ -70,7 +74,27 @@ function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
             )}
           </div>
         </div>
+        {firstAlert && (
+          <button
+            type="button"
+            aria-label={`Problema copyright${alerts.length > 1 ? ` (${alerts.length})` : ""}`}
+            title="Problema copyright"
+            onClick={(event) => { event.stopPropagation(); setAlertOpen((open) => !open); }}
+            className="relative z-20 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-500 text-white shadow-sm hover:bg-red-400"
+          >
+            <AlertCircle size={14} aria-hidden="true" />
+          </button>
+        )}
       </div>
+      {alertOpen && firstAlert && (
+        <div role="dialog" className="absolute right-1 top-8 z-50 w-64 rounded-lg border border-red-200 bg-white p-3 text-left text-[11px] text-[#111] shadow-xl" onClick={(event) => event.stopPropagation()}>
+          <p className="font-bold text-red-700">Problema copyright</p>
+          <p className="mt-1 leading-relaxed">{firstAlert.message}</p>
+          <p className="mt-2 font-mono text-[10px] text-[#6e6e73]">Video: {firstAlert.youtube_video_id}</p>
+          {firstAlert.blocked_regions?.length ? <p className="mt-1 text-red-700">Paesi bloccati: {firstAlert.blocked_regions.join(", ")}</p> : null}
+          {alerts.length > 1 ? <p className="mt-2 font-semibold text-[#6e6e73]">Altri avvisi: {alerts.length - 1}</p> : null}
+        </div>
+      )}
     </div>
   );
 }

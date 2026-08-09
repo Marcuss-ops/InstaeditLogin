@@ -253,6 +253,13 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, delivery *mode
 	if err := meta.Validate(); err != nil {
 		return terminalError{err: err}
 	}
+	// Velox delivery metadata is publication-neutral and may omit privacy
+	// because the target is Google Drive rather than a social network. The
+	// upload_jobs schema still requires a valid privacy enum, so use the
+	// safest ingest default without changing Velox's worker responsibilities.
+	if meta.PrivacyStatus == "" {
+		meta.PrivacyStatus = "private"
+	}
 
 	uploadJob := &models.UploadJob{
 		UserID:              ws.OwnerID,

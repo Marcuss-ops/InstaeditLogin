@@ -17,7 +17,7 @@ var ErrExternalDeliveryNotLinked = errors.New("external delivery not linked to u
 
 // ErrExternalDeliveryAlreadyClaimed is returned when a worker tries to
 // atomically create an upload_job for a delivery row that another worker
-// already claimed (status != 'accepted' or upload_job_id already set).
+// already claimed (status is no longer claimable or upload_job_id is set).
 var ErrExternalDeliveryAlreadyClaimed = errors.New("external delivery already claimed")
 
 // ErrExternalDeliveryNoExpectedTriple is the typed sentinel
@@ -54,12 +54,12 @@ func (r *ExternalDeliveryRepository) GetExpectedTripleByUploadJobID(ctx context.
 
 // CreateUploadJobAndLink creates an upload_jobs row and atomically claims the
 // external_deliveries row for it in a single transaction. The claim UPDATE
-// filters on status='accepted' AND upload_job_id IS NULL, so only one worker
-// can win the race. If the claim fails (0 rows affected) the transaction is
-// rolled back and ErrExternalDeliveryAlreadyClaimed is returned, leaving the
-// delivery row untouched for the winner. On success the delivery row is
-// left with status='downloading' and upload_job_id set, and the new upload
-// job ID is returned.
+// accepts both fresh ('accepted') and due retry ('retry_wait') deliveries,
+// while requiring upload_job_id IS NULL, so only one worker can win the race.
+// If the claim fails (0 rows affected) the transaction is rolled back and
+// ErrExternalDeliveryAlreadyClaimed is returned, leaving the delivery row
+// untouched for the winner. On success the delivery row is left with status
+// 'downloading' and upload_job_id set, and the new upload job ID is returned.
 func (r *ExternalDeliveryRepository) CreateUploadJobAndLink(ctx context.Context, job *models.UploadJob, deliveryID, workerID string) (int64, error) {
 	if deliveryID == "" {
 		return 0, errors.New("external delivery CreateUploadJobAndLink: empty deliveryID")
@@ -84,7 +84,7 @@ func (r *ExternalDeliveryRepository) CreateUploadJobAndLink(ctx context.Context,
 		     lease_expires_at = NULL,
 		     leased_by_worker_id = NULL
 		 WHERE id           = $1
-		   AND status       = 'accepted'
+		   AND status       IN ('accepted', 'retry_wait')
 		   AND upload_job_id IS NULL
 		   AND (leased_by_worker_id = $3 OR leased_by_worker_id IS NULL)`,
 		deliveryID, jobID, workerID,
@@ -107,13 +107,13 @@ func (r *ExternalDeliveryRepository) CreateUploadJobAndLink(ctx context.Context,
 }
 
 // ClaimDelivery atomically claims the next eligible external_delivery row for
-// the calling worker. Eligible rows are in status 'accepted' whose lease has
-// expired (or never existed) and whose next_attempt_at window has opened (or
-// is unset). The selected row is locked with FOR UPDATE SKIP LOCKED, then its
-// attempt_count is incremented, lease_expires_at is set to NOW() + lease,
-// leased_by_worker_id is stamped, and next_attempt_at is cleared. The
-// status remains 'accepted' so that CreateUploadJobAndLink can perform the
-// final state transition to 'downloading' while still verifying the lease.
+// the calling worker. Eligible rows are in status 'accepted' or 'retry_wait'
+// whose lease has expired (or never existed) and whose next_attempt_at window
+// has opened (or is unset). The selected row is locked with FOR UPDATE
+// SKIP LOCKED, then its attempt_count is incremented, lease_expires_at is set
+// to NOW() + lease, leased_by_worker_id is stamped, and next_attempt_at is
+// cleared. The status is left unchanged so CreateUploadJobAndLink can perform
+// the final transition to 'downloading' while still verifying the lease.
 // Returns ErrExternalDeliveryNotFound when no eligible row exists.
 func (r *ExternalDeliveryRepository) ClaimDelivery(ctx context.Context, workerID string, lease time.Duration, maxAttempts int) (*models.ExternalDelivery, error) {
 	if workerID == "" {
@@ -130,7 +130,7 @@ func (r *ExternalDeliveryRepository) ClaimDelivery(ctx context.Context, workerID
 		`WITH candidate AS (
 		    SELECT id
 		      FROM external_deliveries
-		     WHERE status = 'accepted'
+		     WHERE status IN ('accepted', 'retry_wait')
 		       AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
 		       AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
 		     ORDER BY created_at ASC

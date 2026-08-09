@@ -160,12 +160,21 @@ func (s *youtubeVideoStats) UnmarshalJSON(data []byte) error {
 }
 
 type youtubeVideoContent struct {
-	Duration string `json:"duration"`
+	Duration         string                       `json:"duration"`
+	LicensedContent  bool                         `json:"licensedContent"`
+	RegionRestriction *youtubeRegionRestriction   `json:"regionRestriction,omitempty"`
+}
+
+type youtubeRegionRestriction struct {
+	Allowed []string `json:"allowed"`
+	Blocked []string `json:"blocked"`
 }
 
 type youtubeVideoStatus struct {
-	PrivacyStatus string `json:"privacyStatus"`
-	UploadStatus  string `json:"uploadStatus"`
+	PrivacyStatus  string `json:"privacyStatus"`
+	UploadStatus   string `json:"uploadStatus"`
+	RejectionReason string `json:"rejectionReason"`
+	FailureReason   string `json:"failureReason"`
 }
 
 type youtubeVideoProcessingDetails struct {

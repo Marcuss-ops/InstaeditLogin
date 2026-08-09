@@ -24,8 +24,9 @@ import (
 const driveTokenInfoURL = "https://oauth2.googleapis.com/v3/tokeninfo"
 
 // GoogleDriveOAuthService implements the OAuth flow for Google Drive.
-// It is used only to read (import) video files from a user's Drive;
-// it does not publish content, so it implements only OAuthProvider.
+// The requested scope is deployment-configurable: readonly is used by
+// import-only installations, while write is used when the same linked
+// account also backs GoogleDriveDestination delivery.
 type GoogleDriveOAuthService struct {
 	cfg        *config.Config
 	httpClient *http.Client
@@ -73,7 +74,8 @@ func (s *GoogleDriveOAuthService) GetLoginURL(state string) string {
 }
 
 // GetLoginURLWithOptions builds the Google OAuth authorization URL.
-// Google Drive does not use OAuthLoginOptions; options are ignored.
+// Google Drive does not use OAuthLoginOptions; the requested Drive
+// permission is selected by GOOGLE_DRIVE_OAUTH_SCOPE.
 //
 // Scope choice:
 //   - drive.readonly — required for folder-level listing (the
@@ -91,7 +93,7 @@ func (s *GoogleDriveOAuthService) GetLoginURLWithOptions(state string, _ OAuthLo
 	params.Set("client_id", s.cfg.Auth.GoogleDriveClientID)
 	params.Set("redirect_uri", s.cfg.Auth.GoogleDriveRedirectURI)
 	params.Set("state", state)
-	params.Set("scope", canonicalDriveReadonlyScope+" "+userinfoProfileScope)
+	params.Set("scope", s.requestedDriveScope()+" "+userinfoProfileScope)
 	params.Set("response_type", "code")
 	params.Set("access_type", "offline")
 	params.Set("prompt", "consent")
@@ -122,7 +124,7 @@ func (s *GoogleDriveOAuthService) HandleCallback(ctx context.Context, state, cod
 	//     so a one-off Google outage doesn't permanently brick the dashboard;
 	//     the OAuth consent screen already forced the right scope so the
 	//     downstream download will likely succeed anyway.
-	if verifyErr := s.VerifyDriveTokenIsReadonly(ctx, tokenResp.AccessToken); verifyErr != nil {
+	if verifyErr := s.VerifyDriveTokenScope(ctx, tokenResp.AccessToken); verifyErr != nil {
 		if errors.Is(verifyErr, ErrDriveTokenScopeMismatch) {
 			return nil, nil, fmt.Errorf("google drive oauth callback scope check: %w", verifyErr)
 		}
@@ -274,27 +276,18 @@ type googleDriveTokenResponse struct {
 // drive.readonly2 / drive.readonly.alt future scope.
 const canonicalDriveReadonlyScope = "https://www.googleapis.com/auth/drive.readonly"
 
-// canonicalDriveWriteScope is reserved for the InstaEdit EXPORTER
-// (GoogleDriveDeliveryAdapter / GoogleDriveDestination) which must
-// upload files into the operator's Drive. The IMPORT path (this
-// file's OAuth flow) deliberately does NOT request this scope:
-// `drive` is **restricted** per Google's OAuth taxonomy (deeper
-// audit than `drive.readonly`, exposes every file in the
-// operator's Drive) and is unnecessary for folder readout, which
-// is the only Importer-surface requirement. The exporter requests
-// `drive` on its own (separate) OAuth client so its login URL is
-// independent of this Importer's.
-//
-// The downstream verifier (VerifyDriveTokenIsReadonly) is the strict
-// gate: it accepts ONLY the canonical `drive.readonly` token claim.
-// Acceptance of `drive` (write) is intentionally disabled so a
-// future regression that flips the GetLoginURLWithOptions scope
-// literal would be caught at the tokeninfo runtime check rather
-// than leaving a token with wrong-scope entitlements in the vault.
-// This constant stays defined because the exporter flow references
-// the SAME URL string at its own scope declaration; keeping the
-// spelling in one place stops the two surfaces from drifting.
+// canonicalDriveWriteScope is used by the optional delivery/export mode
+// (GOOGLE_DRIVE_OAUTH_SCOPE=write). The default remains drive.readonly for
+// import-only deployments. The write mode is explicit because it grants
+// GoogleDriveDestination permission to create files in Drive.
 const canonicalDriveWriteScope = "https://www.googleapis.com/auth/drive"
+
+func (s *GoogleDriveOAuthService) requestedDriveScope() string {
+	if s != nil && s.cfg != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Auth.GoogleDriveOAuthScope), "write") {
+		return canonicalDriveWriteScope
+	}
+	return canonicalDriveReadonlyScope
+}
 
 // userinfoProfileScope is the companion scope InstaEdit always
 // requests alongside drive.readonly so the dashboard can show the
@@ -320,11 +313,9 @@ var ErrDriveTokenEmpty = errors.New("ERR_DRIVE_TOKEN_EMPTY")
 var ErrDriveTokenScopeMismatch = errors.New("ERR_DRIVE_TOKEN_SCOPE_MISMATCH")
 
 // VerifyDriveTokenIsReadonly hits the Google tokeninfo endpoint to
-// confirm the supplied access token was issued with the
-// `drive.readonly` scope. Returns nil if the canonical scope claim
-// contains drive.readonly; otherwise an error describing the actual
-// scope with a typed sentinel (ErrDriveTokenScopeMismatch or
-// ErrDriveTokenEmpty) so callers can errors.Is the failure category.
+// confirm the supplied access token was issued with drive.readonly.
+// It remains as the strict import-only compatibility helper; the
+// callback uses VerifyDriveTokenScope for the configured mode.
 //
 // Per Task 3/10, this is the canonical "did the operator actually
 // grant drive.readonly (vs the legacy drive.file) when the OAuth
@@ -345,6 +336,17 @@ var ErrDriveTokenScopeMismatch = errors.New("ERR_DRIVE_TOKEN_SCOPE_MISMATCH")
 // the GetLoginURLWithOptions scope literal would be caught by the
 // verifier rather than leaving a non-functional token in the vault.
 func (s *GoogleDriveOAuthService) VerifyDriveTokenIsReadonly(ctx context.Context, accessToken string) error {
+	return s.verifyDriveTokenScope(ctx, accessToken, canonicalDriveReadonlyScope)
+}
+
+// VerifyDriveTokenScope validates the scope selected by the configured
+// Drive OAuth mode. Import deployments use drive.readonly; delivery/export
+// deployments use drive so the GoogleDriveDestination can create files.
+func (s *GoogleDriveOAuthService) VerifyDriveTokenScope(ctx context.Context, accessToken string) error {
+	return s.verifyDriveTokenScope(ctx, accessToken, s.requestedDriveScope())
+}
+
+func (s *GoogleDriveOAuthService) verifyDriveTokenScope(ctx context.Context, accessToken, requiredScope string) error {
 	if accessToken == "" {
 		return fmt.Errorf("%w: drive tokeninfo input rejected before HTTP call", ErrDriveTokenEmpty)
 	}
@@ -376,20 +378,21 @@ func (s *GoogleDriveOAuthService) VerifyDriveTokenIsReadonly(ctx context.Context
 	}
 	// Exact-token match is more conservative than substring: the
 	// canonical scope claim is space-delimited; we split + compare
-	// element-by-element against canonicalDriveReadonlyScope ONLY.
+	// element-by-element against the configured required scope.
 	// This rejects drive.file alone, the unrestricted `auth/drive`
-	// (write access — reserved for the exporter), and hypothetical
+	// or read-only access when the exporter explicitly requires write,
+	// and hypothetical
 	// future scopes like `drive.readonly2` / `drive.readonly.alt`
 	// that would otherwise match a naive "drive.readonly" substring
 	// check. The strict accept-list keeps the consent-screen
 	// declaration consistent with the runtime guard: every scope
 	// that gets through this check is audibly documented as
-	// drive.readonly in `docs/OAUTH-PRODUCTION.md` Step 3.
+	// the configured Drive scope in the deployment contract.
 	for _, scope := range strings.Fields(parsed.Scope) {
-		if scope == canonicalDriveReadonlyScope {
+		if scope == requiredScope {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: drive token scope does not include %q (got %q); refusing to use this token for folder-level Drive reads (the importer consumes only drive.readonly; drive.file and the unrestricted drive write scope are not sufficient)",
-		ErrDriveTokenScopeMismatch, canonicalDriveReadonlyScope, parsed.Scope)
+	return fmt.Errorf("%w: drive token scope does not include %q (got %q)",
+		ErrDriveTokenScopeMismatch, requiredScope, parsed.Scope)
 }
