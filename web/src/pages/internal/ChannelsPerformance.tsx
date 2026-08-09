@@ -46,17 +46,20 @@ export function ChannelsPerformancePage() {
               Aggregated KPIs and rankings across all your YouTube channels.
             </p>
             {state.kind === "ready" && (
-              <p className="text-[12px] text-[#6b7280] mt-0.5">
-                Ultimo dato salvato alle{" "}
-                {state.data.data_updated_at
-                  ? new Date(state.data.data_updated_at).toLocaleString(undefined, {
-                      day: "2-digit",
-                      month: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : "—"}
-              </p>
+              <div className="mt-0.5 space-y-0.5 text-[12px] text-[#6b7280]">
+                <p>
+                  Ultimo snapshot realmente salvato alle{" "}
+                  {state.data.data_updated_at
+                    ? new Date(state.data.data_updated_at).toLocaleString(undefined, {
+                        day: "2-digit",
+                        month: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : "—"}
+                </p>
+                <p>I grafici mostrano solo i giorni con una riga salvata nel database ({state.data.trends.length} snapshot).</p>
+              </div>
             )}
           </div>
           <div className="flex items-center gap-2">

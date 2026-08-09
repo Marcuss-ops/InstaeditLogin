@@ -274,9 +274,12 @@ func buildRankings(items []enrichedChannel) rankings {
 	return r
 }
 
-// buildTrends returns one aggregate point per day in [from, to]. For
-// each channel the last known value up to that day is carried forward,
-// so missing days do not create dips in the aggregate line.
+// buildTrends returns aggregate points only for days that have a metric
+// snapshot actually persisted in account_metric_history. It is tempting to
+// carry the last value forward because these are cumulative YouTube metrics,
+// but doing that makes an old snapshot look like a fresh daily write. A
+// missing day is therefore omitted from the series instead of being
+// fabricated from yesterday's data.
 func buildTrends(
 	accounts []*models.PlatformAccount,
 	histories map[int64][]repository.AccountMetricPoint,
@@ -288,37 +291,29 @@ func buildTrends(
 		accountIDs = append(accountIDs, a.ID)
 	}
 
-	type snapshot struct {
-		subs   int64
-		views  int64
-		videos int64
+	byDay := make(map[string]map[int64]repository.AccountMetricPoint)
+	for _, id := range accountIDs {
+		for _, point := range histories[id] {
+			day := point.Date.UTC().Format("2006-01-02")
+			if byDay[day] == nil {
+				byDay[day] = make(map[int64]repository.AccountMetricPoint)
+			}
+			byDay[day][id] = point
+		}
 	}
-
-	current := make(map[int64]snapshot, len(accountIDs))
-	indices := make(map[int64]int, len(accountIDs))
 
 	var out []trendPoint
 	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
-		for _, id := range accountIDs {
-			hist := histories[id]
-			idx := indices[id]
-			for idx < len(hist) && !hist[idx].Date.After(d) {
-				current[id] = snapshot{
-					subs:   hist[idx].Subscribers,
-					views:  hist[idx].Views,
-					videos: hist[idx].Videos,
-				}
-				idx++
-			}
-			indices[id] = idx
+		points := byDay[d.UTC().Format("2006-01-02")]
+		if len(points) == 0 {
+			continue
 		}
-
 		var p trendPoint
 		for _, id := range accountIDs {
-			if s, ok := current[id]; ok {
-				p.Subscribers += s.subs
-				p.Views += s.views
-				p.Videos += s.videos
+			if point, ok := points[id]; ok {
+				p.Subscribers += point.Subscribers
+				p.Views += point.Views
+				p.Videos += point.Videos
 			}
 		}
 		p.Date = d.Format("2006-01-02")

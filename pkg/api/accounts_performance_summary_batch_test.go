@@ -73,7 +73,30 @@ func TestHandleGetAccountsPerformanceSummary_UsesBatchHistory(t *testing.T) {
 	if len(response.Rankings.ByViews) != 3 || response.Rankings.ByViews[0].ID != 33 || response.Rankings.ByViews[0].Value != 300 {
 		t.Fatalf("view ranking = %+v, want account 33 first with 300", response.Rankings.ByViews)
 	}
-	if len(response.Trends) != 30 || response.Trends[len(response.Trends)-1].Views != 600 {
-		t.Fatalf("trend aggregation = %+v, want 30 points ending at 600 views", response.Trends)
+	if len(response.Trends) != 1 || response.Trends[0].Views != 600 {
+		t.Fatalf("trend aggregation = %+v, want only the persisted snapshot day with 600 views", response.Trends)
+	}
+}
+
+func TestBuildTrendsDoesNotFabricateMissingDays(t *testing.T) {
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
+	accounts := []*models.PlatformAccount{{ID: 11}}
+	histories := map[int64][]repository.AccountMetricPoint{
+		11: {
+			{Date: from, Views: 100, Videos: 1},
+			{Date: to, Views: 150, Videos: 2},
+		},
+	}
+
+	trends := buildTrends(accounts, histories, from, to)
+	if len(trends) != 2 {
+		t.Fatalf("trend points = %+v, want only the two persisted days", trends)
+	}
+	if trends[0].Date != "2026-07-01" || trends[0].Views != 100 {
+		t.Fatalf("first trend = %+v, want July 1 snapshot", trends[0])
+	}
+	if trends[1].Date != "2026-07-03" || trends[1].Views != 150 {
+		t.Fatalf("second trend = %+v, want July 3 snapshot", trends[1])
 	}
 }

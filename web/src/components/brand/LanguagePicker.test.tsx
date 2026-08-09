@@ -11,6 +11,7 @@ describe("LanguagePicker", () => {
     expect(trigger).toHaveAttribute("aria-haspopup", "menu");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(trigger).toHaveAttribute("title", "English · clicca per cambiare");
+    expect(trigger.textContent).not.toContain("🇬🇧");
 
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
