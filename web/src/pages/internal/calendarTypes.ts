@@ -6,6 +6,9 @@ export type Post = {
   scheduled_at?: string | null;
   status: string;
   created_at: string;
+  source?: "post" | "upload";
+  targets?: number[];
+  source_type?: string;
 };
 
 export type Workspace = { id: number; name: string };

@@ -12,6 +12,7 @@ import (
 // AccountMetricPoint represents a single daily metric row for an account.
 type AccountMetricPoint struct {
 	Date          time.Time `json:"date"`
+	UpdatedAt     time.Time `json:"-"`
 	Subscribers   int64     `json:"subscribers"`
 	Views         int64     `json:"views"`
 	Videos        int64     `json:"videos"`
@@ -21,6 +22,16 @@ type AccountMetricPoint struct {
 	RevenueCents  *int64    `json:"revenue_cents,omitempty"`
 	RPMCents      *int64    `json:"rpm_cents,omitempty"`
 	CPMCents      *int64    `json:"cpm_cents,omitempty"`
+}
+
+// utcDay normalizes provider timestamps to the UTC calendar day.
+func utcDay(value time.Time) time.Time {
+	if value.IsZero() {
+		value = time.Now().UTC()
+	}
+	value = value.UTC()
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 // AccountMetricsRepository persists daily metric snapshots for
@@ -57,7 +68,7 @@ func (r *AccountMetricsRepository) UpsertMonetary(
 		    cpm_cents       = EXCLUDED.cpm_cents,
 		    updated_at      = NOW()`,
 		platformAccountID,
-		date.Truncate(24*time.Hour),
+		utcDay(date),
 		point.RevenueCents,
 		point.RPMCents,
 		point.CPMCents,
@@ -94,7 +105,7 @@ func (r *AccountMetricsRepository) UpsertDaily(
 		    cpm_cents          = EXCLUDED.cpm_cents,
 		    updated_at         = NOW()`,
 		platformAccountID,
-		date.Truncate(24*time.Hour),
+		utcDay(date),
 		point.Subscribers,
 		point.Views,
 		point.Videos,
@@ -119,14 +130,14 @@ func (r *AccountMetricsRepository) GetHistory(
 	to time.Time,
 ) ([]AccountMetricPoint, error) {
 	rows, err := r.db.Query(
-		`SELECT metric_date, subscribers, views, videos,
+		`SELECT metric_date, updated_at, subscribers, views, videos,
 		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents, cpm_cents
 		 FROM account_metric_history
 		 WHERE platform_account_id = $1
 		   AND metric_date >= $2
 		   AND metric_date <= $3
 		 ORDER BY metric_date ASC`,
-		platformAccountID, from.Truncate(24*time.Hour), to.Truncate(24*time.Hour),
+		platformAccountID, utcDay(from), utcDay(to),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query metric history: %w", err)
@@ -138,6 +149,7 @@ func (r *AccountMetricsRepository) GetHistory(
 		var p AccountMetricPoint
 		if err := rows.Scan(
 			&p.Date,
+			&p.UpdatedAt,
 			&p.Subscribers,
 			&p.Views,
 			&p.Videos,
@@ -176,14 +188,14 @@ func (r *AccountMetricsRepository) GetHistoryBatch(
 	}
 
 	rows, err := r.db.Query(
-		`SELECT platform_account_id, metric_date, subscribers, views, videos,
+		`SELECT platform_account_id, metric_date, updated_at, subscribers, views, videos,
 		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents, cpm_cents
 		 FROM account_metric_history
 		 WHERE platform_account_id = ANY($1::bigint[])
 		   AND metric_date >= $2
 		   AND metric_date <= $3
 		 ORDER BY platform_account_id ASC, metric_date DESC`,
-		pq.Array(platformAccountIDs), from.Truncate(24*time.Hour), to.Truncate(24*time.Hour),
+		pq.Array(platformAccountIDs), utcDay(from), utcDay(to),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query metric history for accounts: %w", err)
@@ -196,6 +208,7 @@ func (r *AccountMetricsRepository) GetHistoryBatch(
 		if err := rows.Scan(
 			&accountID,
 			&point.Date,
+			&point.UpdatedAt,
 			&point.Subscribers,
 			&point.Views,
 			&point.Videos,
@@ -230,7 +243,7 @@ func (r *AccountMetricsRepository) GetHistoryBatch(
 // account, or nil if no history exists.
 func (r *AccountMetricsRepository) LatestForAccount(platformAccountID int64) (*AccountMetricPoint, error) {
 	row := r.db.QueryRow(
-		`SELECT metric_date, subscribers, views, videos,
+		`SELECT metric_date, updated_at, subscribers, views, videos,
 		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents, cpm_cents
 		 FROM account_metric_history
 		 WHERE platform_account_id = $1
@@ -241,6 +254,7 @@ func (r *AccountMetricsRepository) LatestForAccount(platformAccountID int64) (*A
 	var p AccountMetricPoint
 	err := row.Scan(
 		&p.Date,
+		&p.UpdatedAt,
 		&p.Subscribers,
 		&p.Views,
 		&p.Videos,
@@ -279,7 +293,7 @@ func (r *AccountMetricsRepository) LatestForAccounts(platformAccountIDs []int64)
 	query := fmt.Sprintf(
 		`SELECT DISTINCT ON (platform_account_id)
 		        platform_account_id,
-		        metric_date, subscribers, views, videos,
+		        metric_date, updated_at, subscribers, views, videos,
 		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents, cpm_cents
 		 FROM account_metric_history
 		 WHERE platform_account_id IN (%s)
@@ -300,6 +314,7 @@ func (r *AccountMetricsRepository) LatestForAccounts(platformAccountIDs []int64)
 		if err := rows.Scan(
 			&accountID,
 			&p.Date,
+			&p.UpdatedAt,
 			&p.Subscribers,
 			&p.Views,
 			&p.Videos,

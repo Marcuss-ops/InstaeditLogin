@@ -79,9 +79,10 @@ type accountsPerformanceSummaryResponse struct {
 		Videos      int64  `json:"videos"`
 		Revenue     *int64 `json:"revenue_cents,omitempty"`
 	} `json:"aggregates"`
-	Channels []channelPerformanceSummary `json:"channels"`
-	Rankings rankings                    `json:"rankings"`
-	Trends   []trendPoint                `json:"trends"`
+	Channels      []channelPerformanceSummary `json:"channels"`
+	Rankings      rankings                    `json:"rankings"`
+	Trends        []trendPoint                `json:"trends"`
+	DataUpdatedAt *time.Time                  `json:"data_updated_at,omitempty"`
 }
 
 // isAllowedSummaryDay reports whether days is one of the canonical
@@ -192,6 +193,7 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 	}
 
 	resp := accountsPerformanceSummaryResponse{PeriodDays: days}
+	resp.DataUpdatedAt = latestMetricUpdatedAt(histories)
 	resp.Channels = make([]channelPerformanceSummary, 0, len(enrichedList))
 
 	for _, e := range enrichedList {

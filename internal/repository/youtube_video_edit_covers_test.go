@@ -32,17 +32,18 @@ func TestYouTubeVideoEditRepository_ListCoversByGroupAccounts(t *testing.T) {
 			"yve.id", "yve.platform_account_id", "yve.youtube_video_id",
 			"yve.velox_project_id", "yve.thumbnail_media_id",
 			"yve.source_thumbnail_url", "yve.status", "yve.draft_title",
+			"yve.draft_description",
 			"yve.created_at", "yve.updated_at",
 		}).
 			AddRow("ytes_cover_1", 7, "YouTube cover", "ready",
 				media, nil, 2, now.Add(-time.Hour), now,
 				"ytes_cover_1", 42, "fwFGQglE9c0", "ve_cover_1", nil,
-				"", "editing", title,
+				"", "editing", title, "Descrizione test",
 				now.Add(-time.Hour), now).
 			AddRow("ytes_cover_2", 7, "YouTube cover", "archived",
 				nil, nil, 5, now.Add(-2*time.Hour), now.Add(-time.Hour),
 				"ytes_cover_2", 43, "PlradxPxWy0", "ve_cover_2", nil,
-				"", "published", nil,
+				"", "published", nil, nil,
 				now.Add(-2*time.Hour), now.Add(-time.Hour)))
 
 	covers, err := repo.ListCoversByGroupAccounts(context.Background(), 7, []int64{42, 43})

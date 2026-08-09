@@ -20,15 +20,15 @@ func TestAccountMetricsRepositoryGetHistoryBatch(t *testing.T) {
 	dayOne := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	dayTwo := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
 
-	mock.ExpectQuery(`SELECT platform_account_id, metric_date, subscribers, views, videos`).
-		WithArgs(pq.Array([]int64{11, 22}), from.Truncate(24*time.Hour), to.Truncate(24*time.Hour)).
+	mock.ExpectQuery(`SELECT platform_account_id, metric_date, updated_at, subscribers, views, videos`).
+		WithArgs(pq.Array([]int64{11, 22}), utcDay(from), utcDay(to)).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"platform_account_id", "metric_date", "subscribers", "views", "videos",
+			"platform_account_id", "metric_date", "updated_at", "subscribers", "views", "videos",
 			"watch_time_minutes", "impressions", "ctr", "revenue_cents", "rpm_cents", "cpm_cents",
 		}).
-			AddRow(int64(11), dayTwo, int64(110), int64(1200), int64(11), nil, nil, nil, nil, nil, nil).
-			AddRow(int64(11), dayOne, int64(100), int64(1000), int64(10), nil, nil, nil, nil, nil, nil).
-			AddRow(int64(22), dayOne, int64(200), int64(2000), int64(20), nil, nil, nil, nil, nil, nil))
+			AddRow(int64(11), dayTwo, dayTwo.Add(12*time.Hour), int64(110), int64(1200), int64(11), nil, nil, nil, nil, nil, nil).
+			AddRow(int64(11), dayOne, dayOne.Add(12*time.Hour), int64(100), int64(1000), int64(10), nil, nil, nil, nil, nil, nil).
+			AddRow(int64(22), dayOne, dayOne.Add(12*time.Hour), int64(200), int64(2000), int64(20), nil, nil, nil, nil, nil, nil))
 
 	got, err := NewAccountMetricsRepository(db).GetHistoryBatch([]int64{11, 22}, from, to)
 	if err != nil {

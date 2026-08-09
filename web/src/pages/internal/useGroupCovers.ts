@@ -32,6 +32,7 @@ export function useGroupCovers(groupId: number) {
   const [state, setState] = useState<CoversLoadState>({ kind: "loading" });
   const [openingCoverId, setOpeningCoverId] = useState<string | null>(null);
   const [renamingCoverId, setRenamingCoverId] = useState<string | null>(null);
+  const [savingCoverId, setSavingCoverId] = useState<string | null>(null);
   const toast = useToast();
 
   const loadCovers = useCallback(
@@ -187,5 +188,30 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate]);
 
-  return { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId };
+  const saveCoverDraft = useCallback(async (cover: GroupCover, title: string, description: string): Promise<boolean> => {
+    if (!cover.velox_project_id) return false;
+    setSavingCoverId(cover.project_id);
+    try {
+      await authedFetch(
+        `/api/v1/youtube/editor-sessions/by-project/${encodeURIComponent(cover.velox_project_id)}/draft`,
+        { method: "PUT", body: JSON.stringify({ title: title.trim(), description }) },
+      );
+      setState((previous) => previous.kind !== "ready" ? previous : {
+        ...previous,
+        covers: previous.covers.map((item) => item.project_id === cover.project_id
+          ? { ...item, draft_title: title.trim(), draft_description: description }
+          : item),
+      });
+      toast.success("Modifiche copertina salvate.");
+      return true;
+    } catch (error) {
+      if (error instanceof AuthError) navigate("/login", { replace: true });
+      else toast.error(error instanceof Error ? error.message : "Impossibile salvare la copertina.");
+      return false;
+    } finally {
+      setSavingCoverId(null);
+    }
+  }, [navigate, toast]);
+
+  return { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
 }

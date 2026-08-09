@@ -313,8 +313,10 @@ func (r *SnapshotRepository) ClaimPendingSnapshotRefreshes(ctx context.Context, 
 		  FROM account_resource_snapshots ars
 		  JOIN platform_accounts pa ON pa.id = ars.platform_account_id
 		 WHERE pa.status NOT IN ('deleted', 'disconnected', 'revoked', 'reauth_required', 'suspended')
-		   AND ars.refresh_pending_at IS NOT NULL
-		   AND ars.refresh_pending_at <= NOW()
+		   AND (
+			   (ars.refresh_pending_at IS NOT NULL AND ars.refresh_pending_at <= NOW())
+			   OR (ars.refresh_pending_at IS NULL AND ars.fetched_at <= NOW() - INTERVAL '24 hours')
+		   )
 		   AND (ars.refresh_claimed_until IS NULL OR ars.refresh_claimed_until <= NOW())
 		 ORDER BY ars.refresh_pending_at, ars.platform_account_id
 		 FOR UPDATE OF ars SKIP LOCKED

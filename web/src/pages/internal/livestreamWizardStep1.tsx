@@ -42,7 +42,8 @@ export function LiveStreamWizardStep1({
 
   return (
     <>
-      <section className="mt-8">
+      <div className="mt-8 grid items-start gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
+      <section className="mt-0">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-[15px] font-bold text-white">Canali YouTube del workspace</h2>
           {state.kind === "ready" && (
@@ -99,6 +100,23 @@ export function LiveStreamWizardStep1({
           </div>
         )}
       </section>
+
+      <aside className="rounded-2xl border border-violet-400/20 bg-gradient-to-br from-violet-500/[0.12] via-white/[0.03] to-cyan-400/[0.06] p-5 lg:sticky lg:top-6">
+        <div className="mb-5 flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500/20 text-violet-200"><Radio size={18} aria-hidden="true" /></div>
+          <div>
+            <p className="text-[13px] font-bold text-white">Setup rapido</p>
+            <p className="text-[11px] text-[#9aa0aa]">Solo ciò che serve per iniziare</p>
+          </div>
+        </div>
+        <div className="space-y-3 text-[12px]">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2.5"><span className="text-[#9aa0aa]">Canale</span><span className="max-w-[150px] truncate font-semibold text-white">{selected?.username || "Da selezionare"}</span></div>
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2.5"><span className="text-[#9aa0aa]">Accesso YouTube</span><span className={selected ? "text-emerald-300" : "text-[#7f8591]"}>{selected ? "Pronto" : "In attesa"}</span></div>
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2.5"><span className="text-[#9aa0aa]">Prossimo step</span><span className="font-semibold text-violet-200">Titolo e copertina</span></div>
+        </div>
+        <p className="mt-5 text-[11px] leading-relaxed text-[#9aa0aa]">I dettagli avanzati restano disponibili dopo la scelta del canale, senza appesantire questa schermata.</p>
+      </aside>
+      </div>
 
       {/* Bottom action bar */}
       <div className="sticky bottom-4 mt-8 flex flex-col gap-3 rounded-2xl border border-white/[0.10] bg-[#14141e]/95 p-4 shadow-[0_-8px_40px_rgba(0,0,0,0.5)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">

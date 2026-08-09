@@ -337,6 +337,33 @@ func TestHandleGetDashboardAnalytics_FullResponseCache(t *testing.T) {
 	}
 }
 
+func TestHandleGetDashboardAnalytics_RefreshQueryBypassesCache(t *testing.T) {
+	store := &fakeMetricHistoryStore{
+		getBatchFn: func(ids []int64, _, _ time.Time) (map[int64][]repository.AccountMetricPoint, error) {
+			out := make(map[int64][]repository.AccountMetricPoint, len(ids))
+			for _, id := range ids {
+				out[id] = []repository.AccountMetricPoint{{Date: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), Views: 100}}
+			}
+			return out, nil
+		},
+	}
+	svc := &dashboardAnalyticsYouTubeService{}
+	r := newDashboardAnalyticsRouter(t, []*models.PlatformAccount{
+		{ID: 11, UserID: 42, Platform: models.PlatformYouTube, Username: "channel-one", PlatformUserID: "UC1"},
+	}, store, svc)
+
+	decodeDashboardResponse(t, doDashboardRequest(t, r, "28"))
+	decodeDashboardResponse(t, doDashboardRequest(t, r, "28"))
+	if store.getBatchCount != 1 {
+		t.Fatalf("normal cached requests: history batch calls = %d, want 1", store.getBatchCount)
+	}
+
+	decodeDashboardResponse(t, doDashboardRequest(t, r, "28&refresh=1"))
+	if store.getBatchCount != 2 {
+		t.Fatalf("forced refresh: history batch calls = %d, want 2", store.getBatchCount)
+	}
+}
+
 func TestHandleGetDashboardAnalytics_TopVideosDegradation(t *testing.T) {
 	accounts := []*models.PlatformAccount{
 		{ID: 11, UserID: 42, Platform: models.PlatformYouTube, Username: "channel-one", PlatformUserID: "UC1"},

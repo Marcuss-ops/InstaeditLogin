@@ -30,7 +30,8 @@ export interface GroupCover {
   platform_account_id: number;
   channel_name?: string;
   language?: string;
-  draft_title?: string | null;
+	draft_title?: string | null;
+	draft_description?: string | null;
   project_version: number;
   created_at: string;
   updated_at: string;

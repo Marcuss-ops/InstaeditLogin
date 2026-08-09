@@ -45,6 +45,19 @@ export function ChannelsPerformancePage() {
             <p className="text-[15px] text-[#9aa0aa] mt-1">
               Aggregated KPIs and rankings across all your YouTube channels.
             </p>
+            {state.kind === "ready" && (
+              <p className="text-[12px] text-[#6b7280] mt-0.5">
+                Ultimo dato salvato alle{" "}
+                {state.data.data_updated_at
+                  ? new Date(state.data.data_updated_at).toLocaleString(undefined, {
+                      day: "2-digit",
+                      month: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })
+                  : "—"}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {PERIODS.map((p) => (

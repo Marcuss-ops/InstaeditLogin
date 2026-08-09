@@ -42,6 +42,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
   opening,
   renaming,
   onOpenEditor,
+  onOpenPreview,
   onRenameCover,
 }: {
   cover: GroupCover;
@@ -50,6 +51,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
   /** True while a rename PUT for this cover is in flight. */
   renaming?: boolean;
   onOpenEditor: (cover: GroupCover) => void;
+  onOpenPreview: (cover: GroupCover) => void;
   onRenameCover: (cover: GroupCover, newTitle: string) => Promise<boolean> | boolean;
 }) {
   const status = projectStatusLabel(cover.project_status);
@@ -97,7 +99,12 @@ export const GroupCoverCard = memo(function GroupCoverCard({
       className="group overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.025] transition-colors hover:border-violet-400/30 hover:bg-white/[0.05]"
       data-testid="group-cover-card"
     >
-      <div className="relative aspect-video w-full overflow-hidden bg-black/40">
+      <div
+        className="relative aspect-video w-full cursor-zoom-in overflow-hidden bg-black/40"
+        onClick={() => onOpenPreview(cover)}
+        onDoubleClick={(event) => { event.preventDefault(); onOpenEditor(cover); }}
+        title="Clicca per ingrandire · doppio click per modificare in InstaEditor"
+      >
         {preview ? (
           <img
             src={preview}

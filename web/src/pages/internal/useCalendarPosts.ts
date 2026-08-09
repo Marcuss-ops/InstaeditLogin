@@ -21,7 +21,9 @@ export function useCalendarPosts() {
     setState({ kind: "loading" });
 
     try {
-      const [postsResp, workspacesResp, groupsResp] = await Promise.all([
+      const from = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      const to = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString();
+      const [postsResp, workspacesResp, groupsResp, uploadsResp] = await Promise.all([
         authedFetch("/api/v1/posts", { signal: controller.signal }),
         authedFetch("/api/v1/workspaces", { signal: controller.signal }).catch(
           () => null,
@@ -29,9 +31,40 @@ export function useCalendarPosts() {
         authedFetch("/api/v1/groups/aggregate", { signal: controller.signal }).catch(
           () => null,
         ),
+        authedFetch(`/api/v1/uploads?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`, { signal: controller.signal }).catch(
+          () => null,
+        ),
       ]);
       if (controller.signal.aborted) return;
       const data = (await postsResp.json()) as { posts: Post[] };
+      const uploadsData = uploadsResp && uploadsResp.ok
+        ? (await uploadsResp.json()) as { uploads?: Array<{
+            id: number;
+            workspace_id: number;
+            title?: string;
+            caption?: string;
+            publish_at?: string | null;
+            scheduled_at?: string | null;
+            status: string;
+            created_at: string;
+            targets?: number[];
+            source_type?: string;
+          }> }
+        : { uploads: [] };
+      const scheduledUploads: Post[] = (uploadsData.uploads ?? [])
+        .filter((upload) => Boolean(upload.publish_at || upload.scheduled_at))
+        .map((upload) => ({
+          id: upload.id,
+          workspace_id: upload.workspace_id,
+          title: upload.title,
+          caption: upload.caption,
+          scheduled_at: upload.publish_at ?? upload.scheduled_at,
+          status: upload.status === "ingest_completed" ? "queued" : upload.status,
+          created_at: upload.created_at,
+          targets: upload.targets ?? [],
+          source_type: upload.source_type,
+          source: "upload",
+        }));
       let workspaces: Workspace[] = [];
       if (workspacesResp && workspacesResp.ok) {
         const wsData = (await workspacesResp.json()) as {
@@ -44,7 +77,7 @@ export function useCalendarPosts() {
         const groupsData = (await groupsResp.json()) as { groups?: CalendarGroup[] };
         groups = groupsData.groups ?? [];
       }
-      setState({ kind: "ready", posts: data.posts ?? [], workspaces, groups });
+      setState({ kind: "ready", posts: [...(data.posts ?? []), ...scheduledUploads], workspaces, groups });
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) {

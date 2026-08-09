@@ -107,7 +107,8 @@ export function LiveStreamWizardStep2({
   };
 
   return (
-    <section className="mt-8 space-y-6" data-testid="livestream-new-step2">
+    <section className="mt-8" data-testid="livestream-new-step2">
+      <div className="grid items-start gap-5 lg:grid-cols-2">
       {/* Titolo + Descrizione */}
       <Card title="Identità della trasmissione">
         <Field label="Titolo" htmlFor="ls-title" required counter={`${form.title.length}/${TITLE_MAX}`}>
@@ -322,8 +323,11 @@ export function LiveStreamWizardStep2({
         )}
       </Card>
 
-      {/* Contenuti broadcast */}
-      <Card title="Opzioni di trasmissione">
+      {/* Contenuti broadcast: advanced controls stay collapsed so the main
+          live setup remains compact while the existing settings remain available. */}
+      <details className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-5 lg:col-span-2">
+        <summary className="cursor-pointer list-none text-[15px] font-bold text-white marker:hidden">Opzioni avanzate <span className="ml-2 text-[11px] font-normal text-[#7f8591]">DVR, auto-start, auto-stop e latenza</span></summary>
+        <div className="mt-4 space-y-4">
         <ToggleRow
           label="Attiva DVR"
           hint="Permette agli spettatori di mettere in pausa e riavvolgere la live."
@@ -360,10 +364,12 @@ export function LiveStreamWizardStep2({
             ))}
           </select>
         </Field>
-      </Card>
+        </div>
+      </details>
+      </div>
 
       {/* Action bar */}
-      <div className="sticky bottom-4 flex flex-col gap-3 rounded-2xl border border-white/[0.10] bg-[#14141e]/95 p-4 shadow-[0_-8px_40px_rgba(0,0,0,0.5)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+      <div className="sticky bottom-4 mt-5 flex flex-col gap-3 rounded-2xl border border-white/[0.10] bg-[#14141e]/95 p-4 shadow-[0_-8px_40px_rgba(0,0,0,0.5)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <p className="text-[12px] text-[#9aa0aa]" data-testid="livestream-new-step2-hint">
             Canale: <span className="text-[#cdd2da]">{channelName}</span>

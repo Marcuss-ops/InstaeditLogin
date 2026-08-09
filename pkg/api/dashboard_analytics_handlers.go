@@ -23,11 +23,12 @@ import (
 // ranking. Group memberships deliberately live in /api/v1/groups/*
 // (the Groups page), so this endpoint never exposes group data.
 type dashboardAnalyticsResponse struct {
-	PeriodDays  int                   `json:"period_days"`
-	Aggregates  dashboardAggregates   `json:"aggregates"`
-	Channels    []dashboardChannelRow `json:"channels"`
-	TopVideos   []dashboardTopVideo   `json:"top_videos"`
-	GeneratedAt time.Time             `json:"generated_at"`
+	PeriodDays    int                   `json:"period_days"`
+	Aggregates    dashboardAggregates   `json:"aggregates"`
+	Channels      []dashboardChannelRow `json:"channels"`
+	TopVideos     []dashboardTopVideo   `json:"top_videos"`
+	GeneratedAt   time.Time             `json:"generated_at"`
+	DataUpdatedAt *time.Time            `json:"data_updated_at,omitempty"`
 }
 
 type dashboardAggregates struct {
@@ -135,14 +136,17 @@ func (r *Router) handleGetDashboardAnalytics(w http.ResponseWriter, req *http.Re
 	// history read or YouTube fan-out.
 	cacheKey := fmt.Sprintf("%d|%d", identity.UserID(), days)
 	now := time.Now()
+	forceRefresh := req.URL.Query().Get("refresh") == "1" || req.URL.Query().Get("refresh") == "true"
 	r.dashboardAnalyticsCacheMu.Lock()
 	if r.dashboardAnalyticsCache == nil {
 		r.dashboardAnalyticsCache = make(map[string]dashboardAnalyticsCacheEntry)
 	}
-	if cached, hit := r.dashboardAnalyticsCache[cacheKey]; hit && cached.expiresAt.After(now) {
-		r.dashboardAnalyticsCacheMu.Unlock()
-		writeJSON(w, http.StatusOK, cached.resp)
-		return
+	if !forceRefresh {
+		if cached, hit := r.dashboardAnalyticsCache[cacheKey]; hit && cached.expiresAt.After(now) {
+			r.dashboardAnalyticsCacheMu.Unlock()
+			writeJSON(w, http.StatusOK, cached.resp)
+			return
+		}
 	}
 	r.dashboardAnalyticsCacheMu.Unlock()
 
@@ -189,6 +193,7 @@ func (r *Router) handleGetDashboardAnalytics(w http.ResponseWriter, req *http.Re
 		TopVideos:   []dashboardTopVideo{},
 		GeneratedAt: to,
 	}
+	resp.DataUpdatedAt = latestMetricUpdatedAt(histories)
 
 	var totalRevenue int64
 	hasRevenue := false

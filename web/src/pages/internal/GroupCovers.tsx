@@ -6,6 +6,7 @@ import { useGroupCovers } from "./useGroupCovers";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { cn } from "../../lib/utils";
 import type { GroupCover } from "./groupCoversTypes";
+import { GroupCoverPreviewModal } from "./GroupCoverPreviewModal";
 
 type CoverFilter = "all" | "draft" | "ready" | "archived";
 
@@ -24,13 +25,16 @@ const FILTERS: Array<{ key: CoverFilter; label: string }> = [
  * that opens the editor in a new tab (the SPA never navigates away).
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId } = useGroupCovers(groupId);
+  const { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
   // Video manifest for the one-click create: quickCreateCover opens
   // InstaEditor directly on the group's most recent private video and
   // saves the new cover under a random name (no picker dialog). The name
   // embeds the group name so the cover reads as belonging to this group.
   const { quickCreateCover, openingVideoID } = useGroupYouTubeVideos(groupId, true, groupName);
   const [filter, setFilter] = useState<CoverFilter>("all");
+  const [previewCover, setPreviewCover] = useState<GroupCover | null>(null);
+  const [previewTitle, setPreviewTitle] = useState("");
+  const [previewDescription, setPreviewDescription] = useState("");
 
   // Both editor openings grab the destination tab SYNCHRONOUSLY inside
   // the click gesture: once the async session/draft/launch round-trips
@@ -49,6 +53,12 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
   const handleOpenCoverEditor = (cover: GroupCover) => {
     const tab = window.open("about:blank", "_blank");
     void openCoverEditor(cover, tab);
+  };
+
+  const handleOpenPreview = (cover: GroupCover) => {
+    setPreviewCover(cover);
+    setPreviewTitle(cover.draft_title || cover.name || "");
+    setPreviewDescription(cover.draft_description || "");
   };
 
   const visibleCovers = useMemo(() => {
@@ -176,11 +186,31 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
               opening={openingCoverId === cover.project_id}
               renaming={renamingCoverId === cover.project_id}
               onOpenEditor={handleOpenCoverEditor}
+              onOpenPreview={handleOpenPreview}
               onRenameCover={renameCover}
             />
           ))}
         </div>
       )}
+
+      {previewCover && state.kind === "ready" ? (
+        <GroupCoverPreviewModal
+          cover={previewCover}
+          previewUrl={previewCover.preview_media_id ? state.previewUrls[previewCover.preview_media_id] : undefined}
+          saving={savingCoverId === previewCover.project_id}
+          opening={openingCoverId === previewCover.project_id}
+          title={previewTitle}
+          description={previewDescription}
+          onTitleChange={setPreviewTitle}
+          onDescriptionChange={setPreviewDescription}
+          onClose={() => setPreviewCover(null)}
+          onSave={() => void saveCoverDraft(previewCover, previewTitle, previewDescription)}
+          onOpenEditor={() => {
+            setPreviewCover(null);
+            handleOpenCoverEditor(previewCover);
+          }}
+        />
+      ) : null}
 
     </section>
   );

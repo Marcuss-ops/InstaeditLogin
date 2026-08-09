@@ -66,7 +66,8 @@ export type TrendPoint = {
 };
 
 export type SummaryData = {
-  period_days: number;
+	period_days: number;
+	data_updated_at?: string;
   aggregates: Aggregates;
   channels: ChannelSummary[];
   rankings?: Rankings;

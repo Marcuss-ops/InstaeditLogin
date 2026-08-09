@@ -122,6 +122,14 @@ const FLAG_BY_CODE = {
   "zh-hant": TW,
 } as unknown as Record<string, FlagComponent>;
 
+const EMOJI_BY_LANGUAGE: Record<string, string> = {
+  it: "🇮🇹", en: "🇬🇧", es: "🇪🇸", fr: "🇫🇷", de: "🇩🇪", pt: "🇵🇹", nl: "🇳🇱",
+  pl: "🇵🇱", sv: "🇸🇪", da: "🇩🇰", no: "🇳🇴", fi: "🇫🇮", cs: "🇨🇿", el: "🇬🇷",
+  tr: "🇹🇷", ru: "🇷🇺", uk: "🇺🇦", ar: "🇸🇦", he: "🇮🇱", hi: "🇮🇳", bn: "🇧🇩",
+  th: "🇹🇭", vi: "🇻🇳", id: "🇮🇩", ms: "🇲🇾", tl: "🇵🇭", ja: "🇯🇵", ko: "🇰🇷",
+  zh: "🇨🇳", "zh-hant": "🇹🇼",
+};
+
 export function LanguageFlag({ code, className = "h-4 w-4", ...rest }: LanguageFlagProps) {
   const normalized = code?.trim().toLowerCase() ?? "";
   const Flag = FLAG_BY_CODE[normalized];
@@ -130,6 +138,10 @@ export function LanguageFlag({ code, className = "h-4 w-4", ...rest }: LanguageF
     return <Globe aria-hidden="true" className={className} {...rest} />;
   }
   return <Flag aria-hidden="true" focusable="false" className={className} {...rest} />;
+}
+
+export function languageEmoji(code?: string): string {
+  return EMOJI_BY_LANGUAGE[code?.trim().toLowerCase() ?? ""] ?? "🌐";
 }
 
 /**

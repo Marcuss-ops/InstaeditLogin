@@ -240,11 +240,13 @@ export function InternalDashboard() {
             </p>
             {state.kind === "ready" && (
               <p className="text-[12px] text-[#6b7280] mt-0.5">
-                Dati aggiornati alle{" "}
-                {new Date(state.data.generated_at).toLocaleTimeString(undefined, {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
+				Ultimo dato salvato alle{" "}
+				{new Date(state.data.data_updated_at ?? state.data.generated_at).toLocaleString(undefined, {
+					hour: "2-digit",
+					minute: "2-digit",
+					day: "2-digit",
+					month: "2-digit",
+				})}
               </p>
             )}
           </div>

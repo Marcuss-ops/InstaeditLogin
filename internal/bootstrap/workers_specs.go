@@ -407,6 +407,7 @@ func (a *App) snapshotRefreshSweepWorkerSpec() worker.WorkerSpec {
 			}
 			sw := worker.NewSnapshotRefreshSweepWorker(
 				repository.NewSnapshotRepository(a.DB),
+				repository.NewAccountMetricsRepository(a.DB),
 				a.Vault,
 				refreshers,
 				fetchers,

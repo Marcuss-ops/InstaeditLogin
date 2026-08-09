@@ -46,6 +46,7 @@ type groupCoverEntry struct {
 	ChannelName        string    `json:"channel_name,omitempty"`
 	Language           string    `json:"language,omitempty"`
 	DraftTitle         *string   `json:"draft_title,omitempty"`
+	DraftDescription   *string   `json:"draft_description,omitempty"`
 	ProjectVersion     int64     `json:"project_version"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
@@ -173,6 +174,7 @@ func (r *Router) handleListGroupCovers(w http.ResponseWriter, req *http.Request)
 			YouTubeVideoID:     c.YouTubeVideoID,
 			PlatformAccountID:  c.PlatformAccountID,
 			DraftTitle:         c.DraftTitle,
+			DraftDescription:   c.DraftDescription,
 			ProjectVersion:     c.ProjectVersion,
 			CreatedAt:          c.ProjectCreatedAt,
 			UpdatedAt:          c.ProjectUpdatedAt,

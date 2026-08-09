@@ -57,6 +57,7 @@ func (r *YouTubeVideoEditRepository) ListCoversByGroupAccounts(ctx context.Conte
 		        yve.id, yve.platform_account_id, yve.youtube_video_id,
 		        yve.velox_project_id, yve.thumbnail_media_id,
 		        yve.source_thumbnail_url, yve.status, yve.draft_title,
+		        yve.draft_description,
 		        yve.created_at, yve.updated_at
 		   FROM thumbnail_projects tp
 		   JOIN velox_project_bridges vpb
@@ -85,6 +86,7 @@ func (r *YouTubeVideoEditRepository) ListCoversByGroupAccounts(ctx context.Conte
 			&c.SessionID, &c.PlatformAccountID, &c.YouTubeVideoID,
 			&c.VeloxProjectID, &c.ThumbnailMediaID,
 			&c.SourceThumbnailURL, &c.EditStatus, &c.DraftTitle,
+			&c.DraftDescription,
 			&c.SessionCreatedAt, &c.SessionUpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("youtube video edit ListCoversByGroupAccounts scan: %w", err)

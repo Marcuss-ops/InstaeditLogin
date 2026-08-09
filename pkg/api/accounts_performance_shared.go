@@ -16,6 +16,12 @@
 // build in pkg/api/accounts_performance_summary_handlers.go.
 package api
 
+import (
+	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+)
+
 // accountPerformanceSummary is the per-channel aggregate wire shape
 // the summary endpoint returns inside `channels[].metrics`. Distinct
 // from analytics.Summary (per-channel endpoint) — kept separate so
@@ -65,6 +71,22 @@ func growth(previous, current int64) accountPerformanceMetricGrowth {
 		g.Percent = float64(g.Absolute) / float64(previous) * 100
 	}
 	return g
+}
+
+func latestMetricUpdatedAt(histories map[int64][]repository.AccountMetricPoint) *time.Time {
+	var latest time.Time
+	for _, history := range histories {
+		for _, point := range history {
+			if point.UpdatedAt.After(latest) {
+				latest = point.UpdatedAt
+			}
+		}
+	}
+	if latest.IsZero() {
+		return nil
+	}
+	latest = latest.UTC()
+	return &latest
 }
 
 // engagementRateForSummary returns average views per video, which we

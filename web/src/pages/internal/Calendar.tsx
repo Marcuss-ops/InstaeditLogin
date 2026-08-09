@@ -8,7 +8,7 @@ import { CalendarPostsPanel } from "./CalendarPostsPanel";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 
 export function CalendarPage() {
-  const [view, setView] = useState<CalendarViewMode>("week");
+  const [view, setView] = useState<CalendarViewMode>("month");
   const [currentDate, setCurrentDate] = useState(new Date());
   const posts = useCalendarPosts();
 
@@ -37,7 +37,7 @@ export function CalendarPage() {
               Calendar
             </h1>
             <p className="text-[14px] sm:text-[15px] text-[#9aa0aa] mt-1">
-              Plan, drag and schedule your content across all connected channels.
+              Video programmati per tutti i tuoi canali, in un calendario unico.
             </p>
           </div>
 

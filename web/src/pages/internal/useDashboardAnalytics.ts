@@ -32,7 +32,8 @@ export type DashboardAnalyticsData = {
   };
   channels: DashboardChannelRow[];
   top_videos: DashboardTopVideo[];
-  generated_at: string;
+	generated_at: string;
+	data_updated_at?: string;
 };
 
 export type DashboardAnalyticsState =
@@ -164,9 +165,10 @@ export function useDashboardAnalytics(periodDays: number) {
 
       setState({ kind: "loading" });
       try {
-        const response = await authedFetch(
-          `/api/v1/dashboard/analytics?days=${days}`,
-        );
+		const refreshQuery = opts?.force ? "&refresh=1" : "";
+		const response = await authedFetch(
+			`/api/v1/dashboard/analytics?days=${days}${refreshQuery}`,
+		);
         const data = (await response.json()) as DashboardAnalyticsData;
         const entry: DashboardCacheEntry = {
           data,

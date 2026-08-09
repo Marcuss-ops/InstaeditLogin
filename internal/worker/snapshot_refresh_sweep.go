@@ -78,6 +78,14 @@ type SnapshotRefreshStore interface {
 	MarkSnapshotRefreshTerminal(ctx context.Context, accountID int64, code, message string) error
 }
 
+// DailyMetricHistoryStore is the persistence seam for the daily numeric
+// series consumed by Dashboard and Channel Performance. A fresh remote
+// snapshot must update this history row as well, otherwise the UI keeps
+// serving the previous day's values.
+type DailyMetricHistoryStore interface {
+	UpsertDaily(platformAccountID int64, date time.Time, point repository.AccountMetricPoint) error
+}
+
 // AccountDetailsFetcher is the narrow provider surface the worker needs:
 // fetch rich account details for a platform account. The services
 // AccountDetailsProvider satisfies this structurally; defined inline so
@@ -98,12 +106,13 @@ type AccountDetailsFetcher interface {
 // sweep. fetchers maps platform → AccountDetailsFetcher; a platform
 // without a fetcher is skipped (nothing to refresh into a snapshot).
 type SnapshotRefreshSweepWorker struct {
-	store      SnapshotRefreshStore
-	vault      credentials.VaultAPI
-	refreshers map[string]credentials.TokenRefresher
-	fetchers   map[string]AccountDetailsFetcher
-	interval   time.Duration
-	logger     *slog.Logger
+	store       SnapshotRefreshStore
+	metricStore DailyMetricHistoryStore
+	vault       credentials.VaultAPI
+	refreshers  map[string]credentials.TokenRefresher
+	fetchers    map[string]AccountDetailsFetcher
+	interval    time.Duration
+	logger      *slog.Logger
 }
 
 // NewSnapshotRefreshSweepWorker wires the dependencies. interval <= 0
@@ -113,6 +122,7 @@ type SnapshotRefreshSweepWorker struct {
 // SessionsCleanupWorker).
 func NewSnapshotRefreshSweepWorker(
 	store SnapshotRefreshStore,
+	metricStore DailyMetricHistoryStore,
 	vault credentials.VaultAPI,
 	refreshers map[string]credentials.TokenRefresher,
 	fetchers map[string]AccountDetailsFetcher,
@@ -126,12 +136,13 @@ func NewSnapshotRefreshSweepWorker(
 		logger = slog.Default()
 	}
 	return &SnapshotRefreshSweepWorker{
-		store:      store,
-		vault:      vault,
-		refreshers: refreshers,
-		fetchers:   fetchers,
-		interval:   interval,
-		logger:     logger,
+		store:       store,
+		metricStore: metricStore,
+		vault:       vault,
+		refreshers:  refreshers,
+		fetchers:    fetchers,
+		interval:    interval,
+		logger:      logger,
 	}
 }
 
@@ -288,10 +299,34 @@ func (w *SnapshotRefreshSweepWorker) refreshOne(ctx context.Context, p repositor
 			"error", "snapshot persistence failed")
 		return err
 	}
+	if w.metricStore != nil {
+		if err := w.metricStore.UpsertDaily(p.PlatformAccountID, details.FetchedAt, metricPointFromDetails(details.Metrics)); err != nil {
+			w.logger.Warn("snapshot refresh sweep: failed to persist daily metrics (will retry at next interval)",
+				"platform_account_id", p.PlatformAccountID,
+				"platform", p.Platform,
+				"error", "daily metric persistence failed")
+			return err
+		}
+	}
 	w.logger.Debug("snapshot refresh sweep: snapshot refreshed",
 		"platform_account_id", p.PlatformAccountID,
 		"platform", p.Platform)
 	return nil
+}
+
+func metricPointFromDetails(metrics []models.AccountMetric) repository.AccountMetricPoint {
+	point := repository.AccountMetricPoint{}
+	for _, metric := range metrics {
+		switch metric.Key {
+		case "subscribers":
+			point.Subscribers = metric.Value
+		case "views":
+			point.Views = metric.Value
+		case "videos":
+			point.Videos = metric.Value
+		}
+	}
+	return point
 }
 
 // resolveAccountToken resolves a usable access token for the account,

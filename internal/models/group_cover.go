@@ -34,6 +34,7 @@ type GroupCover struct {
 	SourceThumbnailURL string
 	EditStatus         string
 	DraftTitle         *string
+	DraftDescription   *string
 	SessionCreatedAt   time.Time
 	SessionUpdatedAt   time.Time
 }

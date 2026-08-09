@@ -24,6 +24,7 @@ type refreshSweepStoreStub struct {
 
 	mu              sync.Mutex
 	upserted        []*repository.AccountResourceSnapshot
+	dailyMetrics    []repository.AccountMetricPoint
 	upsertCalls     int
 	claimCalls      int
 	rescheduleCalls int
@@ -70,6 +71,13 @@ func (s *refreshSweepStoreStub) UpsertSnapshot(snap *repository.AccountResourceS
 	return nil
 }
 
+func (s *refreshSweepStoreStub) UpsertDaily(_ int64, _ time.Time, point repository.AccountMetricPoint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dailyMetrics = append(s.dailyMetrics, point)
+	return nil
+}
+
 func (s *refreshSweepStoreStub) upsertCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,6 +121,11 @@ func newRefreshSweepHarness(t *testing.T, pending []repository.PendingSnapshotRe
 		DisplayName:  "Refreshed Channel",
 		ExternalID:   "UC-refreshed",
 		FetchedAt:    time.Now(),
+		Metrics: []models.AccountMetric{
+			{Key: "subscribers", Value: 41},
+			{Key: "views", Value: 44600},
+			{Key: "videos", Value: 16},
+		},
 	}}
 	vault := &mockCredentialVault{
 		renewFn: func(_ context.Context, accountID int64, tokenType string, refresher credentials.TokenRefresher) (*models.OAuthToken, error) {
@@ -132,7 +145,7 @@ func newRefreshSweepHarness(t *testing.T, pending []repository.PendingSnapshotRe
 	fetchers := map[string]AccountDetailsFetcher{
 		models.PlatformYouTube: fetcher,
 	}
-	worker := NewSnapshotRefreshSweepWorker(store, vault, refreshers, fetchers, 0, newSweepTestLogger())
+	worker := NewSnapshotRefreshSweepWorker(store, store, vault, refreshers, fetchers, 0, newSweepTestLogger())
 	return store, fetcher, worker
 }
 
@@ -155,6 +168,14 @@ func TestSnapshotRefreshSweep_Tick_RefreshesPendingAccounts(t *testing.T) {
 	if store.upsertCount() != 2 {
 		t.Fatalf("UpsertSnapshot calls: want 2, got %d", store.upsertCount())
 	}
+	store.mu.Lock()
+	if len(store.dailyMetrics) != 2 {
+		t.Errorf("daily metric upserts: want 2, got %d", len(store.dailyMetrics))
+	}
+	if len(store.dailyMetrics) > 0 && (store.dailyMetrics[0].Subscribers != 41 || store.dailyMetrics[0].Views != 44600 || store.dailyMetrics[0].Videos != 16) {
+		t.Errorf("daily metric mapping: got %+v", store.dailyMetrics[0])
+	}
+	store.mu.Unlock()
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if len(store.upserted) != 2 {
@@ -230,7 +251,7 @@ func TestSnapshotRefreshSweep_Tick_TokenFailureIsolated(t *testing.T) {
 func TestSnapshotRefreshSweep_Tick_StoreError_NoFetch(t *testing.T) {
 	store := &refreshSweepStoreStub{claimErr: errors.New("db unreachable")}
 	fetcher := &sweepFetcher{}
-	w := NewSnapshotRefreshSweepWorker(store, &mockCredentialVault{}, nil, map[string]AccountDetailsFetcher{models.PlatformYouTube: fetcher}, 0, newSweepTestLogger())
+	w := NewSnapshotRefreshSweepWorker(store, nil, &mockCredentialVault{}, nil, map[string]AccountDetailsFetcher{models.PlatformYouTube: fetcher}, 0, newSweepTestLogger())
 
 	w.tick(context.Background())
 
@@ -331,6 +352,7 @@ func TestSnapshotRefreshSweep_ConcurrencyCapped(t *testing.T) {
 	}
 	w := NewSnapshotRefreshSweepWorker(
 		store,
+		nil,
 		vault,
 		map[string]credentials.TokenRefresher{models.PlatformYouTube: func(_ context.Context, rt string) (*models.TokenData, error) {
 			return &models.TokenData{AccessToken: "t", RefreshToken: rt}, nil

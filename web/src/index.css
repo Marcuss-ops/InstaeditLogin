@@ -443,6 +443,30 @@ html {
   letter-spacing: 0.05em;
 }
 
+.fc .fc-daygrid-day-frame {
+  min-height: 7.25rem;
+  padding: 0.2rem;
+}
+
+.fc .fc-daygrid-day-top {
+  min-height: 2rem;
+}
+
+.fc .fc-daygrid-day-number {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.25rem;
+  border-radius: 0.65rem;
+}
+
+.fc .fc-day-today .fc-daygrid-day-number {
+  background: rgba(139, 92, 246, 0.16);
+}
+
+.fc .fc-daygrid-day:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
 .fc .fc-daygrid-day-number,
 .fc .fc-timegrid-slot-label-cushion,
 .fc .fc-timegrid-axis-cushion {

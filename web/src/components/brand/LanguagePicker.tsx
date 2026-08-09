@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
-import { LANGUAGE_OPTIONS, LanguageFlag, languageLabel } from "./LanguageFlag";
+import { LANGUAGE_OPTIONS, LanguageFlag, languageEmoji, languageLabel } from "./LanguageFlag";
 
 const CLEAR_OPTION = { code: "", name: "Nessuna lingua" } as const;
 const PICKER_OPTIONS = [CLEAR_OPTION, ...LANGUAGE_OPTIONS];
@@ -72,6 +72,7 @@ export function LanguagePicker({
         onClick={() => setOpen((current) => !current)}
         className={`group/pill inline-flex h-7 items-center gap-2 rounded-full border bg-white/[0.04] px-2.5 transition-colors hover:border-white/25 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-progress disabled:opacity-50 ${error ? "border-red-300/70" : "border-white/[0.10]"}`}
       >
+        <span className="text-base leading-none" aria-hidden="true">{languageEmoji(value)}</span>
         <LanguageFlag code={value} className="h-5 w-[30px] rounded-[3px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
         <span className={`text-[11px] font-medium ${value?.trim() ? "text-[#cdd2da] group-hover/pill:text-white" : "text-[#7f8591]"}`}>
           {value?.trim() ? currentLabel : "Nessuna"}
@@ -114,6 +115,7 @@ export function LanguagePicker({
               onClick={() => choose(code)}
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-zinc-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:bg-white/10 focus-visible:outline-none"
             >
+              <span className="text-base leading-none" aria-hidden="true">{languageEmoji(code)}</span>
               <LanguageFlag code={code} className="h-5 w-[30px] rounded-[4px] drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
               <span className="flex-1">{name}</span>
               {selectedIndex === index ? <Check size={13} className="text-violet-300" aria-hidden="true" /> : null}

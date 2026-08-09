@@ -7,18 +7,11 @@ import type { EventDropArg, EventInput } from "@fullcalendar/core";
 import { authedFetch, ApiError, AuthError } from "../../lib/auth";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
+import type { Post } from "./calendarTypes";
 
 type PostStatus = "draft" | "queued" | "publishing" | "published" | "failed";
 
-type CalendarPost = {
-  id: number;
-  workspace_id: number;
-  title?: string;
-  caption?: string;
-  scheduled_at?: string | null;
-  status: PostStatus | string;
-  created_at: string;
-};
+type CalendarPost = Post & { status: PostStatus | string };
 
 const STATUS_META: Record<string, { label: string; dot: string; bg: string; text: string; border: string }> = {
   draft: { label: "Draft", dot: "bg-[#9aa0aa]", bg: "bg-white/[0.04]", text: "text-[#9aa0aa]", border: "border-white/[0.08]" },
@@ -72,6 +65,9 @@ function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
           </p>
           <div className="mt-1">
             <StatusBadge status={post.status} />
+            {post.source === "upload" && post.targets && post.targets.length > 0 && (
+              <span className="ml-1.5 text-[10px] text-[#9aa0aa]">{post.targets.length} canal{post.targets.length === 1 ? "e" : "i"}</span>
+            )}
           </div>
         </div>
       </div>
@@ -97,11 +93,22 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
     return posts
       .filter((p): p is CalendarPost & { scheduled_at: string } => Boolean(p.scheduled_at))
       .map((p) => ({
-        id: String(p.id),
+        id: `${p.source ?? "post"}-${p.id}`,
         start: p.scheduled_at,
         allDay: false,
         extendedProps: p,
       }));
+  }, [posts]);
+
+  const scheduledVideoCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const post of posts) {
+      if (post.source !== "upload" || !post.scheduled_at) continue;
+      const date = new Date(post.scheduled_at);
+      const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
   }, [posts]);
 
   useEffect(() => {
@@ -121,12 +128,18 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
         arg.revert();
         return;
       }
-      const id = arg.event.id;
-      setBusyId(id);
+      const eventKey = arg.event.id;
+      const separator = eventKey.indexOf("-");
+      const source = separator > 0 ? eventKey.slice(0, separator) : "post";
+      const id = separator > 0 ? eventKey.slice(separator + 1) : eventKey;
+      setBusyId(eventKey);
       try {
-        await authedFetch(`/api/v1/posts/${id}`, {
+        const endpoint = source === "upload" ? `/api/v1/uploads/${id}/reschedule` : `/api/v1/posts/${id}`;
+        await authedFetch(endpoint, {
           method: "PATCH",
-          body: JSON.stringify({ scheduled_at: newDate.toISOString() }),
+          body: JSON.stringify(source === "upload"
+            ? { publish_at: newDate.toISOString() }
+            : { scheduled_at: newDate.toISOString() }),
         });
         onPostsChange?.();
       } catch (err) {
@@ -139,7 +152,7 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
         console.error(message);
         arg.revert();
       } finally {
-        setBusyId((current) => (current === id ? null : current));
+        setBusyId((current) => (current === eventKey ? null : current));
       }
     },
     [navigate, onPostsChange],
@@ -152,7 +165,7 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
       <FullCalendar
         ref={calendarRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-        initialView="timeGridWeek"
+        initialView="dayGridMonth"
         headerToolbar={false}
         editable={true}
         events={events}
@@ -166,6 +179,18 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
         slotMaxTime="24:00:00"
         allDaySlot={false}
         nowIndicator={true}
+        dayMaxEvents={4}
+        dayCellContent={(arg) => {
+          const date = arg.date;
+          const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+          const count = scheduledVideoCounts.get(key) ?? 0;
+          return (
+            <div className="flex w-full items-center justify-between gap-1 px-1 py-0.5">
+              <span>{arg.dayNumberText}</span>
+              {count > 0 && <span className="rounded-full bg-violet-500/20 px-1.5 py-0.5 text-[9px] font-bold text-violet-200">{count} video</span>}
+            </div>
+          );
+        }}
         dayHeaderFormat={{ weekday: "short", day: "numeric" }}
       />
     </div>
