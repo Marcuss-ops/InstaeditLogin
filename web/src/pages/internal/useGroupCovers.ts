@@ -10,8 +10,9 @@ import type { CoversLoadState, GroupCover } from "./groupCoversTypes";
  * Resolve the signed preview URL for a cover's rendered preview media
  * asset. The media library contract (GET /api/v1/media/{id}) mints the
  * signed URL server-side; we reuse it so the covers grid never has to
- * bundle storage credentials. Failures degrade to undefined — the card
- * falls back to the YouTube video thumbnail.
+ * bundle storage credentials. Both the rendered preview and the attached
+ * thumbnail asset are resolved because older cover projects may have only
+ * one of the two IDs.
  */
 async function resolveCoverPreview(
   mediaId: string,
@@ -43,16 +44,15 @@ export function useGroupCovers(groupId: number) {
         const data = (await response.json()) as { covers?: GroupCover[] };
         if (signal.aborted) return;
         const covers = data.covers ?? [];
-        // Lazily resolve preview URLs for covers that have a rendered
-        // preview; failures fall back to the video thumbnail in the card.
+        // Resolve every real cover asset, not the original YouTube thumbnail.
+        // A cover can be represented by either the rendered project preview
+        // or the attached thumbnail media depending on its lifecycle state.
         const previewUrls: Record<string, string | undefined> = {};
+        const mediaIds = Array.from(new Set(covers.flatMap((cover) => [cover.preview_media_id, cover.thumbnail_media_id].filter((id): id is string => Boolean(id)))));
         await Promise.all(
-          covers
-            .filter((cover) => cover.preview_media_id)
-            .map(async (cover) => {
-              if (!cover.preview_media_id) return;
-              const url = await resolveCoverPreview(cover.preview_media_id, signal);
-              if (!signal.aborted) previewUrls[cover.preview_media_id] = url;
+          mediaIds.map(async (mediaId) => {
+              const url = await resolveCoverPreview(mediaId, signal);
+              if (!signal.aborted) previewUrls[mediaId] = url;
             }),
         );
         if (signal.aborted) return;

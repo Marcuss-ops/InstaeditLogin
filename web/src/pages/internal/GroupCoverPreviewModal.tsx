@@ -1,5 +1,4 @@
 import { Edit3, Loader2, Save, X } from "lucide-react";
-import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { GroupCover } from "./groupCoversTypes";
 
 export function GroupCoverPreviewModal({
@@ -27,7 +26,7 @@ export function GroupCoverPreviewModal({
   onSave: () => void;
   onOpenEditor: () => void;
 }) {
-  const preview = previewUrl || safeAssetUrl(cover.source_thumbnail_url);
+  const preview = previewUrl;
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
@@ -52,7 +51,7 @@ export function GroupCoverPreviewModal({
         </div>
 
         <div className="overflow-hidden rounded-2xl border border-white/[0.10] bg-black shadow-[0_20px_80px_rgba(0,0,0,0.35)]">
-          {preview ? <img src={preview} alt={`Anteprima ${cover.draft_title || cover.name}`} className="block max-h-[62vh] w-full object-contain" /> : <div className="flex aspect-video items-center justify-center text-sm text-[#9aa0aa]">Anteprima non disponibile</div>}
+          {preview ? <img src={preview} alt={`Copertina ${cover.draft_title || cover.name}`} className="block max-h-[62vh] w-full object-contain" /> : <div className="flex aspect-video flex-col items-center justify-center gap-2 text-sm text-[#9aa0aa]"><span>La copertina non è ancora esportata.</span><span className="text-xs text-[#7f8591]">Apri InstaEditor per visualizzarla e modificarla.</span></div>}
         </div>
 
         <div className="mt-5 grid gap-4 md:grid-cols-2">

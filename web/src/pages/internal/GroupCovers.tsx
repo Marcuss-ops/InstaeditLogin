@@ -67,6 +67,12 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
     return state.covers.filter((cover) => cover.project_status === filter);
   }, [filter, state]);
 
+  const coverAssetUrl = (cover: GroupCover): string | undefined => {
+    if (state.kind !== "ready") return undefined;
+    return (cover.preview_media_id ? state.previewUrls[cover.preview_media_id] : undefined)
+      || (cover.thumbnail_media_id ? state.previewUrls[cover.thumbnail_media_id] : undefined);
+  };
+
   return (
     <section className="mb-6" data-testid="group-covers">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -182,7 +188,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
             <GroupCoverCard
               key={cover.project_id}
               cover={cover}
-              previewUrl={cover.preview_media_id ? state.previewUrls[cover.preview_media_id] : undefined}
+              previewUrl={coverAssetUrl(cover)}
               opening={openingCoverId === cover.project_id}
               renaming={renamingCoverId === cover.project_id}
               onOpenEditor={handleOpenCoverEditor}
@@ -196,7 +202,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
       {previewCover && state.kind === "ready" ? (
         <GroupCoverPreviewModal
           cover={previewCover}
-          previewUrl={previewCover.preview_media_id ? state.previewUrls[previewCover.preview_media_id] : undefined}
+          previewUrl={coverAssetUrl(previewCover)}
           saving={savingCoverId === previewCover.project_id}
           opening={openingCoverId === previewCover.project_id}
           title={previewTitle}

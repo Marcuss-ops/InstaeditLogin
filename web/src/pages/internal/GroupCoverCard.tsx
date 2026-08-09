@@ -2,7 +2,6 @@ import { memo, useRef, useState } from "react";
 import { Calendar, Check, Edit3, ExternalLink, Image as ImageIcon, Loader2, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { LanguageFlag } from "../../components/brand/LanguageFlag";
-import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { GroupCover } from "./groupCoversTypes";
 
 function projectStatusLabel(status: string): { label: string; tone: string } {
@@ -56,7 +55,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
 }) {
   const status = projectStatusLabel(cover.project_status);
   const editLabel = editStatusLabel(cover.edit_status);
-  const preview = previewUrl || safeAssetUrl(cover.source_thumbnail_url);
+  const preview = previewUrl;
 
   // Inline title editing: click the title to turn it into an input;
   // Enter/✓ commits (PUT partial { title } → draft_title), Escape/✕
@@ -115,7 +114,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
           />
         ) : (
           <div className="flex h-full items-center justify-center">
-            <ImageIcon size={26} className="text-white/20" aria-hidden="true" />
+            <div className="text-center"><ImageIcon size={26} className="mx-auto text-white/20" aria-hidden="true" /><span className="mt-2 block px-3 text-[11px] text-[#7f8591]">Copertina non ancora esportata</span></div>
           </div>
         )}
         <span
