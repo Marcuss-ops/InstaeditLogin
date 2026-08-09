@@ -83,6 +83,7 @@ func (w *PublishWorker) dispatchPostCompletion(
 	account *models.PlatformAccount,
 	asset *models.MediaAsset,
 	sourceURL string,
+	extraConfig ...map[string]string,
 ) {
 	if w == nil || w.deliveryRegistry == nil {
 		return
@@ -146,11 +147,20 @@ func (w *PublishWorker) dispatchPostCompletion(
 		},
 		RemoteURL: sourceURL,
 	}
-	if account.Platform == models.PlatformGoogleDrive {
-		dest.Config = map[string]string{
-			"folder_id":        os.Getenv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID"),
-			"drive_account_id": strconv.FormatInt(target.PlatformAccountID, 10),
+	if len(extraConfig) > 0 && extraConfig[0] != nil {
+		for key, value := range extraConfig[0] {
+			dest.Config[key] = value
 		}
+	}
+	if account.Platform == models.PlatformGoogleDrive {
+		// A production Velox destination carries its folder in the
+		// opaque destination defaults. The environment fallback is
+		// retained only for legacy/local Drive exports; smoke uses its
+		// own source-side folder variable and never reaches this path.
+		if dest.Config["folder_id"] == "" {
+			dest.Config["folder_id"] = os.Getenv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID")
+		}
+		dest.Config["drive_account_id"] = strconv.FormatInt(target.PlatformAccountID, 10)
 	}
 	if asset.SizeBytes <= 0 && sourceURL != "" {
 		if req, err := http.NewRequestWithContext(ctx, http.MethodHead, sourceURL, nil); err == nil {

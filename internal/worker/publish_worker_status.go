@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -167,7 +168,21 @@ func (w *PublishWorker) publishDriveExport(ctx context.Context, target *models.P
 	if err := w.updateTargetStatus(ctx, target); err != nil {
 		return fmt.Errorf("mark Drive export target published: %w", err)
 	}
-	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, deliveryURL)
+	// Velox destination defaults are carried through UploadJob.Metadata
+	// and materialised on Post.Metadata. Forward only the destination
+	// folder to the provider; credentials and account selection remain
+	// server-side.
+	config := map[string]string{}
+	var metadata map[string]json.RawMessage
+	if json.Unmarshal(post.Metadata, &metadata) == nil {
+		if raw, ok := metadata["folder_id"]; ok {
+			var folderID string
+			if json.Unmarshal(raw, &folderID) == nil {
+				config["folder_id"] = folderID
+			}
+		}
+	}
+	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, deliveryURL, config)
 	return nil
 }
 

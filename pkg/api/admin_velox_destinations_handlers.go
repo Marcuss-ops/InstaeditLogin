@@ -27,9 +27,13 @@ import (
 // without a Go-struct change — the DB column is JSONB and the
 // downstream worker decodes per-key as needed.
 type CreateVeloxDestinationRequest struct {
-	WorkspaceID       int64           `json:"workspace_id"`
-	PlatformAccountID int64           `json:"platform_account_id"`
-	Defaults          json.RawMessage `json:"defaults"`
+	WorkspaceID       int64 `json:"workspace_id"`
+	PlatformAccountID int64 `json:"platform_account_id"`
+	// FolderID is required for Google Drive destinations and is stored
+	// as destination-owned metadata. It is deliberately not read from
+	// the Velox request or from the smoke-test environment.
+	FolderID string          `json:"folder_id,omitempty"`
+	Defaults json.RawMessage `json:"defaults"`
 }
 
 // CreateVeloxDestinationResponse is the 201 body. Distinct shape
@@ -173,23 +177,28 @@ func (m *IntegrationsModule) handleCreateIntegrationVeloxDestination(w http.Resp
 		return
 	}
 
-	// A live platform account is not enough to create a Velox destination:
-	// the account must also be explicitly bound to this workspace.  Without
-	// this check a caller who knows another account ID could create an opaque
-	// destination that the catalog would never expose, while the delivery
-	// path could still resolve it later.
-	binding, err := m.deps.WorkspaceStore.FindChannel(req.Context(), payload.WorkspaceID, payload.PlatformAccountID)
-	if err != nil {
-		slog.Error("velox destination: workspace channel lookup failed",
-			"user_id", userID, "workspace_id", payload.WorkspaceID,
-			"platform_account_id", payload.PlatformAccountID, "err", err)
-		writeError(w, http.StatusInternalServerError, "workspace channel lookup failed")
-		return
-	}
-	if binding == nil || !binding.Enabled {
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: platform_account_id is not enabled in this workspace")
-		return
+	if pa.Platform == models.PlatformGoogleDrive {
+		if strings.TrimSpace(payload.FolderID) == "" {
+			writeError(w, http.StatusUnprocessableEntity,
+				"validation: folder_id is required for Google Drive destinations")
+			return
+		}
+	} else {
+		// Social destinations must be explicitly bound to the workspace.
+		// Drive accounts are workspace-owned OAuth resources, not channels.
+		binding, bindingErr := m.deps.WorkspaceStore.FindChannel(req.Context(), payload.WorkspaceID, payload.PlatformAccountID)
+		if bindingErr != nil {
+			slog.Error("velox destination: workspace channel lookup failed",
+				"user_id", userID, "workspace_id", payload.WorkspaceID,
+				"platform_account_id", payload.PlatformAccountID, "err", bindingErr)
+			writeError(w, http.StatusInternalServerError, "workspace channel lookup failed")
+			return
+		}
+		if binding == nil || !binding.Enabled {
+			writeError(w, http.StatusUnprocessableEntity,
+				"validation: platform_account_id is not enabled in this workspace")
+			return
+		}
 	}
 
 	// Mint opaque ULID-style id "extdst_01J…"
@@ -207,6 +216,26 @@ func (m *IntegrationsModule) handleCreateIntegrationVeloxDestination(w http.Resp
 	defaults := payload.Defaults
 	if len(strings.TrimSpace(string(defaults))) == 0 {
 		defaults = json.RawMessage("{}")
+	}
+	if pa.Platform == models.PlatformGoogleDrive {
+		var defaultsMap map[string]json.RawMessage
+		if err := json.Unmarshal(defaults, &defaultsMap); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "validation: defaults must be a JSON object")
+			return
+		}
+		folderJSON, _ := json.Marshal(strings.TrimSpace(payload.FolderID))
+		defaultsMap["folder_id"] = folderJSON
+		defaultsMap["provider"] = json.RawMessage(`"google_drive"`)
+		defaults, _ = json.Marshal(defaultsMap)
+	} else {
+		// These keys are reserved for destination-owned Drive routing;
+		// never let a social destination opt out of its channel binding.
+		var defaultsMap map[string]json.RawMessage
+		if json.Unmarshal(defaults, &defaultsMap) == nil {
+			delete(defaultsMap, "provider")
+			delete(defaultsMap, "folder_id")
+			defaults, _ = json.Marshal(defaultsMap)
+		}
 	}
 
 	dest := &models.ExternalDestination{

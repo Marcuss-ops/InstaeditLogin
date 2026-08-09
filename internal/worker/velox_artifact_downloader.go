@@ -16,6 +16,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -226,12 +227,23 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, delivery *mode
 		return terminalError{err: fmt.Errorf("workspace %d not found", dest.WorkspaceID)}
 	}
 
-	binding, err := d.workspaceStore.FindChannel(ctx, dest.WorkspaceID, dest.PlatformAccountID)
-	if err != nil {
-		return transientError{err: err}
+	// Drive destinations are OAuth resources, not workspace channels.
+	// The provider marker is destination-owned metadata and therefore
+	// cannot be forged by the Velox payload.
+	var destinationDefaults map[string]json.RawMessage
+	_ = json.Unmarshal(dest.DefaultMetadata, &destinationDefaults)
+	var provider string
+	if raw, ok := destinationDefaults["provider"]; ok {
+		_ = json.Unmarshal(raw, &provider)
 	}
-	if binding == nil || !binding.Enabled {
-		return terminalError{err: fmt.Errorf("platform account %d is not enabled in workspace %d", dest.PlatformAccountID, dest.WorkspaceID)}
+	if provider != "google_drive" {
+		binding, bindingErr := d.workspaceStore.FindChannel(ctx, dest.WorkspaceID, dest.PlatformAccountID)
+		if bindingErr != nil {
+			return transientError{err: bindingErr}
+		}
+		if binding == nil || !binding.Enabled {
+			return terminalError{err: fmt.Errorf("platform account %d is not enabled in workspace %d", dest.PlatformAccountID, dest.WorkspaceID)}
+		}
 	}
 
 	meta, err := models.ParseVeloxDeliveryMetadata(delivery.Metadata)

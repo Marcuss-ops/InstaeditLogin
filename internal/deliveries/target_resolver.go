@@ -279,8 +279,13 @@ func (r *TargetResolver) resolveSavedDestination(ctx context.Context, req Resolv
 		}, nil
 	}
 
-	// Binding check (for disabled channel visibility).
-	binding, _ := r.deps.WorkspaceStore.FindChannel(ctx, dest.WorkspaceID, dest.PlatformAccountID)
+	// Google Drive accounts are workspace-owned OAuth resources, not
+	// channel bindings. Social destinations still require the explicit
+	// workspace channel binding below.
+	var binding *models.WorkspaceChannel
+	if pa.Platform != models.PlatformGoogleDrive {
+		binding, _ = r.deps.WorkspaceStore.FindChannel(ctx, dest.WorkspaceID, dest.PlatformAccountID)
+	}
 
 	// Eligibility check — shared core.
 	entry, eligibility := checkAccountEligibility(pa, binding)

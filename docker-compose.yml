@@ -92,6 +92,13 @@ services:
       # to the frontend bundle, logs, or localStorage). Empty = AI
       # metadata generation unavailable; manual entry still works.
       - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+      # Google Drive OAuth/delivery configuration. Keep these explicit so a
+      # host env file cannot silently start a runtime with YouTube only.
+      - GOOGLE_DRIVE_API_KEY=${GOOGLE_DRIVE_API_KEY}
+      - GOOGLE_DRIVE_UPLOAD_FOLDER_ID=${GOOGLE_DRIVE_UPLOAD_FOLDER_ID}
+      - GOOGLE_DRIVE_CLIENT_ID=${GOOGLE_DRIVE_CLIENT_ID}
+      - GOOGLE_DRIVE_CLIENT_SECRET=${GOOGLE_DRIVE_CLIENT_SECRET}
+      - GOOGLE_DRIVE_REDIRECT_URI=${GOOGLE_DRIVE_REDIRECT_URI}
       # Velox integration (Phase 1 — destination + handoff). When
       # VELOX_INTEGRATION_ENABLED=false the /internal/v1/* router hides
       # every Velox-facing route AND the artifact_source_registry refuses
@@ -147,6 +154,13 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       # NVIDIA AI metadata generation (mirrors the api service).
       - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+      # The worker owns Drive delivery and must use the same provider config
+      # as the API process.
+      - GOOGLE_DRIVE_API_KEY=${GOOGLE_DRIVE_API_KEY}
+      - GOOGLE_DRIVE_UPLOAD_FOLDER_ID=${GOOGLE_DRIVE_UPLOAD_FOLDER_ID}
+      - GOOGLE_DRIVE_CLIENT_ID=${GOOGLE_DRIVE_CLIENT_ID}
+      - GOOGLE_DRIVE_CLIENT_SECRET=${GOOGLE_DRIVE_CLIENT_SECRET}
+      - GOOGLE_DRIVE_REDIRECT_URI=${GOOGLE_DRIVE_REDIRECT_URI}
       # Velox integration (mirrors the api service). The worker reads
       # Velox-resumable YouTube sessions + velox_artifact upload_jobs
       # from the same env block — having the same VELOX_* keys on
