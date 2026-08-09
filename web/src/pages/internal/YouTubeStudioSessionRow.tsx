@@ -5,6 +5,7 @@ import {
   Loader2,
   Send,
 } from "lucide-react";
+import { openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
 import type { EditorSession } from "../../types/uploads";
 import { getRomeTZ, isScheduleInPast, localToUTC } from "./youtubeStudioTime";
 import { FormField } from "./YouTubeStudioFormElements";
@@ -46,6 +47,15 @@ export function SessionRow({
   const canSchedule = !isPublishing && hasValidSchedule;
   const tz = getRomeTZ();
   const isScheduling = hasValidSchedule;
+
+  const handleOpenEditor = () => {
+    const tab = window.open("about:blank", "_blank");
+    void openInstaEditorWithLaunch(session.editor_url, session.velox_project_id, {
+      tab,
+    }).catch(() => {
+      tab?.close();
+    });
+  };
 
   // Format the scheduled date for the button when scheduling.
   const scheduleDate = hasValidSchedule ? new Date(scheduleAt) : null;
@@ -101,14 +111,13 @@ export function SessionRow({
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {session.editor_url ? (
-            <a
-              href={session.editor_url}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
+              onClick={handleOpenEditor}
               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors no-underline"
             >
               <ExternalLink size={12} aria-hidden="true" /> InstaEditor
-            </a>
+            </button>
           ) : (
             <span
               role="alert"

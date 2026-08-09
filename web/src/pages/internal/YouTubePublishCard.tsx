@@ -9,6 +9,7 @@ import type {
   EditorSession,
   YouTubePublishResult,
 } from "../../types/uploads";
+import { openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
 
 const FALLBACK_YOUTUBE_URL = (videoId: string) =>
   `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
@@ -48,6 +49,16 @@ export function YouTubePublishCard({
     result.privacy_status === "private" &&
     !!result.published_at &&
     new Date(result.published_at).getTime() > Date.now();
+
+  const handleOpenEditor = () => {
+    if (!session?.editor_url || !session.velox_project_id) return;
+    const tab = window.open("about:blank", "_blank");
+    void openInstaEditorWithLaunch(session.editor_url, session.velox_project_id, {
+      tab,
+    }).catch(() => {
+      tab?.close();
+    });
+  };
 
   return (
     <section
@@ -145,14 +156,13 @@ export function YouTubePublishCard({
               </a>
             )}
             {session?.editor_url ? (
-              <a
-                href={session.editor_url}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={handleOpenEditor}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.06] px-3 py-2 text-[12px] font-medium text-white hover:bg-white/[0.12] transition-colors"
               >
                 Riapri InstaEditor
-              </a>
+              </button>
             ) : (
               <span
                 role="alert"
