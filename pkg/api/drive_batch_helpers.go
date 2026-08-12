@@ -15,6 +15,22 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
+const defaultUploadPrepareLeadTime = 15 * time.Minute
+
+// prepareAtForPublish keeps Drive downloads out of the scheduling request's
+// critical path while ensuring the asset is staged before its public cursor.
+func prepareAtForPublish(publishAt time.Time) time.Time {
+	return prepareAtForPublishWithLead(publishAt, defaultUploadPrepareLeadTime)
+}
+
+func prepareAtForPublishWithLead(publishAt time.Time, lead time.Duration) time.Time {
+	prepareAt := publishAt.Add(-lead)
+	if prepareAt.Before(time.Now()) {
+		return time.Now()
+	}
+	return prepareAt
+}
+
 // driveAccessToken fetches a fresh access token for a Drive account
 // via the central credential vault (uses the platform's refresh flow
 // when the stored token is expired).

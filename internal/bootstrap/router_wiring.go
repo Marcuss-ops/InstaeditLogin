@@ -198,7 +198,8 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		// read from a single source of truth. Without this option
 		// the helpers fall through to the safe defaults (30/7).
 		api.WithScheduleLimits(api.ScheduleLimits{
-			PublishHorizonDays:       s.cfg.Worker.PublishHorizonDays,			VideoRetentionBufferDays:       s.cfg.Worker.VideoRetentionBufferDays,
+			PublishHorizonDays: s.cfg.Worker.PublishHorizonDays, VideoRetentionBufferDays: s.cfg.Worker.VideoRetentionBufferDays,
+			UploadPrepareLeadMinutes: s.cfg.Worker.UploadPrepareLeadMinutes,
 		}),
 		api.WithYouTubeGroupVideosConfig(api.YouTubeGroupVideosConfig{
 			MaxAccounts:     s.cfg.Worker.YouTubeGroupVideosMaxAccounts,

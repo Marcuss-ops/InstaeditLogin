@@ -26,6 +26,17 @@ type ScheduleLimits struct {
 	// media_assets.expires_at. The 1-day min-floor is applied inside
 	// computeMediaAssetLifetime unconditionally.
 	VideoRetentionBufferDays int
+	// UploadPrepareLeadMinutes is the preparation window before publish_at.
+	// It mirrors UPLOAD_PREPARE_LEAD_MINUTES in WorkerConfig.
+	UploadPrepareLeadMinutes int
+}
+
+func (r *Router) prepareAtForPublish(publishAt time.Time) time.Time {
+	lead := r.scheduleLimits.UploadPrepareLeadMinutes
+	if lead <= 0 {
+		lead = 15
+	}
+	return prepareAtForPublishWithLead(publishAt, time.Duration(lead)*time.Minute)
 }
 
 // WithScheduleLimits wires the env-derived schedule limits into the
