@@ -1,5 +1,5 @@
 import { memo, useRef, useState } from "react";
-import { Calendar, Check, Edit3, ExternalLink, Image as ImageIcon, Loader2, X } from "lucide-react";
+import { Calendar, Check, Edit3, ExternalLink, Image as ImageIcon, Loader2, MoreHorizontal, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { LanguageFlag } from "../../components/brand/LanguageFlag";
 import type { GroupCover } from "./groupCoversTypes";
@@ -95,11 +95,11 @@ export const GroupCoverCard = memo(function GroupCoverCard({
 
   return (
     <article
-      className="group overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.025] transition-colors hover:border-violet-400/30 hover:bg-white/[0.05]"
+      className="group flex h-full flex-col overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d0f15]/90 shadow-[0_14px_34px_rgba(0,0,0,0.12)] transition-all duration-200 hover:-translate-y-1 hover:border-violet-300/25 hover:shadow-[0_20px_44px_rgba(0,0,0,0.2)]"
       data-testid="group-cover-card"
     >
       <div
-        className="relative aspect-video w-full cursor-zoom-in overflow-hidden bg-black/40"
+        className="relative aspect-video w-full cursor-zoom-in overflow-hidden bg-[#07080c]"
         onClick={() => onOpenPreview(cover)}
         onDoubleClick={(event) => { event.preventDefault(); onOpenEditor(cover); }}
         title="Clicca per ingrandire · doppio click per modificare in InstaEditor"
@@ -110,33 +110,35 @@ export const GroupCoverCard = memo(function GroupCoverCard({
             alt=""
             loading="lazy"
             decoding="async"
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]"
           />
         ) : (
-          <div className="flex h-full items-center justify-center">
-            <div className="text-center"><ImageIcon size={26} className="mx-auto text-white/20" aria-hidden="true" /><span className="mt-2 block px-3 text-[11px] text-[#7f8591]">Copertina non ancora esportata</span></div>
+          <div className="flex h-full items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,0.16),transparent_45%)]">
+            <div className="text-center"><span className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04]"><ImageIcon size={20} className="text-white/30" aria-hidden="true" /></span><span className="mt-3 block px-3 text-[11px] text-[#7f8591]">Copertina non ancora esportata</span></div>
           </div>
         )}
+        <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/65 to-transparent opacity-70" />
         <span
           title={`Stato progetto: ${status.label}`}
           className={cn(
-            "absolute left-2 top-2 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold backdrop-blur",
+            "absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold backdrop-blur-md",
             status.tone,
           )}
         >
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
           {status.label}
         </span>
         {cover.language && (
           <span
             title={`Lingua: ${cover.language.toUpperCase()}`}
-            className="absolute right-2 top-2 inline-flex h-6 items-center rounded-md border border-violet-500/20 bg-black/50 px-1.5 backdrop-blur"
+            className="absolute right-3 top-3 inline-flex h-7 items-center rounded-lg border border-white/[0.12] bg-black/45 px-1.5 backdrop-blur-md"
           >
             <LanguageFlag code={cover.language} className="h-4 w-6" />
           </span>
         )}
       </div>
 
-      <div className="p-3.5">
+      <div className="flex flex-1 flex-col p-4">
         {editing ? (
           <div className="flex items-center gap-1.5">
             <input
@@ -203,17 +205,17 @@ export const GroupCoverCard = memo(function GroupCoverCard({
             )}
           </button>
         )}
-        <p className="mt-1 truncate font-mono text-[11px] text-[#9aa0aa]" title={`${cover.channel_name || `Account #${cover.platform_account_id}`} · ${cover.youtube_video_id}`}>
+        <p className="mt-1 truncate text-[11px] text-[#8a919d]" title={`${cover.channel_name || `Account #${cover.platform_account_id}`} · ${cover.youtube_video_id}`}>
           {cover.channel_name || `Account #${cover.platform_account_id}`}
           <span className="px-1 text-white/30">·</span>
-          {cover.youtube_video_id}
+          <span className="font-mono text-[10px] text-white/35">{cover.youtube_video_id}</span>
         </p>
 
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <span
             title="Stato della sessione editor"
             className={cn(
-              "inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-semibold",
+              "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold",
               cover.edit_status === "published"
                 ? "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-300"
                 : cover.edit_status === "failed"
@@ -223,28 +225,28 @@ export const GroupCoverCard = memo(function GroupCoverCard({
           >
             {editLabel}
           </span>
-          <span className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 text-[10px] text-[#9aa0aa]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[10px] text-[#9aa0aa]">
             <Calendar size={10} aria-hidden="true" />
             {formatCoverDate(cover.updated_at) || "—"}
           </span>
         </div>
 
-        <div className="mt-3 flex items-center justify-between gap-2">
+        <div className="mt-auto flex items-center gap-2 pt-5">
           <a
             href={`https://www.youtube.com/watch?v=${encodeURIComponent(cover.youtube_video_id)}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-lg border border-white/[0.10] bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.10] bg-white/[0.04] text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white"
             title="Apri il video su YouTube"
+            aria-label="Apri il video su YouTube"
           >
-            <ExternalLink size={12} aria-hidden="true" />
-            Video
+            <ExternalLink size={14} aria-hidden="true" />
           </a>
           <button
             type="button"
             onClick={() => onOpenEditor(cover)}
             disabled={opening || !cover.velox_project_id || !cover.editor_url}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/25 bg-violet-500/[0.10] px-3 py-1.5 text-[11px] font-bold text-violet-200 transition-colors hover:bg-violet-500/[0.20] hover:text-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-xl border border-violet-400/25 bg-violet-500/[0.14] px-3 text-[11px] font-bold text-violet-100 transition-colors hover:bg-violet-500/[0.24] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
             title={
               !cover.velox_project_id
                 ? "Copertina non associata a un progetto editor"
@@ -254,8 +256,11 @@ export const GroupCoverCard = memo(function GroupCoverCard({
             }
           >
             {opening ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Edit3 size={12} aria-hidden="true" />}
-            {opening ? "Apertura…" : "Modifica in InstaEditor"}
+            <span className="truncate">{opening ? "Apertura…" : "Modifica in InstaEditor"}</span>
           </button>
+          <span className="hidden h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] text-white/25 sm:flex" title="Altre azioni disponibili in anteprima">
+            <MoreHorizontal size={15} aria-hidden="true" />
+          </span>
         </div>
       </div>
     </article>

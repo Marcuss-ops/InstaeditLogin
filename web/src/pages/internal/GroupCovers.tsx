@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, Plus } from "lucide-react";
+import { ArrowUpRight, Image as ImageIcon, Loader2, Plus, Sparkles } from "lucide-react";
 import { GroupCoverCard } from "./GroupCoverCard";
 import { useGroupCovers } from "./useGroupCovers";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
@@ -57,15 +57,20 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
 
   return (
     <section className="mb-6" data-testid="group-covers">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-[13px] font-bold text-white">
-          Copertine del gruppo
-          {state.kind === "ready" && (
-            <span className="ml-2 rounded-md border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-[10px] font-semibold text-[#9aa0aa]">
-              {state.covers.length}
-            </span>
-          )}
-        </h3>
+      <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-white/[0.09] bg-[#0d0f15]/90 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.16)] sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-violet-300/75">
+            <Sparkles size={13} aria-hidden="true" />
+            Spazio selezionato
+          </div>
+          <h2 className="mt-2 truncate text-[22px] font-bold tracking-[-0.025em] text-white sm:text-[25px]">{groupName || "Le tue copertine"}</h2>
+          <p className="mt-1 text-[12px] text-[#858c99]">Progetti attivi e storico del gruppo, sempre nello stesso posto.</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2">
+          <ImageIcon size={15} className="text-violet-300" aria-hidden="true" />
+          <span className="text-[12px] font-semibold text-[#cbd0d8]">{state.kind === "ready" ? state.covers.length : "—"}</span>
+          <span className="text-[11px] text-[#777e8b]">{state.kind === "ready" && state.covers.length === 1 ? "copertina" : "copertine"}</span>
+        </div>
       </div>
 
       {state.kind === "loading" && (
@@ -85,23 +90,26 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
       )}
 
       {state.kind === "ready" && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {/* Photoshop-style first tile: it is an action, not a persisted
-              cover. It stays at the start of the grid so the next cover is
-              always created from the same predictable + button. */}
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
           <button
             type="button"
             onClick={handleCreateCover}
             disabled={openingVideoID != null}
             aria-label="Crea copertina"
             data-testid="group-covers-create-card"
-            className="group flex aspect-video min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-violet-400/35 bg-violet-500/[0.06] p-6 text-center text-violet-100 shadow-[0_12px_32px_rgba(124,58,237,0.08)] transition-all duration-200 hover:-translate-y-0.5 hover:border-violet-300/70 hover:bg-violet-500/[0.13] disabled:cursor-wait disabled:opacity-60"
+            className="group relative flex min-h-[318px] flex-col overflow-hidden rounded-2xl border border-violet-300/20 bg-gradient-to-br from-violet-500/[0.18] via-violet-500/[0.06] to-sky-400/[0.06] p-6 text-left text-violet-100 shadow-[0_18px_45px_rgba(124,58,237,0.12)] transition-all duration-200 hover:-translate-y-1 hover:border-violet-300/45 hover:shadow-[0_22px_55px_rgba(124,58,237,0.2)] disabled:cursor-wait disabled:opacity-60"
           >
-            <span className="flex h-14 w-14 items-center justify-center rounded-full border border-violet-300/35 bg-violet-400/[0.13] shadow-lg transition-transform duration-200 group-hover:scale-110">
-              {openingVideoID != null ? <Loader2 size={25} className="animate-spin" aria-hidden="true" /> : <Plus size={28} strokeWidth={2.2} aria-hidden="true" />}
+            <span aria-hidden="true" className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-violet-300/15 blur-3xl transition-transform duration-500 group-hover:scale-125" />
+            <span className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-violet-200/25 bg-violet-200/10 text-violet-100 shadow-[0_10px_25px_rgba(124,58,237,0.2)] transition-transform duration-200 group-hover:scale-105">
+              {openingVideoID != null ? <Loader2 size={23} className="animate-spin" aria-hidden="true" /> : <Plus size={25} strokeWidth={2.2} aria-hidden="true" />}
             </span>
-            <span className="mt-4 text-[14px] font-bold">Crea copertina</span>
-            <span className="mt-1 text-[11px] text-violet-200/60">Clicca per creare una nuova copertina</span>
+            <span className="relative mt-auto">
+              <span className="block text-[19px] font-bold tracking-[-0.02em]">Crea copertina</span>
+              <span className="mt-2 block max-w-[220px] text-[12px] leading-5 text-violet-100/65">Clicca per creare una nuova copertina partendo da un video del gruppo.</span>
+            </span>
+            <span className="relative mt-5 inline-flex items-center gap-1.5 text-[11px] font-bold text-violet-200/90">
+              Inizia ora <ArrowUpRight size={14} aria-hidden="true" />
+            </span>
           </button>
           {state.covers.map((cover) => (
             <GroupCoverCard
