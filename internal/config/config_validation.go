@@ -314,6 +314,11 @@ func (c *Config) validate() error {
 	} else if c.Worker.FFmpegThreads < 0 {
 		return fmt.Errorf("FFMPEG_THREADS must not be negative (got %d)", c.Worker.FFmpegThreads)
 	}
+	if c.Worker.UploadPrepareLeadMinutes == 0 {
+		c.Worker.UploadPrepareLeadMinutes = 15
+	} else if c.Worker.UploadPrepareLeadMinutes < 0 {
+		return fmt.Errorf("UPLOAD_PREPARE_LEAD_MINUTES must not be negative (got %d)", c.Worker.UploadPrepareLeadMinutes)
+	}
 
 	// Token refresh sweep knobs — active only when a Google provider
 	// (YouTube or Drive) is wired; a Google-less deployment has

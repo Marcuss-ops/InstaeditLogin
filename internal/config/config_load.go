@@ -125,6 +125,7 @@ func Load() (*Config, error) {
 			// layer + worker pool read the same source of truth.
 			PublishHorizonDays:                      getEnvInt("PUBLISH_HORIZON_DAYS", 30),
 			VideoRetentionBufferDays:                getEnvInt("VIDEO_RETENTION_BUFFER_DAYS", 7),
+			UploadPrepareLeadMinutes:                getEnvInt("UPLOAD_PREPARE_LEAD_MINUTES", 15),
 			PublishWorkerIntervalSeconds:            getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 			YouTubeCopyrightCheckIntervalSeconds:    getEnvInt("YOUTUBE_COPYRIGHT_CHECK_INTERVAL_SECONDS", 1200),
 			MetadataGenerationWorkerIntervalSeconds: getEnvInt("METADATA_GENERATION_WORKER_INTERVAL_SECONDS", 5),

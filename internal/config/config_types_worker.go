@@ -129,4 +129,7 @@ type WorkerConfig struct {
 	// VIDEO_RETENTION_BUFFER_DAYS. Smaller values free S3 space faster;
 	// larger values give the retry worker more slack.
 	VideoRetentionBufferDays int
+	// UploadPrepareLeadMinutes is the lead time before publish_at at which
+	// Drive ingest and private YouTube preparation may start.
+	UploadPrepareLeadMinutes int
 }
