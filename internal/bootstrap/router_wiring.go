@@ -187,6 +187,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		api.WithYouTubeThumbnailBatchStore(s.youtubeThumbnailBatchRepo),
 		api.WithLivestreamStore(s.livestreamRepo),
 		api.WithThumbnailProjectStore(s.thumbnailProjectService),
+		api.WithCoverLibraryStore(repository.NewCoverLibraryRepository(s.db)),
 		api.WithContentPipelineStore(s.contentPipelineRepo),
 		api.WithYouTubeCopyrightAlertStore(repository.NewYouTubeTargetPublicationRepository(s.db)),
 		api.WithEditorURL(s.cfg.HTTP.EditorURL),

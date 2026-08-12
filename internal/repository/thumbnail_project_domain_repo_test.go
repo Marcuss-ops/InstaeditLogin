@@ -124,13 +124,33 @@ func TestThumbnailProjectRepository_UpdateExportStatusValidatesFailedError(t *te
 	}
 }
 
+func TestThumbnailProjectRepository_FindExportByRenderKeyScopesAndReadsProfile(t *testing.T) {
+	db, mock := newThumbnailProjectMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	profile := "image/png:1920x1080:renderer-1"
+	mock.ExpectQuery(`SELECT id, project_id, revision_id, media_id`).
+		WithArgs(int64(7), "project-1", "revision-1", profile, models.ThumbnailProjectStatusDeleted).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "revision_id", "media_id", "content_type", "width", "height", "file_size", "sha256", "renderer_version", "render_profile", "status", "last_error", "created_at", "updated_at"}).
+			AddRow("export-1", "project-1", "revision-1", "00000000-0000-0000-0000-000000000001", "image/png", 1920, 1080, 10, make([]byte, 32), "renderer-1", profile, "ready", "", time.Now().UTC(), time.Now().UTC()))
+	got, err := repo.FindExportByRenderKey(context.Background(), 7, "project-1", "revision-1", profile)
+	if err != nil || got == nil {
+		t.Fatalf("FindExportByRenderKey: got=%+v err=%v", got, err)
+	}
+	if got.RenderProfile != profile {
+		t.Fatalf("render profile: %q", got.RenderProfile)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestThumbnailProjectRepository_FindExportScopesByWorkspace(t *testing.T) {
 	db, mock := newThumbnailProjectMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)
 	mock.ExpectQuery(`SELECT id, project_id, revision_id, media_id`).
 		WithArgs(int64(7), "export-1", models.ThumbnailProjectStatusDeleted).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "revision_id", "media_id", "content_type", "width", "height", "file_size", "sha256", "renderer_version", "status", "last_error", "created_at"}).
-			AddRow("export-1", "project-1", "revision-1", "00000000-0000-0000-0000-000000000001", "image/png", 1920, 1080, 10, make([]byte, 32), "renderer-1", "ready", "", time.Now().UTC()))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "revision_id", "media_id", "content_type", "width", "height", "file_size", "sha256", "renderer_version", "render_profile", "status", "last_error", "created_at", "updated_at"}).
+			AddRow("export-1", "project-1", "revision-1", "00000000-0000-0000-0000-000000000001", "image/png", 1920, 1080, 10, make([]byte, 32), "renderer-1", "image/png:1920x1080:renderer-1", "ready", "", time.Now().UTC(), time.Now().UTC()))
 	got, err := repo.FindExport(context.Background(), 7, "export-1")
 	if err != nil || got == nil {
 		t.Fatalf("FindExport: got=%+v err=%v", got, err)

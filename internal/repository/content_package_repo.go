@@ -58,14 +58,14 @@ type ContentPackageStore interface {
 const contentPackageColumns = `id, workspace_id, created_by, source_type,
 drive_account_id, drive_file_id, source_filename, source_fingerprint,
 velox_project_id, source_language, current_metadata_revision_id,
-current_cover_media_id, state, version, created_at, updated_at`
+current_cover_media_id, current_cover_template_version_id, state, version, created_at, updated_at`
 
 func scanContentPackage(row interface{ Scan(...any) error }) (*models.ContentPackage, error) {
 	pkg := &models.ContentPackage{}
 	if err := row.Scan(&pkg.ID, &pkg.WorkspaceID, &pkg.CreatedBy, &pkg.SourceType,
 		&pkg.DriveAccountID, &pkg.DriveFileID, &pkg.SourceFilename,
 		&pkg.SourceFingerprint, &pkg.VeloxProjectID, &pkg.SourceLanguage,
-		&pkg.CurrentMetadataRevisionID, &pkg.CurrentCoverMediaID, &pkg.State,
+		&pkg.CurrentMetadataRevisionID, &pkg.CurrentCoverMediaID, &pkg.CurrentCoverTemplateVersionID, &pkg.State,
 		&pkg.Version, &pkg.CreatedAt, &pkg.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -88,11 +88,35 @@ func scanMetadataRevision(row interface{ Scan(...any) error }) (*models.ContentM
 func scanTarget(row interface{ Scan(...any) error }) (*models.ContentPackageTarget, error) {
 	t := &models.ContentPackageTarget{}
 	if err := row.Scan(&t.ID, &t.ContentPackageID, &t.PlatformAccountID,
-		&t.Language, &t.PrivacyStatus, &t.PlaylistID, &t.Enabled, &t.CreatedAt,
-		&t.UpdatedAt); err != nil {
+		&t.Language, &t.PrivacyStatus, &t.PlaylistID, &t.CoverMediaID, &t.CoverTemplateVersionID,
+		&t.Enabled, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return t, nil
+}
+
+type contentPackageQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func validateCoverTemplateVersionWorkspace(ctx context.Context, q contentPackageQueryer, workspaceID int64, versionID *int64) error {
+	if versionID == nil || *versionID <= 0 {
+		return nil
+	}
+	var visible bool
+	if err := q.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM cover_template_versions v
+			JOIN cover_templates t ON t.id=v.template_id
+			WHERE v.id=$1 AND t.workspace_id=$2
+		)`, *versionID, workspaceID).Scan(&visible); err != nil {
+		return fmt.Errorf("validate cover template workspace: %w", err)
+	}
+	if !visible {
+		return errors.New("cover template version does not belong to the content package workspace")
+	}
+	return nil
 }
 
 func (r *ContentPackageRepository) CreatePackage(ctx context.Context, pkg *models.ContentPackage, revision *models.ContentMetadataRevision) error {
@@ -129,20 +153,22 @@ func (r *ContentPackageRepository) CreatePackage(ctx context.Context, pkg *model
 		return fmt.Errorf("begin content package: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := validateCoverTemplateVersionWorkspace(ctx, tx, pkg.WorkspaceID, pkg.CurrentCoverTemplateVersionID); err != nil {
+		return err
+	}
 	if err := tx.QueryRowContext(ctx,
 		`INSERT INTO content_packages
 			 (workspace_id, created_by, source_type, drive_account_id, drive_file_id,
-		  source_filename, source_fingerprint, velox_project_id, source_language,
-		  current_cover_media_id, state, version)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		  source_filename, source_fingerprint, velox_project_id, source_language,			 current_cover_media_id, current_cover_template_version_id, state, version)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		 RETURNING `+contentPackageColumns,
 		pkg.WorkspaceID, pkg.CreatedBy, pkg.SourceType, pkg.DriveAccountID,
 		pkg.DriveFileID, pkg.SourceFilename, pkg.SourceFingerprint,
-		pkg.VeloxProjectID, pkg.SourceLanguage, pkg.CurrentCoverMediaID, pkg.State, pkg.Version,
+		pkg.VeloxProjectID, pkg.SourceLanguage, pkg.CurrentCoverMediaID, pkg.CurrentCoverTemplateVersionID, pkg.State, pkg.Version,
 	).Scan(&pkg.ID, &pkg.WorkspaceID, &pkg.CreatedBy, &pkg.SourceType,
 		&pkg.DriveAccountID, &pkg.DriveFileID, &pkg.SourceFilename,
 		&pkg.SourceFingerprint, &pkg.VeloxProjectID, &pkg.SourceLanguage,
-		&pkg.CurrentMetadataRevisionID, &pkg.CurrentCoverMediaID, &pkg.State,
+		&pkg.CurrentMetadataRevisionID, &pkg.CurrentCoverMediaID, &pkg.CurrentCoverTemplateVersionID, &pkg.State,
 		&pkg.Version, &pkg.CreatedAt, &pkg.UpdatedAt); err != nil {
 		return fmt.Errorf("insert content package: %w", err)
 	}
@@ -199,13 +225,16 @@ func (r *ContentPackageRepository) UpdatePackage(ctx context.Context, pkg *model
 	if pkg == nil || pkg.ID <= 0 || expectedVersion <= 0 {
 		return errors.New("content package and expected version are required")
 	}
+	if err := validateCoverTemplateVersionWorkspace(ctx, r.db, pkg.WorkspaceID, pkg.CurrentCoverTemplateVersionID); err != nil {
+		return err
+	}
 	result, err := r.db.ExecContext(ctx,
 		`UPDATE content_packages
 		 SET source_filename=$1, source_fingerprint=$2, source_language=$3,
-		     current_cover_media_id=$4, state=$5, version=version+1, updated_at=NOW()
-		 WHERE id=$6 AND workspace_id=$7 AND version=$8`,
+		     current_cover_media_id=$4, current_cover_template_version_id=$5, state=$6, version=version+1, updated_at=NOW()
+		 WHERE id=$7 AND workspace_id=$8 AND version=$9`,
 		pkg.SourceFilename, pkg.SourceFingerprint, pkg.SourceLanguage,
-		pkg.CurrentCoverMediaID, pkg.State, pkg.ID, pkg.WorkspaceID, expectedVersion)
+		pkg.CurrentCoverMediaID, pkg.CurrentCoverTemplateVersionID, pkg.State, pkg.ID, pkg.WorkspaceID, expectedVersion)
 	if err != nil {
 		return fmt.Errorf("update content package: %w", err)
 	}
@@ -221,7 +250,7 @@ func (r *ContentPackageRepository) UpdatePackage(ctx context.Context, pkg *model
 func (r *ContentPackageRepository) ListTargets(ctx context.Context, packageID int64) ([]*models.ContentPackageTarget, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, content_package_id, platform_account_id, language, privacy_status,
-		        playlist_id, enabled, created_at, updated_at
+		        playlist_id, cover_media_id, cover_template_version_id, enabled, created_at, updated_at
 		 FROM content_package_targets WHERE content_package_id=$1 ORDER BY id`, packageID)
 	if err != nil {
 		return nil, fmt.Errorf("list content package targets: %w", err)
@@ -247,12 +276,22 @@ func (r *ContentPackageRepository) ReplaceTargets(ctx context.Context, packageID
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var packageWorkspaceID int64
+	if err := tx.QueryRowContext(ctx, `SELECT workspace_id FROM content_packages WHERE id=$1 FOR UPDATE`, packageID).Scan(&packageWorkspaceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrContentPackageNotFound
+		}
+		return nil, fmt.Errorf("find content package workspace: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM content_package_targets WHERE content_package_id=$1`, packageID); err != nil {
 		return nil, err
 	}
 	for _, target := range targets {
 		if target == nil || target.PlatformAccountID <= 0 || strings.TrimSpace(target.Language) == "" {
 			return nil, errors.New("target account and language are required")
+		}
+		if err := validateCoverTemplateVersionWorkspace(ctx, tx, packageWorkspaceID, target.CoverTemplateVersionID); err != nil {
+			return nil, err
 		}
 		if target.PrivacyStatus == "" {
 			target.PrivacyStatus = "private"
@@ -272,9 +311,9 @@ func (r *ContentPackageRepository) ReplaceTargets(ctx context.Context, packageID
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO content_package_targets
-			 (content_package_id, platform_account_id, language, privacy_status, playlist_id, enabled)
-			 VALUES ($1,$2,$3,$4,$5,$6)`, packageID, target.PlatformAccountID,
-			target.Language, target.PrivacyStatus, target.PlaylistID, target.Enabled); err != nil {
+			 (content_package_id, platform_account_id, language, privacy_status, playlist_id, cover_media_id, cover_template_version_id, enabled)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, packageID, target.PlatformAccountID,
+			target.Language, target.PrivacyStatus, target.PlaylistID, target.CoverMediaID, target.CoverTemplateVersionID, target.Enabled); err != nil {
 			return nil, err
 		}
 	}
@@ -711,7 +750,7 @@ func scanPublishSnapshot(row interface{ Scan(...any) error }) (*models.PublishSn
 	s := &models.PublishSnapshot{}
 	err := row.Scan(&s.ID, &s.ContentScheduleID, &s.ContentPackageID, &s.PackageVersion,
 		&s.TargetAccountID, &s.Language, &s.MetadataRevisionID, &s.TranslationBundleID,
-		&s.CoverMediaID, &s.SourceMediaAssetID, &s.Title, &s.Description, &s.Tags,
+		&s.CoverMediaID, &s.CoverTemplateVersionID, &s.SourceMediaAssetID, &s.Title, &s.Description, &s.Tags,
 		&s.PrivacyStatus, &s.PublishAt, &s.CreatedAt)
 	if len(s.Tags) == 0 {
 		s.Tags = json.RawMessage("[]")
@@ -731,17 +770,16 @@ func (r *ContentPackageRepository) CreatePublishSnapshot(ctx context.Context, sn
 	}
 	row := r.db.QueryRowContext(ctx,
 		`INSERT INTO publish_snapshots
-		 (content_schedule_id, content_package_id, package_version, target_account_id, language,
-		  metadata_revision_id, translation_bundle_id, cover_media_id, source_media_asset_id,
+		 (content_schedule_id, content_package_id, package_version, target_account_id, language,		 metadata_revision_id, translation_bundle_id, cover_media_id, cover_template_version_id, source_media_asset_id,
 		  title, description, tags, privacy_status, publish_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		 ON CONFLICT (content_schedule_id,target_account_id) DO NOTHING
 		 RETURNING id, content_schedule_id, content_package_id, package_version, target_account_id,
-		           language, metadata_revision_id, translation_bundle_id, cover_media_id,
+		           language, metadata_revision_id, translation_bundle_id, cover_media_id, cover_template_version_id,
 		           source_media_asset_id, title, description, tags, privacy_status, publish_at, created_at`,
 		snapshot.ContentScheduleID, snapshot.ContentPackageID, snapshot.PackageVersion,
 		snapshot.TargetAccountID, snapshot.Language, snapshot.MetadataRevisionID,
-		snapshot.TranslationBundleID, snapshot.CoverMediaID, snapshot.SourceMediaAssetID,
+		snapshot.TranslationBundleID, snapshot.CoverMediaID, snapshot.CoverTemplateVersionID, snapshot.SourceMediaAssetID,
 		snapshot.Title, snapshot.Description, snapshot.Tags, snapshot.PrivacyStatus,
 		snapshot.PublishAt)
 	created, err := scanPublishSnapshot(row)
@@ -755,7 +793,8 @@ func (r *ContentPackageRepository) CreatePublishSnapshot(ctx context.Context, sn
 	existing, err := scanPublishSnapshot(r.db.QueryRowContext(ctx,
 		`SELECT id, content_schedule_id, content_package_id, package_version, target_account_id,
 		        language, metadata_revision_id, translation_bundle_id, cover_media_id,
-		        source_media_asset_id, title, description, tags, privacy_status, publish_at, created_at
+		        cover_template_version_id, source_media_asset_id, title, description, tags,
+		        privacy_status, publish_at, created_at
 		 FROM publish_snapshots WHERE content_schedule_id=$1 AND target_account_id=$2`, snapshot.ContentScheduleID, snapshot.TargetAccountID))
 	if err != nil {
 		return err
@@ -768,7 +807,8 @@ func (r *ContentPackageRepository) ListPublishSnapshots(ctx context.Context, sch
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, content_schedule_id, content_package_id, package_version, target_account_id,
 		        language, metadata_revision_id, translation_bundle_id, cover_media_id,
-		        source_media_asset_id, title, description, tags, privacy_status, publish_at, created_at
+		        cover_template_version_id, source_media_asset_id, title, description, tags,
+		        privacy_status, publish_at, created_at
 		 FROM publish_snapshots WHERE content_schedule_id=$1 ORDER BY target_account_id, id`, scheduleID)
 	if err != nil {
 		return nil, err

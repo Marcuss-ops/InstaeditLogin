@@ -120,6 +120,9 @@ func TestThumbnailRender_HappyPath_CreatesReadyExport(t *testing.T) {
 	if store.lastExportStatus != models.ThumbnailProjectExportStatusReady {
 		t.Fatalf("final status transition: %q", store.lastExportStatus)
 	}
+	if store.lastExportProfile == "" {
+		t.Fatal("render profile must be persisted for idempotency")
+	}
 	// The rendered media asset must exist and be ready in the media store.
 	if len(media.assets) != 1 {
 		t.Fatalf("media assets: want 1, got %d", len(media.assets))
@@ -131,6 +134,43 @@ func TestThumbnailRender_HappyPath_CreatesReadyExport(t *testing.T) {
 		if asset.SHA256 == "" || asset.ContentType != models.ThumbnailProjectExportContentTypePNG {
 			t.Fatalf("asset %s sha/ct: %q %q", id, asset.SHA256, asset.ContentType)
 		}
+	}
+}
+
+func TestThumbnailRender_IsIdempotentForSameRevisionAndProfile(t *testing.T) {
+	store := &thumbnailProjectTestStore{project: defaultRenderProject(), revision: defaultRenderRevision()}
+	media := newMockMediaStore()
+	storage := newMockStorageProvider()
+	r := thumbnailRenderRouter(t, store, media, storage, workspaceOwnerStore(1), nil)
+
+	render := func() (int, models.ThumbnailExport) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_test/render?workspace_id=7", bytes.NewBufferString(`{}`))
+		withBearerJWT(t, req, 1)
+		w := httptest.NewRecorder()
+		r.Setup().ServeHTTP(w, req)
+		var export models.ThumbnailExport
+		if err := json.NewDecoder(w.Body).Decode(&export); err != nil {
+			t.Fatalf("decode export: %v", err)
+		}
+		return w.Code, export
+	}
+
+	firstCode, first := render()
+	if firstCode != http.StatusCreated || first.Status != models.ThumbnailProjectExportStatusReady {
+		t.Fatalf("first render: status=%d export=%+v", firstCode, first)
+	}
+	if len(media.assets) != 1 {
+		t.Fatalf("first render created %d media assets, want 1", len(media.assets))
+	}
+	secondCode, second := render()
+	if secondCode != http.StatusOK {
+		t.Fatalf("idempotent retry: status=%d export=%+v", secondCode, second)
+	}
+	if second.ID != first.ID || second.MediaID != first.MediaID || string(second.SHA256) != string(first.SHA256) {
+		t.Fatalf("retry returned a different artifact: first=%+v second=%+v", first, second)
+	}
+	if len(media.assets) != 1 {
+		t.Fatalf("idempotent retry created duplicate media assets: %d", len(media.assets))
 	}
 }
 

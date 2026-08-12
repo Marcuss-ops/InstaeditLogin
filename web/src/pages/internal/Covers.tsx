@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Image as ImageIcon, RefreshCw } from "lucide-react";
 import { useGroupsData } from "./useGroupsData";
 import { GroupCovers } from "./GroupCovers";
@@ -54,6 +54,9 @@ export function CoversPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Link to="/app/covers/library" className="inline-flex items-center gap-1.5 rounded-xl border border-violet-400/20 bg-violet-400/[0.08] px-4 py-2 text-[13px] font-semibold text-violet-200 transition-colors hover:bg-violet-400/[0.16]">
+              Library & template
+            </Link>
             <button
               type="button"
               onClick={() => void load(false, true)}

@@ -24,17 +24,18 @@ type PublicationBlocker struct {
 }
 
 type ResolvedPublication struct {
-	Package             *models.ContentPackage
-	Target              *models.ContentPackageTarget
-	MetadataRevision    *models.ContentMetadataRevision
-	TranslationBundleID *int64
-	Title               string
-	Description         string
-	Tags                json.RawMessage
-	PrivacyStatus       string
-	ThumbnailMediaID    *string
-	Blockers            []PublicationBlocker
-	Warnings            []string
+	Package                *models.ContentPackage
+	Target                 *models.ContentPackageTarget
+	MetadataRevision       *models.ContentMetadataRevision
+	TranslationBundleID    *int64
+	Title                  string
+	Description            string
+	Tags                   json.RawMessage
+	PrivacyStatus          string
+	ThumbnailMediaID       *string
+	CoverTemplateVersionID *int64
+	Blockers               []PublicationBlocker
+	Warnings               []string
 }
 
 func (r ResolvedPublication) Ready() bool { return len(r.Blockers) == 0 }
@@ -68,10 +69,19 @@ func (r *PublicationResolver) Resolve(ctx context.Context, workspaceID, packageI
 	if target == nil {
 		return &ResolvedPublication{Package: pkg, MetadataRevision: metadata, Blockers: []PublicationBlocker{{Code: "target_missing", Message: "target is not configured for this content package"}}}, nil
 	}
+	thumbnailMediaID := pkg.CurrentCoverMediaID
+	if target.CoverMediaID != nil && strings.TrimSpace(*target.CoverMediaID) != "" {
+		thumbnailMediaID = target.CoverMediaID
+	}
+	templateVersionID := pkg.CurrentCoverTemplateVersionID
+	if target.CoverTemplateVersionID != nil && *target.CoverTemplateVersionID > 0 {
+		templateVersionID = target.CoverTemplateVersionID
+	}
 	resolved := &ResolvedPublication{
 		Package: pkg, Target: target, MetadataRevision: metadata,
 		Title: metadata.Title, Description: metadata.Description, Tags: metadata.Tags,
-		PrivacyStatus: target.PrivacyStatus, ThumbnailMediaID: pkg.CurrentCoverMediaID,
+		PrivacyStatus: target.PrivacyStatus, ThumbnailMediaID: thumbnailMediaID,
+		CoverTemplateVersionID: templateVersionID,
 	}
 	if strings.TrimSpace(target.Language) == "" {
 		resolved.Blockers = append(resolved.Blockers, PublicationBlocker{Code: "language_missing", Message: "target language is required"})

@@ -151,8 +151,79 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 		return
 	}
 
+	// The revision is immutable, so this profile is a complete idempotency
+	// key for the rendered artifact. Reserve the export before rendering;
+	// concurrent retries then observe the same rendering row instead of
+	// uploading duplicate files.
+	renderProfile := fmt.Sprintf("%s:%dx%d:%s", contentType, width, height, thumbnailrender.RendererVersion)
+	existing, err := r.thumbnailProjectStore.FindExportByRenderKey(req.Context(), workspaceID, projectID, revisionID, renderProfile)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find existing thumbnail export: "+err.Error())
+		return
+	}
+	if existing != nil {
+		switch existing.Status {
+		case models.ThumbnailProjectExportStatusReady:
+			writeJSON(w, http.StatusOK, existing)
+		case models.ThumbnailProjectExportStatusRendering:
+			writeJSON(w, http.StatusAccepted, existing)
+		default:
+			writeError(w, http.StatusConflict, "thumbnail export already exists and requires operator retry")
+		}
+		return
+	}
+
+	keyExt := "png"
+	if contentType == models.ThumbnailProjectExportContentTypeJPEG {
+		keyExt = "jpeg"
+	}
+	key := services.BuildUploadKey(userID, "thumbnail_export."+keyExt)
+	asset := &models.MediaAsset{
+		UserID: userID, UploadKey: key, Bucket: storageBucket(r.storageProvider),
+		ContentType: contentType, SizeBytes: 0, SHA256: "", Status: models.MediaAssetStatusPending,
+		ExpiresAt: time.Now().Add(renderExportAssetTTL),
+	}
+	if err := r.mediaStore.Create(asset); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create media asset: "+err.Error())
+		return
+	}
+	reservationHash := make([]byte, 32)
+	export := &models.ThumbnailExport{
+		ProjectID: projectID, RevisionID: revisionID, MediaID: asset.ID,
+		ContentType: contentType, Width: width, Height: height, FileSize: 0,
+		SHA256: reservationHash, RendererVersion: thumbnailrender.RendererVersion,
+		RenderProfile: renderProfile, Status: models.ThumbnailProjectExportStatusRendering,
+	}
+	failReservation := func(cause error) {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, cause.Error(), cause)
+		if updateErr := r.thumbnailProjectStore.UpdateExportStatus(req.Context(), workspaceID, export.ID,
+			models.ThumbnailProjectExportStatusFailed, cause.Error(), nil, 0, thumbnailrender.RendererVersion); updateErr != nil {
+			slog.Error("thumbnail render: failed to persist export failure", "export_id", export.ID, "error", updateErr)
+		}
+	}
+	if err := r.thumbnailProjectStore.CreateExport(req.Context(), workspaceID, export); err != nil {
+		if errors.Is(err, repository.ErrThumbnailExportConflict) {
+			safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, "duplicate render reservation", err)
+			existing, findErr := r.thumbnailProjectStore.FindExportByRenderKey(req.Context(), workspaceID, projectID, revisionID, renderProfile)
+			if findErr != nil {
+				writeError(w, http.StatusInternalServerError, "find existing thumbnail export: "+findErr.Error())
+				return
+			}
+			if existing != nil && existing.Status == models.ThumbnailProjectExportStatusReady {
+				writeJSON(w, http.StatusOK, existing)
+			} else {
+				writeJSON(w, http.StatusAccepted, existing)
+			}
+			return
+		}
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		writeError(w, http.StatusInternalServerError, "failed to reserve thumbnail export: "+err.Error())
+		return
+	}
+
 	scene, err := thumbnailrender.Parse(revision.SnapshotJSON, width, height)
 	if err != nil {
+		failReservation(err)
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -169,6 +240,7 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 		}
 		data, rerr := r.fetchRenderMediaBytes(req.Context(), workspaceID, o.MediaID)
 		if rerr != nil {
+			failReservation(rerr)
 			writeRenderMediaError(w, rerr)
 			return
 		}
@@ -184,6 +256,7 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 
 	rendered, err := scene.Render(req.Context(), contentType, resolve)
 	if err != nil {
+		failReservation(err)
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -192,36 +265,17 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 	shaSum := sha256.Sum256(rendered)
 	shaHex := hex.EncodeToString(shaSum[:])
 	sizeBytes := int64(len(rendered))
-	ext := "png"
-	if contentType == models.ThumbnailProjectExportContentTypeJPEG {
-		ext = "jpeg"
-	}
-	key := services.BuildUploadKey(userID, "thumbnail_export."+ext)
-	asset := &models.MediaAsset{
-		UserID:      userID,
-		UploadKey:   key,
-		Bucket:      storageBucket(r.storageProvider),
-		ContentType: contentType,
-		SizeBytes:   sizeBytes,
-		SHA256:      shaHex,
-		Status:      models.MediaAssetStatusPending,
-		ExpiresAt:   time.Now().Add(renderExportAssetTTL),
-	}
-	if err := r.mediaStore.Create(asset); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create media asset: "+err.Error())
-		return
-	}
 
 	grant, err := r.storageProvider.SignUpload(req.Context(), userID, key, contentType, sizeBytes, renderUploadTTL)
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		failReservation(err)
 		writeError(w, http.StatusInternalServerError, "failed to sign render upload: "+err.Error())
 		return
 	}
 
 	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPut, grant.UploadURL, bytes.NewReader(rendered))
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		failReservation(err)
 		writeError(w, http.StatusInternalServerError, "failed to build render upload request: "+err.Error())
 		return
 	}
@@ -233,46 +287,33 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 	}
 	uploadResp, err := uploadClient.Do(uploadReq)
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		failReservation(err)
 		writeError(w, http.StatusBadGateway, "failed to upload render to storage: "+err.Error())
 		return
 	}
 	uploadResp.Body.Close()
 	if uploadResp.StatusCode >= 300 {
 		reason := fmt.Sprintf("render storage upload returned %d", uploadResp.StatusCode)
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, reason, errors.New(reason))
+		failReservation(errors.New(reason))
 		writeError(w, http.StatusBadGateway, reason)
 		return
 	}
 	if err := r.mediaStore.MarkReady(asset.ID, shaHex, sizeBytes, contentType); err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		failReservation(err)
 		writeError(w, http.StatusInternalServerError, "failed to mark render asset ready: "+err.Error())
 		return
 	}
 
-	// --- Two-phase export lifecycle: rendering → ready ---
-	export := &models.ThumbnailExport{
-		ProjectID:       projectID,
-		RevisionID:      revisionID,
-		MediaID:         asset.ID,
-		ContentType:     contentType,
-		Width:           width,
-		Height:          height,
-		FileSize:        sizeBytes,
-		SHA256:          shaSum[:],
-		RendererVersion: thumbnailrender.RendererVersion,
-		Status:          models.ThumbnailProjectExportStatusRendering,
-	}
-	if err := r.thumbnailProjectStore.CreateExport(req.Context(), workspaceID, export); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
+	// Complete the reserved export only after the object is verified ready.
 	if err := r.thumbnailProjectStore.UpdateExportStatus(req.Context(), workspaceID, export.ID,
 		models.ThumbnailProjectExportStatusReady, "", shaSum[:], sizeBytes, thumbnailrender.RendererVersion); err != nil {
 		writeError(w, http.StatusInternalServerError, "export rendered but failed to finalize: "+err.Error())
 		return
 	}
 	export.Status = models.ThumbnailProjectExportStatusReady
+	export.SHA256 = append(export.SHA256[:0], shaSum[:]...)
+	export.FileSize = sizeBytes
+	export.LastError = ""
 	writeJSON(w, http.StatusCreated, export)
 }
 

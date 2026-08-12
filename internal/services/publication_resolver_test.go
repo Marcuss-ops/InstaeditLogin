@@ -29,6 +29,23 @@ func (f *resolverStoreFake) ResolveTranslationEntries(context.Context, int64, in
 	return f.bundle, f.entries, nil
 }
 
+func TestPublicationResolverFallsBackToPackageTemplate(t *testing.T) {
+	cover := "package-cover"
+	templateVersion := int64(21)
+	fake := &resolverStoreFake{
+		pkg:      &models.ContentPackage{ID: 1, WorkspaceID: 7, DriveFileID: "drive-1", SourceLanguage: "it", CurrentCoverMediaID: &cover, CurrentCoverTemplateVersionID: &templateVersion},
+		metadata: &models.ContentMetadataRevision{ID: 3, SourceLanguage: "it", Title: "Titolo", Description: "Descrizione"},
+		targets:  []*models.ContentPackageTarget{{ID: 8, ContentPackageID: 1, PlatformAccountID: 22, Language: "it", PrivacyStatus: "public", Enabled: true}},
+	}
+	resolved, err := NewPublicationResolver(fake).Resolve(context.Background(), 7, 1, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.CoverTemplateVersionID == nil || *resolved.CoverTemplateVersionID != templateVersion {
+		t.Fatalf("package template fallback was not selected: %+v", resolved.CoverTemplateVersionID)
+	}
+}
+
 func TestPublicationResolverUsesSourceForSameLanguage(t *testing.T) {
 	cover := "cover-1"
 	fake := &resolverStoreFake{

@@ -121,11 +121,11 @@ func (r *ThumbnailProjectRepository) DeleteAsset(ctx context.Context, workspaceI
 	return nil
 }
 
-const thumbnailExportColumns = `id, project_id, revision_id, media_id, content_type, width, height, file_size, sha256, renderer_version, status, last_error, created_at`
+const thumbnailExportColumns = `id, project_id, revision_id, media_id, content_type, width, height, file_size, sha256, renderer_version, render_profile, status, last_error, created_at, updated_at`
 
 func scanThumbnailExport(row interface{ Scan(...any) error }) (*models.ThumbnailExport, error) {
 	export := &models.ThumbnailExport{}
-	if err := row.Scan(&export.ID, &export.ProjectID, &export.RevisionID, &export.MediaID, &export.ContentType, &export.Width, &export.Height, &export.FileSize, &export.SHA256, &export.RendererVersion, &export.Status, &export.LastError, &export.CreatedAt); err != nil {
+	if err := row.Scan(&export.ID, &export.ProjectID, &export.RevisionID, &export.MediaID, &export.ContentType, &export.Width, &export.Height, &export.FileSize, &export.SHA256, &export.RendererVersion, &export.RenderProfile, &export.Status, &export.LastError, &export.CreatedAt, &export.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return export, nil
@@ -161,12 +161,12 @@ func (r *ThumbnailProjectRepository) CreateExport(ctx context.Context, workspace
 
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO thumbnail_exports
-			(id, project_id, revision_id, media_id, content_type, width, height, file_size, sha256, renderer_version, status, last_error, created_at)
-		SELECT $2, p.id, r.id, ma.id, $5, $6, $7, $8, $9, $10, $11, $12, $13
+			(id, project_id, revision_id, media_id, content_type, width, height, file_size, sha256, renderer_version, render_profile, status, last_error, created_at)
+		SELECT $2, p.id, r.id, ma.id, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 		  FROM thumbnail_projects p
 		  JOIN thumbnail_project_revisions r ON r.project_id = p.id AND r.id = $3
-		  JOIN media_assets ma ON ma.id = $4::uuid AND ma.status = 'ready' AND ma.expires_at > NOW()
-		 WHERE p.workspace_id = $1 AND p.id = $14 AND p.status <> $15
+		  JOIN media_assets ma ON ma.id = $4::uuid AND ma.status IN ('pending', 'ready') AND ma.expires_at > NOW()
+		 WHERE p.workspace_id = $1 AND p.id = $15 AND p.status <> $16
 		   AND EXISTS (
 			   SELECT 1 FROM workspaces w
 			    WHERE w.id = p.workspace_id
@@ -176,9 +176,12 @@ func (r *ThumbnailProjectRepository) CreateExport(ctx context.Context, workspace
 				  ))
 		   )
 	`, workspaceID, export.ID, export.RevisionID, export.MediaID, export.ContentType, export.Width, export.Height,
-		export.FileSize, export.SHA256, export.RendererVersion, export.Status, export.LastError, createdAt,
+		export.FileSize, export.SHA256, export.RendererVersion, export.RenderProfile, export.Status, export.LastError, createdAt,
 		export.ProjectID, models.ThumbnailProjectStatusDeleted)
 	if err != nil {
+		if strings.Contains(err.Error(), "thumbnail_exports_render_profile_uq") {
+			return fmt.Errorf("%w: render profile already reserved", ErrThumbnailExportConflict)
+		}
 		return fmt.Errorf("create thumbnail export: %w", err)
 	}
 	n, err := result.RowsAffected()
@@ -202,6 +205,7 @@ func (r *ThumbnailProjectRepository) CreateExport(ctx context.Context, workspace
 	}
 	committed = true
 	export.CreatedAt = createdAt
+	export.UpdatedAt = createdAt
 	return nil
 }
 
@@ -237,6 +241,7 @@ func (r *ThumbnailProjectRepository) UpdateExportStatus(ctx context.Context, wor
 		UPDATE thumbnail_exports e
 		   SET status = $1,
 		       last_error = $2,
+		       updated_at = NOW(),
 		       sha256 = CASE WHEN $1 = 'ready' THEN $3 ELSE e.sha256 END,
 		       file_size = CASE WHEN $1 = 'ready' THEN $4 ELSE e.file_size END,
 		       renderer_version = CASE WHEN $5 <> '' THEN $5 ELSE e.renderer_version END
@@ -268,6 +273,27 @@ func (r *ThumbnailProjectRepository) UpdateExportStatus(ctx context.Context, wor
 	}
 	committed = true
 	return nil
+}
+
+func (r *ThumbnailProjectRepository) FindExportByRenderKey(ctx context.Context, workspaceID int64, projectID, revisionID, renderProfile string) (*models.ThumbnailExport, error) {
+	if workspaceID <= 0 || strings.TrimSpace(projectID) == "" || strings.TrimSpace(revisionID) == "" || strings.TrimSpace(renderProfile) == "" {
+		return nil, fmt.Errorf("%w: workspace, project, revision, and render profile are required", ErrThumbnailProjectInvalid)
+	}
+	export, err := scanThumbnailExport(r.db.QueryRowContext(ctx, `
+		SELECT `+thumbnailExportColumns+`
+		  FROM thumbnail_exports e
+		 WHERE e.project_id = $2 AND e.revision_id = $3 AND e.render_profile = $4
+		   AND EXISTS (SELECT 1 FROM thumbnail_projects p WHERE p.id = e.project_id AND p.workspace_id = $1 AND p.status <> $5)
+		 ORDER BY e.created_at DESC, e.id
+		 LIMIT 1
+	`, workspaceID, projectID, revisionID, renderProfile, models.ThumbnailProjectStatusDeleted))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find thumbnail export by render key: %w", err)
+	}
+	return export, nil
 }
 
 func (r *ThumbnailProjectRepository) FindExport(ctx context.Context, workspaceID int64, exportID string) (*models.ThumbnailExport, error) {

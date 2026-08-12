@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, Film, Loader2 } from "lucide-react";
+import { CoverOverridesPanel } from "./CoverOverridesPanel";
 import {
   getContentPackage,
   getContentPackageActivity,
@@ -138,6 +139,14 @@ export function ContentPackageDetail() {
             {!data.schedule && <><label className="mb-2 block text-xs text-[#9aa0aa]" htmlFor="content-schedule-at">Data e ora</label><input id="content-schedule-at" type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="mb-3 w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white" /><button disabled={!preview.ready || scheduling} onClick={() => void schedule()} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40">{scheduling && <Loader2 size={15} className="animate-spin" />} Programma</button></>}
           </aside>
         </div>
+
+        <CoverOverridesPanel
+          packageId={packageId}
+          workspaceId={data.package.workspace_id}
+          packageVersion={data.package.version}
+          targets={data.targets}
+          onSaved={load}
+        />
 
         {data.publications && data.publications.length > 0 && (
           <section className="mt-6 rounded-2xl border border-white/[0.09] bg-white/[0.03] p-5">

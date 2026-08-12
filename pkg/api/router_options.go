@@ -38,6 +38,12 @@ func WithThumbnailProjectStore(store ThumbnailProjectStore) RouterOption {
 	return func(r *Router) { r.thumbnailProjectStore = store }
 }
 
+// WithCoverLibraryStore wires the workspace-scoped Cover Library and
+// immutable Template Library catalog.
+func WithCoverLibraryStore(store CoverLibraryStore) RouterOption {
+	return func(r *Router) { r.coverLibraryStore = store }
+}
+
 func WithPostStore(repo PostStore) RouterOption {
 	return func(r *Router) { r.postStore = repo }
 }

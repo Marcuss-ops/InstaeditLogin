@@ -36,34 +36,37 @@ func (s ContentPackageState) IsValid() bool {
 }
 
 type ContentPackage struct {
-	ID                        int64               `json:"id"`
-	WorkspaceID               int64               `json:"workspace_id"`
-	CreatedBy                 int64               `json:"created_by"`
-	SourceType                string              `json:"source_type"`
-	DriveAccountID            *int64              `json:"drive_account_id,omitempty"`
-	DriveFileID               string              `json:"drive_file_id"`
-	SourceFilename            string              `json:"source_filename,omitempty"`
-	SourceFingerprint         string              `json:"source_fingerprint,omitempty"`
-	VeloxProjectID            *string             `json:"velox_project_id,omitempty"`
-	SourceLanguage            string              `json:"source_language"`
-	CurrentMetadataRevisionID *int64              `json:"current_metadata_revision_id,omitempty"`
-	CurrentCoverMediaID       *string             `json:"current_cover_media_id,omitempty"`
-	State                     ContentPackageState `json:"state"`
-	Version                   int64               `json:"version"`
-	CreatedAt                 time.Time           `json:"created_at"`
-	UpdatedAt                 time.Time           `json:"updated_at"`
+	ID                            int64               `json:"id"`
+	WorkspaceID                   int64               `json:"workspace_id"`
+	CreatedBy                     int64               `json:"created_by"`
+	SourceType                    string              `json:"source_type"`
+	DriveAccountID                *int64              `json:"drive_account_id,omitempty"`
+	DriveFileID                   string              `json:"drive_file_id"`
+	SourceFilename                string              `json:"source_filename,omitempty"`
+	SourceFingerprint             string              `json:"source_fingerprint,omitempty"`
+	VeloxProjectID                *string             `json:"velox_project_id,omitempty"`
+	SourceLanguage                string              `json:"source_language"`
+	CurrentMetadataRevisionID     *int64              `json:"current_metadata_revision_id,omitempty"`
+	CurrentCoverMediaID           *string             `json:"current_cover_media_id,omitempty"`
+	CurrentCoverTemplateVersionID *int64              `json:"current_cover_template_version_id,omitempty"`
+	State                         ContentPackageState `json:"state"`
+	Version                       int64               `json:"version"`
+	CreatedAt                     time.Time           `json:"created_at"`
+	UpdatedAt                     time.Time           `json:"updated_at"`
 }
 
 type ContentPackageTarget struct {
-	ID                int64     `json:"id"`
-	ContentPackageID  int64     `json:"content_package_id"`
-	PlatformAccountID int64     `json:"platform_account_id"`
-	Language          string    `json:"language"`
-	PrivacyStatus     string    `json:"privacy_status"`
-	PlaylistID        *string   `json:"playlist_id,omitempty"`
-	Enabled           bool      `json:"enabled"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                     int64     `json:"id"`
+	ContentPackageID       int64     `json:"content_package_id"`
+	PlatformAccountID      int64     `json:"platform_account_id"`
+	Language               string    `json:"language"`
+	PrivacyStatus          string    `json:"privacy_status"`
+	PlaylistID             *string   `json:"playlist_id,omitempty"`
+	CoverMediaID           *string   `json:"cover_media_id,omitempty"`
+	CoverTemplateVersionID *int64    `json:"cover_template_version_id,omitempty"`
+	Enabled                bool      `json:"enabled"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 type ContentMetadataRevision struct {
@@ -138,22 +141,23 @@ type ContentPackagePublicationStatus struct {
 }
 
 type PublishSnapshot struct {
-	ID                  int64           `json:"id"`
-	ContentScheduleID   int64           `json:"content_schedule_id"`
-	ContentPackageID    int64           `json:"content_package_id"`
-	PackageVersion      int64           `json:"package_version"`
-	TargetAccountID     int64           `json:"target_account_id"`
-	Language            string          `json:"language"`
-	MetadataRevisionID  int64           `json:"metadata_revision_id"`
-	TranslationBundleID *int64          `json:"translation_bundle_id,omitempty"`
-	CoverMediaID        *string         `json:"cover_media_id,omitempty"`
-	SourceMediaAssetID  *string         `json:"source_media_asset_id,omitempty"`
-	Title               string          `json:"title"`
-	Description         string          `json:"description"`
-	Tags                json.RawMessage `json:"tags"`
-	PrivacyStatus       string          `json:"privacy_status"`
-	PublishAt           time.Time       `json:"publish_at"`
-	CreatedAt           time.Time       `json:"created_at"`
+	ID                     int64           `json:"id"`
+	ContentScheduleID      int64           `json:"content_schedule_id"`
+	ContentPackageID       int64           `json:"content_package_id"`
+	PackageVersion         int64           `json:"package_version"`
+	TargetAccountID        int64           `json:"target_account_id"`
+	Language               string          `json:"language"`
+	MetadataRevisionID     int64           `json:"metadata_revision_id"`
+	TranslationBundleID    *int64          `json:"translation_bundle_id,omitempty"`
+	CoverMediaID           *string         `json:"cover_media_id,omitempty"`
+	CoverTemplateVersionID *int64          `json:"cover_template_version_id,omitempty"`
+	SourceMediaAssetID     *string         `json:"source_media_asset_id,omitempty"`
+	Title                  string          `json:"title"`
+	Description            string          `json:"description"`
+	Tags                   json.RawMessage `json:"tags"`
+	PrivacyStatus          string          `json:"privacy_status"`
+	PublishAt              time.Time       `json:"publish_at"`
+	CreatedAt              time.Time       `json:"created_at"`
 }
 
 type PublicationEvent struct {

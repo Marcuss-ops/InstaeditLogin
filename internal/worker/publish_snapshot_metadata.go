@@ -9,12 +9,13 @@ import (
 // job metadata created by ContentPreparationWorker. Keeping this decoder in
 // one place makes the upload and publish phases consume the same snapshot.
 type publishSnapshotMetadata struct {
-	Title            string   `json:"title"`
-	Description      string   `json:"description"`
-	Tags             []string `json:"tags,omitempty"`
-	ThumbnailMediaID string   `json:"thumbnail_media_id,omitempty"`
-	Language         string   `json:"language,omitempty"`
-	PrivacyStatus    string   `json:"privacy_status,omitempty"`
+	Title                  string   `json:"title"`
+	Description            string   `json:"description"`
+	Tags                   []string `json:"tags,omitempty"`
+	ThumbnailMediaID       string   `json:"thumbnail_media_id,omitempty"`
+	CoverTemplateVersionID *int64   `json:"cover_template_version_id,omitempty"`
+	Language               string   `json:"language,omitempty"`
+	PrivacyStatus          string   `json:"privacy_status,omitempty"`
 }
 
 type publishJobMetadata struct {

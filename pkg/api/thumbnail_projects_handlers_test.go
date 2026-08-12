@@ -31,6 +31,7 @@ type thumbnailProjectTestStore struct {
 	createdExport     *models.ThumbnailExport
 	export            *models.ThumbnailExport
 	findExportErr     error
+	lastExportProfile string
 	lastExportStatus  string
 	lastExportError   string
 	lastExportSHA     []byte
@@ -110,9 +111,17 @@ func (s *thumbnailProjectTestStore) CreateExport(_ context.Context, _ int64, exp
 	}
 	export.CreatedAt = time.Now().UTC()
 	s.createdExport = export
+	s.export = export
+	s.lastExportProfile = export.RenderProfile
 	return nil
 }
 func (s *thumbnailProjectTestStore) FindExport(_ context.Context, _ int64, _ string) (*models.ThumbnailExport, error) {
+	return s.export, s.findExportErr
+}
+func (s *thumbnailProjectTestStore) FindExportByRenderKey(_ context.Context, _ int64, projectID, revisionID, renderProfile string) (*models.ThumbnailExport, error) {
+	if s.export == nil || s.export.ProjectID != projectID || s.export.RevisionID != revisionID || s.export.RenderProfile != renderProfile {
+		return nil, nil
+	}
 	return s.export, s.findExportErr
 }
 func (s *thumbnailProjectTestStore) UpdateExportStatus(_ context.Context, _ int64, _ string, status, lastError string, sha256 []byte, fileSize int64, rendererVersion string) error {

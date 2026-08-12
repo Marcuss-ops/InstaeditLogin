@@ -25,6 +25,9 @@ type ThumbnailProjectStore interface {
 	CreateExport(ctx context.Context, workspaceID int64, export *models.ThumbnailExport) error
 	// FindExport returns a workspace-scoped export by id.
 	FindExport(ctx context.Context, workspaceID int64, exportID string) (*models.ThumbnailExport, error)
+	// FindExportByRenderKey returns the existing export for an immutable
+	// project/revision/output profile tuple.
+	FindExportByRenderKey(ctx context.Context, workspaceID int64, projectID, revisionID, renderProfile string) (*models.ThumbnailExport, error)
 	// UpdateExportStatus transitions a 'rendering' export to 'ready' or
 	// 'failed' and, on ready, advances the project's latest_export_id and
 	// preview_media_id pointers in the same transaction.

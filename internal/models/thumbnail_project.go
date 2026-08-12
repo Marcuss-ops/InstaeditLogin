@@ -93,19 +93,23 @@ type ThumbnailProjectAsset struct {
 
 // ThumbnailExport describes a rendered file persisted in media storage.
 type ThumbnailExport struct {
-	ID              string    `json:"id"`
-	ProjectID       string    `json:"project_id"`
-	RevisionID      string    `json:"revision_id"`
-	MediaID         string    `json:"media_id"`
-	ContentType     string    `json:"content_type"`
-	Width           int       `json:"width"`
-	Height          int       `json:"height"`
-	FileSize        int64     `json:"file_size"`
-	SHA256          []byte    `json:"sha256"`
-	RendererVersion string    `json:"renderer_version"`
-	Status          string    `json:"status"`
-	LastError       string    `json:"last_error"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              string `json:"id"`
+	ProjectID       string `json:"project_id"`
+	RevisionID      string `json:"revision_id"`
+	MediaID         string `json:"media_id"`
+	ContentType     string `json:"content_type"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
+	FileSize        int64  `json:"file_size"`
+	SHA256          []byte `json:"sha256"`
+	RendererVersion string `json:"renderer_version"`
+	// RenderProfile is the canonical output profile (format, dimensions,
+	// renderer lineage). Non-empty profiles are unique per project/revision.
+	RenderProfile string    `json:"render_profile,omitempty"`
+	Status        string    `json:"status"`
+	LastError     string    `json:"last_error"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // ThumbnailAssignment is an optional YouTube destination for an export.

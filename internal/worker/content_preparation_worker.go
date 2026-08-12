@@ -99,7 +99,7 @@ func (w *ContentPreparationWorker) prepareSchedule(ctx context.Context, schedule
 			}
 			return w.blockSchedule(ctx, schedule, reason)
 		}
-		snapshot := &models.PublishSnapshot{ContentScheduleID: schedule.ID, ContentPackageID: pkg.ID, PackageVersion: pkg.Version, TargetAccountID: publication.Target.PlatformAccountID, Language: publication.Target.Language, MetadataRevisionID: publication.MetadataRevision.ID, TranslationBundleID: publication.TranslationBundleID, CoverMediaID: publication.ThumbnailMediaID, Title: publication.Title, Description: publication.Description, Tags: publication.Tags, PrivacyStatus: publication.PrivacyStatus, PublishAt: schedule.ScheduledAt}
+		snapshot := &models.PublishSnapshot{ContentScheduleID: schedule.ID, ContentPackageID: pkg.ID, PackageVersion: pkg.Version, TargetAccountID: publication.Target.PlatformAccountID, Language: publication.Target.Language, MetadataRevisionID: publication.MetadataRevision.ID, TranslationBundleID: publication.TranslationBundleID, CoverMediaID: publication.ThumbnailMediaID, CoverTemplateVersionID: publication.CoverTemplateVersionID, Title: publication.Title, Description: publication.Description, Tags: publication.Tags, PrivacyStatus: publication.PrivacyStatus, PublishAt: schedule.ScheduledAt}
 		if err := w.store.CreatePublishSnapshot(ctx, snapshot); err != nil {
 			_ = w.store.MarkScheduleRetry(ctx, schedule.ID, w.workerID, time.Now().Add(time.Minute), err.Error())
 			return err
@@ -119,7 +119,7 @@ func (w *ContentPreparationWorker) prepareSchedule(ctx context.Context, schedule
 		if publication.PrivacyStatus != "" {
 			defaultPrivacy = publication.PrivacyStatus
 		}
-		snapshots[fmt.Sprint(publication.Target.PlatformAccountID)] = map[string]any{"title": publication.Title, "description": publication.Description, "tags": publication.Tags, "thumbnail_media_id": publication.ThumbnailMediaID, "language": publication.Target.Language, "privacy_status": publication.PrivacyStatus}
+		snapshots[fmt.Sprint(publication.Target.PlatformAccountID)] = map[string]any{"title": publication.Title, "description": publication.Description, "tags": publication.Tags, "thumbnail_media_id": publication.ThumbnailMediaID, "cover_template_version_id": publication.CoverTemplateVersionID, "language": publication.Target.Language, "privacy_status": publication.PrivacyStatus}
 	}
 	metadata, err := json.Marshal(map[string]any{"source_language": pkg.SourceLanguage, "content_package_id": pkg.ID, "content_schedule_id": schedule.ID, "publish_snapshots": snapshots})
 	if err != nil {

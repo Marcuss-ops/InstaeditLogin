@@ -18,35 +18,40 @@ import (
 )
 
 type contentPackageCreateRequest struct {
-	WorkspaceID       int64                       `json:"workspace_id"`
-	SourceType        string                      `json:"source_type"`
-	DriveAccountID    *int64                      `json:"drive_account_id,omitempty"`
-	DriveFileID       string                      `json:"drive_file_id"`
-	SourceFilename    string                      `json:"source_filename"`
-	SourceFingerprint string                      `json:"source_fingerprint"`
-	VeloxProjectID    *string                     `json:"velox_project_id,omitempty"`
-	SourceLanguage    string                      `json:"source_language"`
-	Title             string                      `json:"title"`
-	Description       string                      `json:"description"`
-	Tags              json.RawMessage             `json:"tags"`
-	Targets           []contentPackageTargetInput `json:"targets"`
+	WorkspaceID                   int64                       `json:"workspace_id"`
+	SourceType                    string                      `json:"source_type"`
+	DriveAccountID                *int64                      `json:"drive_account_id,omitempty"`
+	DriveFileID                   string                      `json:"drive_file_id"`
+	SourceFilename                string                      `json:"source_filename"`
+	SourceFingerprint             string                      `json:"source_fingerprint"`
+	VeloxProjectID                *string                     `json:"velox_project_id,omitempty"`
+	SourceLanguage                string                      `json:"source_language"`
+	CurrentCoverMediaID           *string                     `json:"current_cover_media_id,omitempty"`
+	CurrentCoverTemplateVersionID *int64                      `json:"current_cover_template_version_id,omitempty"`
+	Title                         string                      `json:"title"`
+	Description                   string                      `json:"description"`
+	Tags                          json.RawMessage             `json:"tags"`
+	Targets                       []contentPackageTargetInput `json:"targets"`
 }
 
 type contentPackageTargetInput struct {
-	PlatformAccountID int64   `json:"platform_account_id"`
-	Language          string  `json:"language"`
-	PrivacyStatus     string  `json:"privacy_status"`
-	PlaylistID        *string `json:"playlist_id,omitempty"`
-	Enabled           *bool   `json:"enabled,omitempty"`
+	PlatformAccountID      int64   `json:"platform_account_id"`
+	Language               string  `json:"language"`
+	PrivacyStatus          string  `json:"privacy_status"`
+	PlaylistID             *string `json:"playlist_id,omitempty"`
+	Enabled                *bool   `json:"enabled,omitempty"`
+	CoverMediaID           *string `json:"cover_media_id,omitempty"`
+	CoverTemplateVersionID *int64  `json:"cover_template_version_id,omitempty"`
 }
 
 type contentPackagePatchRequest struct {
-	ExpectedPackageVersion int64   `json:"expected_package_version"`
-	SourceFilename         *string `json:"source_filename,omitempty"`
-	SourceFingerprint      *string `json:"source_fingerprint,omitempty"`
-	SourceLanguage         *string `json:"source_language,omitempty"`
-	CurrentCoverMediaID    *string `json:"current_cover_media_id,omitempty"`
-	State                  *string `json:"state,omitempty"`
+	ExpectedPackageVersion        int64   `json:"expected_package_version"`
+	SourceFilename                *string `json:"source_filename,omitempty"`
+	SourceFingerprint             *string `json:"source_fingerprint,omitempty"`
+	SourceLanguage                *string `json:"source_language,omitempty"`
+	CurrentCoverMediaID           *string `json:"current_cover_media_id,omitempty"`
+	CurrentCoverTemplateVersionID *int64  `json:"current_cover_template_version_id,omitempty"`
+	State                         *string `json:"state,omitempty"`
 }
 
 type contentMetadataRequest struct {
@@ -85,18 +90,19 @@ type contentPackageResponse struct {
 }
 
 type contentPreviewTarget struct {
-	PlatformAccountID int64                         `json:"platform_account_id"`
-	ChannelName       string                        `json:"channel_name,omitempty"`
-	Language          string                        `json:"language"`
-	Title             string                        `json:"title"`
-	Description       string                        `json:"description"`
-	Tags              json.RawMessage               `json:"tags"`
-	ThumbnailMediaID  *string                       `json:"thumbnail_media_id,omitempty"`
-	PrivacyStatus     string                        `json:"privacy_status"`
-	ScheduledAt       *time.Time                    `json:"scheduled_at,omitempty"`
-	Ready             bool                          `json:"ready"`
-	Blockers          []services.PublicationBlocker `json:"blockers"`
-	Warnings          []string                      `json:"warnings,omitempty"`
+	PlatformAccountID      int64                         `json:"platform_account_id"`
+	ChannelName            string                        `json:"channel_name,omitempty"`
+	Language               string                        `json:"language"`
+	Title                  string                        `json:"title"`
+	Description            string                        `json:"description"`
+	Tags                   json.RawMessage               `json:"tags"`
+	ThumbnailMediaID       *string                       `json:"thumbnail_media_id,omitempty"`
+	CoverTemplateVersionID *int64                        `json:"cover_template_version_id,omitempty"`
+	PrivacyStatus          string                        `json:"privacy_status"`
+	ScheduledAt            *time.Time                    `json:"scheduled_at,omitempty"`
+	Ready                  bool                          `json:"ready"`
+	Blockers               []services.PublicationBlocker `json:"blockers"`
+	Warnings               []string                      `json:"warnings,omitempty"`
 }
 
 type contentPreviewResponse struct {
@@ -196,7 +202,7 @@ func (r *Router) handleCreateContentPackage(w http.ResponseWriter, req *http.Req
 			return
 		}
 	}
-	pkg := &models.ContentPackage{WorkspaceID: body.WorkspaceID, CreatedBy: identity.UserID(), SourceType: body.SourceType, DriveAccountID: body.DriveAccountID, DriveFileID: strings.TrimSpace(body.DriveFileID), SourceFilename: body.SourceFilename, SourceFingerprint: body.SourceFingerprint, VeloxProjectID: body.VeloxProjectID, SourceLanguage: body.SourceLanguage}
+	pkg := &models.ContentPackage{WorkspaceID: body.WorkspaceID, CreatedBy: identity.UserID(), SourceType: body.SourceType, DriveAccountID: body.DriveAccountID, DriveFileID: strings.TrimSpace(body.DriveFileID), SourceFilename: body.SourceFilename, SourceFingerprint: body.SourceFingerprint, VeloxProjectID: body.VeloxProjectID, SourceLanguage: body.SourceLanguage, CurrentCoverMediaID: body.CurrentCoverMediaID, CurrentCoverTemplateVersionID: body.CurrentCoverTemplateVersionID}
 	revision := &models.ContentMetadataRevision{SourceLanguage: body.SourceLanguage, Title: body.Title, Description: body.Description, Tags: body.Tags, CreatedBy: identity.UserID()}
 	if err := r.contentPackageStore.CreatePackage(req.Context(), pkg, revision); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "create content package: "+err.Error())
@@ -249,7 +255,7 @@ func (r *Router) validateContentPackageTargets(w http.ResponseWriter, req *http.
 		if privacy == "" {
 			privacy = "private"
 		}
-		targets = append(targets, &models.ContentPackageTarget{PlatformAccountID: input.PlatformAccountID, Language: input.Language, PrivacyStatus: privacy, PlaylistID: input.PlaylistID, Enabled: enabled})
+		targets = append(targets, &models.ContentPackageTarget{PlatformAccountID: input.PlatformAccountID, Language: input.Language, PrivacyStatus: privacy, PlaylistID: input.PlaylistID, CoverMediaID: input.CoverMediaID, CoverTemplateVersionID: input.CoverTemplateVersionID, Enabled: enabled})
 	}
 	return targets, true
 }
@@ -321,6 +327,9 @@ func (r *Router) handlePatchContentPackage(w http.ResponseWriter, req *http.Requ
 	}
 	if body.CurrentCoverMediaID != nil {
 		pkg.CurrentCoverMediaID = body.CurrentCoverMediaID
+	}
+	if body.CurrentCoverTemplateVersionID != nil {
+		pkg.CurrentCoverTemplateVersionID = body.CurrentCoverTemplateVersionID
 	}
 	if body.State != nil {
 		pkg.State = models.ContentPackageState(*body.State)
@@ -591,7 +600,7 @@ func (r *Router) handleContentPreview(w http.ResponseWriter, req *http.Request) 
 				name = account.Username
 			}
 		}
-		item := contentPreviewTarget{PlatformAccountID: resolved.Target.PlatformAccountID, ChannelName: name, Language: resolved.Target.Language, Title: resolved.Title, Description: resolved.Description, Tags: resolved.Tags, ThumbnailMediaID: resolved.ThumbnailMediaID, PrivacyStatus: resolved.PrivacyStatus, Ready: resolved.Ready(), Blockers: resolved.Blockers, Warnings: resolved.Warnings}
+		item := contentPreviewTarget{PlatformAccountID: resolved.Target.PlatformAccountID, ChannelName: name, Language: resolved.Target.Language, Title: resolved.Title, Description: resolved.Description, Tags: resolved.Tags, ThumbnailMediaID: resolved.ThumbnailMediaID, CoverTemplateVersionID: resolved.CoverTemplateVersionID, PrivacyStatus: resolved.PrivacyStatus, Ready: resolved.Ready(), Blockers: resolved.Blockers, Warnings: resolved.Warnings}
 		if schedule != nil {
 			item.ScheduledAt = &schedule.ScheduledAt
 		}

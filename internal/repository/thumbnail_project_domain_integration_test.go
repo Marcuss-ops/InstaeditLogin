@@ -15,7 +15,7 @@ import (
 func TestThumbnailProjectRepository_IntegrationAssetsExportsAssignments(t *testing.T) {
 	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
-	if err := database.RunMigrationsUpTo(db, 97); err != nil {
+	if err := database.RunMigrationsUpTo(db, 122); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
 	if _, err := db.Exec(`

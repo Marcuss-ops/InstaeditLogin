@@ -195,6 +195,21 @@ func (r *Router) Setup() http.Handler {
 		r.handleGetVeloxProjectBridge,
 		r.handleDeleteVeloxProjectBridge,
 	))
+	if r.coverLibraryStore != nil {
+		coverLibraryRead := func(handler http.Handler) http.Handler { return r.protected(handler.ServeHTTP) }
+		coverLibraryMutation := func(handler http.Handler) http.Handler {
+			if r.csrfMiddleware != nil {
+				handler = r.csrfMiddleware(handler)
+			}
+			return r.protected(handler.ServeHTTP)
+		}
+		r.mux.Method(http.MethodGet, "/api/v1/cover-library", coverLibraryRead(http.HandlerFunc(r.handleListCoverLibrary)))
+		r.mux.Method(http.MethodGet, "/api/v1/template-library", coverLibraryRead(http.HandlerFunc(r.handleListCoverTemplates)))
+		r.mux.Method(http.MethodGet, "/api/v1/template-library/{template_id}/versions", coverLibraryRead(http.HandlerFunc(r.handleListCoverTemplateVersions)))
+		r.mux.Method(http.MethodPost, "/api/v1/template-library", coverLibraryMutation(http.HandlerFunc(r.handleCreateCoverTemplate)))
+		r.mux.Method(http.MethodPost, "/api/v1/template-library/{template_id}/versions", coverLibraryMutation(http.HandlerFunc(r.handleCreateCoverTemplateVersion)))
+		r.mux.Method(http.MethodPost, "/api/v1/template-library/{template_id}/archive", coverLibraryMutation(http.HandlerFunc(r.handleArchiveCoverTemplate)))
+	}
 	reg.Register(NewMediaModule(MediaModuleDeps{
 		RateLimitSvc:       r.rateLimitSvc,
 		Protected:          r.protected,

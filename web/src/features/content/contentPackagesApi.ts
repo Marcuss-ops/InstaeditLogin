@@ -8,6 +8,7 @@ export type ContentPackage = {
   version: number;
   current_cover_media_id?: string;
   drive_file_id: string;
+  workspace_id: number;
 };
 
 export type ContentPackageTarget = {
@@ -15,7 +16,10 @@ export type ContentPackageTarget = {
   platform_account_id: number;
   language: string;
   privacy_status: string;
+  playlist_id?: string;
   enabled: boolean;
+  cover_media_id?: string;
+  cover_template_version_id?: number;
 };
 
 export type ContentPackagePublication = {
@@ -63,6 +67,7 @@ export type ContentPreview = {
     title: string;
     description: string;
     thumbnail_media_id?: string;
+    cover_template_version_id?: number;
     privacy_status: string;
     scheduled_at?: string;
     ready: boolean;
@@ -151,6 +156,27 @@ export function scheduleContentPackage(
   return apiClient<ContentPackageResponse>(
     `/api/v1/content-packages/${id}/schedule`,
     { method: "POST", body: input },
+  );
+}
+
+export function replaceContentPackageTargets(
+  id: string,
+  input: {
+    expected_package_version: number;
+    targets: Array<{
+      platform_account_id: number;
+      language: string;
+      privacy_status: string;
+      enabled: boolean;
+      playlist_id?: string;
+      cover_media_id?: string;
+      cover_template_version_id?: number;
+    }>;
+  },
+) {
+  return apiClient<{ package: ContentPackage; targets: ContentPackageTarget[] }>(
+    `/api/v1/content-packages/${id}/targets`,
+    { method: "PUT", body: input },
   );
 }
 

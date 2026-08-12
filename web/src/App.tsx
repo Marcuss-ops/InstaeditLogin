@@ -73,6 +73,11 @@ const CoversPage = lazy(() =>
     default: m.CoversPage,
   })),
 );
+const CoverLibraryPage = lazy(() =>
+  import("./pages/internal/CoverLibrary").then((m) => ({
+    default: m.CoverLibraryPage,
+  })),
+);
 const ChannelsPerformancePage = lazy(() =>
   import("./pages/internal/ChannelsPerformance").then((m) => ({
     default: m.ChannelsPerformancePage,
@@ -191,6 +196,14 @@ function App() {
                   Covers bookmarks and nested editor URLs land on the hub too
                   — the SPA never navigates away; InstaEditor opens in a new
                   tab from the video grid / preview modal. */}
+              <Route
+                path="covers/library"
+                element={
+                  <LazyRoute>
+                    <CoverLibraryPage />
+                  </LazyRoute>
+                }
+              />
               <Route
                 path="covers/*"
                 element={

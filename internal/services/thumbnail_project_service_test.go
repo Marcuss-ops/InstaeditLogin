@@ -74,6 +74,9 @@ func (s *thumbnailProjectServiceStore) CreateExport(context.Context, int64, *mod
 func (s *thumbnailProjectServiceStore) FindExport(context.Context, int64, string) (*models.ThumbnailExport, error) {
 	return nil, nil
 }
+func (s *thumbnailProjectServiceStore) FindExportByRenderKey(context.Context, int64, string, string, string) (*models.ThumbnailExport, error) {
+	return nil, nil
+}
 func (s *thumbnailProjectServiceStore) ListExports(context.Context, int64, string) ([]models.ThumbnailExport, error) {
 	return nil, nil
 }

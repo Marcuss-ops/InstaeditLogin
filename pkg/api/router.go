@@ -32,6 +32,7 @@ type Router struct {
 	userRepo              UserStore
 	workspaceStore        WorkspaceStore
 	thumbnailProjectStore ThumbnailProjectStore
+	coverLibraryStore     CoverLibraryStore
 	postStore             PostStore
 	storageProvider       StorageProvider
 	mediaStore            MediaStore
@@ -441,6 +442,7 @@ type Router struct {
 // internal/repository).
 var _ WorkspaceStore = (*repository.WorkspaceRepository)(nil)
 var _ ThumbnailProjectStore = (*repository.ThumbnailProjectRepository)(nil)
+var _ CoverLibraryStore = (*repository.CoverLibraryRepository)(nil)
 
 func NewRouter(
 	capRouter *services.CapabilityRouter,

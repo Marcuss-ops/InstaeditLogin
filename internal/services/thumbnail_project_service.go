@@ -27,6 +27,7 @@ type ThumbnailProjectStore interface {
 	DeleteAsset(context.Context, int64, string, string, string) error
 	CreateExport(context.Context, int64, *models.ThumbnailExport) error
 	FindExport(context.Context, int64, string) (*models.ThumbnailExport, error)
+	FindExportByRenderKey(context.Context, int64, string, string, string) (*models.ThumbnailExport, error)
 	ListExports(context.Context, int64, string) ([]models.ThumbnailExport, error)
 	CreateAssignment(context.Context, *models.ThumbnailAssignment) error
 	ListAssignments(context.Context, int64, string) ([]models.ThumbnailAssignment, error)
@@ -189,6 +190,13 @@ func (s *ThumbnailProjectService) FindExport(ctx context.Context, workspaceID in
 		return nil, err
 	}
 	return s.store.FindExport(ctx, workspaceID, strings.TrimSpace(exportID))
+}
+
+func (s *ThumbnailProjectService) FindExportByRenderKey(ctx context.Context, workspaceID int64, projectID, revisionID, renderProfile string) (*models.ThumbnailExport, error) {
+	if err := s.validateWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+	return s.store.FindExportByRenderKey(ctx, workspaceID, strings.TrimSpace(projectID), strings.TrimSpace(revisionID), strings.TrimSpace(renderProfile))
 }
 
 func (s *ThumbnailProjectService) ListExports(ctx context.Context, workspaceID int64, projectID string) ([]models.ThumbnailExport, error) {
