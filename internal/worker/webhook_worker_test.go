@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,15 +14,19 @@ import (
 )
 
 type webhookTestRepo struct {
-	mu         sync.Mutex
-	deliveries []repository.WebhookDelivery
-	claimed    int
-	claimLimit int
-	claimTTL   time.Duration
-	active     map[int64]string
-	success    []int64
-	heartbeats int
-	maxActive  int
+	mu          sync.Mutex
+	deliveries  []repository.WebhookDelivery
+	claimed     int
+	claimLimit  int
+	claimTTL    time.Duration
+	active      map[int64]string
+	success     []int64
+	retries     int
+	deadCount   int
+	lastError   string
+	nextAttempt time.Time
+	heartbeats  int
+	maxActive   int
 }
 
 func (r *webhookTestRepo) ClaimDueDeliveries(_ context.Context, limit int, ttl time.Duration) ([]repository.WebhookDelivery, error) {
@@ -64,10 +69,19 @@ func (r *webhookTestRepo) MarkSuccess(_ context.Context, id int64, leaseID, _ st
 	r.success = append(r.success, id)
 	return nil
 }
-func (r *webhookTestRepo) MarkRetry(context.Context, int64, string, string, string, string, time.Time) error {
+func (r *webhookTestRepo) MarkRetry(_ context.Context, _ int64, _ string, lastError, _ string, _ string, nextAttempt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.retries++
+	r.lastError = lastError
+	r.nextAttempt = nextAttempt
 	return nil
 }
-func (r *webhookTestRepo) MarkDead(context.Context, int64, string, string, string, string) error {
+func (r *webhookTestRepo) MarkDead(_ context.Context, _ int64, _ string, lastError, _ string, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deadCount++
+	r.lastError = lastError
 	return nil
 }
 func (r *webhookTestRepo) FindEventByID(context.Context, int64) (*repository.WebhookEvent, error) {
@@ -126,6 +140,65 @@ func TestWebhookWorker_ConfigurableConcurrencyAndNoDuplicateClaims(t *testing.T)
 	if got := atomic.LoadInt32(&maxActive); got > 3 {
 		t.Fatalf("max concurrent HTTP requests=%d, want <=3", got)
 	}
+}
+
+func TestWebhookWorker_UsesSharedErrorClassification(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		retryAfter string
+		wantRetry  bool
+		wantDead   bool
+		wantCode   string
+	}{
+		{name: "429 rate limited", status: http.StatusTooManyRequests, retryAfter: "30", wantRetry: true, wantCode: "rate_limited"},
+		{name: "503 transient", status: http.StatusServiceUnavailable, wantRetry: true, wantCode: "provider_unavailable"},
+		{name: "401 auth", status: http.StatusUnauthorized, wantDead: true, wantCode: "authentication_error"},
+		{name: "403 auth", status: http.StatusForbidden, wantDead: true, wantCode: "authentication_error"},
+		{name: "400 permanent", status: http.StatusBadRequest, wantDead: true, wantCode: "validation_error"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.retryAfter != "" {
+					w.Header().Set("Retry-After", tc.retryAfter)
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer server.Close()
+			testWebhookURL = server.URL
+			repo := &webhookTestRepo{
+				deliveries: []repository.WebhookDelivery{{ID: 101, EventID: 1, EndpointID: 1}},
+				active:     make(map[int64]string),
+			}
+			w := NewWebhookWorkerWithOptions(repo, WebhookWorkerOptions{
+				Concurrency: 1, HTTPTimeout: time.Second, LeaseTTL: 30 * time.Second,
+				HTTPClient: &http.Client{Timeout: time.Second},
+			})
+			w.runOnce(context.Background())
+
+			repo.mu.Lock()
+			retries, dead, code, next := repo.retries, repo.deadCount, repo.lastError, repo.nextAttempt
+			repo.mu.Unlock()
+			if retries != btoi(tc.wantRetry) || dead != btoi(tc.wantDead) {
+				t.Fatalf("routing retries=%d dead=%d, want retries=%v dead=%v (error=%q)", retries, dead, tc.wantRetry, tc.wantDead, code)
+			}
+			if code == "" || !strings.Contains(code, tc.wantCode) {
+				t.Errorf("normalized error code: got %q, want contains %q", code, tc.wantCode)
+			}
+			if tc.retryAfter != "" && !next.After(time.Now().Add(20*time.Second)) {
+				t.Errorf("429 Retry-After was not honored: next_attempt=%v", next)
+			}
+		})
+	}
+}
+
+func btoi(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func TestWebhookWorker_HeartbeatFencesSlowDelivery(t *testing.T) {

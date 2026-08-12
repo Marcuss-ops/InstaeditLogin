@@ -47,12 +47,14 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sort"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // DefaultTokenRefreshSweepInterval is the fallback tick interval.
@@ -215,16 +217,23 @@ func (w *TokenRefreshSweepWorker) tick(ctx context.Context) {
 		}
 		if renewErr != nil {
 			failed++
-			// Vault errors are redacted by construction (no token
-			// material, classified code only) — safe to log the full
-			// error. A dead grant surfaces here as invalid_grant →
-			// reauth_required, which is exactly what the sweep wants
-			// to discover early.
+			// Invalid-grant is owned by credentials, so adapt it at the
+			// worker boundary instead of making services import credentials.
+			classificationErr := renewErr
+			if errors.Is(renewErr, credentials.ErrInvalidGrant) || errors.Is(renewErr, credentials.ErrYouTubeInvalidGrant) {
+				classificationErr = services.NewAuthenticationError("authentication_error", renewErr)
+			}
+			classification := services.ClassifyErrorFor(g.Provider, "token_refresh", classificationErr)
+			// Persisted/logged diagnostics use only the normalized contract;
+			// raw provider bodies and token material never cross this boundary.
 			w.logger.Warn("token refresh sweep renew failed (will retry at next interval)",
 				"platform_account_id", g.PlatformAccountID,
 				"oauth_connection_id", g.OAuthConnectionID,
 				"provider", g.Provider,
-				"error", renewErr)
+				"error_kind", classification.Kind,
+				"error_code", classification.Code,
+				"retryable", classification.Retryable,
+				"retry_after", classification.RetryAfter)
 			continue
 		}
 		renewed++

@@ -76,6 +76,65 @@ func IsErrorKind(err error, kind ErrorKind) bool {
 	return classified != nil && classified.Kind == kind
 }
 
+// ClassifyHTTPStatus normalizes an HTTP response when a provider returned
+// no richer typed error. A successful response returns nil; callers should
+// handle 2xx success before routing failures. The mapping is shared by
+// workers such as webhook delivery that receive an http.Response directly.
+func ClassifyHTTPStatus(provider, operation string, status int, retryAfter time.Duration) *NormalizedError {
+	if status >= http.StatusOK && status < http.StatusMultipleChoices {
+		return nil
+	}
+
+	kind := ErrorKindPermanent
+	code := string(MapHTTPStatus(status))
+	retryable := false
+	switch {
+	case status == http.StatusRequestTimeout || status == http.StatusTooEarly:
+		kind, code, retryable = ErrorKindTransient, "timeout", true
+	case status == http.StatusTooManyRequests:
+		kind, code, retryable = ErrorKindRateLimited, "rate_limited", true
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		kind, code = ErrorKindAuth, "authentication_error"
+	case status >= http.StatusInternalServerError && status < 600:
+		kind, code, retryable = ErrorKindTransient, "provider_unavailable", true
+	case status < 100:
+		kind, code = ErrorKindPermanent, "unknown"
+	}
+	return &NormalizedError{
+		Provider: provider, Operation: operation, Kind: kind, Code: code,
+		HTTPStatus: status, Retryable: retryable, RetryAfter: retryAfter,
+		Cause: fmt.Errorf("%s %s returned HTTP %d", provider, operation, status),
+	}
+}
+
+// AuthenticationError is a provider-neutral wrapper for auth failures whose
+// concrete sentinel belongs to another package (for example credentials.ErrInvalidGrant).
+// It lets workers preserve typed auth semantics without creating an import cycle.
+type AuthenticationError struct {
+	Code  string
+	Cause error
+}
+
+func (e *AuthenticationError) Error() string {
+	if e == nil || e.Code == "" {
+		return "authentication error"
+	}
+	return e.Code
+}
+
+func (e *AuthenticationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// NewAuthenticationError adapts a package-owned auth sentinel to the shared
+// classifier while retaining errors.Is/errors.As access to the original cause.
+func NewAuthenticationError(code string, cause error) error {
+	return &AuthenticationError{Code: code, Cause: cause}
+}
+
 // ClassifyError converts the repository's provider-specific and legacy error
 // shapes into one worker decision. Explicit transport/timeouts are transient;
 // unknown ordinary errors are permanent so programming and validation bugs do
@@ -92,6 +151,14 @@ func ClassifyError(err error) *NormalizedError {
 		return normalizedFrom(err, "", "timeout", 0, ErrorKindTransient, true, retryAfterFromCarrier(err))
 	}
 
+	var authenticationErr *AuthenticationError
+	if errors.As(err, &authenticationErr) {
+		code := authenticationErr.Code
+		if code == "" {
+			code = "authentication_error"
+		}
+		return normalizedFrom(err, "", code, 0, ErrorKindAuth, false, 0)
+	}
 	if pe, ok := IsProviderError(err); ok {
 		return classifyProviderError(err, pe)
 	}

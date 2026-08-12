@@ -40,6 +40,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -48,6 +49,42 @@ import (
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+func TestProcessBatch_FailurePersistsNormalizedProviderClass(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "429", err: &services.ProviderError{Code: services.ErrorCodeRateLimited, Platform: "google_drive", StatusCode: 429}, want: "rate_limited"},
+		{name: "503", err: &services.ProviderError{Code: services.ErrorCodeProviderUnavailable, Platform: "google_drive", StatusCode: 503}, want: "provider_unavailable"},
+		{name: "auth", err: &services.ProviderError{Code: services.ErrorCodeAuthenticationError, Platform: "google_drive", StatusCode: 401}, want: "authentication_error"},
+		{name: "permanent", err: &services.ProviderError{Code: services.ErrorCodeValidationError, Platform: "google_drive", StatusCode: 400}, want: "validation_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			batchRepo := newFakeBatchStore()
+			uploadRepo := &fakeUploadRepo{}
+			vault := newFakeVault(testMyDriveToken)
+			lister := &recordingLister{listErr: tc.err}
+			inspector := &recordingInspector{}
+			router := services.NewCapabilityRouter()
+			router.Register("google_drive", &fakeProvider{Lister: lister, Inspector: inspector})
+			batch := makeBatch(t)
+			batchRepo.seedBatch(batch)
+
+			c := newCrawlerForSharedDriveTests(batchRepo, uploadRepo, vault, router)
+			c.processBatch(context.Background(), batch, testWorkerID)
+
+			if len(batchRepo.markFailedCalls) != 1 {
+				t.Fatalf("MarkFailed calls=%d, want 1", len(batchRepo.markFailedCalls))
+			}
+			if !strings.Contains(batchRepo.markFailedCalls[0], tc.want) {
+				t.Fatalf("normalized failure=%q, want %q", batchRepo.markFailedCalls[0], tc.want)
+			}
+		})
+	}
+}
 
 // TestProcessBatch_SharedDrive_ThreadsDriveIDAcrossPages — happy
 // path lock for the user's spec line "propagare folder.driveId come

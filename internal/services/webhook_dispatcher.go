@@ -213,29 +213,17 @@ func (d *WebhookDispatcher) NextAttempt(attempt int, now time.Time) time.Time {
 	return now.Add(sampler.UniformDuration(base, time.Duration(temp), d.rand.Int63n))
 }
 
-// IsTerminalStatus is the classifier used by the worker. 2xx
-// → success. 4xx (non-429) → dead (client misconfiguration, no
-// point retrying). 5xx / 429 / timeout → retry (subject to
-// MaxAttempts).
+// IsTerminalStatus is retained as a compatibility facade for callers that
+// still need the historical three-bool shape. The decision itself delegates
+// to the shared classifier, so webhook helpers cannot drift from worker policy.
 func IsTerminalStatus(httpStatus int, timedOut bool) (success, dead, retry bool) {
 	if timedOut {
-		return false, false, true
+		classified := ClassifyError(context.DeadlineExceeded)
+		return false, !classified.Retryable, classified.Retryable
 	}
-	switch {
-	case httpStatus >= 200 && httpStatus < 300:
+	classified := ClassifyHTTPStatus("webhook", "delivery", httpStatus, 0)
+	if classified == nil {
 		return true, false, false
-	case httpStatus == 408 || httpStatus == 425 || httpStatus == 429:
-		// 408 Request Timeout, 425 Too Early, 429 Too Many Requests:
-		// retry-with-backoff.
-		return false, false, true
-	case httpStatus >= 500:
-		return false, false, true
-	case httpStatus >= 400:
-		// 4xx (other): client misconfiguration, do not retry.
-		return false, true, false
-	default:
-		// 1xx / 3xx — receiver's protocol problem; treat as
-		// terminal (we don't follow redirects here).
-		return false, true, false
 	}
+	return false, !classified.Retryable, classified.Retryable
 }

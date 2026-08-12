@@ -247,34 +247,48 @@ func (w *WebhookWorker) processOne(ctx context.Context, d *repository.WebhookDel
 	req = req.WithContext(requestCtx)
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
-		w.classifyFailure(d, 0, true, err.Error(), requestLog, "")
+		w.routeFailure(d, services.ClassifyErrorFor("webhook", "delivery", err), err.Error(), requestLog, "")
 		return
 	}
 	defer resp.Body.Close()
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
 	responseLog := fmt.Sprintf("HTTP %d %s", resp.StatusCode, string(bodyBytes))
-	success, dead, retry := services.IsTerminalStatus(resp.StatusCode, false)
-	switch {
-	case success:
+	if classification := services.ClassifyHTTPStatus("webhook", "delivery", resp.StatusCode, services.ParseThrottleHeaders(resp.Header)); classification == nil {
 		if err := w.repo.MarkSuccess(context.Background(), d.ID, d.LeaseID, responseLog); err != nil {
 			w.logger.Warn("webhook worker MarkSuccess error", "delivery_id", d.ID, "error", err)
 			return
 		}
 		atomic.AddInt64(&w.processed, 1)
-	case dead:
-		w.markDead(d, fmt.Sprintf("HTTP %d (terminal)", resp.StatusCode), requestLog, responseLog)
-	case retry:
-		w.classifyFailure(d, resp.StatusCode, false, resp.Status, requestLog, responseLog)
+	} else {
+		w.routeFailure(d, classification, resp.Status, requestLog, responseLog)
 	}
 }
 
-func (w *WebhookWorker) classifyFailure(d *repository.WebhookDelivery, httpStatus int, timedOut bool, errStr, requestLog, responseLog string) {
+// routeFailure applies the shared provider-independent classification to one
+// delivery. Auth and permanent errors go directly to the DLQ; transient and
+// rate-limited errors are retried until MaxAttempts. A provider Retry-After
+// hint wins over the local jitter schedule.
+func (w *WebhookWorker) routeFailure(d *repository.WebhookDelivery, classification *services.NormalizedError, detail, requestLog, responseLog string) {
+	if classification == nil {
+		classification = services.ClassifyError(errors.New("webhook delivery failure"))
+	}
+	lastError := classification.Code
+	if detail != "" {
+		lastError = fmt.Sprintf("%s: %s", classification.Code, detail)
+	}
+	if !classification.Retryable || classification.Kind == services.ErrorKindAuth || classification.Kind == services.ErrorKindPermanent {
+		w.markDead(d, lastError, requestLog, responseLog)
+		return
+	}
 	if d.Attempt >= services.MaxAttempts {
-		w.markDead(d, fmt.Sprintf("max attempts (%d) reached: HTTP %d %s (timeout=%v)", services.MaxAttempts, httpStatus, errStr, timedOut), requestLog, responseLog)
+		w.markDead(d, fmt.Sprintf("max attempts (%d) reached: %s", services.MaxAttempts, lastError), requestLog, responseLog)
 		return
 	}
 	nextAt := w.dispatcher.NextAttempt(d.Attempt, w.clock())
-	if err := w.repo.MarkRetry(context.Background(), d.ID, d.LeaseID, errStr, requestLog, responseLog, nextAt); err != nil {
+	if classification.RetryAfter > 0 {
+		nextAt = w.clock().Add(classification.RetryAfter)
+	}
+	if err := w.repo.MarkRetry(context.Background(), d.ID, d.LeaseID, lastError, requestLog, responseLog, nextAt); err != nil {
 		w.logger.Warn("webhook worker MarkRetry error", "delivery_id", d.ID, "error", err)
 		return
 	}

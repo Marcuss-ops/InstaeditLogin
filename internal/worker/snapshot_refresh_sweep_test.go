@@ -12,6 +12,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // refreshSweepStoreStub is a SnapshotRefreshStore with a fixed pending
@@ -242,6 +243,34 @@ func TestSnapshotRefreshSweep_Tick_TokenFailureIsolated(t *testing.T) {
 	}
 	if store.upsertCount() != 1 {
 		t.Errorf("UpsertSnapshot calls: want 1 (account 22 refreshed despite 21 failing), got %d", store.upsertCount())
+	}
+}
+
+func TestSnapshotRefreshSweep_FailureClassificationRoutesAuthAndTransient(t *testing.T) {
+	pending := []repository.PendingSnapshotRefresh{
+		{PlatformAccountID: 21, Platform: "youtube", PlatformUserID: "UC-auth"},
+		{PlatformAccountID: 22, Platform: "youtube", PlatformUserID: "UC-503"},
+	}
+	store, _, w := newRefreshSweepHarness(t, pending, func(accountID int64) error {
+		switch accountID {
+		case 21:
+			return credentials.ErrInvalidGrant
+		case 22:
+			return &services.ProviderError{Code: services.ErrorCodeProviderUnavailable, Platform: "youtube", StatusCode: 503}
+		default:
+			return nil
+		}
+	})
+
+	w.tick(context.Background())
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.terminalCalls != 1 {
+		t.Errorf("terminal calls=%d, want 1 for auth failure", store.terminalCalls)
+	}
+	if store.rescheduleCalls != 1 {
+		t.Errorf("reschedule calls=%d, want 1 for transient 503", store.rescheduleCalls)
 	}
 }
 

@@ -9,6 +9,44 @@ import (
 	"time"
 )
 
+func TestClassifyHTTPStatus_Table(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		kind       ErrorKind
+		code       string
+		retryable  bool
+		retryAfter time.Duration
+	}{
+		{name: "429", status: http.StatusTooManyRequests, kind: ErrorKindRateLimited, code: "rate_limited", retryable: true, retryAfter: 45 * time.Second},
+		{name: "503", status: http.StatusServiceUnavailable, kind: ErrorKindTransient, code: "provider_unavailable", retryable: true},
+		{name: "401", status: http.StatusUnauthorized, kind: ErrorKindAuth, code: "authentication_error"},
+		{name: "403", status: http.StatusForbidden, kind: ErrorKindAuth, code: "authentication_error"},
+		{name: "422", status: http.StatusUnprocessableEntity, kind: ErrorKindPermanent, code: "validation_error"},
+		{name: "408", status: http.StatusRequestTimeout, kind: ErrorKindTransient, code: "timeout", retryable: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClassifyHTTPStatus("test", "operation", tc.status, tc.retryAfter)
+			if got == nil {
+				t.Fatal("ClassifyHTTPStatus returned nil")
+			}
+			if got.Kind != tc.kind || got.Code != tc.code || got.Retryable != tc.retryable {
+				t.Fatalf("got kind=%q code=%q retryable=%v, want kind=%q code=%q retryable=%v", got.Kind, got.Code, got.Retryable, tc.kind, tc.code, tc.retryable)
+			}
+			if got.RetryAfter != tc.retryAfter {
+				t.Fatalf("RetryAfter=%s, want %s", got.RetryAfter, tc.retryAfter)
+			}
+			if got.Provider != "test" || got.Operation != "operation" || got.HTTPStatus != tc.status {
+				t.Fatalf("context fields not preserved: %+v", got)
+			}
+		})
+	}
+	if got := ClassifyHTTPStatus("test", "operation", http.StatusOK, 0); got != nil {
+		t.Fatalf("2xx must return nil, got %+v", got)
+	}
+}
+
 func TestClassifyError_Table(t *testing.T) {
 	cause := errors.New("bug sentinel")
 	cases := []struct {

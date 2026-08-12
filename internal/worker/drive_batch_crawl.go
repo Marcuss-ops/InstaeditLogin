@@ -54,7 +54,7 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 	defer func() {
 		cancelHB()
 		hbWG.Wait()
-		if completed {
+		if completed || errors.Is(terminalErr, context.Canceled) {
 			return
 		}
 		if markErr := c.batchRepo.MarkFailed(context.Background(), batch.ID, workerID, terminalMsg(terminalErr)); markErr != nil {
@@ -296,13 +296,19 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 	)
 }
 
-// terminalMsg returns a safe error string for the MarkFailed
-// error_message column. Empty err → "process exited without success".
+// terminalMsg returns a stable, provider-independent diagnostic for the
+// MarkFailed error_message column. The crawler currently has no durable
+// requeue transition, so every non-cancellation failure remains terminal,
+// but its retry/auth/permanent class is still preserved for operators.
 func terminalMsg(err error) string {
 	if err == nil {
-		return "process exited without success"
+		return "permanent: process exited without success"
 	}
-	return err.Error()
+	classification := services.ClassifyErrorFor("google_drive", "batch_crawl", err)
+	if classification == nil {
+		return "permanent: drive batch failed"
+	}
+	return classification.Error()
 }
 
 // randomGap returns a uniformly-random duration between [min, max]

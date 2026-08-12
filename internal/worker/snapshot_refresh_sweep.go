@@ -206,23 +206,33 @@ func (w *SnapshotRefreshSweepWorker) tick(ctx context.Context) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			if err := w.refreshOne(ctx, p); err != nil {
-				nextAttempt := nextSnapshotRefreshAttempt(p.Attempts)
-				classification := services.ClassifyErrorFor(p.Platform, "snapshot_refresh", err)
-				terminal := errors.Is(err, credentials.ErrInvalidGrant) ||
-					(classification != nil && classification.Code != "unknown" &&
-						(classification.Kind == services.ErrorKindAuth || classification.Kind == services.ErrorKindPermanent))
+				// Cancellation belongs to worker shutdown, not to the durable
+				// failure queue. Do not turn a cancelled context into a terminal
+				// row or schedule a retry while the process is stopping.
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				classificationErr := err
+				if errors.Is(err, credentials.ErrInvalidGrant) || errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
+					classificationErr = services.NewAuthenticationError("invalid_grant", err)
+				}
+				classification := services.ClassifyErrorFor(p.Platform, "snapshot_refresh", classificationErr)
+				if classification == nil {
+					classification = services.ClassifyErrorFor(p.Platform, "snapshot_refresh", errors.New("snapshot refresh failed"))
+				}
+				terminal := classification.Kind == services.ErrorKindAuth || classification.Kind == services.ErrorKindPermanent
 				if terminal {
-					code := "SNAPSHOT_REFRESH_PERMANENT"
+					code := classification.Code
 					message := "snapshot refresh error requires operator action"
-					if errors.Is(err, credentials.ErrInvalidGrant) {
+					if errors.Is(err, credentials.ErrInvalidGrant) || errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
 						code = "OAUTH_INVALID_GRANT"
 						message = "OAuth grant requires reauthorization"
 					}
 					if terminalErr := w.store.MarkSnapshotRefreshTerminal(ctx, p.PlatformAccountID, code, message); terminalErr != nil {
-						w.logger.Warn("snapshot refresh sweep: failed to persist terminal OAuth state", "platform_account_id", p.PlatformAccountID, "error", terminalErr)
+						w.logger.Warn("snapshot refresh sweep: failed to persist terminal snapshot state", "platform_account_id", p.PlatformAccountID, "error_code", code, "error", terminalErr)
 					}
-				} else if scheduleErr := w.store.RescheduleSnapshotRefresh(ctx, p.PlatformAccountID, nextAttempt, snapshotRefreshErrorSummary(err)); scheduleErr != nil {
-					w.logger.Warn("snapshot refresh sweep: failed to persist retry schedule", "platform_account_id", p.PlatformAccountID, "error", scheduleErr)
+				} else if scheduleErr := w.store.RescheduleSnapshotRefresh(ctx, p.PlatformAccountID, nextSnapshotRefreshAttempt(p.Attempts), snapshotRefreshErrorSummary(classification, err)); scheduleErr != nil {
+					w.logger.Warn("snapshot refresh sweep: failed to persist retry schedule", "platform_account_id", p.PlatformAccountID, "error_kind", classification.Kind, "error_code", classification.Code, "error", scheduleErr)
 				}
 			}
 		}(p)
@@ -233,15 +243,15 @@ func (w *SnapshotRefreshSweepWorker) tick(ctx context.Context) {
 // nextSnapshotRefreshAttempt applies bounded exponential backoff after a
 // failed refresh. The claim is released by RescheduleSnapshotRefresh, so a
 // provider outage cannot hot-loop on every worker tick.
-func snapshotRefreshErrorSummary(err error) string {
-	if errors.Is(err, credentials.ErrInvalidGrant) {
+func snapshotRefreshErrorSummary(classification *services.NormalizedError, err error) string {
+	if errors.Is(err, credentials.ErrInvalidGrant) || errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
 		return "oauth grant requires reauthorization"
 	}
 	if errors.Is(err, credentials.ErrModernGrantMissing) {
 		return "oauth grant token is missing"
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return "provider request timed out"
+	if classification != nil && classification.Code != "" {
+		return classification.Code
 	}
 	return "snapshot refresh failed"
 }
@@ -284,7 +294,7 @@ func (w *SnapshotRefreshSweepWorker) refreshOne(ctx context.Context, p repositor
 		w.logger.Warn("snapshot refresh sweep: no valid token for account (will retry at next interval)",
 			"platform_account_id", p.PlatformAccountID,
 			"platform", p.Platform,
-			"error", snapshotRefreshErrorSummary(err))
+			"error", snapshotRefreshErrorSummary(services.ClassifyErrorFor(p.Platform, "snapshot_refresh", err), err))
 		return err
 	}
 
@@ -293,7 +303,7 @@ func (w *SnapshotRefreshSweepWorker) refreshOne(ctx context.Context, p repositor
 		w.logger.Warn("snapshot refresh sweep: provider fetch failed (will retry at next interval)",
 			"platform_account_id", p.PlatformAccountID,
 			"platform", p.Platform,
-			"error", snapshotRefreshErrorSummary(err))
+			"error", snapshotRefreshErrorSummary(services.ClassifyErrorFor(p.Platform, "snapshot_refresh", err), err))
 		return err
 	}
 
