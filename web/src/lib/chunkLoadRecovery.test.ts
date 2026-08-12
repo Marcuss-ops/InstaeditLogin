@@ -32,7 +32,18 @@ describe("installChunkLoadRecovery", () => {
     vi.advanceTimersByTime(300);
     expect(reloadMock).toHaveBeenCalledTimes(1);
 
-    // A second failure in the same tab session must not loop forever.
+    // The same stale chunk must not loop forever.
+    window.dispatchEvent(
+      new ErrorEvent("error", {
+        message:
+          "Failed to fetch dynamically imported module: https://app.instaedit.org/assets/Groups-abc123.js",
+      }),
+    );
+    vi.advanceTimersByTime(300);
+    expect(reloadMock).toHaveBeenCalledTimes(1);
+
+    // A different stale chunk can belong to a newer deployment and gets one
+    // recovery attempt of its own.
     window.dispatchEvent(
       new ErrorEvent("error", {
         message:
@@ -40,7 +51,7 @@ describe("installChunkLoadRecovery", () => {
       }),
     );
     vi.advanceTimersByTime(300);
-    expect(reloadMock).toHaveBeenCalledTimes(1);
+    expect(reloadMock).toHaveBeenCalledTimes(2);
   });
 
   it("reloads once for an unhandledrejection carrying a module-load error", () => {

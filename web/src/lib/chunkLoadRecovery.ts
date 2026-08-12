@@ -44,18 +44,23 @@ export function installChunkLoadRecovery(): void {
     return;
   }
 
-  const reloadOnce = (): void => {
-    if (sessionStorage.getItem(RELOAD_FLAG)) return;
-    sessionStorage.setItem(RELOAD_FLAG, "1");
+  const reloadOnce = (message: string): void => {
+    // Store the failing module URL/message instead of a boolean. A boolean
+    // survives successful reloads and permanently disables recovery for every
+    // later deployment in the same tab. The fingerprint prevents an actual
+    // stale-cache loop while allowing a browser carrying an old flag to heal.
+    const fingerprint = message || "unknown-module";
+    if (sessionStorage.getItem(RELOAD_FLAG) === fingerprint) return;
+    sessionStorage.setItem(RELOAD_FLAG, fingerprint);
     // Give the current error a moment to surface, then boot fresh.
     window.setTimeout(() => window.location.reload(), 250);
   };
 
   window.addEventListener("error", (event) => {
-    if (isModuleLoadError(event)) reloadOnce();
+    if (isModuleLoadError(event)) reloadOnce(eventMessage(event));
   });
 
   window.addEventListener("unhandledrejection", (event) => {
-    if (isModuleLoadError(event)) reloadOnce();
+    if (isModuleLoadError(event)) reloadOnce(eventMessage(event));
   });
 }
