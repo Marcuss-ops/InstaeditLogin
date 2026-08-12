@@ -125,7 +125,7 @@ func (w *ContentPreparationWorker) prepareSchedule(ctx context.Context, schedule
 	if err != nil {
 		return err
 	}
-	job := &models.UploadJob{UserID: pkg.CreatedBy, WorkspaceID: pkg.WorkspaceID, SourceType: models.UploadJobSourceAuthenticatedDrive, SourceID: pkg.DriveFileID, DriveAccountID: pkg.DriveAccountID, Title: resolved[0].Title, Caption: resolved[0].Description, Metadata: metadata, Targets: targetIDs, DefaultPrivacyLevel: defaultPrivacy, IngestAfter: schedule.PrepareAt, PublishAt: &schedule.ScheduledAt}
+	job := &models.UploadJob{UserID: pkg.CreatedBy, WorkspaceID: pkg.WorkspaceID, SourceType: models.UploadJobSourceAuthenticatedDrive, SourceID: pkg.DriveFileID, DriveAccountID: pkg.DriveAccountID, Title: resolved[0].Title, Caption: resolved[0].Description, Metadata: metadata, Targets: targetIDs, Status: models.UploadJobStatusPending, DefaultPrivacyLevel: defaultPrivacy, IngestAfter: schedule.PrepareAt, PublishAt: &schedule.ScheduledAt}
 	if err := w.uploads.Create(job); err != nil {
 		if existing, lookupErr := w.uploads.FindByScheduleID(ctx, schedule.ID); lookupErr == nil && existing != nil {
 			_ = w.store.MarkSchedulePrepared(ctx, schedule.ID, w.workerID)
