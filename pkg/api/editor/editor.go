@@ -131,18 +131,6 @@ func (m *EditorBFFModule) proxyHandler() http.Handler {
 			writeError(w, http.StatusBadGateway, "upstream editor call failed")
 			return
 		}
-		// A newly-created editor session has no persisted canvas document yet.
-		// Velox correctly returns 404 for that empty state, but the editor
-		// intentionally falls back to the InstaEdit session thumbnail. Return a
-		// typed empty-document response so that expected bootstrap state does not
-		// appear as a failed request in the browser console.
-		if req.Method == http.MethodGet && strings.HasSuffix(path, "/document") && resp.StatusCode == http.StatusNotFound {
-			_ = resp.Body.Close()
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `{"document_exists":false,"canvas_json":{"width":1920,"height":1080,"objects":[]}}`)
-			return
-		}
 		defer resp.Body.Close()
 		for k, vv := range resp.Header {
 			for _, v := range vv {
