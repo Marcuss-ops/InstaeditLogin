@@ -174,6 +174,7 @@ var (
 
 	ErrThumbnailProjectAssetNotFound = errors.New("thumbnail project asset not found")
 	ErrThumbnailExportNotFound       = errors.New("thumbnail export not found")
+	ErrThumbnailExportConflict       = errors.New("thumbnail export already exists for render profile")
 	ErrThumbnailAssignmentNotFound   = errors.New("thumbnail assignment not found")
 	// ErrThumbnailAssignmentConflict is returned when a thumbnail
 	// assignment would violate the (export_id, platform_account_id,
