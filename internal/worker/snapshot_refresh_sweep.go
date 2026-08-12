@@ -49,6 +49,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // DefaultSnapshotRefreshSweepInterval is the fallback tick interval.
@@ -206,13 +207,18 @@ func (w *SnapshotRefreshSweepWorker) tick(ctx context.Context) {
 			defer func() { <-sem }()
 			if err := w.refreshOne(ctx, p); err != nil {
 				nextAttempt := nextSnapshotRefreshAttempt(p.Attempts)
-				if errors.Is(err, credentials.ErrInvalidGrant) {
-					// A revoked grant cannot be repaired by retrying. Clear
-					// the durable queue marker; a successful reauthorization
-					// will enqueue the account again through the read path.
-				}
-				if errors.Is(err, credentials.ErrInvalidGrant) {
-					if terminalErr := w.store.MarkSnapshotRefreshTerminal(ctx, p.PlatformAccountID, "OAUTH_INVALID_GRANT", "OAuth grant requires reauthorization"); terminalErr != nil {
+				classification := services.ClassifyErrorFor(p.Platform, "snapshot_refresh", err)
+				terminal := errors.Is(err, credentials.ErrInvalidGrant) ||
+					(classification != nil && classification.Code != "unknown" &&
+						(classification.Kind == services.ErrorKindAuth || classification.Kind == services.ErrorKindPermanent))
+				if terminal {
+					code := "SNAPSHOT_REFRESH_PERMANENT"
+					message := "snapshot refresh error requires operator action"
+					if errors.Is(err, credentials.ErrInvalidGrant) {
+						code = "OAUTH_INVALID_GRANT"
+						message = "OAuth grant requires reauthorization"
+					}
+					if terminalErr := w.store.MarkSnapshotRefreshTerminal(ctx, p.PlatformAccountID, code, message); terminalErr != nil {
 						w.logger.Warn("snapshot refresh sweep: failed to persist terminal OAuth state", "platform_account_id", p.PlatformAccountID, "error", terminalErr)
 					}
 				} else if scheduleErr := w.store.RescheduleSnapshotRefresh(ctx, p.PlatformAccountID, nextAttempt, snapshotRefreshErrorSummary(err)); scheduleErr != nil {

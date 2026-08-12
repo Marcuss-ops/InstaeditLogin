@@ -55,7 +55,7 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 		// 429/Retry-After from the platform is NOT a fault — requeue
 		// with next_attempt_at = the platform's hint instead of the
 		// terminal markFailed. Everything else stays terminal.
-		if services.IsRateLimitError(err) {
+		if classification := services.ClassifyErrorFor(account.Platform, "publish", err); classification != nil && classification.Kind == services.ErrorKindRateLimited {
 			return w.markRateLimited(target, err)
 		}
 		return w.markFailed(target, err.Error())

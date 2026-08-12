@@ -452,7 +452,8 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	// 4. Delegate to platform's Reconcile (single GET + transition decision).
 	res, err := ap.Reconcile(leaseCtx, oauthToken.AccessToken, target.PlatformPostID)
 	if err != nil {
-		isRateLimit := services.IsRateLimitError(err)
+		classification := services.ClassifyErrorFor(account.Platform, "reconcile", err)
+		isRateLimit := classification != nil && classification.Kind == services.ErrorKindRateLimited
 		if !isRateLimit && w.isPermanentReconcileError(err) {
 			w.logger.Warn("publish reconcile permanent error",
 				"target_id", target.ID, "publish_id", target.PlatformPostID, "error", err)
@@ -518,7 +519,7 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 // untyped transport errors (timeout, reset, EOF) are conservatively treated
 // as transient because they do not prove the remote publish failed.
 func (w *ReconcileWorker) isPermanentReconcileError(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
 	if errors.Is(err, services.ErrPublishTerminal) ||
@@ -526,10 +527,11 @@ func (w *ReconcileWorker) isPermanentReconcileError(err error) bool {
 		errors.Is(err, services.ErrPermanentUpload) {
 		return true
 	}
-	if providerErr, ok := services.IsProviderError(err); ok {
-		return !providerErr.Retryable
+	classification := services.ClassifyErrorFor("", "reconcile", err)
+	if classification == nil {
+		return false
 	}
-	return false
+	return classification.Kind == services.ErrorKindPermanent || classification.Kind == services.ErrorKindAuth || !classification.Retryable
 }
 
 // scheduleRetry applies the shared Retry-After policy. A positive provider
@@ -545,7 +547,8 @@ func (w *ReconcileWorker) scheduleRetry(target *models.PostTarget, retryAfter ti
 		retryAfter = reconcileBackoffForAttempt(attempt)
 	}
 	next := time.Now().Add(retryAfter)
-	incrementAttempt := !services.IsRateLimitError(cause)
+	classification := services.ClassifyErrorFor("", "reconcile", cause)
+	incrementAttempt := classification == nil || classification.Kind != services.ErrorKindRateLimited
 	if err := w.postRepo.ScheduleNextReconcileWithLease(target.ID, w.workerID, attempt, next, incrementAttempt, reconcileErrorCode(cause), cause.Error()); err != nil {
 		return false, false, fmt.Errorf("schedule retry for target %d: %w", target.ID, err)
 	}
@@ -557,7 +560,10 @@ func (w *ReconcileWorker) scheduleRetry(target *models.PostTarget, retryAfter ti
 }
 
 func reconcileErrorCode(err error) string {
-	if services.IsRateLimitError(err) {
+	classification := services.ClassifyErrorFor("", "reconcile", err)
+	if classification != nil && classification.Kind == services.ErrorKindRateLimited {
+		// Preserve the existing persisted code while the normalized kind is
+		// consumed by all worker branches.
 		return "RATE_LIMITED"
 	}
 	return "RECONCILE_TRANSIENT"

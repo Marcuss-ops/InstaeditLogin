@@ -34,6 +34,7 @@ func (w *UploadWorker) handleProcessingError(
 		"error", processErr,
 	)
 
+	classification := services.ClassifyErrorFor("", poolName, processErr)
 	errorCode := classifyUploadError(processErr)
 	// Task 5/10 — permanent-error fast-path. Drive files with
 	// capabilities.canDownload=false (and SHA / size / MIME mismatch
@@ -47,7 +48,13 @@ func (w *UploadWorker) handleProcessingError(
 	// so a single canDownload=false rejection lands the row in
 	// 'dead_letter' (= 'perm_error' per the docs/OPERATIONS.md
 	// runbook) on the very first failed tick.
-	if errors.Is(processErr, ErrPermanent) || errors.Is(processErr, services.ErrPermanentUpload) {
+	if errors.Is(processErr, context.Canceled) {
+		// Shutdown cancellation is not a provider failure and must not
+		// consume retry budget or create a misleading DLQ row.
+		return
+	}
+	if (classification != nil && (classification.Kind == services.ErrorKindPermanent || classification.Kind == services.ErrorKindAuth)) ||
+		errors.Is(processErr, ErrPermanent) || errors.Is(processErr, services.ErrPermanentUpload) {
 		if markErr := w.jobRepo.MarkDeadLetter(ctx, job.ID, workerID, errorCode, processErr.Error()); markErr != nil {
 			w.logger.Error("upload worker: MarkDeadLetter (permanent) failed",
 				"pool", poolName, "job_id", job.ID, "error", markErr)
@@ -77,7 +84,43 @@ func (w *UploadWorker) handleProcessingError(
 // routing. Empty string means "unclassified" — the repository will
 // store NULL via NULLIF.
 func classifyUploadError(err error) string {
-	s := err.Error()
+	if err == nil {
+		return ""
+	}
+	classification := services.ClassifyError(err)
+	if classification != nil {
+		switch classification.Kind {
+		case services.ErrorKindRateLimited:
+			return "rate_limited"
+		case services.ErrorKindAuth:
+			return "auth_error"
+		case services.ErrorKindPermanent:
+			// Preserve the legacy provider buckets when the message carries
+			// one; they are already used by operator filters.
+			if legacy := classifyUploadErrorLegacy(err.Error()); legacy != "" {
+				return legacy
+			}
+			return "permanent_error"
+		case services.ErrorKindTransient:
+			if classification.Code == "timeout" {
+				return "timeout"
+			}
+			if classification.Provider != "" {
+				switch classification.Provider {
+				case "google_drive":
+					return "drive_error"
+				case "storage":
+					return "s3_error"
+				case "youtube":
+					return "youtube_error"
+				}
+			}
+		}
+	}
+	return classifyUploadErrorLegacy(err.Error())
+}
+
+func classifyUploadErrorLegacy(s string) string {
 	switch {
 	case containsAny(s, "drive", "googleapis.com/upload/drive"):
 		return "drive_error"

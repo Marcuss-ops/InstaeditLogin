@@ -24,6 +24,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // VeloxDownloadJob is kept for backward compatibility with tests and
@@ -300,9 +301,13 @@ func (d *VeloxArtifactDownloader) handleFailure(ctx context.Context, delivery *m
 		return
 	}
 
-	var te transientError
-	if !errors.As(err, &te) {
-		if markErr := d.claimStore.MarkFailed(ctx, delivery.ID, "VELOX_PROCESSING_ERROR", err.Error()); markErr != nil {
+	classification := services.ClassifyErrorFor("velox", "artifact_registration", err)
+	if classification == nil || (classification.Kind != services.ErrorKindTransient && classification.Kind != services.ErrorKindRateLimited) {
+		code := "VELOX_PROCESSING_ERROR"
+		if classification != nil && classification.Kind == services.ErrorKindAuth {
+			code = "VELOX_AUTH_ERROR"
+		}
+		if markErr := d.claimStore.MarkFailed(ctx, delivery.ID, code, err.Error()); markErr != nil {
 			d.logMarkFailure(delivery.ID, "MarkFailed", markErr, err)
 		}
 		return
@@ -314,10 +319,16 @@ func (d *VeloxArtifactDownloader) handleFailure(ctx context.Context, delivery *m
 		}
 		return
 	}
-
 	backoff := d.retryBackoff(delivery.AttemptCount)
+	if classification.RetryAfter > 0 {
+		backoff = classification.RetryAfter
+	}
 	nextAttempt := time.Now().Add(backoff)
-	if markErr := d.claimStore.MarkRetry(ctx, delivery.ID, nextAttempt, "TRANSIENT_ERROR", te.err.Error()); markErr != nil {
+	errorCode := "TRANSIENT_ERROR"
+	if classification.Kind == services.ErrorKindRateLimited {
+		errorCode = "RATE_LIMITED"
+	}
+	if markErr := d.claimStore.MarkRetry(ctx, delivery.ID, nextAttempt, errorCode, err.Error()); markErr != nil {
 		d.logMarkFailure(delivery.ID, "MarkRetry", markErr, err)
 	}
 }
@@ -353,11 +364,15 @@ func (d *VeloxArtifactDownloader) retryBackoff(attemptCount int) time.Duration {
 
 type transientError struct{ err error }
 
-func (e transientError) Error() string { return e.err.Error() }
+func (e transientError) Error() string     { return e.err.Error() }
+func (e transientError) Unwrap() error     { return e.err }
+func (e transientError) IsTransient() bool { return true }
 
 type terminalError struct{ err error }
 
-func (e terminalError) Error() string { return e.err.Error() }
+func (e terminalError) Error() string     { return e.err.Error() }
+func (e terminalError) Unwrap() error     { return e.err }
+func (e terminalError) IsPermanent() bool { return true }
 
 type errMetadataOnly struct{ deliveryID string }
 

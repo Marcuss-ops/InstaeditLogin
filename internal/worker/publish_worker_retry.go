@@ -44,7 +44,11 @@ const defaultRateLimitBackoff = 60 * time.Second
 // sees it and the row is recovered later (still 'publishing' — an
 // operator-visible stall rather than a silent drop).
 func (w *PublishWorker) markRateLimited(target *models.PostTarget, pubErr error) error {
+	classification := services.ClassifyErrorFor("", "publish", pubErr)
 	retryAfter := services.RetryAfterFromError(pubErr)
+	if classification != nil && classification.RetryAfter > 0 {
+		retryAfter = classification.RetryAfter
+	}
 	if retryAfter <= 0 {
 		retryAfter = defaultRateLimitBackoff
 	}
@@ -57,6 +61,8 @@ func (w *PublishWorker) markRateLimited(target *models.PostTarget, pubErr error)
 	target.Status = models.PostStatusQueued
 	target.AttemptCount++
 	target.NextAttemptAt = &nextAttempt
+	// Keep the persisted uppercase code for dashboard/backfill compatibility;
+	// the worker decision itself comes from the shared rate_limited kind.
 	target.LastErrorCode = "RATE_LIMITED"
 	target.ErrorMessage = pubErr.Error()
 	w.logger.Warn("platform rate limited publish; target rescheduled",

@@ -155,7 +155,9 @@ func (w *MetadataGenerationWorker) processOne(ctx context.Context, job *models.M
 	<-hbDone
 
 	if err != nil {
-		if errors.Is(err, services.ErrNVIDIANotConfigured) {
+		classification := services.ClassifyErrorFor("nvidia", "metadata_generation", err)
+		if errors.Is(err, services.ErrNVIDIANotConfigured) ||
+			(classification != nil && (classification.Kind == services.ErrorKindPermanent || classification.Kind == services.ErrorKindAuth)) {
 			w.logger.Warn("metadata generation worker: NVIDIA not configured, failing job permanently",
 				"job_id", job.ID, "workspace_id", job.WorkspaceID)
 			// Terminal — no retry for misconfiguration.
@@ -164,7 +166,9 @@ func (w *MetadataGenerationWorker) processOne(ctx context.Context, job *models.M
 			}
 			return
 		}
-		// Transient (or unknown) failure — requeue with backoff.
+		// Transient (or unknown) failure — requeue with backoff. The
+		// shared classifier treats network, timeout and provider 5xx as
+		// retryable and keeps auth/permanent failures on the terminal path.
 		backoff := w.computeBackoff(job.AttemptCount)
 		w.logger.Warn("metadata generation worker: generation failed, retrying",
 			"job_id", job.ID, "workspace_id", job.WorkspaceID,

@@ -201,18 +201,8 @@ func (e *RateLimitError) Error() string {
 // returning *RateLimitError to returning *ProviderError, and the
 // worker detects both transparently.
 func IsRateLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var rle *RateLimitError
-	if errors.As(err, &rle) {
-		return true
-	}
-	var pe *ProviderError
-	if errors.As(err, &pe) && pe.Code == ErrorCodeRateLimited {
-		return true
-	}
-	return false
+	classified := ClassifyError(err)
+	return classified != nil && classified.Kind == ErrorKindRateLimited
 }
 
 // RetryAfterFromError extracts the platform-supplied Retry-After hint

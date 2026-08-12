@@ -50,6 +50,11 @@ func (e PermanentError) Is(target error) bool {
 	return target == ErrPermanent
 }
 
+// IsPermanent lets the shared services error classifier recognize this
+// worker-owned artifact contract failure without importing worker (which
+// would create an import cycle).
+func (e PermanentError) IsPermanent() bool { return true }
+
 // Common Code values used by the worker for routing. Centralised
 // here so the classifier (classifyUploadError) reads from the same
 // namespace; previously these lived with the source package.
