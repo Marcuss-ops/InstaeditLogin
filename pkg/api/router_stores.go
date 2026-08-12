@@ -392,6 +392,14 @@ type ContentPipelineStore interface {
 	GetPipeline(ctx context.Context, workspaceID, postID int64) (*repository.ContentPipelineEntry, error)
 }
 
+// ContentPackageStore is the product-level editable aggregate contract. The
+// concrete repository lives in internal/repository; keeping this alias here
+// lets API tests provide a small in-memory implementation without widening
+// the router's dependency surface.
+type ContentPackageStore = repository.ContentPackageStore
+
+type DriveInboxStore = repository.DriveInboxStore
+
 // ConnectLinkNonceStore is the persistence contract for connect-link
 // jti values. Production wiring passes *repository.ConnectLinkNonceRepository.
 // The stored value is the JWT's RegisteredClaims.ID (jti), which

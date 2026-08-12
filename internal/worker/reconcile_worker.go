@@ -118,14 +118,15 @@ type ReconcileUserStore = PublisherUserStore
 // 018) is an option for async platforms that want
 // at-most-N-transient-failures-per-row semantics inside the row itself.
 type ReconcileWorker struct {
-	postRepo      ReconcilePostStore
-	userRepo      ReconcileUserStore
-	router        *services.CapabilityRouter
-	vault         credentials.VaultAPI
-	workerID      string                  // per-process id, threaded via constructor (no global)
-	memoryLimiter *services.MemoryLimiter // explicit DI; nil-safe in tests
-	interval      time.Duration
-	logger        *slog.Logger
+	postRepo         ReconcilePostStore
+	userRepo         ReconcileUserStore
+	router           *services.CapabilityRouter
+	vault            credentials.VaultAPI
+	workerID         string                  // per-process id, threaded via constructor (no global)
+	memoryLimiter    *services.MemoryLimiter // explicit DI; nil-safe in tests
+	interval         time.Duration
+	logger           *slog.Logger
+	packageStateSync ContentPackageStateSynchronizer
 }
 
 // NewReconcileWorker wires the dependencies. interval <= 0 falls back
@@ -179,6 +180,38 @@ func NewReconcileWorker(
 // spawned worker doesn't wait up to `interval` before observing
 // any already-publishing rows. Matches the outbox dispatcher's
 // initial-drain-then-ticker shape (internal/outbox/dispatcher.go::Run).
+// SetContentPackageStateSynchronizer wires the optional projection that keeps
+// Content Package state aligned when an async provider reaches a terminal state.
+func (w *ReconcileWorker) SetContentPackageStateSynchronizer(s ContentPackageStateSynchronizer) {
+	w.packageStateSync = s
+}
+
+func (w *ReconcileWorker) syncContentPackageState(target *models.PostTarget) {
+	if w.packageStateSync == nil || target == nil || target.PostID <= 0 {
+		return
+	}
+	lookup, ok := w.postRepo.(interface {
+		FindByID(id int64) (*models.Post, error)
+	})
+	if !ok {
+		return
+	}
+	post, err := lookup.FindByID(target.PostID)
+	if err != nil || post == nil {
+		if err != nil {
+			w.logger.Warn("reconcile worker: content package state lookup failed", "post_id", target.PostID, "error", err)
+		}
+		return
+	}
+	packageID, ok := contentPackageIDFromMetadata(post.Metadata)
+	if !ok {
+		return
+	}
+	if err := w.packageStateSync.SyncPublicationState(context.Background(), packageID); err != nil {
+		w.logger.Warn("reconcile worker: content package state sync failed", "package_id", packageID, "post_id", target.PostID, "error", err)
+	}
+}
+
 func (w *ReconcileWorker) Run(ctx context.Context) error {
 	w.logger.Info("reconcile worker started",
 		"interval_seconds", w.interval.Seconds(),
@@ -473,6 +506,7 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	if err := w.postRepo.UpdateReconcileStatusWithLease(target, w.workerID); err != nil {
 		return false, false, fmt.Errorf("transition to published: %w", err)
 	}
+	w.syncContentPackageState(target)
 	return true, false, nil
 }
 
@@ -549,6 +583,7 @@ func (w *ReconcileWorker) markDeadLetterAndReturn(target *models.PostTarget, own
 		return false, false, fmt.Errorf("transition to dlq: %w", updateErr)
 	}
 	*target = deadTarget
+	w.syncContentPackageState(target)
 	w.logger.Warn("reconcile target moved to dead letter queue", "target_id", target.ID, "post_id", target.PostID, "reason", reason)
 	return true, true, nil
 }
@@ -588,6 +623,7 @@ func (w *ReconcileWorker) markBlockedAuthAndReturn(target *models.PostTarget, ow
 		return false, false, fmt.Errorf("transition to blocked_auth: %w", updateErr)
 	}
 	*target = blockedTarget
+	w.syncContentPackageState(target)
 	return true, true, nil
 }
 
@@ -610,5 +646,6 @@ func (w *ReconcileWorker) markFailedAndReturn(target *models.PostTarget, ownerID
 		return false, false, fmt.Errorf("transition to failed: %w", updateErr)
 	}
 	*target = failedTarget
+	w.syncContentPackageState(target)
 	return true, true, nil
 }

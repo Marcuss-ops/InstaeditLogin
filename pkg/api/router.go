@@ -142,6 +142,13 @@ type Router struct {
 	// producer endpoint AND/OR the poll endpoint return 501.
 	importBatchStore ImportBatchStore
 
+	// contentPackageStore is the product-level editable content aggregate.
+	// It is intentionally separate from uploadJobStore: creating or editing a
+	// package never creates an execution job.
+	contentPackageStore ContentPackageStore
+	publicationResolver *services.PublicationResolver
+	driveInboxStore     DriveInboxStore
+
 	// snapshotStore caches remote resource data (channel stats,
 	// profile, branding) so the frontend doesn't trigger a provider
 	// API call on every render. Wired via WithSnapshotStore;

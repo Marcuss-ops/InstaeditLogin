@@ -136,6 +136,13 @@ type LeaseAwarePublisherPostStore interface {
 	ReclaimExpiredLeases(ownerID string) (int64, error)
 }
 
+// ContentPackageStateSynchronizer updates the product-level package state
+// from the existing post/target publication rows. It does not own provider
+// execution and is intentionally optional for backwards-compatible worker tests.
+type ContentPackageStateSynchronizer interface {
+	SyncPublicationState(ctx context.Context, packageID int64) error
+}
+
 type PublisherUserStore interface {
 	// FindPlatformAccountByID returns (nil, nil) when no row matches, matching
 	// the codebase's repository convention (nil/nil not-found, no ErrNoRows).
@@ -211,6 +218,9 @@ type PublishWorker struct {
 	// Nil at startup means the bypass is silently disabled — the
 	// pre-fix behaviour is preserved for callers that don't wire it.
 	ytPubLookup YouTubeTargetPublicationLookup
+	// packageStateSync projects per-target publication completion back onto
+	// the Content Package aggregate. It is optional for legacy test fixtures.
+	packageStateSync ContentPackageStateSynchronizer
 
 	// nvidiaTranslator (per-channel-language posting) translates the
 	// post title/caption into each target channel's language at

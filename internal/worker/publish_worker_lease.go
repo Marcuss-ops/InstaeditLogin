@@ -12,6 +12,19 @@ import (
 // updateTargetStatus persists a child-job mutation with a lease CAS when the
 // SQL repository supports it. The fallback keeps older in-memory fixtures
 // usable while production always takes the lease-aware branch.
+func (w *PublishWorker) syncContentPackageState(ctx context.Context, post *models.Post) {
+	if w.packageStateSync == nil || post == nil {
+		return
+	}
+	packageID, ok := contentPackageIDFromMetadata(post.Metadata)
+	if !ok {
+		return
+	}
+	if err := w.packageStateSync.SyncPublicationState(ctx, packageID); err != nil {
+		w.logger.Warn("publish worker: content package state sync failed", "package_id", packageID, "post_id", post.ID, "error", err)
+	}
+}
+
 func (w *PublishWorker) updateTargetStatus(ctx context.Context, target *models.PostTarget) error {
 	if leaseStore, ok := w.postRepo.(LeaseAwarePublisherPostStore); ok {
 		if err := leaseStore.UpdateStatusWithLease(target, w.workerID); err != nil {

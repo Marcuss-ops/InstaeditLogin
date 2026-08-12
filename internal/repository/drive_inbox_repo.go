@@ -46,8 +46,14 @@ func (r *DriveInboxRepository) CreateInbox(ctx context.Context, inbox *models.Dr
 	}
 	if err := r.db.QueryRowContext(ctx,
 		`INSERT INTO drive_inboxes (workspace_id, drive_account_id, folder_id, enabled)
-		 VALUES ($1,$2,$3,$4) RETURNING id, workspace_id, drive_account_id, folder_id, enabled, last_scan_at, cursor, created_at, updated_at`,
+		 SELECT $1, pa.id, $3, $4
+		 FROM platform_accounts pa
+		 WHERE pa.id=$2 AND pa.workspace_id=$1 AND pa.platform='google_drive'
+		 RETURNING id, workspace_id, drive_account_id, folder_id, enabled, last_scan_at, cursor, created_at, updated_at`,
 		inbox.WorkspaceID, inbox.DriveAccountID, inbox.FolderID, inbox.Enabled).Scan(&inbox.ID, &inbox.WorkspaceID, &inbox.DriveAccountID, &inbox.FolderID, &inbox.Enabled, &inbox.LastScanAt, &inbox.Cursor, &inbox.CreatedAt, &inbox.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("drive account does not belong to the workspace")
+		}
 		return fmt.Errorf("create drive inbox: %w", err)
 	}
 	return nil

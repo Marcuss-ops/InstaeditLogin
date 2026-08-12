@@ -89,6 +89,7 @@ func (a *App) publishWorkerSpec() worker.WorkerSpec {
 			// table is the contract boundary for the Blocco #1
 			// two-phase split (Phase-1 stamps, Phase-2 reads + videos.update).
 			pw.SetYouTubeTargetPublicationStore(a.runtime.youtubeTargetPublicationStore)
+			pw.SetContentPackageStateSynchronizer(repository.NewContentPackageRepository(a.DB))
 			// Per-channel-language posting: wire the NVIDIA translator so
 			// targets whose channel declares a language (metadata["language"])
 			// get the post's title/caption translated at publish time. The
@@ -139,6 +140,7 @@ func (a *App) reconcileWorkerSpec() worker.WorkerSpec {
 				time.Duration(a.Cfg.Worker.ReconcileWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
+			rw.SetContentPackageStateSynchronizer(repository.NewContentPackageRepository(a.DB))
 			return rw.Run(ctx)
 		},
 	}
@@ -343,6 +345,39 @@ func (a *App) driveBatchCrawlerWorkerSpec() worker.WorkerSpec {
 				slog.Default(),
 			)
 			return dbcc.Run(ctx)
+		},
+	}
+}
+
+func (a *App) contentPreparationWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
+		Name:     "content_preparation",
+		Critical: true,
+		Run: func(ctx context.Context) error {
+			preparation := worker.NewContentPreparationWorker(
+				repository.NewContentPackageRepository(a.DB),
+				repository.NewUploadJobRepository(a.DB),
+				a.WorkerID+"-content-preparation",
+				worker.ContentPreparationWorkerOptions{Interval: 10 * time.Second, LeaseTTL: 5 * time.Minute, BatchSize: 10},
+				slog.Default(),
+			)
+			return preparation.Run(ctx)
+		},
+	}
+}
+
+func (a *App) driveInboxScannerWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
+		Name:     "drive_inbox_scanner",
+		Critical: false,
+		Run: func(ctx context.Context) error {
+			scanner := worker.NewDriveInboxScanner(
+				repository.NewDriveInboxRepository(a.DB),
+				worker.NewDriveFolderDiscovery(a.Vault, a.CapRouter),
+				worker.DriveInboxScannerOptions{Interval: 5 * time.Minute},
+				slog.Default(),
+			)
+			return scanner.Run(ctx)
 		},
 	}
 }

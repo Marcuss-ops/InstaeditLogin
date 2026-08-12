@@ -102,6 +102,8 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		// but through a narrower CrawlerBatchStore interface
 		// declared in internal/worker/drive_batch_crawler.go.
 		api.WithImportBatchStore(s.importBatchRepo),
+		api.WithContentPackageStore(repository.NewContentPackageRepository(s.db)),
+		api.WithDriveInboxStore(repository.NewDriveInboxRepository(s.db)),
 		// P1#7 — exporter for the crawler goroutine spawned in
 		// RunWorkers. Same instance as ImportBatchStore above; the
 		// split into two interfaces lets each consumer request only
@@ -195,8 +197,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		// read from a single source of truth. Without this option
 		// the helpers fall through to the safe defaults (30/7).
 		api.WithScheduleLimits(api.ScheduleLimits{
-			PublishHorizonDays:       s.cfg.Worker.PublishHorizonDays,
-			VideoRetentionBufferDays: s.cfg.Worker.VideoRetentionBufferDays,
+			PublishHorizonDays:       s.cfg.Worker.PublishHorizonDays,			VideoRetentionBufferDays:       s.cfg.Worker.VideoRetentionBufferDays,
 		}),
 		api.WithYouTubeGroupVideosConfig(api.YouTubeGroupVideosConfig{
 			MaxAccounts:     s.cfg.Worker.YouTubeGroupVideosMaxAccounts,

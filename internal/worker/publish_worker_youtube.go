@@ -173,6 +173,7 @@ func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models
 						if err := w.updateTargetStatus(ctx, target); err != nil {
 							return false, fmt.Errorf("publish worker: update target after YouTube reuse: %w", err)
 						}
+						w.syncContentPackageState(ctx, post)
 						// Post-completion dispatch is best-effort. Resolve a fresh
 						// URL for the delivery hook too; never re-emit the
 						// persisted signed URL after Phase-2 reuse.
@@ -257,6 +258,12 @@ type YouTubeTargetPublicationLookup interface {
 // NewPublishWorker.
 func (w *PublishWorker) SetYouTubeTargetPublicationStore(s YouTubeTargetPublicationLookup) {
 	w.ytPubLookup = s
+}
+
+// SetContentPackageStateSynchronizer wires the projection that keeps the
+// product-level Content Package lifecycle aligned with target publication.
+func (w *PublishWorker) SetContentPackageStateSynchronizer(s ContentPackageStateSynchronizer) {
+	w.packageStateSync = s
 }
 
 // isCanaryEnabled (Task 7/10) returns true when the post's metadata

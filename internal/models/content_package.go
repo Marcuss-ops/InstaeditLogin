@@ -118,6 +118,25 @@ type ContentSchedule struct {
 	NextAttemptAt    *time.Time `json:"next_attempt_at,omitempty"`
 }
 
+// ContentPackagePublicationStatus is the read model for the execution
+// handoff. It joins the immutable snapshot to the existing upload/post
+// pipeline without introducing a second publication state machine.
+type ContentPackagePublicationStatus struct {
+	ContentPackageID  int64      `json:"content_package_id"`
+	ContentScheduleID int64      `json:"content_schedule_id"`
+	TargetAccountID   int64      `json:"target_account_id"`
+	Language          string     `json:"language"`
+	Title             string     `json:"title"`
+	UploadJobID       *int64     `json:"upload_job_id,omitempty"`
+	UploadJobStatus   string     `json:"upload_job_status,omitempty"`
+	PostID            *int64     `json:"post_id,omitempty"`
+	PostTargetID      *int64     `json:"post_target_id,omitempty"`
+	TargetStatus      string     `json:"target_status,omitempty"`
+	YouTubeVideoID    *string    `json:"youtube_video_id,omitempty"`
+	ThumbnailStatus   *string    `json:"thumbnail_status,omitempty"`
+	PublishedAt       *time.Time `json:"published_at,omitempty"`
+}
+
 type PublishSnapshot struct {
 	ID                  int64           `json:"id"`
 	ContentScheduleID   int64           `json:"content_schedule_id"`

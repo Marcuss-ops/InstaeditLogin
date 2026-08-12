@@ -168,6 +168,7 @@ func (w *PublishWorker) publishDriveExport(ctx context.Context, target *models.P
 	if err := w.updateTargetStatus(ctx, target); err != nil {
 		return fmt.Errorf("mark Drive export target published: %w", err)
 	}
+	w.syncContentPackageState(ctx, post)
 	// Velox destination defaults are carried through UploadJob.Metadata
 	// and materialised on Post.Metadata. Forward only the destination
 	// folder to the provider; credentials and account selection remain

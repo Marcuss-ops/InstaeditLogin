@@ -31,6 +31,18 @@ import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { AdminProtectedRoute } from "./components/auth/AdminProtectedRoute";
 import { InternalLayout } from "./components/layout/InternalLayout";
 
+const ContentInboxPage = lazy(() =>
+  import("./pages/internal/ContentInbox").then((m) => ({
+    default: m.ContentInbox,
+  })),
+);
+
+const ContentPackageDetailPage = lazy(() =>
+  import("./pages/internal/ContentPackageDetail").then((m) => ({
+    default: m.ContentPackageDetail,
+  })),
+);
+
 const PlatformPage = lazy(() =>
   import("./pages/platforms/PlatformPage").then((m) => ({
     default: m.PlatformPage,
@@ -228,6 +240,22 @@ function App() {
                 }
               />
               <Route path="content/new" element={<ContentNew />} />
+              <Route
+                path="content/inbox"
+                element={
+                  <LazyRoute>
+                    <ContentInboxPage />
+                  </LazyRoute>
+                }
+              />
+              <Route
+                path="content/:packageId"
+                element={
+                  <LazyRoute>
+                    <ContentPackageDetailPage />
+                  </LazyRoute>
+                }
+              />
                 <Route
                   path="content/:postId/publish"
                   element={<ContentPublish />}

@@ -291,6 +291,22 @@ func WithImportBatchStore(s ImportBatchStore) RouterOption {
 	return func(r *Router) { r.importBatchStore = s }
 }
 
+// WithContentPackageStore wires the editable Content Package aggregate. The
+// resolver is built from the same store so preview and preparation share one
+// precedence/readiness implementation.
+func WithContentPackageStore(s ContentPackageStore) RouterOption {
+	return func(r *Router) {
+		r.contentPackageStore = s
+		if s != nil {
+			r.publicationResolver = services.NewPublicationResolver(s)
+		}
+	}
+}
+
+func WithDriveInboxStore(s DriveInboxStore) RouterOption {
+	return func(r *Router) { r.driveInboxStore = s }
+}
+
 // WithSnapshotStore wires the account resource snapshot cache. When
 // nil, GET /accounts/{id} returns the base 6-field shape and
 // /accounts/{id}/sync returns 501.

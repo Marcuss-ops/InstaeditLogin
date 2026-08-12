@@ -50,6 +50,7 @@ type ContentPackageStore interface {
 	CancelSchedule(ctx context.Context, packageID, expectedVersion int64) error
 	CreatePublishSnapshot(ctx context.Context, snapshot *models.PublishSnapshot) error
 	ListPublishSnapshots(ctx context.Context, scheduleID int64) ([]*models.PublishSnapshot, error)
+	ListPublicationStatuses(ctx context.Context, packageID int64) ([]*models.ContentPackagePublicationStatus, error)
 	ListPublicationEvents(ctx context.Context, packageID int64) ([]*models.PublicationEvent, error)
 	AppendPublicationEvent(ctx context.Context, event *models.PublicationEvent) error
 }
@@ -782,6 +783,134 @@ func (r *ContentPackageRepository) ListPublishSnapshots(ctx context.Context, sch
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// ListPublicationStatuses exposes the execution state for every frozen
+// target. The query deliberately joins the existing upload_jobs/posts/
+// post_targets/YouTube publication tables; Content Packages remain the
+// product aggregate and do not grow a parallel execution state machine.
+func (r *ContentPackageRepository) ListPublicationStatuses(ctx context.Context, packageID int64) ([]*models.ContentPackagePublicationStatus, error) {
+	packageIDText := fmt.Sprint(packageID)
+	rows, err := r.db.QueryContext(ctx, `
+		WITH package_jobs AS (
+			SELECT DISTINCT ON (metadata->>'content_schedule_id')
+				id, status, post_id, metadata->>'content_schedule_id' AS schedule_id
+			FROM upload_jobs
+			WHERE metadata->>'content_package_id'=$1
+			  AND workspace_id=(SELECT workspace_id FROM content_packages WHERE id=$1::bigint)
+			ORDER BY metadata->>'content_schedule_id', id DESC
+		)
+		SELECT s.content_package_id, s.id, s.target_account_id, s.language, s.title,
+		       j.id, j.status, p.id, pt.id, pt.status,
+		       y.youtube_video_id, y.thumbnail_status,
+		       COALESCE(y.published_at, pt.published_at)
+		FROM publish_snapshots s
+		LEFT JOIN package_jobs j ON j.schedule_id=s.content_schedule_id::text
+		LEFT JOIN posts p ON p.upload_job_id=j.id
+		LEFT JOIN post_targets pt ON pt.post_id=p.id AND pt.platform_account_id=s.target_account_id
+		LEFT JOIN youtube_target_publications y ON y.post_target_id=pt.id
+		WHERE s.content_package_id=$1::bigint
+		ORDER BY s.content_schedule_id, s.target_account_id, s.id`, packageIDText)
+	if err != nil {
+		return nil, fmt.Errorf("list content package publication statuses: %w", err)
+	}
+	defer rows.Close()
+	var out []*models.ContentPackagePublicationStatus
+	for rows.Next() {
+		status := &models.ContentPackagePublicationStatus{}
+		var uploadJobID, postID, postTargetID sql.NullInt64
+		var uploadJobStatus, targetStatus sql.NullString
+		var videoID, thumbnailStatus sql.NullString
+		var publishedAt sql.NullTime
+		if err := rows.Scan(&status.ContentPackageID, &status.ContentScheduleID, &status.TargetAccountID, &status.Language, &status.Title,
+			&uploadJobID, &uploadJobStatus, &postID, &postTargetID, &targetStatus,
+			&videoID, &thumbnailStatus, &publishedAt); err != nil {
+			return nil, fmt.Errorf("scan content package publication status: %w", err)
+		}
+		if uploadJobID.Valid {
+			status.UploadJobID = &uploadJobID.Int64
+		}
+		if uploadJobStatus.Valid {
+			status.UploadJobStatus = uploadJobStatus.String
+		}
+		if postID.Valid {
+			status.PostID = &postID.Int64
+		}
+		if postTargetID.Valid {
+			status.PostTargetID = &postTargetID.Int64
+		}
+		if targetStatus.Valid {
+			status.TargetStatus = targetStatus.String
+		}
+		if videoID.Valid {
+			status.YouTubeVideoID = &videoID.String
+		}
+		if thumbnailStatus.Valid {
+			status.ThumbnailStatus = &thumbnailStatus.String
+		}
+		if publishedAt.Valid {
+			status.PublishedAt = &publishedAt.Time
+		}
+		out = append(out, status)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list content package publication statuses rows: %w", err)
+	}
+	return out, nil
+}
+
+// SyncPublicationState projects the existing per-target execution state onto
+// the product-level package state. It is intentionally a projection only:
+// upload_jobs, post_targets and youtube_target_publications remain the source
+// of truth for provider execution.
+func (r *ContentPackageRepository) SyncPublicationState(ctx context.Context, packageID int64) error {
+	if packageID <= 0 {
+		return errors.New("content package id must be positive")
+	}
+	statuses, err := r.ListPublicationStatuses(ctx, packageID)
+	if err != nil {
+		return err
+	}
+	if len(statuses) == 0 {
+		return nil
+	}
+
+	published := 0
+	failed := 0
+	active := 0
+	for _, status := range statuses {
+		if status == nil {
+			continue
+		}
+		if status.PublishedAt != nil || status.TargetStatus == string(models.PostStatusPublished) {
+			published++
+			continue
+		}
+		switch status.TargetStatus {
+		case string(models.PostStatusFailed), string(models.PostStatusBlockedAuth), string(models.PostStatusDLQ):
+			failed++
+		default:
+			active++
+		}
+	}
+
+	var next models.ContentPackageState
+	switch {
+	case published == len(statuses):
+		next = models.ContentPackageStatePublished
+	case published > 0 && published+failed == len(statuses):
+		next = models.ContentPackageStatePartiallyPublished
+	case published > 0 || active > 0:
+		next = models.ContentPackageStatePublishing
+	case failed == len(statuses):
+		next = models.ContentPackageStateBlocked
+	default:
+		return nil
+	}
+	_, err = r.db.ExecContext(ctx,
+		`UPDATE content_packages SET state=$1, updated_at=NOW()
+		 WHERE id=$2 AND state NOT IN ('draft','cancelled')`, next, packageID)
+	return err
 }
 
 func (r *ContentPackageRepository) AppendPublicationEvent(ctx context.Context, event *models.PublicationEvent) error {

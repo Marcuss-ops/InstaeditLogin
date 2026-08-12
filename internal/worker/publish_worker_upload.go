@@ -80,6 +80,7 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 		if err := w.updateTargetStatus(ctx, target); err != nil {
 			return fmt.Errorf("update status for async publish: %w", err)
 		}
+		w.syncContentPackageState(ctx, post)
 		return nil
 	}
 
@@ -91,6 +92,7 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 	if err := w.updateTargetStatus(ctx, target); err != nil {
 		return fmt.Errorf("transition to published: %w", err)
 	}
+	w.syncContentPackageState(ctx, post)
 	// Post-completion dispatch (Task 7/10): fire DeliveryRegistry
 	// for the platform_account.Platform key. Best-effort: a missing
 	// provider OR a Deliver error is warn-logged and NOT propagated
