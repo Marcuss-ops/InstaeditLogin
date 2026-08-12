@@ -380,23 +380,37 @@ func isPQUniqueViolation(err error) bool {
 // the draft schedule).
 func (r *YouTubeVideoEditRepository) FindDraftByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
 	edit := &models.YouTubeVideoEdit{}
+	// PostgreSQL arrays and JSONB do not scan directly into the model's
+	// native []string/map fields through database/sql. Read them through
+	// lib/pq/[]byte first, then decode them explicitly so a draft lookup
+	// cannot turn into a 500 as soon as the row contains tags or translations.
+	var draftTags pq.StringArray
+	var draftTranslations []byte
 	err := r.db.QueryRowContext(ctx,
 		`SELECT draft_title, draft_description, draft_tags,
 		        draft_default_language, draft_default_audio_language,
 		        draft_translations, draft_desired_privacy, draft_publish_at
-		   FROM youtube_video_edits
-		  WHERE velox_project_id = $1`,
+		  FROM youtube_video_edits
+		 WHERE velox_project_id = $1`,
 		projectID,
 	).Scan(
-		&edit.DraftTitle, &edit.DraftDescription, &edit.DraftTags,
+		&edit.DraftTitle, &edit.DraftDescription, &draftTags,
 		&edit.DraftDefaultLanguage, &edit.DraftDefaultAudioLanguage,
-		&edit.DraftTranslations, &edit.DraftDesiredPrivacy, &edit.DraftPublishAt,
+		&draftTranslations, &edit.DraftDesiredPrivacy, &edit.DraftPublishAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("youtube video edit FindDraftByVeloxProjectID: %w", err)
+	}
+	if draftTags != nil {
+		edit.DraftTags = []string(draftTags)
+	}
+	if len(draftTranslations) > 0 {
+		if err := json.Unmarshal(draftTranslations, &edit.DraftTranslations); err != nil {
+			return nil, fmt.Errorf("youtube video edit FindDraftByVeloxProjectID decode translations: %w", err)
+		}
 	}
 	return edit, nil
 }

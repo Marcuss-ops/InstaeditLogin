@@ -112,6 +112,33 @@ func TestProxyHandlerAuthorizesProjectBeforeProxy(t *testing.T) {
 	}
 }
 
+func TestProxyHandlerReturnsTypedEmptyDocumentForNewProject(t *testing.T) {
+	proxy := &fakeProjectProxy{
+		response: &http.Response{
+			StatusCode: http.StatusNotFound,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"error":"document not found"}`)),
+		},
+	}
+	module := NewEditorBFFModule(Deps{
+		Client: proxy,
+		AuthorizeProject: func(context.Context, int64, int64, string, bool) error {
+			return nil
+		},
+	})
+
+	req := identityRequest(httptest.NewRequest(http.MethodGet, "/api/v1/editor/projects/ve_abc123/document", nil))
+	recorder := httptest.NewRecorder()
+	module.proxyHandler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Body.String(); got != `{"document_exists":false,"canvas_json":{"width":1920,"height":1080,"objects":[]}}` {
+		t.Fatalf("body = %s", got)
+	}
+}
+
 func TestProxyHandlerDeniesUnauthorizedProjectWithoutProxy(t *testing.T) {
 	proxy := &fakeProjectProxy{}
 	module := NewEditorBFFModule(Deps{
