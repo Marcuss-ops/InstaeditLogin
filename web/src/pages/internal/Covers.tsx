@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { Image as ImageIcon, RefreshCw } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { Image as ImageIcon } from "lucide-react";
 import { useGroupsData } from "./useGroupsData";
 import { GroupCovers } from "./GroupCovers";
 import { EmptyState } from "../../components/feedback/EmptyState";
@@ -21,7 +21,7 @@ import type { TreeNode } from "./groupsTypes";
  * hub they were working on.
  */
 export function CoversPage() {
-  const { state, tree, selectedGroupId, setSelectedGroupId, load } = useGroupsData();
+  const { state, tree, selectedGroupId, setSelectedGroupId } = useGroupsData();
   const allGroups = useMemo(() => flattenTree(tree), [tree]);
   const [searchParams] = useSearchParams();
   const requestedGroupId = Number(searchParams.get("group"));
@@ -52,18 +52,6 @@ export function CoversPage() {
               Seleziona un gruppo per vedere le copertine create al suo interno, comprese
               quelle vecchie e archiviate: modificale in InstaEditor senza lasciare l'app.
             </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link to="/app/covers/library" className="inline-flex items-center gap-1.5 rounded-xl border border-violet-400/20 bg-violet-400/[0.08] px-4 py-2 text-[13px] font-semibold text-violet-200 transition-colors hover:bg-violet-400/[0.16]">
-              Library & template
-            </Link>
-            <button
-              type="button"
-              onClick={() => void load(false, true)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-white/[0.08]"
-            >
-              <RefreshCw size={14} aria-hidden="true" /> Refresh
-            </button>
           </div>
         </div>
 

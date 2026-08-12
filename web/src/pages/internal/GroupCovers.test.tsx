@@ -182,7 +182,7 @@ describe("GroupCovers", () => {
     expect(screen.getByText(/archiviata/i)).toBeInTheDocument();
   });
 
-  it("shows an always-visible Crea copertina button in the header even with a full grid", async () => {
+  it("shows the Photoshop-style create tile before the full grid", async () => {
     routeFetch({
       covers: [
         coverFixture(),
@@ -200,7 +200,13 @@ describe("GroupCovers", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("group-cover-card")).toHaveLength(2);
     });
-    expect(screen.getByTestId("group-covers-create-header")).toBeInTheDocument();
+    expect(screen.getByTestId("group-covers-create-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("group-covers-create-header")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tutte")).not.toBeInTheDocument();
+    expect(screen.queryByText("Bozze")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pronte")).not.toBeInTheDocument();
+    expect(screen.queryByText("Archiviate")).not.toBeInTheDocument();
+    expect(screen.queryByText("Aggiorna")).not.toBeInTheDocument();
   });
 
   it("opens InstaEditor directly from the header + on the most recent private video with a random name", async () => {
@@ -222,7 +228,7 @@ describe("GroupCovers", () => {
 
     renderPanel();
 
-    // The header + is always visible, so wait for the video manifest load
+    // The first grid tile is always visible, so wait for the video manifest load
     // to land in hook state before clicking — the one-click create must
     // see a ready group (not the initial loading state).
     await waitFor(() => {
@@ -233,7 +239,7 @@ describe("GroupCovers", () => {
     });
     await act(async () => {});
 
-    fireEvent.click(screen.getByTestId("group-covers-create-header"));
+    fireEvent.click(screen.getByTestId("group-covers-create-card"));
 
     // The tab is reserved synchronously inside the click gesture, then
     // navigated once the launch URL is ready (immune to popup blockers).
@@ -278,19 +284,17 @@ describe("GroupCovers", () => {
     expect(fakeTabs[0]?.close).not.toHaveBeenCalled();
   });
 
-  it("renders a short empty state with a Crea copertina button", async () => {
+  it("renders the create tile as the first cover when the group is empty", async () => {
     routeFetch();
 
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByText(/nessuna copertina in questo gruppo/i)).toBeInTheDocument();
+      expect(screen.getByTestId("group-covers-create-card")).toBeInTheDocument();
     });
-    // The long explanatory description was removed on purpose.
-    expect(
-      screen.queryByText(/Quando crei una copertina per un video di questo gruppo/i),
-    ).not.toBeInTheDocument();
-    expect(screen.getByTestId("group-covers-create")).toBeInTheDocument();
+    expect(screen.getByText("Crea copertina")).toBeInTheDocument();
+    expect(screen.getByText(/clicca per creare una nuova copertina/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nessuna copertina in questo gruppo/i)).not.toBeInTheDocument();
   });
 
   it("surfaces a toast when the group has no private videos to draw a cover on", async () => {
@@ -308,7 +312,7 @@ describe("GroupCovers", () => {
       );
     });
     await act(async () => {});
-    fireEvent.click(screen.getByTestId("group-covers-create-header"));
+    fireEvent.click(screen.getByTestId("group-covers-create-card"));
 
     await waitFor(() => {
       expect(toastMock.error).toHaveBeenCalledWith(
@@ -320,7 +324,7 @@ describe("GroupCovers", () => {
     expect(fakeTabs[0]?.close).toHaveBeenCalled();
   });
 
-  it("filters by project status via the filter chips", async () => {
+  it("renders every project status together without status filters", async () => {
     routeFetch({
       covers: [
         coverFixture({ project_id: "ytes_draft", project_status: "draft", draft_title: "Draft cover" }),
@@ -335,14 +339,9 @@ describe("GroupCovers", () => {
       expect(screen.getAllByTestId("group-cover-card")).toHaveLength(3);
     });
     expect(screen.getByText("Draft cover")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Archiviate" }));
-    await waitFor(() => {
-      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
-    });
     expect(screen.getByText("Archived cover")).toBeInTheDocument();
-    expect(screen.queryByText("Draft cover")).not.toBeInTheDocument();
-    expect(screen.queryByText("Ready cover")).not.toBeInTheDocument();
+    expect(screen.getByText("Ready cover")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Archiviate" })).not.toBeInTheDocument();
   });
 
   it("shows the draft title when present", async () => {

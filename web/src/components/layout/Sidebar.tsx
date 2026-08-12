@@ -21,7 +21,6 @@ const baseNavItems: NavItem[] = [
   { to: "/app/content/inbox", label: "Content Inbox", icon: FUNCTIONAL_ICON_CATALOG.product.folder },
   { to: "/app/groups", label: "Groups", icon: FUNCTIONAL_ICON_CATALOG.product.folder },
   { to: "/app/covers", label: "Copertine", icon: FUNCTIONAL_ICON_CATALOG.product.image },
-  { to: "/app/covers/library", label: "Cover Library", icon: FUNCTIONAL_ICON_CATALOG.product.image },
   { to: "/app/livestreams", label: "Live streaming", icon: FUNCTIONAL_ICON_CATALOG.product.live, liveCountBadge: true },
   { to: "/app/linking", label: "Linking", icon: FUNCTIONAL_ICON_CATALOG.product.link },
 ];
