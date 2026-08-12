@@ -227,6 +227,21 @@ func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
 	return scanUploadJob(row)
 }
 
+// FindByScheduleID is the preparation idempotency lookup. The schedule id is
+// persisted in UploadJob.Metadata so a crash after job creation but before the
+// schedule CAS cannot fan out a duplicate execution row.
+func (r *UploadJobRepository) FindByScheduleID(ctx context.Context, scheduleID int64) (*models.UploadJob, error) {
+	var id int64
+	err := r.db.QueryRowContext(ctx, `SELECT id FROM upload_jobs WHERE metadata->>'content_schedule_id'=$1 ORDER BY id LIMIT 1`, fmt.Sprint(scheduleID)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.FindByID(id)
+}
+
 // ErrUploadJobNotFound is the typed sentinel Reschedule/Cancel return
 // to differentiate "job id doesn't exist" from "job id exists but
 // already moved past pending (worker claimed / completed / failed)".
