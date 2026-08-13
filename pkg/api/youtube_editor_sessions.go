@@ -220,6 +220,19 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 			return nil, nil, fmt.Errorf("repair editor session source thumbnail: %w", updateErr)
 		}
 	}
+	// Persist the authoritative snippet category (videos.list) so the
+	// GET by-project / by-id detail can serve the extended session
+	// contract's `category_id` without a second YouTube round-trip. A
+	// non-empty YouTube value repairs a stale/empty row; an empty read
+	// never overwrites an existing value (mirrors the thumbnail repair).
+	categoryID := strings.TrimSpace(video.CategoryID)
+	if categoryID != "" && strings.TrimSpace(persisted.CategoryID) != categoryID {
+		persisted.CategoryID = categoryID
+		persisted.UpdatedAt = time.Now().UTC()
+		if updateErr := r.youtubeVideoEditStore.Update(ctx, persisted); updateErr != nil {
+			return nil, nil, fmt.Errorf("repair editor session category: %w", updateErr)
+		}
+	}
 	return persisted, video, nil
 }
 

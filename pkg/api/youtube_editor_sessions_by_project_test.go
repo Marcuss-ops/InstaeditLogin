@@ -193,6 +193,8 @@ func TestGetYouTubeEditorSessionByProject_200_HappyPath(t *testing.T) {
 		PlatformAccountID: 42,
 		YouTubeVideoID:    "yt-1",
 		VeloxProjectID:    "vp-1",
+		SourceThumbnailURL: "https://i.ytimg.com/vi/yt-1/hqdefault.jpg",
+		CategoryID:         "24",
 		DesiredPrivacy:    "private",
 		Status:            "editing",
 	}
@@ -220,11 +222,57 @@ func TestGetYouTubeEditorSessionByProject_200_HappyPath(t *testing.T) {
 	if dto.DesiredPrivacy != "private" {
 		t.Fatalf("expected desired_privacy=private, got %s", dto.DesiredPrivacy)
 	}
+	// Extended session contract: InstaEditor's initial document
+	// (thumbnail_url, category_id, privacy_status).
+	if dto.ThumbnailURL != "https://i.ytimg.com/vi/yt-1/hqdefault.jpg" {
+		t.Fatalf("expected thumbnail_url, got %q", dto.ThumbnailURL)
+	}
+	if dto.CategoryID != "24" {
+		t.Fatalf("expected category_id=24, got %q", dto.CategoryID)
+	}
+	if dto.PrivacyStatus != "private" {
+		t.Fatalf("expected privacy_status=private (fallback to desired), got %q", dto.PrivacyStatus)
+	}
 	// The launcher URL must be present and point at the session's own
 	// project handle (the InstaEditor SPA redirect target).
 	wantEditorURL := "https://editor.instaedit.test/editor/vp-1"
 	if dto.EditorURL != wantEditorURL {
 		t.Fatalf("expected editor_url=%s, got %s", wantEditorURL, dto.EditorURL)
+	}
+}
+
+// TestGetYouTubeEditorSessionByProject_PrefersActualPrivacy verifies
+// privacy_status reflects the live read-back (actual_privacy) over the
+// operator's desired_privacy once the publish orchestrator stamped it.
+func TestGetYouTubeEditorSessionByProject_PrefersActualPrivacy(t *testing.T) {
+	t.Parallel()
+	workspace := &models.Workspace{ID: 7, OwnerID: 1}
+	edit := &models.YouTubeVideoEdit{
+		ID:                "sess-1",
+		WorkspaceID:       workspace.ID,
+		PlatformAccountID: 42,
+		YouTubeVideoID:    "yt-1",
+		VeloxProjectID:    "vp-1",
+		DesiredPrivacy:    "private",
+		ActualPrivacy:     strPtr("public"),
+		Status:            "published",
+	}
+	router := newByProjectRouter(t, workspace, edit)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/youtube/editor-sessions/by-project/vp-1", nil)
+	withBearerJWT(t, req, 1)
+	rec := httptest.NewRecorder()
+	router.Setup().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	var dto youTubeEditorSessionDetail
+	if err := json.NewDecoder(rec.Body).Decode(&dto); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if dto.PrivacyStatus != "public" {
+		t.Fatalf("expected privacy_status=public (actual read-back wins), got %q", dto.PrivacyStatus)
 	}
 }
 

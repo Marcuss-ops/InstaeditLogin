@@ -65,7 +65,7 @@ func (r *YouTubeVideoEditRepository) MarkPublishing(ctx context.Context, id stri
 			id, desiredPrivacy, publishAt,
 		).Scan(
 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
-			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID,
 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
 			&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 			&edit.CreatedAt, &edit.UpdatedAt,
@@ -88,7 +88,7 @@ func (r *YouTubeVideoEditRepository) MarkPublishing(ctx context.Context, id stri
 			id, desiredPrivacy, publishAt, int(inFlightTimeout.Seconds()),
 		).Scan(
 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
-			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID,
 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
 			&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 			&edit.CreatedAt, &edit.UpdatedAt,
@@ -119,7 +119,7 @@ func (r *YouTubeVideoEditRepository) AttachThumbnail(ctx context.Context, sessio
 		sessionID, thumbnailMediaID,
 	).Scan(
 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
-		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID,
 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
 		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 		&edit.CreatedAt, &edit.UpdatedAt,
@@ -193,7 +193,7 @@ func (r *YouTubeVideoEditRepository) MarkPublishedWithActualPrivacy(
 		id, actualPrivacy, syncStatus,
 	).Scan(
 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
-		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID,
 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
 		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 		&edit.CreatedAt, &edit.UpdatedAt,
@@ -344,7 +344,7 @@ func (r *YouTubeVideoEditRepository) findOpenEditableSessionByTriple(
 		workspaceID, platformAccountID, youtubeVideoID,
 	).Scan(
 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
-		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID,
 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
 		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 		&edit.CreatedAt, &edit.UpdatedAt,

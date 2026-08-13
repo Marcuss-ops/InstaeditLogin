@@ -3209,6 +3209,9 @@ components:
         youtube_video_id: { type: string }
         velox_project_id: { type: string }
         source_thumbnail_url: { type: string, format: uri }
+        thumbnail_url: { type: string, format: uri }
+        category_id: { type: string }
+        privacy_status: { type: string, enum: [public, unlisted, private] }
         thumbnail_media_id: { type: string, nullable: true }
         desired_privacy: { type: string, enum: [public, unlisted, private] }
         publish_at: { type: string, format: date-time, nullable: true }

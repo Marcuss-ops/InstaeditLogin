@@ -27,21 +27,32 @@ import (
 // SPA treats `null actual_privacy` as "in flight", the same way it
 // treats no `editor_url` on a freshly-discovered card grid entry.
 type youTubeEditorSessionDetail struct {
-	ID                 string     `json:"id"`
-	WorkspaceID        int64      `json:"workspace_id"`
-	PlatformAccountID  int64      `json:"platform_account_id"`
-	ChannelID          string     `json:"channel_id,omitempty"`
-	YouTubeVideoID     string     `json:"youtube_video_id"`
-	VeloxProjectID     string     `json:"velox_project_id"`
-	EditorURL          string     `json:"editor_url"`
-	SourceThumbnailURL string     `json:"source_thumbnail_url,omitempty"`
-	ThumbnailMediaID   *string    `json:"thumbnail_media_id,omitempty"`
-	DesiredPrivacy     string     `json:"desired_privacy"`
-	PublishAt          *time.Time `json:"publish_at,omitempty"`
-	Status             string     `json:"status"`
-	LastError          string     `json:"last_error,omitempty"`
-	ActualPrivacy      *string    `json:"actual_privacy,omitempty"`
-	YouTubeSyncStatus  *string    `json:"youtube_sync_status,omitempty"`
+	ID                 string `json:"id"`
+	WorkspaceID        int64  `json:"workspace_id"`
+	PlatformAccountID  int64  `json:"platform_account_id"`
+	ChannelID          string `json:"channel_id,omitempty"`
+	YouTubeVideoID     string `json:"youtube_video_id"`
+	VeloxProjectID     string `json:"velox_project_id"`
+	EditorURL          string `json:"editor_url"`
+	SourceThumbnailURL string `json:"source_thumbnail_url,omitempty"`
+	// Extended session contract (thumbnail_url, category_id,
+	// privacy_status) — the authoritative YouTube projection InstaEditor
+	// renders as its initial document on load. thumbnail_url mirrors the
+	// persisted source_thumbnail_url under the contract's wire name;
+	// category_id is stamped at session creation from videos.list;
+	// privacy_status is the live read-back (actual_privacy) when the
+	// publish orchestrator stamped it, falling back to desired_privacy
+	// for a session that has not published yet.
+	ThumbnailURL      string     `json:"thumbnail_url,omitempty"`
+	CategoryID        string     `json:"category_id,omitempty"`
+	PrivacyStatus     string     `json:"privacy_status"`
+	ThumbnailMediaID  *string    `json:"thumbnail_media_id,omitempty"`
+	DesiredPrivacy    string     `json:"desired_privacy"`
+	PublishAt         *time.Time `json:"publish_at,omitempty"`
+	Status            string     `json:"status"`
+	LastError         string     `json:"last_error,omitempty"`
+	ActualPrivacy     *string    `json:"actual_privacy,omitempty"`
+	YouTubeSyncStatus *string    `json:"youtube_sync_status,omitempty"`
 	// DraftTitle is the operator-typed (or auto-provisioner
 	// pre-filled) title the SPA renders on initial load. Added for
 	// the GET-by-id endpoint so the Thumbnail Maker SPA can
@@ -74,6 +85,10 @@ func (r *Router) editorDetailWithURL(w http.ResponseWriter, detail youTubeEditor
 }
 
 func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSessionDetail {
+	privacyStatus := edit.DesiredPrivacy
+	if edit.ActualPrivacy != nil && strings.TrimSpace(*edit.ActualPrivacy) != "" {
+		privacyStatus = *edit.ActualPrivacy
+	}
 	return youTubeEditorSessionDetail{
 		ID:                 edit.ID,
 		WorkspaceID:        edit.WorkspaceID,
@@ -81,6 +96,9 @@ func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSe
 		YouTubeVideoID:     edit.YouTubeVideoID,
 		VeloxProjectID:     edit.VeloxProjectID,
 		SourceThumbnailURL: edit.SourceThumbnailURL,
+		ThumbnailURL:       edit.SourceThumbnailURL,
+		CategoryID:         edit.CategoryID,
+		PrivacyStatus:      privacyStatus,
 		ThumbnailMediaID:   edit.ThumbnailMediaID,
 		DesiredPrivacy:     edit.DesiredPrivacy,
 		PublishAt:          edit.PublishAt,

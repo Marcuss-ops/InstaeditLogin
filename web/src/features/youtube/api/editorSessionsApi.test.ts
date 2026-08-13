@@ -228,6 +228,26 @@ describe("getYouTubeEditorSession", () => {
     expect(result.actual_privacy).toBe("public");
     expect(result.youtube_sync_status).toBe("confirmed");
   });
+
+  it("exposes the extended session contract fields on the detail projection", async () => {
+    const detail = {
+      ...FULL_SESSION,
+      status: "editing",
+      workspace_id: 7,
+      platform_account_id: 99,
+      source_thumbnail_url: "https://i.ytimg.com/vi/vid/hqdefault.jpg",
+      thumbnail_url: "https://i.ytimg.com/vi/vid/hqdefault.jpg",
+      category_id: "24",
+      privacy_status: "private",
+      created_at: "2030-01-01T00:00:00Z",
+      updated_at: "2030-01-01T00:00:01Z",
+    };
+    authedFetchMock.mockResolvedValue(jsonResponse(detail));
+    const result = await getYouTubeEditorSession("ytedit_42");
+    expect(result.thumbnail_url).toBe("https://i.ytimg.com/vi/vid/hqdefault.jpg");
+    expect(result.category_id).toBe("24");
+    expect(result.privacy_status).toBe("private");
+  });
 });
 
 // ────────────────────────────────────────────────────────────────

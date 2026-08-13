@@ -26,6 +26,7 @@ type YouTubeVideoEdit struct {
 	YouTubeVideoID     string     `json:"youtube_video_id"`
 	VeloxProjectID     string     `json:"velox_project_id"`
 	SourceThumbnailURL string     `json:"source_thumbnail_url,omitempty"`
+	CategoryID         string     `json:"category_id,omitempty"`
 	ThumbnailMediaID   *string    `json:"thumbnail_media_id,omitempty"`
 	DesiredPrivacy     string     `json:"desired_privacy"`
 	PublishAt          *time.Time `json:"publish_at,omitempty"`

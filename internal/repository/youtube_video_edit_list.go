@@ -157,7 +157,7 @@ func (r *YouTubeVideoEditRepository) ListByWorkspace(ctx context.Context, filter
 		edit := &models.YouTubeVideoEdit{}
 		if err := rows.Scan(
 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
-			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID,
 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
 			&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 			&edit.CreatedAt, &edit.UpdatedAt,
@@ -223,7 +223,7 @@ func (r *YouTubeVideoEditRepository) ListByWorkspaceAccountIDs(ctx context.Conte
 		edit := &models.YouTubeVideoEdit{}
 		if err := rows.Scan(
 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
-			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID,
 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
 			&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 			&edit.CreatedAt, &edit.UpdatedAt,

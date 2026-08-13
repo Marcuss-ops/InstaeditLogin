@@ -165,11 +165,11 @@ func (r *YouTubeVideoEditRepository) Create(ctx context.Context, edit *models.Yo
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO youtube_video_edits
 			(id, workspace_id, platform_account_id, youtube_video_id, velox_project_id,
-			 source_thumbnail_url, thumbnail_media_id, desired_privacy, publish_at,
+			 source_thumbnail_url, category_id, thumbnail_media_id, desired_privacy, publish_at,
 			 status, last_error, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		edit.ID, edit.WorkspaceID, edit.PlatformAccountID, edit.YouTubeVideoID, edit.VeloxProjectID,
-		edit.SourceThumbnailURL, edit.ThumbnailMediaID, edit.DesiredPrivacy, edit.PublishAt,
+		edit.SourceThumbnailURL, edit.CategoryID, edit.ThumbnailMediaID, edit.DesiredPrivacy, edit.PublishAt,
 		edit.Status, edit.LastError, edit.CreatedAt, edit.UpdatedAt,
 	)
 	if err != nil {
@@ -189,7 +189,7 @@ func (r *YouTubeVideoEditRepository) FindByID(ctx context.Context, id string) (*
 		id,
 	).Scan(
 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
-		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID,
 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
 		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 		&edit.CreatedAt, &edit.UpdatedAt,
@@ -214,7 +214,7 @@ func (r *YouTubeVideoEditRepository) FindByVeloxProjectID(ctx context.Context, p
 		projectID,
 	).Scan(
 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID, &edit.VeloxProjectID,
-		&edit.SourceThumbnailURL, &edit.ThumbnailMediaID, &edit.DesiredPrivacy, &edit.PublishAt,
+		&edit.SourceThumbnailURL, &edit.CategoryID, &edit.ThumbnailMediaID, &edit.DesiredPrivacy, &edit.PublishAt,
 		&edit.Status, &edit.LastError, &edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 		&edit.CreatedAt, &edit.UpdatedAt,
 	); err == sql.ErrNoRows {
@@ -233,15 +233,16 @@ func (r *YouTubeVideoEditRepository) Update(ctx context.Context, edit *models.Yo
 		     youtube_video_id = $4,
 		     velox_project_id = $5,
 		     source_thumbnail_url = $6,
-		     thumbnail_media_id = $7,
-		     desired_privacy = $8,
-		     publish_at = $9,
-		     status = $10,
-		     last_error = $11,
-		     updated_at = $12
+		     category_id = $7,
+		     thumbnail_media_id = $8,
+		     desired_privacy = $9,
+		     publish_at = $10,
+		     status = $11,
+		     last_error = $12,
+		     updated_at = $13
 		 WHERE id = $1`,
 		edit.ID, edit.WorkspaceID, edit.PlatformAccountID, edit.YouTubeVideoID, edit.VeloxProjectID,
-		edit.SourceThumbnailURL, edit.ThumbnailMediaID, edit.DesiredPrivacy, edit.PublishAt,
+		edit.SourceThumbnailURL, edit.CategoryID, edit.ThumbnailMediaID, edit.DesiredPrivacy, edit.PublishAt,
 		edit.Status, edit.LastError, edit.UpdatedAt,
 	)
 	if err != nil {
@@ -269,7 +270,7 @@ func (r *YouTubeVideoEditRepository) Update(ctx context.Context, edit *models.Yo
 // publish-by-project GET, the dashboard list, and the groups videos
 // endpoint all surface them without per-call SQL edits.
 const youtubeVideoEditSelectColumns = `id, workspace_id, platform_account_id, youtube_video_id,
-	        velox_project_id, source_thumbnail_url, thumbnail_media_id,
+	        velox_project_id, source_thumbnail_url, category_id, thumbnail_media_id,
 	        desired_privacy, publish_at, status, last_error,
 	        actual_privacy, youtube_sync_status,
 	        created_at, updated_at`

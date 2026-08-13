@@ -176,6 +176,12 @@ export interface YouTubeEditorSessionDetail
   platform_account_id: number;
   channel_id?: string;
   source_thumbnail_url?: string;
+  /** Extended session contract: authoritative YouTube thumbnail (canvas). */
+  thumbnail_url?: string;
+  /** Extended session contract: YouTube snippet categoryId (e.g. "24"). */
+  category_id?: string;
+  /** Extended session contract: live read-back privacy (falls back to desired). */
+  privacy_status?: string;
   last_error?: string;
   draft_title?: string;
   created_at: string;
