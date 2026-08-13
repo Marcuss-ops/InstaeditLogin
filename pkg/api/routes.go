@@ -432,6 +432,19 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPatch, "/api/v1/groups/{group_id}/youtube/videos/{video_id}", r.protected(patchGroupYouTubeVideoMetadataHandler.ServeHTTP))
 
+	// POST /api/v1/groups/{group_id}/youtube/videos/{video_id}/thumbnail
+	// — the cover-save flow. The authorized InstaEdit backend receives
+	// the rendered cover (thumbnail_media_id), verifies group/owner/
+	// video, calls thumbnails.set (PNG/JPEG ≤ 2 MB) and invalidates the
+	// account's cached videos so the card refreshes. Thumbnail-ONLY: it
+	// never touches privacy or snippet metadata (that is the full
+	// editor-sessions /publish pipeline).
+	var publishGroupVideoThumbnailHandler http.Handler = http.HandlerFunc(r.handlePublishGroupVideoThumbnail)
+	if r.csrfMiddleware != nil {
+		publishGroupVideoThumbnailHandler = r.csrfMiddleware(publishGroupVideoThumbnailHandler)
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/groups/{group_id}/youtube/videos/{video_id}/thumbnail", r.protected(publishGroupVideoThumbnailHandler.ServeHTTP))
+
 	// GET /api/v1/groups/{group_id}/covers — Copertine hub covers
 	// grid. Read-only, no CSRF (GET exempt). Returns the cover
 	// projects (thumbnail projects) linked to the group's accounts —

@@ -411,7 +411,11 @@ func (s *YouTubeOAuthService) GetYouTubeVideo(ctx context.Context, accessToken, 
 		return nil, fmt.Errorf("youtube video details: decode: %w", err)
 	}
 	if len(result.Items) == 0 {
-		return nil, fmt.Errorf("youtube video details: video %s not found", videoID)
+		// Wrap the typed sentinel so callers can distinguish "video
+		// missing" (404) from transient upstream failures via
+		// errors.Is(err, ErrYouTubeVideoNotFound). The message keeps
+		// "not found" for the legacy string-matching paths.
+		return nil, fmt.Errorf("%w: video_id=%s", ErrYouTubeVideoNotFound, videoID)
 	}
 
 	v := result.Items[0]

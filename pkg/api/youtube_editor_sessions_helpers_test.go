@@ -299,6 +299,10 @@ type mockYouTubeOAuthServiceForEditor struct {
 	// simulate the merged-snippet update; the default is fail-loud so
 	// a test that reaches the endpoint without opting in surfaces.
 	updateVideoMetadataFn func(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error)
+	// setThumbnailFn (POST group video thumbnail) lets tests simulate
+	// the thumbnails.set call; the default is fail-loud so a test
+	// that reaches the endpoint without opting in surfaces.
+	setThumbnailFn func(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error
 }
 
 func (m *mockYouTubeOAuthServiceForEditor) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
@@ -348,6 +352,9 @@ func (m *mockYouTubeOAuthServiceForEditor) ListEditableVideos(ctx context.Contex
 }
 
 func (m *mockYouTubeOAuthServiceForEditor) SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error {
+	if m.setThumbnailFn != nil {
+		return m.setThumbnailFn(ctx, accessToken, videoID, mimeType, body, size)
+	}
 	return errors.New("not implemented")
 }
 
