@@ -42,6 +42,19 @@ vi.mock("../../lib/queryRegistry", () => ({
   invalidateSharedQueries: vi.fn(),
 }));
 
+// The 'Modifica video' drawer consumes the centralized category resource;
+// in the Copertine hub tests it resolves to the canonical snapshot.
+vi.mock("../../features/youtube/hooks/useYouTubeCategories", () => ({
+  useYouTubeCategories: () => ({
+    data: [
+      { id: "17", label: "Sport" },
+      { id: "20", label: "Gaming" },
+      { id: "24", label: "Intrattenimento" },
+    ],
+    isLoading: false,
+  }),
+}));
+
 vi.mock("react-router-dom", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-router-dom")>();
   return {
@@ -556,5 +569,146 @@ describe("GroupCovers", () => {
       String(url).includes("/youtube/videos"),
     );
     expect(videosCalls).toHaveLength(1);
+  });
+
+  it("filters the Video/Cover manager grid by visibility tabs with real counts", async () => {
+    routeFetch({
+      videos: [
+        privateVideoFixture({ youtube_video_id: "pub-1", title: "Video pubblico", privacy_status: "public", actual_privacy: "public" }),
+        privateVideoFixture({ youtube_video_id: "priv-1", title: "Video privato", privacy_status: "private", actual_privacy: "private" }),
+        privateVideoFixture({ youtube_video_id: "unl-1", title: "Video non in elenco", privacy_status: "unlisted", actual_privacy: "unlisted" }),
+      ],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Video pubblico")).toBeInTheDocument();
+      expect(screen.getByText("Video privato")).toBeInTheDocument();
+      expect(screen.getByText("Video non in elenco")).toBeInTheDocument();
+    });
+
+    // The pills carry counts derived from the single canonical list.
+    expect(screen.getByTestId("group-videos-filter-all")).toHaveTextContent("3");
+    expect(screen.getByTestId("group-videos-filter-private")).toHaveTextContent("1");
+    expect(screen.getByTestId("group-videos-filter-unlisted")).toHaveTextContent("1");
+    expect(screen.getByTestId("group-videos-filter-public")).toHaveTextContent("1");
+
+    fireEvent.click(screen.getByTestId("group-videos-filter-private"));
+    await waitFor(() => {
+      expect(screen.getByText("Video privato")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Video pubblico")).not.toBeInTheDocument();
+    expect(screen.queryByText("Video non in elenco")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("group-videos-filter-public"));
+    await waitFor(() => {
+      expect(screen.getByText("Video pubblico")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Video privato")).not.toBeInTheDocument();
+  });
+
+  it("filters the manager grid by category within the Copertine hub", async () => {
+    routeFetch({
+      videos: [
+        privateVideoFixture({ youtube_video_id: "cat-1", title: "Video sport", category_id: "17", category_title: "Sport" }),
+        privateVideoFixture({ youtube_video_id: "cat-2", title: "Video gaming", category_id: "20" }),
+      ],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Video sport")).toBeInTheDocument();
+      expect(screen.getByText("Video gaming")).toBeInTheDocument();
+    });
+
+    const select = screen.getByTestId("group-videos-category") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "17" } });
+    await waitFor(() => {
+      expect(screen.getByText("Video sport")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Video gaming")).not.toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: "all" } });
+    await waitFor(() => {
+      expect(screen.getByText("Video gaming")).toBeInTheDocument();
+    });
+  });
+
+  it("filters the manager grid by search within the Copertine hub", async () => {
+    routeFetch({
+      videos: [
+        privateVideoFixture({ youtube_video_id: "abc-1", title: "Wrestling Highlights", channel_name: "Wrestling Insider RU" }),
+        privateVideoFixture({ youtube_video_id: "xyz-2", title: "Cucina veloce", channel_name: "Chef Mario" }),
+      ],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Wrestling Highlights")).toBeInTheDocument();
+      expect(screen.getByText("Cucina veloce")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId("group-videos-search"), { target: { value: "chef" } });
+    await waitFor(() => {
+      expect(screen.getByText("Cucina veloce")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Wrestling Highlights")).not.toBeInTheDocument();
+  });
+
+  it("opens the 'Modifica video' drawer from Dettagli, prefilled, and saves via the metadata PATCH", async () => {
+    routeFetch({
+      videos: [
+        privateVideoFixture({
+          youtube_video_id: "meta-1",
+          title: "Video modificabile",
+          description: "Descrizione esistente",
+          category_id: "24",
+          category_title: "Intrattenimento",
+          privacy_status: "public",
+          actual_privacy: "public",
+        }),
+      ],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Video modificabile")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dettagli" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("edit-metadata-drawer")).toBeInTheDocument();
+    });
+
+    // Prefilled from the video's canonical metadata.
+    const titleInput = screen.getByTestId("edit-metadata-title-input") as HTMLInputElement;
+    expect(titleInput.value).toBe("Video modificabile");
+    const categorySelect = screen.getByTestId("edit-metadata-category") as HTMLSelectElement;
+    expect(categorySelect.value).toBe("24");
+    // Visibility is shown as a read-only badge, never a control.
+    expect(screen.getByText("Pubblico")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /visibilità/i })).not.toBeInTheDocument();
+
+    fireEvent.change(titleInput, { target: { value: "Titolo aggiornato" } });
+    fireEvent.change(categorySelect, { target: { value: "20" } });
+    fireEvent.click(screen.getByTestId("edit-metadata-save"));
+
+    await waitFor(() => {
+      const patchCall = authedFetchMock.mock.calls.find(([url, init]) =>
+        String(url) === "/api/v1/groups/7/youtube/videos/meta-1" && (init as RequestInit).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      expect(JSON.parse(String((patchCall as unknown[])[1] && (patchCall[1] as RequestInit).body))).toEqual({
+        platform_account_id: 42,
+        title: "Titolo aggiornato",
+        description: "Descrizione esistente",
+        category_id: "20",
+      });
+    });
+    expect(toastMock.success).toHaveBeenCalledWith("Metadati video salvati.");
   });
 });

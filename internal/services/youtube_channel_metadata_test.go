@@ -153,6 +153,62 @@ func TestUpdateVideoMetadata_PartialPatchPreservesUntouchedFields(t *testing.T) 
 	}
 }
 
+// TestUpdateVideoMetadata_EmptyStringClearsDescription pins the other
+// half of the pointer semantics: a NON-nil empty description means
+// "explicitly cleared" — the merge applies it verbatim while the rest
+// of the canonical snippet (title, tags, categoryId) survives intact.
+// (Title cannot be cleared — validation rejects it — and an empty
+// categoryId maps to the neutral default, so description is the only
+// snippet field that can be deliberately emptied.)
+func TestUpdateVideoMetadata_EmptyStringClearsDescription(t *testing.T) {
+	var putBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"items": [{
+					"id": "VID123",
+					"snippet": {
+						"title": "Keep title",
+						"description": "Descrizione da cancellare",
+						"channelId": "UC123",
+						"tags": ["t1", "t2"],
+						"categoryId": "24"
+					}
+				}]
+			}`))
+			return
+		}
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&putBody); err != nil {
+			t.Fatalf("decode put body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	cleared := ""
+	if _, err := svc.UpdateVideoMetadata(t.Context(), "token", "VID123", "UC123", models.YouTubeMetadataPatch{Description: &cleared}); err != nil {
+		t.Fatalf("UpdateVideoMetadata: %v", err)
+	}
+	snippet := putBody["snippet"].(map[string]interface{})
+	if snippet["description"] != "" {
+		t.Errorf("description: want empty (cleared), got %v", snippet["description"])
+	}
+	if snippet["title"] != "Keep title" {
+		t.Errorf("title must be preserved, got %v", snippet["title"])
+	}
+	if snippet["categoryId"] != "24" {
+		t.Errorf("categoryId must be preserved, got %v", snippet["categoryId"])
+	}
+	tags, ok := snippet["tags"].([]interface{})
+	if !ok || len(tags) != 2 || tags[0] != "t1" || tags[1] != "t2" {
+		t.Errorf("tags must be preserved, got %v", snippet["tags"])
+	}
+}
+
 // TestUpdateVideoMetadata_RejectsForeignChannelBeforePut gates the
 // update to the owner channel: a videos.list hit whose channelId
 // differs must 403 WITHOUT burning the quota-expensive PUT.
