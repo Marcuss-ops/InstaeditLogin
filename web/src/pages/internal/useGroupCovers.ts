@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { authedFetch, AuthError, ApiError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import { coversHubReturnTo, openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
+import { invalidateGroupVideos } from "../../features/youtube/hooks/useGroupVideosInvalidation";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { CoversLoadState, GroupCover } from "./groupCoversTypes";
 
@@ -136,6 +137,10 @@ export function useGroupCovers(groupId: number) {
           };
         });
         toast.success("Titolo copertina salvato.");
+        // Targeted invalidation: the cover draft feeds the linked video's
+        // metadata, so refresh only the group video-list cache
+        // (`['groups', groupId, 'youtube', 'videos']`).
+        invalidateGroupVideos(groupId);
         return true;
       } catch (error) {
         if (error instanceof AuthError) {
@@ -148,7 +153,7 @@ export function useGroupCovers(groupId: number) {
         setRenamingCoverId(null);
       }
     },
-    [navigate, toast],
+    [groupId, navigate, toast],
   );
 
   const openCoverEditor = useCallback(async (cover: GroupCover, tab?: Window | null): Promise<boolean> => {
@@ -203,6 +208,10 @@ export function useGroupCovers(groupId: number) {
           : item),
       });
       toast.success("Modifiche copertina salvate.");
+      // Targeted invalidation: only the group video-list cache
+      // (`['groups', groupId, 'youtube', 'videos']`) is refreshed, so
+      // the cards reflect the new draft without reloading InstaEdit.
+      invalidateGroupVideos(groupId);
       return true;
     } catch (error) {
       if (error instanceof AuthError) navigate("/login", { replace: true });
@@ -211,7 +220,7 @@ export function useGroupCovers(groupId: number) {
     } finally {
       setSavingCoverId(null);
     }
-  }, [navigate, toast]);
+  }, [groupId, navigate, toast]);
 
   return { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
 }

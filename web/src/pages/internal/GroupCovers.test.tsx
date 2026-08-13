@@ -39,6 +39,7 @@ vi.mock("../../components/toast", () => ({
 
 vi.mock("../../lib/queryRegistry", () => ({
   useSharedPolling: () => vi.fn(async () => undefined),
+  invalidateSharedQueries: vi.fn(),
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {

@@ -9,6 +9,10 @@ import {
   coversHubReturnTo,
   openInstaEditorWithLaunch,
 } from "../../features/youtube/api/editorSessionsApi";
+import {
+  invalidateGroupVideos,
+  useGroupVideosInvalidation,
+} from "../../features/youtube/hooks/useGroupVideosInvalidation";
 
 // Same naming style as the InstaEditor's own generateRandomName, so a
 // freshly created cover reads as a proper project name (not the video's
@@ -233,6 +237,11 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
         },
       });
       toast.success("Titolo e descrizione salvati.");
+      // Targeted invalidation: only the group's video-list cache
+      // (`['groups', groupId, 'youtube', 'videos']`) is refreshed, so
+      // the cards reflect the new title/description without reloading
+      // the rest of InstaEdit.
+      invalidateGroupVideos(groupId);
     } catch (error) {
       if (error instanceof AuthError) {
         navigate("/login", { replace: true });
@@ -364,6 +373,16 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
   useEffect(() => {
     if (hasPendingVideos) void pollPendingVideos();
   }, [hasPendingVideos, pollPendingVideos]);
+
+  // Targeted invalidation subscriber: when `invalidateGroupVideos` fires
+  // (a metadata/cover save in this tab or another tab), refresh ONLY the
+  // canonical video list. resetPolling=false keeps the current rows
+  // rendered while the refresh happens in the background; forceRefresh
+  // bypasses the backend list cache so the cards pick up the new state.
+  const handleGroupVideosInvalidated = useCallback(() => {
+    void refreshVideos(false, true);
+  }, [refreshVideos]);
+  useGroupVideosInvalidation(groupId, handleGroupVideosInvalidated);
 
   return {
     state,

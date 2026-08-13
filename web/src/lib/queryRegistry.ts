@@ -348,6 +348,37 @@ export function useSharedPolling(key: string, options: SharedPollingOptions): ()
   }, [query.refetch]);
 }
 
+/**
+ * Targeted cache invalidation — the react-query-style partial-key
+ * equivalent of `invalidateQueries({ queryKey })`. Refetches ONLY the
+ * registry entries whose key equals `key` or starts with `key + ":"`
+ * (so `invalidateSharedQueries("groups:7:youtube:videos")` touches
+ * exactly that cache surface, never the whole registry — the opposite
+ * of {@link clearSharedQueryCache}).
+ *
+ * Entries with mounted consumers are force-refetched (bypassing the
+ * staleTime, using each entry's own fetcher). Entries that only hold
+ * cached data with no live subscribers are marked stale instead, so the
+ * NEXT subscriber bypasses staleTime and fetches fresh data on mount.
+ * Unknown keys are a no-op.
+ */
+export function invalidateSharedQueries(key: string): void {
+  const prefix = `${key}:`;
+  for (const entry of entries.values()) {
+    if (entry.key !== key && !entry.key.startsWith(prefix)) continue;
+    if (entry.listeners.size === 0) {
+      // No mounted consumer right now: expire the snapshot so the next
+      // subscriber re-fetches instead of serving a stale cached row.
+      entry.snapshot = { ...entry.snapshot, updatedAt: 0 };
+      continue;
+    }
+    void fetchEntry(entry, true).catch(() => {
+      // Invalidation errors surface through the entry snapshot; an
+      // invalidation must never produce an unhandled rejection.
+    });
+  }
+}
+
 /** Test-only reset hook. It is harmless in production and avoids cache leakage between isolated tests. */
 export function clearSharedQueryCache(): void {
   registry.clear();

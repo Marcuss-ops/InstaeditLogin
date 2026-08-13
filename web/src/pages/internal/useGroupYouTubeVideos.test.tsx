@@ -6,6 +6,8 @@ const {
   openInstaEditorWithLaunchMock,
   createEditorSessionAndOpenMock,
   createYouTubeEditorSessionMock,
+  useGroupVideosInvalidationMock,
+  invalidateGroupVideosMock,
   navigateMock,
   toastMock,
 } = vi.hoisted(() => ({
@@ -13,6 +15,8 @@ const {
   openInstaEditorWithLaunchMock: vi.fn(),
   createEditorSessionAndOpenMock: vi.fn(),
   createYouTubeEditorSessionMock: vi.fn(),
+  useGroupVideosInvalidationMock: vi.fn(),
+  invalidateGroupVideosMock: vi.fn(),
   navigateMock: vi.fn(),
   toastMock: {
     success: vi.fn(),
@@ -40,6 +44,12 @@ vi.mock("../../components/toast", () => ({
 
 vi.mock("../../lib/queryRegistry", () => ({
   useSharedPolling: () => vi.fn(async () => undefined),
+  invalidateSharedQueries: vi.fn(),
+}));
+
+vi.mock("../../features/youtube/hooks/useGroupVideosInvalidation", () => ({
+  useGroupVideosInvalidation: useGroupVideosInvalidationMock,
+  invalidateGroupVideos: invalidateGroupVideosMock,
 }));
 
 vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
@@ -86,6 +96,8 @@ beforeEach(() => {
   openInstaEditorWithLaunchMock.mockReset();
   createEditorSessionAndOpenMock.mockReset();
   createYouTubeEditorSessionMock.mockReset();
+  useGroupVideosInvalidationMock.mockReset();
+  invalidateGroupVideosMock.mockReset();
   navigateMock.mockReset();
   toastMock.success.mockReset();
   toastMock.error.mockReset();
@@ -320,6 +332,65 @@ describe("useGroupYouTubeVideos — quick create (Crea copertina)", () => {
     );
     expect(createYouTubeEditorSessionMock).not.toHaveBeenCalled();
     expect(openInstaEditorWithLaunchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
+  it("subscribes to group-videos invalidation and background-refreshes the canonical list", async () => {
+    authedFetchMock.mockResolvedValueOnce(
+      jsonResponse({ videos: [privateVideo] }),
+    );
+
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The hook subscribes the invalidation handler for its groupId.
+    expect(useGroupVideosInvalidationMock).toHaveBeenCalledWith(
+      7,
+      expect.any(Function),
+    );
+    const handler = useGroupVideosInvalidationMock.mock.calls[0]?.[1] as () => void;
+    expect(handler).toBeTypeOf("function");
+
+    await act(async () => {
+      handler();
+      await Promise.resolve();
+    });
+
+    // Only the video list refetches, with refresh=true (bypasses the
+    // backend list cache) — no other InstaEdit surface is reloaded.
+    const lastCall = authedFetchMock.mock.calls.at(-1)?.[0];
+    expect(String(lastCall)).toContain("/api/v1/groups/7/youtube/videos");
+    expect(String(lastCall)).toContain("refresh=true");
+    // The current rows stay rendered: no loading-state reset.
+    expect(result.current.state.kind).toBe("ready");
+  });
+
+  it("invalidates the group videos cache after saving video metadata", async () => {
+    const existing = {
+      ...video,
+      velox_project_id: "ve_existing",
+      editor_url: "https://editor.example.test/editor/ve_existing",
+    };
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+
+    await act(async () => {
+      await result.current.openVideoPreview(existing);
+    });
+    expect(result.current.preview).not.toBeNull();
+
+    await act(async () => {
+      await result.current.saveVideoMetadata();
+    });
+
+    expect(toastMock.success).toHaveBeenCalledWith("Titolo e descrizione salvati.");
+    expect(invalidateGroupVideosMock).toHaveBeenCalledWith(7);
+    expect(authedFetchMock).toHaveBeenCalledWith(
+      "/api/v1/youtube/editor-sessions/by-project/ve_existing/draft",
+      expect.objectContaining({ method: "PUT" }),
+    );
   });
 });
 
