@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -316,6 +317,188 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube update video: server error (status %d)", resp.StatusCode)}
 	default:
 		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video: unexpected status %d", resp.StatusCode)}
+	}
+}
+
+// UpdateVideoMetadata applies a PARTIAL snippet patch (title /
+// description / categoryId) to an existing video via videos.update.
+//
+// videos.update REPLACES the snippet part: editable properties that
+// are omitted from the request body are deleted (the documented
+// videos.update pitfall). To avoid wiping tags / default languages on
+// a title-only save, this method first reads the CURRENT canonical
+// snippet (videos.list part=snippet), merges the patch over it, and
+// only then issues the PUT with the full snippet.
+//
+// expectedChannelID, when non-empty, gates the update to videos owned
+// by that channel: a read whose channelId differs is rejected BEFORE
+// the quota-expensive PUT.
+//
+// Returns the merged snippet projection (YouTubeMetadataResult) on
+// success, and the same typed errors as UpdateVideoPrivacy
+// (YouTubeAPIError; ErrYouTubeVideoNotFound wrapped on 404) so
+// handlers can classify failures.
+func (s *YouTubeOAuthService) UpdateVideoMetadata(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error) {
+	if videoID == "" {
+		return nil, fmt.Errorf("youtube update video metadata: empty video id")
+	}
+	// Validate the patch BEFORE any upstream read so an invalid
+	// request never burns a YouTube call.
+	var patchTitle, patchDescription string
+	if patch.Title != nil {
+		patchTitle = *patch.Title
+		if strings.TrimSpace(patchTitle) == "" {
+			return nil, fmt.Errorf("youtube update video metadata: title cannot be empty")
+		}
+	}
+	if patch.Description != nil {
+		patchDescription = *patch.Description
+	}
+	if err := ValidateYouTubeSnippet(patchTitle, patchDescription); err != nil {
+		return nil, fmt.Errorf("youtube update video metadata: %w", err)
+	}
+
+	// 1. Read the current canonical snippet (incl. tags, categoryId,
+	// default languages) so the merge below never drops them.
+	params := url.Values{}
+	params.Set("part", "snippet")
+	params.Set("id", videoID)
+	reqURL := "https://www.googleapis.com/youtube/v3/videos?" + params.Encode()
+	readReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("youtube update video metadata: create read request: %w", err)
+	}
+	readReq.Header.Set("Authorization", "Bearer "+accessToken)
+
+	readResp, err := s.httpClient.Do(readReq)
+	if err != nil {
+		return nil, &YouTubeAPIError{StatusCode: 0, Category: "network", Message: fmt.Sprintf("youtube update video metadata: read request: %v", err)}
+	}
+	if readResp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, readResp.Body)
+		readResp.Body.Close()
+		switch {
+		case readResp.StatusCode == http.StatusNotFound:
+			apiErr := &YouTubeAPIError{StatusCode: http.StatusNotFound, Category: "not_found", Message: "youtube update video metadata: video not found (status 404)"}
+			return nil, fmt.Errorf("%w: video_id=%s: %w", ErrYouTubeVideoNotFound, videoID, apiErr)
+		case readResp.StatusCode == http.StatusUnauthorized:
+			return nil, &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: "youtube update video metadata: unauthorized (status 401)"}
+		case readResp.StatusCode == http.StatusForbidden:
+			return nil, &YouTubeAPIError{StatusCode: http.StatusForbidden, Category: "auth", Message: "youtube update video metadata: forbidden (status 403)"}
+		case readResp.StatusCode == http.StatusTooManyRequests:
+			return nil, &YouTubeAPIError{StatusCode: http.StatusTooManyRequests, Category: "rate_limit", Message: "youtube update video metadata: rate limited (status 429)"}
+		case readResp.StatusCode >= 500:
+			return nil, &YouTubeAPIError{StatusCode: readResp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube update video metadata: read server error (status %d)", readResp.StatusCode)}
+		default:
+			return nil, &YouTubeAPIError{StatusCode: readResp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video metadata: unexpected status %d", readResp.StatusCode)}
+		}
+	}
+
+	var current youtubeVideosResponse
+	if err := json.NewDecoder(readResp.Body).Decode(&current); err != nil {
+		readResp.Body.Close()
+		return nil, fmt.Errorf("youtube update video metadata: decode read response: %w", err)
+	}
+	readResp.Body.Close()
+	if len(current.Items) == 0 {
+		return nil, fmt.Errorf("%w: video_id=%s", ErrYouTubeVideoNotFound, videoID)
+	}
+	video := current.Items[0]
+	if expectedChannelID != "" && video.Snippet.ChannelID != "" && video.Snippet.ChannelID != expectedChannelID {
+		return nil, &YouTubeAPIError{StatusCode: http.StatusForbidden, Category: "auth", Message: "youtube update video metadata: video not owned by the expected channel"}
+	}
+
+	// 2. Merge the patch over the canonical snippet.
+	title := video.Snippet.Title
+	if patch.Title != nil {
+		title = strings.TrimSpace(*patch.Title)
+	}
+	description := video.Snippet.Description
+	if patch.Description != nil {
+		description = *patch.Description
+	}
+	categoryID := video.Snippet.CategoryID
+	if patch.CategoryID != nil {
+		categoryID = strings.TrimSpace(*patch.CategoryID)
+	}
+	if err := ValidateYouTubeSnippet(title, description); err != nil {
+		return nil, fmt.Errorf("youtube update video metadata: %w", err)
+	}
+	if title == "" {
+		return nil, fmt.Errorf("youtube update video metadata: title cannot be empty")
+	}
+	// YouTube rejects an empty categoryId whenever the snippet part is
+	// sent; a neutral valid default mirrors UpdateVideoPrivacy.
+	if categoryID == "" {
+		categoryID = "22" // People & Blogs
+	}
+
+	// 3. Send the FULL snippet back: omitted properties in a
+	// videos.update body are deleted, so tags / default languages are
+	// preserved verbatim here, not re-sent as empty.
+	snippet := map[string]interface{}{
+		"title":       title,
+		"description": description,
+		"categoryId":  categoryID,
+	}
+	tags := video.Snippet.Tags
+	if len(tags) == 0 {
+		tags = []string{}
+	}
+	snippet["tags"] = tags
+	if video.Snippet.DefaultLanguage != "" {
+		snippet["defaultLanguage"] = video.Snippet.DefaultLanguage
+	}
+	if video.Snippet.DefaultAudioLanguage != "" {
+		snippet["defaultAudioLanguage"] = video.Snippet.DefaultAudioLanguage
+	}
+
+	payload := map[string]interface{}{
+		"id":      videoID,
+		"snippet": snippet,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("youtube update video metadata: marshal payload: %w", err)
+	}
+
+	updateReq, err := http.NewRequestWithContext(ctx, http.MethodPut, "https://www.googleapis.com/youtube/v3/videos?part=snippet", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("youtube update video metadata: create update request: %w", err)
+	}
+	updateReq.Header.Set("Authorization", "Bearer "+accessToken)
+	updateReq.Header.Set("Content-Type", "application/json")
+
+	updateResp, err := s.httpClient.Do(updateReq)
+	if err != nil {
+		return nil, &YouTubeAPIError{StatusCode: 0, Category: "network", Message: fmt.Sprintf("youtube update video metadata: update request: %v", err)}
+	}
+	defer updateResp.Body.Close()
+	if updateResp.StatusCode == http.StatusOK || updateResp.StatusCode == http.StatusNoContent {
+		_, _ = io.Copy(io.Discard, updateResp.Body)
+		return &models.YouTubeMetadataResult{
+			VideoID:     videoID,
+			Title:       title,
+			Description: description,
+			CategoryID:  categoryID,
+		}, nil
+	}
+
+	_, _ = io.Copy(io.Discard, updateResp.Body)
+	switch {
+	case updateResp.StatusCode == http.StatusUnauthorized:
+		return nil, &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: "youtube update video metadata: unauthorized (status 401)"}
+	case updateResp.StatusCode == http.StatusForbidden:
+		return nil, &YouTubeAPIError{StatusCode: http.StatusForbidden, Category: "auth", Message: "youtube update video metadata: forbidden (status 403)"}
+	case updateResp.StatusCode == http.StatusNotFound:
+		apiErr := &YouTubeAPIError{StatusCode: http.StatusNotFound, Category: "not_found", Message: "youtube update video metadata: video not found (status 404)"}
+		return nil, fmt.Errorf("%w: video_id=%s: %w", ErrYouTubeVideoNotFound, videoID, apiErr)
+	case updateResp.StatusCode == http.StatusTooManyRequests:
+		return nil, &YouTubeAPIError{StatusCode: http.StatusTooManyRequests, Category: "rate_limit", Message: "youtube update video metadata: rate limited (status 429)"}
+	case updateResp.StatusCode >= 500:
+		return nil, &YouTubeAPIError{StatusCode: updateResp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube update video metadata: server error (status %d)", updateResp.StatusCode)}
+	default:
+		return nil, &YouTubeAPIError{StatusCode: updateResp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video metadata: unexpected status %d", updateResp.StatusCode)}
 	}
 }
 

@@ -295,6 +295,10 @@ type mockYouTubeOAuthServiceForEditor struct {
 	// reaching ValidateChannelBinding must explicitly opt in — a
 	// silent nil success could mask guard gaps in future tests.
 	validateChannelBindingFn func(ctx context.Context, accessToken, expectedChannelID string) error
+	// updateVideoMetadataFn (PATCH group video metadata) lets tests
+	// simulate the merged-snippet update; the default is fail-loud so
+	// a test that reaches the endpoint without opting in surfaces.
+	updateVideoMetadataFn func(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error)
 }
 
 func (m *mockYouTubeOAuthServiceForEditor) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
@@ -366,6 +370,13 @@ func (m *mockYouTubeOAuthServiceForEditor) UpsertLocalizations(ctx context.Conte
 	// pass nil and the helper returns nil — matches the
 	// production behaviour when opts.Translations is empty.
 	return nil
+}
+
+func (m *mockYouTubeOAuthServiceForEditor) UpdateVideoMetadata(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error) {
+	if m.updateVideoMetadataFn != nil {
+		return m.updateVideoMetadataFn(ctx, accessToken, videoID, expectedChannelID, patch)
+	}
+	return nil, errors.New("not implemented")
 }
 
 // newPublishRouter builds the minimal router required by the publish

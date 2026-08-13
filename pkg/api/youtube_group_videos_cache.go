@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,22 @@ var youtubeGroupVideosInflight = struct {
 	sync.Mutex
 	entries map[string]*youtubeGroupVideosInflightEntry
 }{entries: make(map[string]*youtubeGroupVideosInflightEntry)}
+
+// invalidateAccountCachedVideos drops the cached editable-videos entries
+// for one account. Called after an out-of-band metadata change (e.g.
+// PATCH group video metadata) so the next group list reflects the new
+// title/description/category without waiting out the cache TTL.
+func (r *Router) invalidateAccountCachedVideos(acc *models.PlatformAccount) {
+	// Cache keys are "%d:%s:%d" (account id : platform user id : max).
+	prefix := fmt.Sprintf("%d:%s:", acc.ID, acc.PlatformUserID)
+	r.youtubeGroupVideosCacheMu.Lock()
+	defer r.youtubeGroupVideosCacheMu.Unlock()
+	for key := range r.youtubeGroupVideosCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.youtubeGroupVideosCache, key)
+		}
+	}
+}
 
 // fetchCachedAccountEditableVideos renews the canonical YouTube bearer grant
 // and returns the first page of private/unlisted/processed videos. Error semantics:

@@ -107,4 +107,12 @@ type YouTubeOAuthService interface {
 	// sanity bounds before invoking the call so quota isn't burned
 	// on a guaranteed-4xx response.
 	UpsertLocalizations(ctx context.Context, accessToken, videoID, lang string, tr models.YouTubeTranslation) error
+	// UpdateVideoMetadata applies a PARTIAL snippet patch
+	// (title / description / categoryId) to an existing video. The
+	// implementation reads the current canonical snippet first and
+	// preserves every field the patch omits (tags, default languages)
+	// — videos.update replaces the snippet, it does not merge.
+	// expectedChannelID, when non-empty, gates the update to videos
+	// owned by that channel. Returns the merged snippet projection.
+	UpdateVideoMetadata(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error)
 }

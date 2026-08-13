@@ -421,6 +421,17 @@ func (r *Router) Setup() http.Handler {
 	var listGroupYouTubeVideosHandler http.Handler = http.HandlerFunc(r.handleListGroupYouTubeVideos)
 	r.mux.Method(http.MethodGet, "/api/v1/groups/{group_id}/youtube/videos", r.protected(listGroupYouTubeVideosHandler.ServeHTTP))
 
+	// PATCH /api/v1/groups/{group_id}/youtube/videos/{video_id} — the
+	// single metadata update endpoint (title / description / category)
+	// for a group video. The body carries platform_account_id (the
+	// owning channel) + the partial patch; the service merges over the
+	// current canonical snippet so tags / omitted fields survive.
+	var patchGroupYouTubeVideoMetadataHandler http.Handler = http.HandlerFunc(r.handlePatchGroupYouTubeVideoMetadata)
+	if r.csrfMiddleware != nil {
+		patchGroupYouTubeVideoMetadataHandler = r.csrfMiddleware(patchGroupYouTubeVideoMetadataHandler)
+	}
+	r.mux.Method(http.MethodPatch, "/api/v1/groups/{group_id}/youtube/videos/{video_id}", r.protected(patchGroupYouTubeVideoMetadataHandler.ServeHTTP))
+
 	// GET /api/v1/groups/{group_id}/covers — Copertine hub covers
 	// grid. Read-only, no CSRF (GET exempt). Returns the cover
 	// projects (thumbnail projects) linked to the group's accounts —
