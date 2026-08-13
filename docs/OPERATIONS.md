@@ -114,7 +114,7 @@ outage.
 
 | Warning pattern in `warnings[]` / log | Cause | Action |
 |---|---|---|
-| `status 403 … quotaExceeded` | **Read-side quota exhausted** (see §12.2) | Verify quota in Google Cloud Console; requests succeed again after the 07:00 UTC reset |
+| `status 403 … quotaExceeded` | **Read-side quota exhausted** (see §12.2) | Verify quota in Google Cloud Console; requests succeed again after the midnight-Pacific reset (07:00 UTC during PDT, 08:00 UTC during PST) |
 | `vault: decrypt refresh token: … cipher: message authentication failed` | **Vault `ENCRYPTION_KEY` mismatch** — tokens were encrypted with a different key than the running API | Restore the key that encrypted the stored tokens (`ENCRYPTION_KEY` or multi-key `ENCRYPTION_KEYS`, see 2026-08-02 incident below) |
 | `invalid_grant` / `status 401` / `token expired` | OAuth token revoked/expired → account flagged `reauth_required` | Complete a fresh OAuth dance for the account |
 | `status 429` / timeout / transport error | Transient upstream failure | Retry; escalate if persistent |
@@ -125,8 +125,11 @@ outage.
   project** (`videos.list` = 1 unit; `search.list` = 100 units/call).
   Uploads draw from the separate 2026 "Video Uploads" bucket — see
   [oauth-google-limits.md](oauth-google-limits.md) — NOT from this pool.
-* **Reset**: every day at **07:00 UTC** (midnight Pacific during PDT,
-  March–November; 08:00 UTC during PST). Quota does not roll over.
+* **Reset**: every day at **midnight Pacific Time** (America/Los_Angeles
+  — 07:00 UTC during PDT, March–November; 08:00 UTC during PST). This
+  is the same boundary the app's quota gate uses (`YouTubeQuotaDay` in
+  `internal/repository/youtube_quota_repo.go`), so the scheduler's
+  per-bucket day always matches Google's. Quota does not roll over.
 * **Verify (Google Cloud Console)**:
   1. https://console.cloud.google.com → select the project → **APIs &
      Services** → **YouTube Data API v3** → **Quotas**.

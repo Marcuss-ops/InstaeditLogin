@@ -10,6 +10,12 @@
 //	general       → videos.update, videos.list,
 //	                thumbnails.set, channels.list (default 10000 units/day)
 //
+// DAY BOUNDARY: Google resets every quota bucket at midnight Pacific
+// Time (America/Los_Angeles), NOT midnight UTC. The date key and the
+// retry-after window both derive from YouTubeQuotaDay (the canonical
+// day function) so the whole system agrees on when a quota day starts
+// and ends.
+//
 // The pattern mirrors internal/repository/rate_limit_repo.go
 // (INSERT...ON CONFLICT + FOR UPDATE on the daily row) but is sized
 // for quota buckets (1 call == 1 bucket unit in the Google 2026 model)
@@ -28,6 +34,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	_ "time/tzdata" // embed the IANA timezone DB so America/Los_Angeles resolves even in minimal containers
 )
 
 // YouTube quota bucket identifiers (Google 2026 quota model). These are
@@ -38,6 +46,37 @@ const (
 	YouTubeQuotaBucketSearches     = "searches"
 	YouTubeQuotaBucketGeneral      = "general"
 )
+
+// youtubeQuotaLocation is America/Los_Angeles — the timezone Google
+// uses for YouTube Data API v3 daily quota resets (midnight Pacific
+// Time). Loaded once at package init; the embedded IANA database
+// (time/tzdata) guarantees resolution even in minimal containers.
+var youtubeQuotaLocation = func() *time.Location {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		// Cannot happen with the embedded tzdata; fail fast if a
+		// misbuilt binary drops it.
+		panic(fmt.Sprintf("youtube quota: load America/Los_Angeles: %v", err))
+	}
+	return loc
+}()
+
+// YouTubeQuotaDay is the CANONICAL quota-day boundary: midnight Pacific
+// Time (America/Los_Angeles) on the calendar day containing `now`.
+// Google resets every daily quota bucket at midnight PT — NOT midnight
+// UTC — so the youtube_quota_daily date key and the retry-after window
+// must BOTH derive from this single function. Every quota-day
+// computation in the system goes through here; never compute the day
+// with time.Now().UTC().Truncate(24h) again.
+//
+// The returned time carries the America/Los_Angeles location at
+// 00:00:00. Format it with .Format("2006-01-02") to get the Pacific
+// calendar date for the DATE column — that string is independent of
+// the Postgres session timezone.
+func YouTubeQuotaDay(now time.Time) time.Time {
+	inLA := now.In(youtubeQuotaLocation)
+	return time.Date(inLA.Year(), inLA.Month(), inLA.Day(), 0, 0, 0, 0, youtubeQuotaLocation)
+}
 
 // YouTubeDailyQuotaRepository is the Postgres-backed implementation of
 // the daily quota gate used by the YouTubeQuotaManager.
@@ -51,12 +90,11 @@ func NewYouTubeDailyQuotaRepository(db *sql.DB) *YouTubeDailyQuotaRepository {
 	return &YouTubeDailyQuotaRepository{db: db}
 }
 
-// todayUTC returns the current UTC date truncated to midnight. Used as
-// both the UPSERT target and the cache key for the daily row. Pinned
-// to UTC because the quota bucket window resets at UTC midnight — NOT
-// local midnight — per docs/OAUTH-PRODUCTION.md Step 6.
-func todayUTC() time.Time {
-	return time.Now().UTC().Truncate(24 * time.Hour)
+// quotaDayKey returns the Pacific calendar date string (YYYY-MM-DD) for
+// the quota day containing `now`. The date column is keyed on the
+// Pacific day, matching Google's midnight-PT reset.
+func quotaDayKey(now time.Time) string {
+	return YouTubeQuotaDay(now).Format("2006-01-02")
 }
 
 // ReserveQuota atomically:
@@ -64,7 +102,8 @@ func todayUTC() time.Time {
 //  1. Upserts today's (date, bucket) row at limit=defaultLimit.
 //  2. Locks the row via SELECT … FOR UPDATE.
 //  3. If calls+cost > limit, returns (false, retryAfterSeconds, nil)
-//     with retryAfterSeconds == seconds until next UTC midnight.
+//     with retryAfterSeconds == seconds until the next Pacific midnight
+//     (the bucket window's natural reset boundary).
 //  4. Else, increments calls by cost, commits, returns (true, 0, nil).
 //
 // Concurrency: the FOR UPDATE serializes concurrent reservations
@@ -100,7 +139,8 @@ func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, bucket s
 		}
 	}()
 
-	today := todayUTC()
+	now := time.Now()
+	today := quotaDayKey(now)
 
 	// (1) Upsert today's row if it doesn't yet exist. The ON CONFLICT
 	// DO NOTHING branch preserves any prior metadata so a partial day
@@ -137,10 +177,14 @@ func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, bucket s
 	}
 
 	if callsStored+cost > effectiveLimit {
-		// Compute retryAfterSeconds as the wall-clock gap to next UTC
-		// midnight (i.e. the bucket window's natural reset boundary).
-		nextMidnight := today.Add(24 * time.Hour)
-		gap := time.Until(nextMidnight)
+		// Compute retryAfterSeconds as the wall-clock gap to the next
+		// Pacific midnight. Advancing the quota day with AddDate (one
+		// CALENDAR day in America/Los_Angeles) instead of adding 24
+		// absolute hours keeps the boundary exact across DST: a spring-
+		// forward Pacific day is 23h, a fall-back day is 25h, and
+		// today+24h would land on the wrong side of the boundary.
+		nextMidnight := YouTubeQuotaDay(now).AddDate(0, 0, 1)
+		gap := nextMidnight.Sub(now)
 		if gap < 0 {
 			gap = 0
 		}
@@ -162,13 +206,13 @@ func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, bucket s
 	return true, 0, nil
 }
 
-// RecordError bumps the errors counter for today (UTC) in the given
-// bucket. Called by the YouTubeQuotaManager when an actual API call
-// returns 5xx, hits a transport error, or fails validation. Distinct
-// from ReserveQuota's quota_exceeded path: RecordError is "we tried,
-// Google said no", not "we decided not to try". The errors column is
-// informational — it does NOT block scheduling, since quota vs. error
-// are orthogonal failure modes.
+// RecordError bumps the errors counter for the current Pacific quota
+// day in the given bucket. Called by the YouTubeQuotaManager when an
+// actual API call returns 5xx, hits a transport error, or fails
+// validation. Distinct from ReserveQuota's quota_exceeded path:
+// RecordError is "we tried, Google said no", not "we decided not to
+// try". The errors column is informational — it does NOT block
+// scheduling, since quota vs. error are orthogonal failure modes.
 //
 // The function synthesizes the daily row on first-call-of-day so the
 // errors counter does not silently drop the very first failure.
@@ -181,7 +225,7 @@ func (r *YouTubeDailyQuotaRepository) RecordError(ctx context.Context, bucket st
 	if bucket == "" {
 		return errors.New("youtube quota: bucket must not be empty")
 	}
-	today := todayUTC()
+	today := quotaDayKey(time.Now())
 	if _, err := r.db.ExecContext(ctx, `
 		INSERT INTO youtube_quota_daily (date, bucket, calls, errors, "limit", last_reset_at)
 		VALUES ($1, $2, 0, 1, $3, NOW())
@@ -192,10 +236,10 @@ func (r *YouTubeDailyQuotaRepository) RecordError(ctx context.Context, bucket st
 	return nil
 }
 
-// GetSnapshot returns the current daily row's (calls, errors, limit,
-// last_reset_at) for a bucket as an externally-readable snapshot. Used
-// by the /admin/health surface and by operators — both read-only and
-// do NOT touch the row.
+// GetSnapshot returns the current Pacific quota day's row's (calls,
+// errors, limit, last_reset_at) for a bucket as an externally-readable
+// snapshot. Used by the /admin/health surface and by operators — both
+// read-only and do NOT touch the row.
 //
 // Naming: the second return is `errCount` (NOT `errors`) because a
 // named return value of type `int` named `errors` would SHADOW the
@@ -212,7 +256,7 @@ func (r *YouTubeDailyQuotaRepository) GetSnapshot(ctx context.Context, bucket st
 	if bucket == "" {
 		return 0, 0, 0, time.Time{}, errors.New("youtube quota: bucket must not be empty")
 	}
-	today := todayUTC()
+	today := quotaDayKey(time.Now())
 	if err := r.db.QueryRowContext(ctx, `
 		SELECT calls, errors, "limit", last_reset_at
 		FROM youtube_quota_daily
