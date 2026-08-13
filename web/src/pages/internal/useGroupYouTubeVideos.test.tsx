@@ -6,8 +6,8 @@ const {
   openInstaEditorWithLaunchMock,
   createEditorSessionAndOpenMock,
   createYouTubeEditorSessionMock,
+  patchGroupVideoMetadataMock,
   useGroupVideosInvalidationMock,
-  invalidateGroupVideosMock,
   navigateMock,
   toastMock,
 } = vi.hoisted(() => ({
@@ -15,8 +15,8 @@ const {
   openInstaEditorWithLaunchMock: vi.fn(),
   createEditorSessionAndOpenMock: vi.fn(),
   createYouTubeEditorSessionMock: vi.fn(),
+  patchGroupVideoMetadataMock: vi.fn(),
   useGroupVideosInvalidationMock: vi.fn(),
-  invalidateGroupVideosMock: vi.fn(),
   navigateMock: vi.fn(),
   toastMock: {
     success: vi.fn(),
@@ -49,7 +49,10 @@ vi.mock("../../lib/queryRegistry", () => ({
 
 vi.mock("../../features/youtube/hooks/useGroupVideosInvalidation", () => ({
   useGroupVideosInvalidation: useGroupVideosInvalidationMock,
-  invalidateGroupVideos: invalidateGroupVideosMock,
+}));
+
+vi.mock("../../features/youtube/api/videosApi", () => ({
+  patchGroupVideoMetadata: patchGroupVideoMetadataMock,
 }));
 
 vi.mock("../../features/youtube/api/editorSessionsApi", () => ({
@@ -96,13 +99,14 @@ beforeEach(() => {
   openInstaEditorWithLaunchMock.mockReset();
   createEditorSessionAndOpenMock.mockReset();
   createYouTubeEditorSessionMock.mockReset();
+  patchGroupVideoMetadataMock.mockReset();
   useGroupVideosInvalidationMock.mockReset();
-  invalidateGroupVideosMock.mockReset();
   navigateMock.mockReset();
   toastMock.success.mockReset();
   toastMock.error.mockReset();
   toastMock.info.mockReset();
   authedFetchMock.mockResolvedValue(jsonResponse({ videos: [] }));
+  patchGroupVideoMetadataMock.mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -368,7 +372,7 @@ describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
     expect(result.current.state.kind).toBe("ready");
   });
 
-  it("invalidates the group videos cache after saving video metadata", async () => {
+  it("saves video metadata through the shared videosApi", async () => {
     const existing = {
       ...video,
       velox_project_id: "ve_existing",
@@ -386,19 +390,16 @@ describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
     });
 
     expect(toastMock.success).toHaveBeenCalledWith("Metadati video salvati.");
-    expect(invalidateGroupVideosMock).toHaveBeenCalledWith(7);
-    // The drawer saves through the single metadata PATCH (not the editor
-    // session draft): the backend merges into the canonical snippet.
-    const patchCall = authedFetchMock.mock.calls.find(([url, init]) =>
-      String(url) === "/api/v1/groups/7/youtube/videos/video-1" && (init as RequestInit).method === "PATCH",
-    );
-    expect(patchCall).toBeDefined();
-    expect(JSON.parse(String((patchCall as unknown[])[1] && (patchCall[1] as RequestInit).body))).toEqual({
+    // The drawer saves through the single metadata PATCH in videosApi
+    // (not the editor-session draft); the backend merges into the
+    // canonical snippet and the API layer invalidates the group cache.
+    expect(patchGroupVideoMetadataMock).toHaveBeenCalledWith(7, "video-1", {
       platform_account_id: 42,
       title: "Video privato",
       description: "",
       category_id: "",
     });
+    expect(patchGroupVideoMetadataMock).toHaveBeenCalledTimes(1);
   });
 
   it("seeds the category draft from the video and PATCHes title/description/category on save", async () => {
@@ -420,11 +421,7 @@ describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
       await result.current.saveVideoMetadata();
     });
 
-    const patchCall = authedFetchMock.mock.calls.find(([url, init]) =>
-      String(url) === "/api/v1/groups/7/youtube/videos/video-1" && (init as RequestInit).method === "PATCH",
-    );
-    expect(patchCall).toBeDefined();
-    expect(JSON.parse(String((patchCall as unknown[])[1] && (patchCall[1] as RequestInit).body))).toEqual({
+    expect(patchGroupVideoMetadataMock).toHaveBeenCalledWith(7, "video-1", {
       platform_account_id: 42,
       title: "Nuovo titolo",
       description: "Descrizione esistente",
@@ -433,7 +430,6 @@ describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
     // The drawer preview reflects the edited values immediately.
     expect(result.current.preview?.video.title).toBe("Nuovo titolo");
     expect(result.current.preview?.video.category_id).toBe("20");
-    expect(invalidateGroupVideosMock).toHaveBeenCalledWith(7);
   });
 });
 

@@ -9,10 +9,8 @@ import {
   coversHubReturnTo,
   openInstaEditorWithLaunch,
 } from "../../features/youtube/api/editorSessionsApi";
-import {
-  invalidateGroupVideos,
-  useGroupVideosInvalidation,
-} from "../../features/youtube/hooks/useGroupVideosInvalidation";
+import { patchGroupVideoMetadata } from "../../features/youtube/api/videosApi";
+import { useGroupVideosInvalidation } from "../../features/youtube/hooks/useGroupVideosInvalidation";
 
 // Same naming style as the InstaEditor's own generateRandomName, so a
 // freshly created cover reads as a proper project name (not the video's
@@ -210,29 +208,23 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
   }, []);
 
   // "Modifica video" drawer save: PATCH the single metadata endpoint
-  // (title/description/category) under the group's owning channel. The
-  // backend merges into the canonical YouTube snippet (preserving tags
-  // and omitted fields) and invalidates its per-account cache, so the
-  // cards refresh through the targeted group-videos invalidation — no
-  // need to touch the editor-session draft, which stays the cover
-  // project's own content.
+  // (title/description/category) under the group's owning channel via
+  // the shared videosApi — the backend merges into the canonical
+  // YouTube snippet (preserving tags and omitted fields), and the API
+  // layer invalidates ONLY the group-videos cache afterwards so the
+  // cards refresh without reloading the rest of InstaEdit. The
+  // editor-session draft is untouched: it stays the cover project's
+  // own content.
   const saveVideoMetadata = useCallback(async () => {
     if (!preview || savingMetadata) return;
     setSavingMetadata(true);
     try {
-      const videoID = preview.video.youtube_video_id;
-      await authedFetch(
-        `/api/v1/groups/${groupId}/youtube/videos/${encodeURIComponent(videoID)}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            platform_account_id: preview.video.platform_account_id,
-            title: draftTitle,
-            description: draftDescription,
-            category_id: editCategoryID,
-          }),
-        },
-      );
+      await patchGroupVideoMetadata(groupId, preview.video.youtube_video_id, {
+        platform_account_id: preview.video.platform_account_id,
+        title: draftTitle,
+        description: draftDescription,
+        category_id: editCategoryID,
+      });
       setPreview({
         video: {
           ...preview.video,
@@ -242,11 +234,6 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
         },
       });
       toast.success("Metadati video salvati.");
-      // Targeted invalidation: only the group's video-list cache
-      // (`['groups', groupId, 'youtube', 'videos']`) is refreshed, so
-      // the cards reflect the new title/description/category without
-      // reloading the rest of InstaEdit.
-      invalidateGroupVideos(groupId);
     } catch (error) {
       if (error instanceof AuthError) {
         navigate("/login", { replace: true });
