@@ -145,3 +145,168 @@ The Google-published, cross-verified quota increase URL is
 [Quota Calculator](https://developers.google.com/youtube/v3/determine_quota_cost).
 
 How to submit the increase request: [Step 6 — quota increase](oauth-google-setup.md#step-6--request-a-youtube-data-api-v3-quota-increase).
+
+## General bucket — budget 100 upload + 100 copertine/giorno (2026)
+
+Oltre al bucket dedicato "Video Uploads", dal **1° giugno 2026** Google
+ha un secondo bucket rilevante per InstaEdit: il bucket **"general"**
+(altre API, default **10.000 unità/giorno** per Google Cloud project).
+Il modello a 3 bucket è implementato in
+`internal/services/youtube_quota_manager.go` (`YouTubeQuotaManager`) e
+persistito per-giorno-Pacifico in `youtube_quota_daily` (migration
+124); la tabella dei costi è la mappa `youtubeOperationSpecs`:
+
+| Operazione          | Bucket          | Costo | Note                                   |
+| ------------------- | --------------- | ----- | -------------------------------------- |
+| `videos.insert`     | video_uploads   | 1     | cap 100/giorno, contatore dedicato     |
+| `search.list`       | searches        | 1     | cap 100/giorno, bucket separato        |
+| `videos.update`     | general         | 50    | pubblicazione/metadata                 |
+| `thumbnails.set`    | general         | 50    | copertina personalizzata               |
+| `videos.list`       | general         | 1     | verifica/ownership/reconciliation      |
+| `channels.list`     | general         | 1     | binding canale / `mine=true`           |
+
+### Il problema: 100 upload + 100 copertine saturano il bucket general
+
+Con **100 video al giorno** e **copertina personalizzata su tutti** il
+conto del bucket general è il seguente (prima della migration al
+`publishAt` nativo, commit `88c2495d`):
+
+```text
+videos.update       100 × 50 =  5.000 unità
+thumbnails.set      100 × 50 =  5.000 unità
+-----------------------------------------
+TOTALE general                = 10.000 unità  →  100% del cap giornaliero
+```
+
+Il bucket general è a **quota piena**, **zero margine** per:
+
+* `videos.list` (reconciliation, verifica ownership prima della
+  copertina — `GetYouTubeVideo` nei handler e nel reconciler);
+* `channels.list` (binding check pre-upload, ~46 call sites nel
+  codebase);
+* **retry** transitori (`PublishThumbnail` e `SetThumbnail` ritentano
+  internamente fino a 3 volte con `doWithRetry` — ogni retry brucia
+  altre 50 unità);
+* qualunque altra operazione di manutenzione/metadata.
+
+`YouTubeQuotaManager` riserva le unità **prima** della chiamata API
+(`ReserveOperation` → `FOR UPDATE` su `youtube_quota_daily`), quindi
+quando il bucket general è a quota il pipeline si ferma **prima** di
+spendere chiamate reali — ma con 100 copertine + 100 update il blocco
+arriva già nel pomeriggio. **Con il vecchio flusso, 100/giorno non era
+sicuro.**
+
+### La mitigazione già in produzione: `status.publishAt` nativo
+
+Dal commit `88c2495d` i video **programmati** (publish_at futuro +
+privacy desiderata `public`) passano `status.publishAt` direttamente
+nel `videos.insert` privato: YouTube pubblica da solo alla scadenza e
+**il `videos.update` post-publish_at non viene più emesso** (il publish
+worker salta la `videos.update` quando il flag `native_publish_at` è
+presente sulla riga `youtube_target_publications`).
+
+Risultato per lo scenario **100 upload + 100 copertine, tutti
+programmati**:
+
+```text
+video_uploads       100 × videos.insert (1)  = 100/100 chiamate  (al cap)
+general             100 × thumbnails.set (50) =  5.000 unità
+                    videos.update             =      0  ← risparmiate 5.000
+----------------------------------------------
+TOTALE general                              =  5.000 / 10.000  →  50% libero
+```
+
+**50% di headroom** sul bucket general: spazio per reconciliation
+(`videos.list` ≈ 1 unità per video + `channels.list`), retry e margine
+operativo. Il collo di bottiglia diventa il bucket `video_uploads`
+(100 chiamate) — non il bucket general.
+
+### Formula di budget da usare in pianificazione
+
+```text
+unità_general/giorno =
+    50 × N_update_immediati      (video pubblicati senza publishAt nativo)
+  + 50 × N_copertine             (thumbnails.set, una per video coperto)
+  +  1 × N_videos_list           (reconciliation + verifica ownership)
+  +  1 × N_channels_list         (binding check, min=1 per upload)
+  + margine retry                (≈ 50–150 unità, 1–3 retry copertina/update)
+```
+
+Soglie operative consigliate (cap default 10.000):
+
+* **≤ 100 copertine/giorno e tutti i video programmati**: 5.000–5.500
+  unità → **sicuro**, nessuna richiesta quota necessaria.
+* **≥ 50 update immediati + 100 copertine**: 7.500–8.000 unità →
+  **richiedere aumento** del bucket general a 15.000–20.000 via
+  [Quota Calculator](https://developers.google.com/youtube/v3/determine_quota_cost).
+* **100 update immediati + 100 copertine**: 10.000+ → **sopra il cap**,
+  blocco garantito; convertire al `publishAt` nativo oppure richiedere
+  l'aumento prima del rollout.
+
+---
+
+## Piano copertine (thumbnails) — stato attuale e piano automatico
+
+### Cosa esiste già oggi
+
+1. **`SetThumbnail`** (`internal/services/youtube_channel_thumbnail.go`):
+   chiamata `thumbnails.set` pura (PNG/JPEG ≤ 2 MB), 50 unità dal
+   bucket general. Usata dal handler
+   `POST /api/v1/groups/{group_id}/youtube/videos/{video_id}/thumbnail`
+   (`pkg/api/youtube_group_videos_thumbnail.go`) — flusso
+   **THUMBNAIL-ONLY**: non tocca privacy né snippet.
+2. **`PublishThumbnail`** (stesso file): `thumbnails.set` + `videos.update`
+   in un'unica sequenza con retry (3 tentativi) — usata dal publish
+   degli editor-sessions (`pkg/api/youtube_editor_sessions_by_project_publish.go`).
+   Costo combinato: **50 + 50 = 100 unità** dal bucket general.
+3. **Stato machine deliveries** (`internal/deliveries/state.go`):
+   `THUMBNAIL_PENDING → THUMBNAIL_UPLOADING → THUMBNAIL_APPLIED`
+   (con `THUMBNAIL_FAILED` come exit terminale post-`PRIVATE_UPLOADED`,
+   invariante privacy=private preservata). La transizione
+   `THUMBNAIL_APPLIED → READY_TO_PUBLISH` è condizionata dal flag
+   `require_thumbnail` del contratto
+   (`docs/velox-instaedit-contract.md` §10, riga 124).
+4. **Capability `SetThumbnail`** nel target catalog
+   (`internal/deliveries/target_catalog.go`): YouTube espone oggi
+   `UploadVideo=true, SetThumbnail=true, Publish=true, Schedule=true`;
+   `CapabilitiesForTarget` è il punto centrale dove una piattaforma
+   senza copertine (es. TikTok oggi) restituisce `SetThumbnail=false`.
+
+### Cosa manca al piano automatico (da implementare)
+
+Il **piano copertine** consiste nel far applicare la copertina
+**automaticamente dal worker**, senza intervento umano, per ogni
+video che ha una `thumbnail_media_id`/`cover_template_version_id`
+risolta (snapshot già presenti in
+`internal/worker/publish_snapshot_metadata.go`):
+
+1. **Fase di consegna**: dopo `PRIVATE_UPLOADED`, se il target ha la
+   capability `SetThumbnail` e la copertina è risolta, transizione
+   `THUMBNAIL_PENDING → THUMBNAIL_UPLOADING → THUMBNAIL_APPLIED`
+   eseguita dal worker con `SetThumbnail` (50 unità general).
+2. **Orchestrazione quota**: ogni `thumbnails.set` deve passare da
+   `YouTubeQuotaManager.ReserveOperation(YouTubeOpThumbnailsSet)`
+   prima della chiamata, così il worker si ferma **prima** di
+   superare le 10.000 unità invece di ricevere `quotaExceeded` a metà
+   giornata.
+3. **Niente `videos.update` per i programmati**: per i video con
+   `publishAt` nativo la copertina è l'**unico** costo general (50
+   unità); non ricombinare mai `PublishThumbnail` (che aggiunge 50
+   unità di `videos.update`) nel percorso automatico dei video
+   programmati — usare `SetThumbnail` puro.
+4. **Retry e margine**: con `doWithRetry` (3 tentativi) ogni copertina
+   può costare fino a 150 unità in caso di errori transitori; il
+   budget di cui sopra include già questo margine.
+
+### Riepilogo budget con il piano copertine completo
+
+| Scenario (100 video/giorno)                | video_uploads | general units | Esito                |
+| ------------------------------------------ | ------------- | ------------- | -------------------- |
+| 100 programmati + 100 copertine            | 100/100       | ~5.000        | ✅ sicuro            |
+| 100 immediati + 100 copertine (vecchio)    | 100/100       | ~10.000+      | ❌ quota exceeded    |
+| 100 programmati, copertine solo dove serve | 100/100       | 100–5.000     | ✅ sicuro            |
+
+Il `publishAt` nativo (già in main) è la chiave: trasforma lo scenario
+critico in uno con il 50% di bucket general libero, e il piano
+copertine può essere abilitato in sicurezza fino a ~100 copertine/
+giorno senza richieste di aumento quota.
