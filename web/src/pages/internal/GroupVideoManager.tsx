@@ -40,6 +40,8 @@ export function GroupVideoManager({ controller }: { controller: GroupVideosContr
     setDraftTitle,
     draftDescription,
     setDraftDescription,
+    editCategoryID,
+    setEditCategoryID,
     savingMetadata,
     openThumbnailEditor,
     openVideoPreview,
@@ -300,15 +302,15 @@ export function GroupVideoManager({ controller }: { controller: GroupVideosContr
       {preview && (
         <GroupYouTubeVideoPreviewModal
           preview={preview}
-          openingVideoID={openingVideoID}
           savingMetadata={savingMetadata}
           draftTitle={draftTitle}
           draftDescription={draftDescription}
+          editCategoryID={editCategoryID}
           onClose={() => setPreview(null)}
           onDraftTitleChange={setDraftTitle}
           onDraftDescriptionChange={setDraftDescription}
+          onEditCategoryIDChange={setEditCategoryID}
           onSave={() => void saveVideoMetadata()}
-          onThumbnail={handleOpenThumbnail}
         />
       )}
     </section>

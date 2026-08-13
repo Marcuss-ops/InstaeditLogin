@@ -385,12 +385,55 @@ describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
       await result.current.saveVideoMetadata();
     });
 
-    expect(toastMock.success).toHaveBeenCalledWith("Titolo e descrizione salvati.");
+    expect(toastMock.success).toHaveBeenCalledWith("Metadati video salvati.");
     expect(invalidateGroupVideosMock).toHaveBeenCalledWith(7);
-    expect(authedFetchMock).toHaveBeenCalledWith(
-      "/api/v1/youtube/editor-sessions/by-project/ve_existing/draft",
-      expect.objectContaining({ method: "PUT" }),
+    // The drawer saves through the single metadata PATCH (not the editor
+    // session draft): the backend merges into the canonical snippet.
+    const patchCall = authedFetchMock.mock.calls.find(([url, init]) =>
+      String(url) === "/api/v1/groups/7/youtube/videos/video-1" && (init as RequestInit).method === "PATCH",
     );
+    expect(patchCall).toBeDefined();
+    expect(JSON.parse(String((patchCall as unknown[])[1] && (patchCall[1] as RequestInit).body))).toEqual({
+      platform_account_id: 42,
+      title: "Video privato",
+      description: "",
+      category_id: "",
+    });
+  });
+
+  it("seeds the category draft from the video and PATCHes title/description/category on save", async () => {
+    const existing = { ...video, category_id: "24", description: "Descrizione esistente" };
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+
+    await act(async () => {
+      await result.current.openVideoPreview(existing);
+    });
+    expect(result.current.editCategoryID).toBe("24");
+    expect(result.current.draftTitle).toBe("Video privato");
+    expect(result.current.draftDescription).toBe("Descrizione esistente");
+
+    await act(async () => {
+      result.current.setDraftTitle("Nuovo titolo");
+      result.current.setEditCategoryID("20");
+    });
+    await act(async () => {
+      await result.current.saveVideoMetadata();
+    });
+
+    const patchCall = authedFetchMock.mock.calls.find(([url, init]) =>
+      String(url) === "/api/v1/groups/7/youtube/videos/video-1" && (init as RequestInit).method === "PATCH",
+    );
+    expect(patchCall).toBeDefined();
+    expect(JSON.parse(String((patchCall as unknown[])[1] && (patchCall[1] as RequestInit).body))).toEqual({
+      platform_account_id: 42,
+      title: "Nuovo titolo",
+      description: "Descrizione esistente",
+      category_id: "20",
+    });
+    // The drawer preview reflects the edited values immediately.
+    expect(result.current.preview?.video.title).toBe("Nuovo titolo");
+    expect(result.current.preview?.video.category_id).toBe("20");
+    expect(invalidateGroupVideosMock).toHaveBeenCalledWith(7);
   });
 });
 

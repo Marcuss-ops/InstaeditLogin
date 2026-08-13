@@ -1,71 +1,176 @@
-import { Edit3, Loader2, Save } from "lucide-react";
-import type { GroupYouTubeVideo, VideoPreview } from "./groupYouTubeVideosTypes";
-import { safeAssetUrl } from "./groupYouTubeVideosVisual";
+import { Image as ImageIcon, Loader2, Save } from "lucide-react";
+import { cn } from "../../lib/utils";
+import { useYouTubeCategories } from "../../features/youtube/hooks/useYouTubeCategories";
+import type { VideoPreview } from "./groupYouTubeVideosTypes";
+import { privacyBadge, safeAssetUrl, toneClasses } from "./groupYouTubeVideosVisual";
 
+/**
+ * "Modifica video" drawer — the Dettagli destination for a group video.
+ *
+ * Edits the YouTube snippet metadata (title / description / category)
+ * through the single PATCH endpoint; saves via onSave (the hook's
+ * saveVideoMetadata). Visibility is SHOWN but deliberately read-only in
+ * V1: privacy is owned by the publish flow in InstaEditor / YouTube
+ * Studio, not by this drawer.
+ */
 export function GroupYouTubeVideoPreviewModal({
   preview,
-  openingVideoID,
   savingMetadata,
   draftTitle,
   draftDescription,
+  editCategoryID,
   onClose,
   onDraftTitleChange,
   onDraftDescriptionChange,
+  onEditCategoryIDChange,
   onSave,
-  onThumbnail,
 }: {
   preview: VideoPreview;
-  openingVideoID: string | null;
   savingMetadata: boolean;
   draftTitle: string;
   draftDescription: string;
+  editCategoryID: string;
   onClose: () => void;
   onDraftTitleChange: (value: string) => void;
   onDraftDescriptionChange: (value: string) => void;
+  onEditCategoryIDChange: (value: string) => void;
   onSave: () => void;
-  onThumbnail: (video: GroupYouTubeVideo) => void;
 }) {
   const thumbnail = safeAssetUrl(preview.video.thumbnail_url);
+  const privacy = privacyBadge(preview.video);
+  const availability = preview.video.availability;
+  const availabilityIssue = availability && availability.status !== "available";
+
+  // Categories come from the centralized resource (useYouTubeCategories);
+  // it serves the canonical snapshot until the backend proxy is live, so
+  // the select always has options. The video's current category is
+  // always kept in the list even if it is missing from the fetched set.
+  const categories = useYouTubeCategories("IT");
+  const categoryItems = categories.data ?? [];
+  const hasCurrentCategory = editCategoryID !== "" && categoryItems.some((category) => category.id === editCategoryID);
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm"
       role="presentation"
       onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div role="dialog" aria-modal="true" aria-labelledby="youtube-video-preview-title" className="max-h-[96vh] w-full max-w-6xl overflow-y-auto rounded-2xl border border-white/[0.12] bg-[#11131a] p-5 shadow-2xl">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Preview copertina</p>
-            <h4 id="youtube-video-preview-title" className="mt-1 text-xl font-bold text-white">{preview.video.channel_name || "Video YouTube"}</h4>
-            <p className="mt-1 text-[11px] text-[#9aa0aa]">Lingua: {(preview.video.language?.trim() || "en").toUpperCase()} · {preview.video.youtube_video_id}</p>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-metadata-title"
+        data-testid="edit-metadata-drawer"
+        className="ml-auto flex h-full w-full max-w-md flex-col border-l border-white/[0.12] bg-[#11131a] shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-white/[0.08] px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Dettagli video</p>
+            <h4 id="edit-metadata-title" className="mt-1 truncate text-lg font-bold text-white">Modifica video</h4>
+            <p className="mt-1 truncate text-[11px] text-[#9aa0aa]">
+              {preview.video.channel_name || "Video YouTube"} · {preview.video.youtube_video_id}
+            </p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-xl text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Chiudi preview">×</button>
-        </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Chiudi modifica video"
+            className="rounded-lg px-2 py-1 text-xl text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white"
+          >
+            ×
+          </button>
+        </header>
 
-        <div className="overflow-hidden rounded-2xl border border-white/[0.10] bg-black">
-          {thumbnail ? <img src={thumbnail} alt={`Thumbnail ${preview.video.channel_name || "YouTube"}`} className="block max-h-[76vh] w-full object-contain" /> : <div className="flex aspect-video items-center justify-center text-[#9aa0aa]">Thumbnail non disponibile</div>}
-        </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <div className="overflow-hidden rounded-2xl border border-white/[0.10] bg-black">
+            {thumbnail ? <img src={thumbnail} alt={`Thumbnail ${preview.video.channel_name || "YouTube"}`} className="block max-h-[40vh] w-full object-contain" /> : (
+              <div className="flex aspect-video items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,0.16),transparent_45%)]">
+                <div className="text-center">
+                  <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04]"><ImageIcon size={20} className="text-white/30" aria-hidden="true" /></span>
+                  <span className="mt-3 block px-3 text-[11px] text-[#7f8591]">Nessuna miniatura disponibile per questo video</span>
+                </div>
+              </div>
+            )}
+          </div>
+
           <label className="grid gap-1.5 text-xs font-semibold text-[#cdd2da]">
             Titolo video
-            <input value={draftTitle} onChange={(event) => onDraftTitleChange(event.target.value)} className="rounded-lg border border-white/[0.10] bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-violet-400/50" />
+            <input
+              value={draftTitle}
+              onChange={(event) => onDraftTitleChange(event.target.value)}
+              data-testid="edit-metadata-title-input"
+              className="rounded-lg border border-white/[0.10] bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-violet-400/50"
+            />
           </label>
-          <label className="grid gap-1.5 text-xs font-semibold text-[#cdd2da] md:col-span-2">
+
+          <label className="grid gap-1.5 text-xs font-semibold text-[#cdd2da]">
             Descrizione video
-            <textarea value={draftDescription} onChange={(event) => onDraftDescriptionChange(event.target.value)} rows={5} className="resize-y rounded-lg border border-white/[0.10] bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-violet-400/50" />
+            <textarea
+              value={draftDescription}
+              onChange={(event) => onDraftDescriptionChange(event.target.value)}
+              rows={5}
+              data-testid="edit-metadata-description-input"
+              className="resize-y rounded-lg border border-white/[0.10] bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-violet-400/50"
+            />
           </label>
+
+          <label className="grid gap-1.5 text-xs font-semibold text-[#cdd2da]">
+            Categoria
+            <select
+              value={editCategoryID}
+              onChange={(event) => onEditCategoryIDChange(event.target.value)}
+              data-testid="edit-metadata-category"
+              className="rounded-lg border border-white/[0.10] bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-violet-400/50"
+            >
+              <option value="">Senza categoria</option>
+              {categories.isLoading && categoryItems.length === 0 && (
+                <option value="" disabled>Caricamento categorie…</option>
+              )}
+              {categoryItems.map((category) => (
+                <option key={category.id} value={category.id}>{category.label}</option>
+              ))}
+              {editCategoryID !== "" && !hasCurrentCategory && (
+                <option value={editCategoryID}>{editCategoryID}</option>
+              )}
+            </select>
+          </label>
+
+          <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-[#9aa0aa]">Visibilità</p>
+            <span className={cn("mt-1.5 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-bold", toneClasses[privacy.tone])}>
+              <span aria-hidden="true">{privacy.emoji}</span>
+              {privacy.label}
+            </span>
+            {availabilityIssue && (
+              <p className="mt-2 text-[11px] text-amber-200/90">
+                {availability?.reason ?? "Il video non è attualmente gestibile dal canale."}
+              </p>
+            )}
+            <p className="mt-2 text-[11px] text-[#7f8591]">
+              La visibilità si modifica dal flusso di pubblicazione di InstaEditor o da YouTube Studio — non è modificabile qui nella V1.
+            </p>
+          </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-white/[0.08] pt-4">
-          <button type="button" onClick={onClose} className="rounded-lg border border-white/[0.10] px-3 py-2 text-xs font-semibold text-[#cdd2da] hover:bg-white/[0.08]">Chiudi</button>
-          <button type="button" onClick={onSave} disabled={savingMetadata} className="inline-flex items-center gap-2 rounded-lg border border-white/[0.10] bg-white/[0.05] px-3 py-2 text-xs font-bold text-white hover:bg-white/[0.10] disabled:opacity-60">
-            <Save size={14} aria-hidden="true" /> {savingMetadata ? "Salvataggio…" : "Salva titolo e descrizione"}
+        <footer className="flex justify-end gap-2 border-t border-white/[0.08] px-5 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            data-testid="edit-metadata-cancel"
+            className="rounded-lg border border-white/[0.10] px-3 py-2 text-xs font-semibold text-[#cdd2da] hover:bg-white/[0.08]"
+          >
+            Annulla
           </button>
-          <button type="button" onClick={() => { onClose(); onThumbnail(preview.video); }} disabled={openingVideoID !== null} className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-60">
-            {openingVideoID === preview.video.youtube_video_id ? <Loader2 size={14} className="animate-spin" /> : <Edit3 size={14} aria-hidden="true" />}
-            Modifica in InstaEditor
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={savingMetadata}
+            data-testid="edit-metadata-save"
+            className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-60"
+          >
+            {savingMetadata ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
+            {savingMetadata ? "Salvataggio…" : "Salva modifiche"}
           </button>
-        </div>
+        </footer>
       </div>
     </div>
   );

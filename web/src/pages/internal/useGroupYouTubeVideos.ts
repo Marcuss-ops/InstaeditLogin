@@ -90,6 +90,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
   const [preview, setPreview] = useState<VideoPreview | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
+  const [editCategoryID, setEditCategoryID] = useState("");
   const [savingMetadata, setSavingMetadata] = useState(false);
   const toast = useToast();
 
@@ -205,42 +206,46 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     setPreview({ video });
     setDraftTitle(video.title ?? "");
     setDraftDescription(video.draft_description ?? video.description ?? "");
+    setEditCategoryID(video.category_id ?? "");
   }, []);
 
+  // "Modifica video" drawer save: PATCH the single metadata endpoint
+  // (title/description/category) under the group's owning channel. The
+  // backend merges into the canonical YouTube snippet (preserving tags
+  // and omitted fields) and invalidates its per-account cache, so the
+  // cards refresh through the targeted group-videos invalidation — no
+  // need to touch the editor-session draft, which stays the cover
+  // project's own content.
   const saveVideoMetadata = useCallback(async () => {
     if (!preview || savingMetadata) return;
     setSavingMetadata(true);
     try {
-      let projectId = preview.video.velox_project_id;
-      if (!projectId) {
-        const workspaceID = await resolveGroupWorkspace(groupId);
-        const session = await createYouTubeEditorSession(buildSessionPayload(preview.video, workspaceID));
-        projectId = session.velox_project_id;
-      }
-      await authedFetch(`/api/v1/youtube/editor-sessions/by-project/${encodeURIComponent(projectId)}/draft`, {
-        method: "PUT",
-        body: JSON.stringify({
-          title: draftTitle,
-          description: draftDescription,
-          tags: [],
-          desired_privacy: preview.video.desired_privacy || "private",
-          publish_at: preview.video.publish_at ?? null,
-        }),
-      });
+      const videoID = preview.video.youtube_video_id;
+      await authedFetch(
+        `/api/v1/groups/${groupId}/youtube/videos/${encodeURIComponent(videoID)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            platform_account_id: preview.video.platform_account_id,
+            title: draftTitle,
+            description: draftDescription,
+            category_id: editCategoryID,
+          }),
+        },
+      );
       setPreview({
         video: {
           ...preview.video,
           title: draftTitle,
           description: draftDescription,
-          draft_description: draftDescription,
-          velox_project_id: projectId,
+          category_id: editCategoryID,
         },
       });
-      toast.success("Titolo e descrizione salvati.");
+      toast.success("Metadati video salvati.");
       // Targeted invalidation: only the group's video-list cache
       // (`['groups', groupId, 'youtube', 'videos']`) is refreshed, so
-      // the cards reflect the new title/description without reloading
-      // the rest of InstaEdit.
+      // the cards reflect the new title/description/category without
+      // reloading the rest of InstaEdit.
       invalidateGroupVideos(groupId);
     } catch (error) {
       if (error instanceof AuthError) {
@@ -251,7 +256,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     } finally {
       setSavingMetadata(false);
     }
-  }, [draftDescription, draftTitle, groupId, navigate, preview, savingMetadata, toast]);
+  }, [draftDescription, draftTitle, editCategoryID, groupId, navigate, preview, savingMetadata, toast]);
 
   const loadVideos = useCallback(
     async (signal: AbortSignal, offset = 0, append = false, forceRefresh = false): Promise<void> => {
@@ -395,6 +400,8 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     setDraftTitle,
     draftDescription,
     setDraftDescription,
+    editCategoryID,
+    setEditCategoryID,
     savingMetadata,
     openThumbnailEditor,
     quickCreateCover,

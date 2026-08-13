@@ -19,6 +19,17 @@ vi.mock("../../lib/auth", () => ({
   },
 }));
 
+vi.mock("../../features/youtube/hooks/useYouTubeCategories", () => ({
+  useYouTubeCategories: () => ({
+    data: [
+      { id: "17", label: "Sport" },
+      { id: "20", label: "Gaming" },
+      { id: "24", label: "Intrattenimento" },
+    ],
+    isLoading: false,
+  }),
+}));
+
 import { ApiError } from "../../lib/auth";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 
@@ -343,6 +354,106 @@ describe("GroupYouTubeVideos", () => {
     await waitFor(() => {
       expect(screen.getByText("Wrestling Highlights")).toBeInTheDocument();
     });
+  });
+
+  it("opens the 'Modifica video' drawer from Dettagli and saves title/description/category via PATCH", async () => {
+    authedFetchMock.mockResolvedValue(
+      jsonResponse({
+        videos: [
+          {
+            youtube_video_id: "meta-1",
+            title: "Video con metadati",
+            description: "Descrizione esistente",
+            thumbnail_url: "https://i.ytimg.com/vi/meta-1/hqdefault.jpg",
+            privacy_status: "public",
+            actual_privacy: "public",
+            platform_account_id: 42,
+            category_id: "24",
+            category_title: "Intrattenimento",
+          },
+        ],
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Video con metadati")).toBeInTheDocument();
+    });
+
+    // The card's Dettagli action opens the metadata drawer (exact name:
+    // the article itself is also a button whose name includes it).
+    fireEvent.click(screen.getByRole("button", { name: "Dettagli" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("edit-metadata-drawer")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("heading", { name: /modifica video/i })).toBeInTheDocument();
+
+    // The category select resolves the canonical snapshot and is
+    // pre-selected on the video's current category.
+    const categorySelect = screen.getByTestId("edit-metadata-category") as HTMLSelectElement;
+    expect(categorySelect.value).toBe("24");
+    expect(categorySelect.options.length).toBeGreaterThan(3);
+
+    // Visibility is shown but read-only in V1: a badge, never a control.
+    expect(screen.getByText("Pubblico")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /visibilità/i })).not.toBeInTheDocument();
+
+    // Edit title + category, then save.
+    fireEvent.change(screen.getByTestId("edit-metadata-title-input"), { target: { value: "Nuovo titolo" } });
+    fireEvent.change(categorySelect, { target: { value: "20" } });
+    fireEvent.click(screen.getByTestId("edit-metadata-save"));
+
+    await waitFor(() => {
+      const patchCall = authedFetchMock.mock.calls.find(([url, init]) =>
+        String(url) === "/api/v1/groups/7/youtube/videos/meta-1" && (init as RequestInit).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      expect(JSON.parse(String((patchCall as unknown[])[1] && (patchCall[1] as RequestInit).body))).toEqual({
+        platform_account_id: 42,
+        title: "Nuovo titolo",
+        description: "Descrizione esistente",
+        category_id: "20",
+      });
+    });
+  });
+
+  it("cancels the 'Modifica video' drawer without saving", async () => {
+    authedFetchMock.mockResolvedValue(
+      jsonResponse({
+        videos: [
+          {
+            youtube_video_id: "meta-2",
+            title: "Video da non toccare",
+            platform_account_id: 42,
+            category_id: "17",
+          },
+        ],
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Video da non toccare")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dettagli" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("edit-metadata-drawer")).toBeInTheDocument();
+    });
+
+    // Dirty the fields, then Annulla: no PATCH is issued.
+    fireEvent.change(screen.getByTestId("edit-metadata-title-input"), { target: { value: "Non salvato" } });
+    fireEvent.click(screen.getByTestId("edit-metadata-cancel"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("edit-metadata-drawer")).not.toBeInTheDocument();
+    });
+    const patchCalls = authedFetchMock.mock.calls.filter(([url, init]) =>
+      String(url).includes("/youtube/videos/meta-2") && (init as RequestInit).method === "PATCH",
+    );
+    expect(patchCalls).toHaveLength(0);
   });
 
   it("shows an actionable message when YouTube returns a 502", async () => {
