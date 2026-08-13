@@ -310,6 +310,10 @@ func (a *App) uploadWorkerSpec() worker.WorkerSpec {
 			// wires (production + tests).
 			uw.SetYouTubeTargetPublishStore(a.runtime.youtubeTargetPublicationStore)
 			uw.SetMediaDownloadResolver(a.runtime.mediaDownloadResolver)
+			// Blocco delivery-queue — wire the post/target lookup surface the
+			// global delivery pool needs to resolve a claimed (video,
+			// channel) row back to its parent post + target.
+			uw.SetYouTubeDeliveryPostStore(repository.NewPostRepository(a.DB))
 			// Migration 092 — wire the ffprobe pass so every asset the
 			// upload worker ingests gets duration/resolution/FPS/audio
 			// probed (the live wizard's compatibility badge reads from

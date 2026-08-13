@@ -134,6 +134,35 @@ type UploadYouTubeTargetPubStore interface {
 	// that don't need the increment-folded shape.
 	MarkYouTubeUploadedAtomic(ctx context.Context, id int64, videoID string) error
 	Update(ctx context.Context, pub *models.YouTubeTargetPublication) error
+
+	// Delivery-queue surface (migration 125): the row is the claimable
+	// (video, channel) queue unit consumed by the GLOBAL delivery pool
+	// (runYouTubeDeliveryPool). A single upload_job with N YouTube
+	// targets fans out to N independent rows claimed concurrently by
+	// different pool workers — instead of one worker looping targets
+	// sequentially inside a single job claim.
+	ClaimReadyDeliveries(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.YouTubeTargetPublication, error)
+	HeartbeatDelivery(ctx context.Context, id int64, workerID string, lease time.Duration) (bool, error)
+	ReleaseDeliveryLease(ctx context.Context, id int64, workerID string) error
+	MarkDeliveryUploaded(ctx context.Context, id int64, workerID, videoID string) error
+	MarkDeliveryFailed(ctx context.Context, id int64, workerID, errorCode, errMessage string, nextAttemptAt time.Time) error
+	MarkDeliveryBlockedAuth(ctx context.Context, id int64, workerID, reason string) error
+	ReclaimExpiredDeliveryLeases(ctx context.Context, maxRows int) (int64, error)
+}
+
+// UploadDeliveryPostStore resolves the post + post_target rows a
+// delivery needs to run the per-channel private upload. The delivery
+// row only carries ids (upload_job_id, post_target_id,
+// platform_account_id); the worker loads the parent post (title,
+// caption, metadata, privacy, media asset) and the target through this
+// narrow surface. *repository.PostRepository implements both methods;
+// tests inject an in-memory fake.
+type UploadDeliveryPostStore interface {
+	// FindByID / FindTargetByID mirror *repository.PostRepository's
+	// signatures (no ctx — the repo binds queries to the pool's
+	// database/sql driver which manages its own timeouts).
+	FindByID(id int64) (*models.Post, error)
+	FindTargetByID(id int64) (*models.PostTarget, error)
 }
 
 // UploadWorkerOptions configures the worker pool sizing + cadence.
@@ -211,16 +240,17 @@ type UploadWorker struct {
 	storage          services.StorageProvider
 	capRouter        *services.CapabilityRouter
 	vault            credentials.VaultAPI
-	sourceRegistry   *ArtifactSourceRegistry
-	deliveryVerifier ExternalDeliveryVerifier
-	ytPubStore       UploadYouTubeTargetPubStore
-	resolver         services.MediaDownloadResolver
-	prober           MediaProber
-	interval         time.Duration
-	logger           *slog.Logger
-	uploadTimeout    time.Duration
-	s3HTTPClient     *http.Client
-	opts             UploadWorkerOptions
+	sourceRegistry    *ArtifactSourceRegistry
+	deliveryVerifier  ExternalDeliveryVerifier
+	ytPubStore        UploadYouTubeTargetPubStore
+	deliveryPostStore UploadDeliveryPostStore
+	resolver          services.MediaDownloadResolver
+	prober            MediaProber
+	interval          time.Duration
+	logger            *slog.Logger
+	uploadTimeout     time.Duration
+	s3HTTPClient      *http.Client
+	opts              UploadWorkerOptions
 }
 
 // NewUploadWorker wires a new UploadWorker. opts fields default in
@@ -280,6 +310,17 @@ func (w *UploadWorker) SetYouTubeTargetPublishStore(store UploadYouTubeTargetPub
 	w.ytPubStore = store
 }
 
+// SetYouTubeDeliveryPostStore wires the post/target lookup surface the
+// global delivery pool needs to resolve a claimed (video, channel)
+// delivery row back to its parent post + target. The concrete
+// *repository.PostRepository implements both methods. When never
+// called (or nil) the delivery pool logs once and stays disabled —
+// the enqueue side (processPublishJob materialization) keeps working
+// and rows simply wait for a wired worker.
+func (w *UploadWorker) SetYouTubeDeliveryPostStore(store UploadDeliveryPostStore) {
+	w.deliveryPostStore = store
+}
+
 // SetMediaDownloadResolver wires the shared just-in-time media resolver.
 // The setter keeps the existing constructor stable for test fixtures while
 // production ensures every publisher signs from the owned, ready asset.
@@ -303,58 +344,41 @@ func (w *UploadWorker) YouTubeTargetPublishStore() UploadYouTubeTargetPubStore {
 	return w.ytPubStore
 }
 
-// uploadVideoAsPrivateForTarget performs the per-target YouTube
-// resumable upload-as-private for a single post_target row (Blocco
-// #1 P0). The upload lands regardless of publish_at so the rest of
-// the pipeline (Velox thumbnail editor, etc.) can resolve to a real
-// youtube_video_id immediately. publish_at remains on the
-// post_target row for the LATER videos.update phase (publish
-// worker / Blocco #1 phase 2).
+// uploadVideoAsPrivateForDelivery performs the per-(video, channel)
+// YouTube resumable upload-as-private for a single claimed delivery
+// row (Blocco #1 P0 + delivery-queue refactor, migration 125). The
+// upload lands regardless of publish_at so the rest of the pipeline
+// (Velox thumbnail editor, etc.) can resolve to a real
+// youtube_video_id immediately. publish_at remains on the delivery
+// row for the LATER publish phase (Blocco #1 phase 2, owned by
+// publish_worker / native status.publishAt when scheduled public).
 //
 // Routing:
-//   - targetID == 0 OR platform_account_id == 0 → error (caller bug).
-//   - Platform ≠ YouTube                          → skip (return nil);
-//     the per-target private step is YouTube-only; other platforms
-//     keep using publish_worker's synchronous upload+publish flow.
-//   - Token refresh transient error              → return error
-//     (outer job retries on next claim).
-//   - Channel binding ErrYouTubeChannelMismatch   → handleTargetBlockedAuth
-//     (post_target.status='blocked_auth' +
-//      platform_account.status='reauth_required' +
-//      yt_pub row status='failed' + last_error) + return nil so the
-//     parent job continues. Other binding errors (5xx, network) →
-//     return error (retry).
-//   - UploadChannelUploader not on the provider  → return error
-//     (registration bug — BootstrapRegistry must register YouTube's
+//   - Delivery already youtube_uploaded        → idempotent skip (return nil).
+//   - Platform ≠ YouTube                        → skip (return nil);
+//     only YouTube gets the per-delivery private step; other
+//     platforms keep using publish_worker's synchronous flow.
+//   - Token refresh transient error            → return error (the
+//     delivery pool routes the row to retry_wait via MarkDeliveryFailed).
+//   - Channel binding ErrYouTubeChannelMismatch → handleTargetBlockedAuth
+//     (delivery state='failed' + post_target.status='blocked_auth' +
+//      platform_account.status='reauth_required') + return nil (no
+//     retry). Other binding errors (5xx, network) → return error
+//     (retry_wait).
+//   - UploadChannelUploader not on the provider → return error
+//     (registration bug — bootstrap must register YouTube's
 //     UploadChannelUploader conformance).
-//   - Chunked PUT erred                          → IncrementAttempt on
-//     yt_pub row + return error (outer retries).
-//   - Chunked PUT succeeded with non-empty videoID → MarkYouTubeUploaded
+//   - Chunked PUT erred                          → return error; the
+//     delivery pool's processYouTubeDelivery routes the row to
+//     retry_wait / dead_letter via MarkDeliveryFailed (attempt++ +
+//     last_error in ONE atomic UPDATE).
+//   - Chunked PUT succeeded with non-empty videoID → MarkDeliveryUploaded
+//     (state='youtube_uploaded' + video_id + attempt++ + lease release)
 //     + return nil.
 //
-// Runs inside runWithHeartbeat's lease heartbeat so a worker crash
-// mid-upload leaves the row with youtube_upload_status='youtube_uploading'
-// (UNIQUE(post_target_id) makes the next worker's re-run idempotent).
-//
-// Idempotent on the row level (Create is best-effort + re-fetch on
-// UNIQUE collision); not idempotent on the YouTube side — every
-// re-run does a fresh videos.insert, which YouTube itself dedupes
-// via the resumable-session protocol only if the worker re-attaches// to the prior session URI (NOT a concern here since the helper
-// always starts a fresh session).
-//
-// FIXED (Blocco #1 followup — migration 077): the prior transient-failure
-// phantom-posts-on-MarkRetry symptom was eliminated by the migration
-// below: posts.upload_job_id is now stamped with &job.ID at this layer
-// (see the post struct literal at the top of processPublishJob), and
-// PostRepository.Create's ON CONFLICT (upload_job_id) WHERE
-// upload_job_id IS NOT NULL DO NOTHING + qSelectPostByUploadJobID
-// re-fetch path (internal/repository/post_repo.go::Create +
-// fetchExistingByUploadJobID) reuses the existing post row + its
-// post_targets fan-out instead of inserting a fresh row when the
-// retry's processPublishJob reaches this code path. youtube_target_
-// publications rows already-per-target (per attempt one) remain
-// unaffected: those have UNIQUE(post_target_id) which the per-target
-// helper's FindByPostTargetID short-circuit already handles for
-// within-claim reruns; across claim retries the OnConflict-style
-// shim below the post-rehydrate reuses the existing target.IDs and
-// the helper's idempotent-skip fires correctly.
+// Runs inside runDeliveryWithHeartbeat's lease heartbeat so a worker
+// crash mid-upload leaves the row in state='uploading' with an expired
+// lease; the delivery reclaimer (ReclaimExpiredDeliveryLeases) returns
+// it to 'ready_to_upload' and the next claim re-runs the helper
+// idempotently (UNIQUE(post_target_id) + the youtube_uploaded
+// short-circuit mean re-runs never double-upload a channel).

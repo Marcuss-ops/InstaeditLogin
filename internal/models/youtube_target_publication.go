@@ -104,6 +104,44 @@ type YouTubeTargetPublication struct {
 	PublishedAt     *time.Time `json:"published_at,omitempty"`
 	LastError          string     `json:"last_error,omitempty"`
 	AttemptCount       int        `json:"attempt_count"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	// Delivery-queue operational fields (migration 125). `state` is the
+	// canonical lifecycle cursor for the WHOLE delivery — the legacy
+	// youtube_upload_status / youtube_processing_status / thumbnail_status
+	// columns are kept and demoted to per-phase observations. The row is
+	// the independently claimable unit of work (1 PostTarget YouTube = 1
+	// publication = 1 delivery), so a single upload_job with N targets
+	// fans out to N queue rows consumed by the global delivery pool.
+	State string `json:"state"`
+	// Priority SMALLINT, lower = higher priority (drives the claim ORDER BY).
+	Priority int16 `json:"priority"`
+	// PrepareAt is the earliest wall-clock time the delivery may be
+	// claimed (NULL = eligible immediately).
+	PrepareAt *time.Time `json:"prepare_at,omitempty"`
+	// NextAttemptAt is the retry backoff cursor: retry_wait / quota_wait
+	// rows are unclaimable until it elapses.
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	// MaxAttempts is the retry cap before dead_letter.
+	MaxAttempts int `json:"max_attempts"`
+	LeaseOwner      *string    `json:"lease_owner,omitempty"`
+	LeaseExpiresAt  *time.Time `json:"lease_expires_at,omitempty"`
+	HeartbeatAt     *time.Time `json:"heartbeat_at,omitempty"`
+	// ResumeState is where a side state (quota_wait / blocked_auth /
+	// retry_wait) returns once its condition clears.
+	ResumeState *string `json:"resume_state,omitempty"`
+	// LastErrorCode is the stable machine-readable error class (sister of
+	// last_error, which stays human-readable).
+	LastErrorCode *string `json:"last_error_code,omitempty"`
+	// LastTransitionAt is stamped on every state change (audit + stuck
+	// detection).
+	LastTransitionAt time.Time `json:"last_transition_at"`
+	// VerifiedAt is the terminal success stamp (published → verified).
+	VerifiedAt *time.Time `json:"verified_at,omitempty"`
+	// OriginalPublishAt is the user's originally requested publish time,
+	// preserved across capacity spillover.
+	OriginalPublishAt *time.Time `json:"original_publish_at,omitempty"`
+	// SpilloverCount is how many days capacity planning moved this
+	// delivery forward (audit of the planner).
+	SpilloverCount int `json:"spillover_count"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }

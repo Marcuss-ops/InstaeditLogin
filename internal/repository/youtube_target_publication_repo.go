@@ -121,6 +121,9 @@ const ytTargetPubsSelectColumns = `
 	youtube_uploaded_at, youtube_processed_at,
 	editor_session_id, velox_project_id, thumbnail_media_id, thumbnail_status,
 	desired_privacy, publish_at, native_publish_at, published_at, last_error, attempt_count,
+	state, priority, prepare_at, next_attempt_at, max_attempts,
+	lease_owner, lease_expires_at, heartbeat_at, resume_state,
+	last_error_code, last_transition_at, verified_at, original_publish_at, spillover_count,
 	created_at, updated_at`
 
 // ytPubsRowScanner matches both *sql.Row and *sql.Rows via their shared
@@ -153,6 +156,15 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
 		publishAt               sql.NullTime
 		nativePublishAt         sql.NullTime
 		publishedAt             sql.NullTime
+		prepareAt               sql.NullTime
+		nextAttemptAt           sql.NullTime
+		leaseOwner              sql.NullString
+		leaseExpiresAt          sql.NullTime
+		heartbeatAt             sql.NullTime
+		resumeState             sql.NullString
+		lastErrorCode           sql.NullString
+		verifiedAt              sql.NullTime
+		originalPublishAt       sql.NullTime
 	)
 	if err := s.Scan(
 		&pub.ID, &pub.UploadJobID, &pub.PostTargetID, &pub.PlatformAccountID,
@@ -160,6 +172,9 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
 		&youtubeUploadedAt, &youtubeProcessedAt,
 		&editorSessionID, &veloxProjectID, &thumbnailMediaID, &thumbnailStatus,
 		&pub.DesiredPrivacy, &publishAt, &nativePublishAt, &publishedAt, &pub.LastError, &pub.AttemptCount,
+		&pub.State, &pub.Priority, &prepareAt, &nextAttemptAt, &pub.MaxAttempts,
+		&leaseOwner, &leaseExpiresAt, &heartbeatAt, &resumeState,
+		&lastErrorCode, &pub.LastTransitionAt, &verifiedAt, &originalPublishAt, &pub.SpilloverCount,
 		&pub.CreatedAt, &pub.UpdatedAt,
 	); err != nil {
 		return err
@@ -175,6 +190,15 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
 	pub.PublishAt = ytPubsNullTimePtr(publishAt)
 	pub.NativePublishAt = ytPubsNullTimePtr(nativePublishAt)
 	pub.PublishedAt = ytPubsNullTimePtr(publishedAt)
+	pub.PrepareAt = ytPubsNullTimePtr(prepareAt)
+	pub.NextAttemptAt = ytPubsNullTimePtr(nextAttemptAt)
+	pub.LeaseOwner = ytPubsNullStringPtr(leaseOwner)
+	pub.LeaseExpiresAt = ytPubsNullTimePtr(leaseExpiresAt)
+	pub.HeartbeatAt = ytPubsNullTimePtr(heartbeatAt)
+	pub.ResumeState = ytPubsNullStringPtr(resumeState)
+	pub.LastErrorCode = ytPubsNullStringPtr(lastErrorCode)
+	pub.VerifiedAt = ytPubsNullTimePtr(verifiedAt)
+	pub.OriginalPublishAt = ytPubsNullTimePtr(originalPublishAt)
 	return nil
 }
 
@@ -233,14 +257,17 @@ func (r *YouTubeTargetPublicationRepository) Create(ctx context.Context, pub *mo
 			(upload_job_id, post_target_id, platform_account_id,
 			 youtube_video_id, youtube_upload_status, youtube_processing_status,
 			 editor_session_id, velox_project_id, thumbnail_media_id, thumbnail_status,
-			 desired_privacy, publish_at, native_publish_at, last_error, attempt_count)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			 desired_privacy, publish_at, native_publish_at, last_error, attempt_count,
+			 state, priority, prepare_at, max_attempts)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+		         $16, $17, $18, $19)
 		 RETURNING id, created_at, updated_at`,
 		pub.UploadJobID, pub.PostTargetID, pub.PlatformAccountID,
 		ytPubsNullableString(pub.YouTubeVideoID), pub.YouTubeUploadStatus, ytPubsNullableString(pub.YouTubeProcessingStatus),
 		ytPubsNullableString(pub.EditorSessionID), ytPubsNullableString(pub.VeloxProjectID),
 		ytPubsNullableString(pub.ThumbnailMediaID), ytPubsNullableString(pub.ThumbnailStatus),
 		pub.DesiredPrivacy, ytPubsNullableTime(pub.PublishAt), ytPubsNullableTime(pub.NativePublishAt), pub.LastError, pub.AttemptCount,
+		pub.State, pub.Priority, ytPubsNullableTime(pub.PrepareAt), pub.MaxAttempts,
 	).Scan(&pub.ID, &pub.CreatedAt, &pub.UpdatedAt)
 }
 

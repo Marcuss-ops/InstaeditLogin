@@ -184,6 +184,142 @@ func (s *lifecycleYouTubePublicationStore) Update(_ context.Context, pub *models
 	return nil
 }
 
+// delivery-queue fake surface (migration 125). The claim simulates the
+// FOR UPDATE SKIP LOCKED + lease-CAS UPDATE: rows in a claimable state
+// flip to 'uploading' with a lease owner; the processor transitions
+// them via MarkDeliveryUploaded / MarkDeliveryFailed /
+// MarkDeliveryBlockedAuth.
+func (s *lifecycleYouTubePublicationStore) ClaimReadyDeliveries(_ context.Context, workerID string, limit int, _ time.Duration) ([]*models.YouTubeTargetPublication, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*models.YouTubeTargetPublication
+	for _, row := range s.rows {
+		if row.State != "ready_to_upload" && row.State != "preflight" {
+			continue
+		}
+		copy := *row
+		copy.State = "uploading"
+		copy.LeaseOwner = &workerID
+		expires := time.Now().Add(time.Minute)
+		copy.LeaseExpiresAt = &expires
+		s.rows[row.PostTargetID] = &copy
+		out = append(out, &copy)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s *lifecycleYouTubePublicationStore) HeartbeatDelivery(_ context.Context, _ int64, _ string, _ time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *lifecycleYouTubePublicationStore) ReleaseDeliveryLease(_ context.Context, id int64, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range s.rows {
+		if row.ID == id {
+			row.LeaseOwner = nil
+			row.LeaseExpiresAt = nil
+			row.HeartbeatAt = nil
+			return nil
+		}
+	}
+	return fmt.Errorf("publication id %d not found", id)
+}
+
+func (s *lifecycleYouTubePublicationStore) MarkDeliveryUploaded(_ context.Context, id int64, _ string, videoID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range s.rows {
+		if row.ID == id {
+			if row.YouTubeUploadStatus != "youtube_uploaded" {
+				s.uploadedCalls++
+			}
+			row.YouTubeVideoID = &videoID
+			row.YouTubeUploadStatus = "youtube_uploaded"
+			row.State = "youtube_uploaded"
+			row.AttemptCount++
+			row.LeaseOwner = nil
+			row.LeaseExpiresAt = nil
+			row.HeartbeatAt = nil
+			return nil
+		}
+	}
+	return fmt.Errorf("publication id %d not found", id)
+}
+
+func (s *lifecycleYouTubePublicationStore) MarkDeliveryFailed(_ context.Context, id int64, _ string, _ string, message string, nextAttemptAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range s.rows {
+		if row.ID == id {
+			row.AttemptCount++
+			row.LastError = message
+			row.NextAttemptAt = &nextAttemptAt
+			if row.AttemptCount >= row.MaxAttempts {
+				row.State = "dead_letter"
+			} else {
+				row.State = "retry_wait"
+			}
+			row.LeaseOwner = nil
+			row.LeaseExpiresAt = nil
+			row.HeartbeatAt = nil
+			return nil
+		}
+	}
+	return fmt.Errorf("publication id %d not found", id)
+}
+
+func (s *lifecycleYouTubePublicationStore) MarkDeliveryBlockedAuth(_ context.Context, id int64, _ string, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range s.rows {
+		if row.ID == id {
+			row.AttemptCount++
+			row.LastError = reason
+			row.State = "failed"
+			row.LeaseOwner = nil
+			row.LeaseExpiresAt = nil
+			row.HeartbeatAt = nil
+			return nil
+		}
+	}
+	return fmt.Errorf("publication id %d not found", id)
+}
+
+func (s *lifecycleYouTubePublicationStore) ReclaimExpiredDeliveryLeases(_ context.Context, _ int) (int64, error) {
+	return 0, nil
+}
+
+// lifecycleDeliveryPostStore resolves the post + post_target rows a
+// claimed delivery needs, mirroring *repository.PostRepository's
+// lookups. It reads LIVE from the lifecycleUploadPostStore because the
+// post/targets are only populated when processPublishJob calls
+// Create (the delivery pool runs after materialization).
+type lifecycleDeliveryPostStore struct {
+	postStore *lifecycleUploadPostStore
+}
+
+func (s *lifecycleDeliveryPostStore) FindByID(id int64) (*models.Post, error) {
+	if s.postStore.post != nil && s.postStore.post.ID == id {
+		return s.postStore.post, nil
+	}
+	return nil, nil
+}
+
+func (s *lifecycleDeliveryPostStore) FindTargetByID(id int64) (*models.PostTarget, error) {
+	for _, t := range s.postStore.targets {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
+var _ UploadDeliveryPostStore = (*lifecycleDeliveryPostStore)(nil)
+
 // lifecycleTestStorage is a tiny S3-compatible fake. It reuses the worker's
 // normal presigned PUT flow and returns the same verified size/mime that Drive
 // advertised, so artifact verification still runs before MarkIngested.
@@ -371,6 +507,7 @@ func TestContentPackageLifecycleE2E_DriveSchedulePreparationPublish_Idempotent(t
 	uploadWorker := NewUploadWorker(uploadRepo, mediaStore, uploadPostStore, users, storage, router, vault, registry, nil, time.Second, nil, UploadWorkerOptions{VideoRetentionBufferDays: 7})
 	uploadWorker.SetMediaDownloadResolver(testMediaDownloadResolver{})
 	uploadWorker.SetYouTubeTargetPublishStore(ytPubs)
+	uploadWorker.SetYouTubeDeliveryPostStore(&lifecycleDeliveryPostStore{postStore: uploadPostStore})
 
 	claimedIngest, err := uploadRepo.ClaimBatch(ctx, "lifecycle-ingest", 1, time.Minute)
 	if err != nil || len(claimedIngest) != 1 {
@@ -396,23 +533,48 @@ func TestContentPackageLifecycleE2E_DriveSchedulePreparationPublish_Idempotent(t
 	if err := uploadWorker.processPublishJob(ctx, claimedPublish[0], "lifecycle-publish"); err != nil {
 		t.Fatalf("private upload preparation: %v", err)
 	}
+	// The job claim only MATERIALIZES the delivery rows now — the heavy
+	// videos.insert happens in the delivery pool per (video, channel)
+	// row. Assert the fan-out split: 3 rows enqueued, 0 uploads yet.
+	if provider.privateUploadCalls != 0 {
+		t.Fatalf("private YouTube uploads during materialization=%d, want 0 (uploads moved to the delivery pool)", provider.privateUploadCalls)
+	}
+	if ytPubs.createCalls != 3 || ytPubs.uploadedCalls != 0 {
+		t.Fatalf("YouTube publication rows create=%d uploaded=%d, want 3/0 after materialization", ytPubs.createCalls, ytPubs.uploadedCalls)
+	}
+	// Fan-out phase: the delivery pool claims the 3 (video, channel)
+	// rows and uploads each independently. A slow channel cannot block
+	// its siblings — each row is its own claim + lease + retry budget.
+	deliveries, err := ytPubs.ClaimReadyDeliveries(ctx, "lifecycle-delivery", 10, time.Minute)
+	if err != nil || len(deliveries) != 3 {
+		t.Fatalf("delivery claim: rows=%d err=%v, want 3", len(deliveries), err)
+	}
+	for _, delivery := range deliveries {
+		if err := uploadWorker.processYouTubeDelivery(ctx, delivery, "lifecycle-delivery"); err != nil {
+			t.Fatalf("per-delivery private upload id=%d: %v", delivery.ID, err)
+		}
+	}
 	if provider.privateUploadCalls != 3 {
-		t.Fatalf("private YouTube uploads=%d, want 3 (one per target)", provider.privateUploadCalls)
+		t.Fatalf("private YouTube uploads=%d, want 3 (one per delivery row)", provider.privateUploadCalls)
 	}
-	if ytPubs.createCalls != 3 || ytPubs.uploadedCalls != 3 {
-		t.Fatalf("YouTube publication rows create=%d uploaded=%d, want 3/3", ytPubs.createCalls, ytPubs.uploadedCalls)
+	if ytPubs.uploadedCalls != 3 {
+		t.Fatalf("YouTube publication rows uploaded=%d, want 3", ytPubs.uploadedCalls)
 	}
-	// Exercise the actual per-target retry branch after the durable
-	// publication rows are already youtube_uploaded. The helper must
-	// find each row and skip videos.insert; a retry must not create a
-	// second provider-side video for any channel.
+	// Exercise the idempotent retry branch after the durable rows are
+	// youtube_uploaded: re-processing a delivery must find the row and
+	// skip videos.insert — a retry must not create a second
+	// provider-side video for any channel.
 	for _, target := range uploadPostStore.targets {
-		if err := uploadWorker.uploadVideoAsPrivateForTarget(ctx, claimedPublish[0], target, uploadPostStore.post, uploadPostStore.post.MediaURL); err != nil {
-			t.Fatalf("idempotent private-upload retry target %d: %v", target.ID, err)
+		row, err := ytPubs.FindByPostTargetID(ctx, target.ID)
+		if err != nil || row == nil || row.YouTubeUploadStatus != "youtube_uploaded" {
+			t.Fatalf("delivery row after fan-out target=%d: %+v err=%v, want youtube_uploaded", target.ID, row, err)
+		}
+		if err := uploadWorker.processYouTubeDelivery(ctx, row, "lifecycle-delivery-2"); err != nil {
+			t.Fatalf("idempotent delivery retry id=%d: %v", row.ID, err)
 		}
 	}
 	if provider.privateUploadCalls != 3 || ytPubs.createCalls != 3 || ytPubs.uploadedCalls != 3 {
-		t.Fatalf("private-upload retry duplicated provider state: private=%d creates=%d uploaded=%d, want 3/3/3", provider.privateUploadCalls, ytPubs.createCalls, ytPubs.uploadedCalls)
+		t.Fatalf("delivery retry duplicated provider state: private=%d creates=%d uploaded=%d, want 3/3/3", provider.privateUploadCalls, ytPubs.createCalls, ytPubs.uploadedCalls)
 	}
 	if uploadPostStore.createCalls != 1 || uploadPostStore.publishCalls != 1 {
 		t.Fatalf("post handoff create=%d publish-trigger=%d, want 1/1", uploadPostStore.createCalls, uploadPostStore.publishCalls)

@@ -130,6 +130,30 @@ func (w *UploadWorker) Run(ctx context.Context) error {
 		w.runUploadPool(ctx)
 	}()
 
+	// (6) YouTube delivery pool — claims individual (video, channel)
+	// rows from youtube_target_publications (state='ready_to_upload' /
+	// 'preflight' / due retry_wait | quota_wait) and runs the private
+	// upload per row. Concurrency is bounded by the same
+	// YOUTUBE_UPLOAD_CONCURRENCY knob as the upload pool: the fan-out
+	// of a single job with N channels is N independent rows consumed
+	// by this GLOBAL pool, so a slow channel never blocks its
+	// siblings. Disabled (logs once, rows wait) when ytPubStore or the
+	// delivery post store are not wired.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.runYouTubeDeliveryPool(ctx)
+	}()
+
+	// (7) Delivery-lease reclaimer — recovers delivery rows stuck in
+	// 'uploading' with an expired lease (worker crash / network
+	// partition without a heartbeat) back to 'ready_to_upload'.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.runDeliveryReclaimerLoop(ctx)
+	}()
+
 	wg.Wait()
 	return ctx.Err()
 }
@@ -399,4 +423,176 @@ func (w *UploadWorker) runWithHeartbeat(
 	}()
 
 	return processor(ctx, job, workerID)
+}
+
+// runYouTubeDeliveryPool is the GLOBAL delivery pool: it claims
+// individual (video, channel) rows from youtube_target_publications
+// and runs the per-delivery private upload. Bounded by
+// w.opts.UploadConcurrency (YOUTUBE_UPLOAD_CONCURRENCY) — the same
+// knob that bounds the upload pool — so the total number of
+// concurrent videos.insert calls is capped fleet-wide, regardless of
+// how many jobs/targets the upload pool materialized.
+//
+// The loop mirrors runPoolLoop (semaphore + exponential empty-queue
+// backoff) but claims *models.YouTubeTargetPublication rows instead of
+// *models.UploadJob: the queue unit here is ONE (video, channel)
+// delivery, so a single upload_job with N YouTube targets fans out to
+// N independent rows claimed concurrently by different pool workers.
+func (w *UploadWorker) runYouTubeDeliveryPool(ctx context.Context) {
+	if w.ytPubStore == nil {
+		w.logger.Warn("upload worker: ytPubStore not wired — youtube delivery pool disabled")
+		return
+	}
+	if w.deliveryPostStore == nil {
+		w.logger.Warn("upload worker: delivery post store not wired — youtube delivery pool disabled")
+		return
+	}
+	poolWorkerID := uniqueWorkerID("delivery")
+	concurrency := w.opts.UploadConcurrency
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	sem := make(chan struct{}, concurrency)
+	backoff := w.opts.EmptyQueueBackoffMin
+
+	w.logger.Info("upload worker: youtube delivery pool started",
+		"delivery_concurrency", concurrency, "worker_id", poolWorkerID)
+	defer w.logger.Info("upload worker: youtube delivery pool stopped")
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		claimed := w.runYouTubeDeliveryTick(ctx, sem, poolWorkerID)
+		if claimed {
+			backoff = w.opts.EmptyQueueBackoffMin
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > w.opts.EmptyQueueBackoffMax {
+			backoff = w.opts.EmptyQueueBackoffMax
+		}
+	}
+}
+
+// runYouTubeDeliveryTick claims one batch of ready deliveries (up to
+// the semaphore size) and spawns one goroutine per row. Each row gets
+// its own heartbeat goroutine via runDeliveryWithHeartbeat; the
+// processor itself owns the retry/dead-letter transitions
+// (MarkDeliveryFailed) so a slow or failed channel never blocks the
+// batch's other rows.
+func (w *UploadWorker) runYouTubeDeliveryTick(
+	ctx context.Context,
+	sem chan struct{},
+	poolWorkerID string,
+) bool {
+	deliveries, err := w.ytPubStore.ClaimReadyDeliveries(ctx, poolWorkerID, cap(sem), w.opts.LeaseTTL)
+	if err != nil {
+		w.logger.Error("upload worker: claim ready deliveries failed", "error", err)
+		return false
+	}
+	if len(deliveries) == 0 {
+		return false
+	}
+	w.logger.Info("upload worker: claimed youtube deliveries",
+		"pool", "delivery", "count", len(deliveries), "worker_id", poolWorkerID)
+
+	for _, delivery := range deliveries {
+		select {
+		case <-ctx.Done():
+			return false
+		case sem <- struct{}{}:
+		}
+		go func(d *models.YouTubeTargetPublication) {
+			defer func() { <-sem }()
+			if err := w.runDeliveryWithHeartbeat(ctx, d, poolWorkerID); err != nil {
+				w.logger.Warn("upload worker: youtube delivery failed",
+					"delivery_id", d.ID, "post_target_id", d.PostTargetID,
+					"platform_account_id", d.PlatformAccountID, "error", err)
+			}
+		}(delivery)
+	}
+	return true
+}
+
+// runDeliveryWithHeartbeat wraps one claimed delivery in a heartbeat
+// goroutine (ticking every opts.HeartbeatInterval) plus panic recovery,
+// mirroring runWithHeartbeat's defer-ordering contract: recover first,
+// then cancel, then wg.Wait — LIFO means cancel must be declared after
+// the recover block to run before wg.Wait returns. If HeartbeatDelivery
+// reports the lease lost (peer stole it via the reclaimer), the
+// heartbeat goroutine exits and the processor's next state write fails
+// its CAS — the peer owns the row.
+func (w *UploadWorker) runDeliveryWithHeartbeat(
+	ctx context.Context,
+	delivery *models.YouTubeTargetPublication,
+	workerID string,
+) (err error) {
+	hbCtx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(w.opts.HeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hbCtx.Done():
+				return
+			case <-ticker.C:
+				ok, hErr := w.ytPubStore.HeartbeatDelivery(ctx, delivery.ID, workerID, w.opts.LeaseTTL)
+				if hErr != nil {
+					w.logger.Warn("upload worker: delivery heartbeat failed",
+						"delivery_id", delivery.ID, "error", hErr)
+					continue
+				}
+				if !ok {
+					w.logger.Warn("upload worker: delivery lease lost", "delivery_id", delivery.ID)
+					return
+				}
+			}
+		}
+	}()
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("delivery processing panic for delivery %d: %v", delivery.ID, r)
+			w.logger.Error("upload worker: delivery processing panic",
+				"delivery_id", delivery.ID, "panic", r, "stack", string(debug.Stack()))
+		}
+		cancel()
+		wg.Wait()
+	}()
+	return w.processYouTubeDelivery(ctx, delivery, workerID)
+}
+
+// runDeliveryReclaimerLoop ticks on opts.ReclaimInterval and returns
+// delivery rows stuck in 'uploading' with an expired lease back to
+// 'ready_to_upload' so the delivery pool re-claims them (idempotent:
+// already-uploaded rows are skipped on the next claim).
+func (w *UploadWorker) runDeliveryReclaimerLoop(ctx context.Context) {
+	if w.ytPubStore == nil {
+		return
+	}
+	ticker := time.NewTicker(w.opts.ReclaimInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := w.ytPubStore.ReclaimExpiredDeliveryLeases(ctx, 100)
+			if err != nil {
+				w.logger.Error("upload worker: delivery reclaimer tick failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				w.logger.Info("upload worker: delivery reclaimer recovered rows", "count", n)
+			}
+		}
+	}
 }
