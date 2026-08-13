@@ -5,6 +5,7 @@ import type { GroupYouTubeVideo } from "./groupYouTubeVideosTypes";
 import { LanguageFlag } from "../../components/brand/LanguageFlag";
 import {
   formatPublishAt,
+  privacyBadge,
   publicationState,
   safeAssetUrl,
   toneClasses,
@@ -22,6 +23,7 @@ export const GroupYouTubeVideoCard = memo(function GroupYouTubeVideoCard({
   onThumbnail: (video: GroupYouTubeVideo) => void;
 }) {
   const publication = publicationState(video);
+  const privacy = privacyBadge(video);
   const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(video.youtube_video_id)}`;
   const thumbnail = safeAssetUrl(video.thumbnail_url);
   return (
@@ -44,7 +46,7 @@ export const GroupYouTubeVideoCard = memo(function GroupYouTubeVideoCard({
         ) : (
           <div className="flex h-full items-center justify-center text-white/20"><Video size={20} aria-hidden="true" /></div>
         )}
-        <span className="absolute right-2 top-2 rounded-md bg-black/65 px-1.5 py-1 text-[10px] text-white">🔒</span>
+        <span className="absolute right-2 top-2 rounded-md bg-black/65 px-1.5 py-1 text-[10px] text-white">{privacy.emoji}</span>
       </div>
       <div className="flex min-w-0 flex-col justify-between">
         <div className="min-w-0">
@@ -58,7 +60,7 @@ export const GroupYouTubeVideoCard = memo(function GroupYouTubeVideoCard({
         <div className="mt-2 flex min-w-0 items-end justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <span title={publication.label} className={cn("inline-flex h-7 min-w-[30px] items-center justify-center rounded-lg border px-2 text-[14px]", toneClasses[publication.tone])}>
-              🔒
+              {privacy.emoji}
               <span className="sr-only">{publication.label}</span>
             </span>
             <span title={`Lingua: ${(video.language?.trim() || "non impostata").toUpperCase()}`} className="inline-flex h-7 min-w-[30px] items-center justify-center rounded-lg border border-violet-500/20 bg-violet-500/[0.10] px-2">

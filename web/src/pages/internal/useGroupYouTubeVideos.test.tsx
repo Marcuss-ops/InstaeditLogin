@@ -67,8 +67,9 @@ const video: GroupYouTubeVideo = {
   platform_account_id: 42,
 };
 
-// The hook's loadVideos filter keeps only videos whose privacy is
-// "private" (and not phantom), so quick-create fixtures must carry it.
+// The hook returns EVERY manageable video (canonical list); quick-create
+// derives the first private (non-phantom) row client-side, so fixtures
+// carrying actual_privacy "private" are the ones it must pick.
 const privateVideo: GroupYouTubeVideo = {
   ...video,
   actual_privacy: "private",
@@ -241,6 +242,61 @@ describe("useGroupYouTubeVideos — quick create (Crea copertina)", () => {
       createdSession.editor_url,
       createdSession.velox_project_id,
       { returnTo: "/app/covers?group=7" },
+    );
+  });
+
+  it("keeps every manageable video in the canonical list (no private-only filter)", async () => {
+    authedFetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        videos: [
+          { ...video, youtube_video_id: "public-1", privacy_status: "public", actual_privacy: "public" },
+          { ...video, youtube_video_id: "private-1", privacy_status: "private", actual_privacy: "private" },
+          { ...video, youtube_video_id: "unlisted-1", privacy_status: "unlisted", actual_privacy: "unlisted" },
+        ],
+      }),
+    );
+
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.state.kind).toBe("ready");
+    if (result.current.state.kind !== "ready") return;
+    expect(result.current.state.videos.map((v) => v.youtube_video_id)).toEqual([
+      "public-1",
+      "private-1",
+      "unlisted-1",
+    ]);
+  });
+
+  it("quick-create picks the newest private video even when a public video is first", async () => {
+    authedFetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          videos: [
+            { ...video, youtube_video_id: "public-1", privacy_status: "public", actual_privacy: "public" },
+            { ...privateVideo, youtube_video_id: "private-1" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ workspace_id: 7 }))
+      .mockResolvedValueOnce(jsonResponse({}));
+    createYouTubeEditorSessionMock.mockResolvedValueOnce(createdSession);
+
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    let opened = false;
+    await act(async () => {
+      opened = await result.current.quickCreateCover();
+    });
+
+    expect(opened).toBe(true);
+    expect(createYouTubeEditorSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ youtube_video_id: "private-1" }),
     );
   });
 

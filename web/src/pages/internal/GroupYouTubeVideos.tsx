@@ -1,9 +1,18 @@
+import { useState } from "react";
 import { AlertTriangle, Loader2, RefreshCw, Video } from "lucide-react";
 import { EmptyState } from "../../components/feedback/EmptyState";
+import { cn } from "../../lib/utils";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { GroupYouTubeVideoCard } from "./GroupYouTubeVideoCard";
 import { GroupYouTubeVideoPreviewModal } from "./GroupYouTubeVideoPreviewModal";
-import { DEFAULT_PAGE_SIZE, RECENCY_OPTIONS, type GroupYouTubeVideo } from "./groupYouTubeVideosTypes";
+import { DEFAULT_PAGE_SIZE, RECENCY_OPTIONS, type GroupYouTubeVideo, type YouTubePrivacyStatus } from "./groupYouTubeVideosTypes";
+
+const VISIBILITY_FILTERS: Array<{ id: "all" | YouTubePrivacyStatus; label: string }> = [
+  { id: "all", label: "Tutti" },
+  { id: "private", label: "Privati" },
+  { id: "unlisted", label: "Non in elenco" },
+  { id: "public", label: "Pubblici" },
+];
 
 export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; groupName?: string }) {
   const {
@@ -24,6 +33,22 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
     refreshVideos,
     loadMoreVideos,
   } = useGroupYouTubeVideos(groupId, true, groupName);
+  const [visibility, setVisibility] = useState<"all" | YouTubePrivacyStatus>("all");
+
+  // Derived visibility filter over the canonical list: the hook returns
+  // every manageable video (private/public/unlisted/phantom) and the UI
+  // narrows it on privacyStatus — one query, one cache, derived filters.
+  const visibleVideos = state.kind === "ready"
+    ? state.videos.filter((video) => visibility === "all" || video.privacy_status === visibility)
+    : [];
+  const counts = state.kind === "ready"
+    ? {
+        all: state.videos.length,
+        private: state.videos.filter((video) => video.privacy_status === "private").length,
+        unlisted: state.videos.filter((video) => video.privacy_status === "unlisted").length,
+        public: state.videos.filter((video) => video.privacy_status === "public").length,
+      }
+    : null;
 
   // Open the destination tab synchronously inside the click gesture so a
   // popup blocker cannot swallow the editor window while the session
@@ -42,7 +67,7 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
   return (
     <section className="mb-6" data-testid="group-youtube-videos">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-[13px] font-bold text-white">Video da pubblicare</h3>
+        <h3 className="text-[13px] font-bold text-white">Video del gruppo</h3>
         <div className="flex items-center gap-2">
           <label className="text-[11px] text-[#9aa0aa]" htmlFor="group-video-recency">Periodo</label>
           <select
@@ -68,6 +93,29 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
         </div>
       </div>
 
+      {state.kind === "ready" && state.videos.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filtra per visibilità">
+          {VISIBILITY_FILTERS.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              aria-pressed={visibility === filter.id}
+              onClick={() => setVisibility(filter.id)}
+              data-testid={`group-videos-filter-${filter.id}`}
+              className={cn(
+                "rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors",
+                visibility === filter.id
+                  ? "border-violet-400/50 bg-violet-500/[0.12] text-violet-100"
+                  : "border-white/[0.08] bg-white/[0.04] text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white",
+              )}
+            >
+              {filter.label}
+              <span className="ml-1.5 text-[10px] font-medium text-white/40">{counts?.[filter.id] ?? 0}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {state.kind === "loading" && (
         <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-5 text-[12px] text-[#9aa0aa]">
           <Loader2 size={15} className="animate-spin" aria-hidden="true" />
@@ -92,10 +140,10 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
         </div>
       )}
 
-      {state.kind === "ready" && state.videos.length === 0 && (
+      {state.kind === "ready" && visibleVideos.length === 0 && (
         <EmptyState
-          title="Nessun video privato recente"
-          description={`Non ci sono video privati negli ultimi ${recencyDays} giorni.`}
+          title={visibility === "all" ? "Nessun video recente" : `Nessun video ${visibility === "private" ? "privato" : visibility === "unlisted" ? "non in elenco" : "pubblico"}`}
+          description={visibility === "all" ? `Non ci sono video negli ultimi ${recencyDays} giorni.` : "Prova a cambiare filtro o periodo."}
           icon={<Video size={24} />}
           className="mx-auto max-w-sm bg-white/[0.02] py-8 border-white/[0.08]"
           cta={
@@ -110,11 +158,11 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
         />
       )}
 
-      {state.kind === "ready" && state.videos.length > 0 && (
+      {state.kind === "ready" && visibleVideos.length > 0 && (
         <div className="space-y-3">
           {(() => {
-            const midpoint = Math.ceil(state.videos.length / 2);
-            const columns = [state.videos.slice(0, midpoint), state.videos.slice(midpoint)];
+            const midpoint = Math.ceil(visibleVideos.length / 2);
+            const columns = [visibleVideos.slice(0, midpoint), visibleVideos.slice(midpoint)];
             return (
               <div className="grid grid-cols-1 gap-3 min-[1001px]:grid-cols-2">
                 {columns.map((videos, index) => (
@@ -137,7 +185,7 @@ export function GroupYouTubeVideos({ groupId, groupName }: { groupId: number; gr
           })()}
           {(
             <div className="grid min-h-[58px] grid-cols-[1fr_auto_1fr] items-center rounded-2xl border border-white/[0.08] bg-white/[0.018] px-4 text-[11px] text-[#9aa0aa]">
-              <span>1–{state.videos.length} video</span>
+              <span>1–{visibleVideos.length} video</span>
               {state.hasMore ? (
                 <button
                   type="button"

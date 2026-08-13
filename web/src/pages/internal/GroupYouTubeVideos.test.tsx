@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe("GroupYouTubeVideos", () => {
-  it("loads the first recent private-video page automatically on mount", async () => {
+  it("loads the first recent video page automatically on mount", async () => {
     authedFetchMock.mockResolvedValue(
       jsonResponse({
         videos: [],
@@ -58,7 +58,7 @@ describe("GroupYouTubeVideos", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
+      expect(screen.getByText(/nessun video recente/i)).toBeInTheDocument();
     });
     expect(screen.getByTestId("group-youtube-videos-recency")).toBeInTheDocument();
   });
@@ -122,13 +122,13 @@ describe("GroupYouTubeVideos", () => {
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
+      expect(screen.getByText(/nessun video recente/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/non ci sono video privati negli ultimi 90 giorni/i)).toBeInTheDocument();
+    expect(screen.getByText(/non ci sono video negli ultimi 90 giorni/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cambia periodo" })).toBeInTheDocument();
   });
 
-  it("does not render published phantom videos", async () => {
+  it("renders published phantom videos with the canonical list", async () => {
     authedFetchMock.mockResolvedValue(
       jsonResponse({
         videos: [
@@ -151,9 +151,51 @@ describe("GroupYouTubeVideos", () => {
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
+      expect(screen.getByText("Test video")).toBeInTheDocument();
     });
-    expect(screen.queryByText("Test video")).not.toBeInTheDocument();
+  });
+
+  it("filters the grid by privacy status client-side", async () => {
+    authedFetchMock.mockResolvedValue(
+      jsonResponse({
+        videos: [
+          {
+            youtube_video_id: "pub-id",
+            title: "Video pubblico",
+            privacy_status: "public",
+            actual_privacy: "public",
+            platform_account_id: 42,
+          },
+          {
+            youtube_video_id: "priv-id",
+            title: "Video privato",
+            privacy_status: "private",
+            actual_privacy: "private",
+            platform_account_id: 42,
+          },
+        ],
+        summary: { total_videos: 2 },
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Video pubblico")).toBeInTheDocument();
+      expect(screen.getByText("Video privato")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("group-videos-filter-private"));
+    await waitFor(() => {
+      expect(screen.getByText("Video privato")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Video pubblico")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("group-videos-filter-public"));
+    await waitFor(() => {
+      expect(screen.getByText("Video pubblico")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Video privato")).not.toBeInTheDocument();
   });
 
   it("shows an actionable message when YouTube returns a 502", async () => {

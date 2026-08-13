@@ -178,10 +178,14 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
       toast.error(state.message);
       return false;
     }
-    const firstVideo = state.videos[0];
-    // The manifest is date-descending (most recent private video first)
-    // after the privacy/phantom filter, so the one-click create draws its
-    // canvas from the group's newest private video.
+    // Derived filter on the canonical list: the one-click create draws
+    // its canvas from the group's newest PRIVATE video. The manifest is
+    // date-descending, so the first private (non-phantom) row is the
+    // most recent one.
+    const firstVideo = state.videos.find((video) => {
+      const privacy = String(video.actual_privacy ?? video.privacy_status ?? "").toLowerCase();
+      return privacy === "private" && video.phantom !== true;
+    });
     if (!firstVideo) {
       toast.error("Nessun video privato nel gruppo: carica un video su YouTube per crearci la copertina.");
       return false;
@@ -261,21 +265,18 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
           has_more?: boolean;
           next_offset?: number;
         };
-        // Normalize each row once: coerce privacy_status to the strict
-        // union (unknown values become undefined) and stamp the derived
-        // availability projection. privacy_status and availability stay
-        // separate concepts — the filter below keeps the current
-        // private-only behaviour until the visibility tabs land.
-        const videos = (data.videos ?? [])
-          .map((video) => ({
-            ...video,
-            privacy_status: isYouTubePrivacyStatus(video.privacy_status) ? video.privacy_status : undefined,
-            availability: videoAvailability(video),
-          }))
-          .filter((video) => {
-            const privacy = String(video.actual_privacy ?? video.privacy_status ?? "").toLowerCase();
-            return privacy === "private" && video.phantom !== true;
-          });
+        // Canonical query: every manageable video (private, public,
+        // unlisted, phantom published sessions) reaches state as-is.
+        // Visibility filters are DERIVED by consumers on privacyStatus;
+        // the backend stays a single resource — no per-visibility
+        // endpoints, one cache, one list. Each row is normalized once:
+        // privacy_status coerced to the strict union (unknown values
+        // become undefined) and the availability projection stamped.
+        const videos = (data.videos ?? []).map((video) => ({
+          ...video,
+          privacy_status: isYouTubePrivacyStatus(video.privacy_status) ? video.privacy_status : undefined,
+          availability: videoAvailability(video),
+        }));
         setState((previous) => {
           const previousVideos = append && previous.kind === "ready" ? previous.videos : [];
           return {

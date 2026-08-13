@@ -93,6 +93,30 @@ export function publicationState(video: GroupYouTubeVideo): {
   return { label: "Non ancora pubblicato", tone: "neutral" };
 }
 
+/**
+ * Current YouTube visibility of the video (actual read-back first, then
+ * the listing status). Independent from the publish lifecycle: a video
+ * can be "Privato su YouTube" (lifecycle) AND still be visible only to
+ * the channel (privacy). Unknown/missing values render neutrally.
+ */
+export function privacyBadge(video: GroupYouTubeVideo): {
+  label: string;
+  emoji: string;
+  tone: keyof typeof toneClasses;
+} {
+  const privacy = String(video.actual_privacy ?? video.privacy_status ?? "").toLowerCase();
+  switch (privacy) {
+    case "public":
+      return { label: "Pubblico", emoji: "🌍", tone: "success" };
+    case "unlisted":
+      return { label: "Non in elenco", emoji: "🔗", tone: "info" };
+    case "private":
+      return { label: "Privato", emoji: "🔒", tone: "neutral" };
+    default:
+      return { label: "Sconosciuta", emoji: "❔", tone: "neutral" };
+  }
+}
+
 export function formatPublishAt(value?: string): string | null {
   if (!value) return null;
   const date = new Date(value);
