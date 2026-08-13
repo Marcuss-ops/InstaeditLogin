@@ -62,7 +62,7 @@ func (m *MediaModule) Register(mux chi.Router) {
 	mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder/async", m.deps.Protected(m.deps.DriveBatchImportV2))
 	mux.Method(http.MethodGet, "/api/v1/media/import/drive/folder/async/{id}", m.deps.Protected(m.deps.DriveBatchV2Status))
 	mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", m.deps.Protected(m.deps.DriveBatchStatus))
-	mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", m.deps.Protected(m.deps.CompleteMedia))
+	mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", mediaProtected(m.deps.CompleteMedia))
 	mux.Method(http.MethodGet, "/api/v1/media", m.deps.Protected(m.deps.ListMedia))
 	mux.Method(http.MethodGet, "/api/v1/media/{id}", m.deps.Protected(m.deps.GetMedia))
 	mux.Method(http.MethodGet, "/api/v1/drive/assets", m.deps.Protected(m.deps.ListDriveAssets))

@@ -349,6 +349,58 @@ func TestMedia_Presign_EditorSessionBearer_200(t *testing.T) {
 	}
 }
 
+// TestMedia_Complete_EditorSessionBearer_200 pins that the media
+// complete step of the InstaEditor save flow accepts the editor session
+// bearer too (presign 200 → storage PUT → complete). Regression guard
+// for the 401 the browser hit after presign succeeded.
+func TestMedia_Complete_EditorSessionBearer_200(t *testing.T) {
+	issuer, err := editorlaunch.New("test-launch-secret-0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("new issuer: %v", err)
+	}
+	store := newMockMediaStore()
+	store.assets["asset-editor-complete"] = &models.MediaAsset{
+		ID:          "asset-editor-complete",
+		UserID:      42,
+		Status:      models.MediaAssetStatusPending,
+		ContentType: "image/png",
+		SizeBytes:   1024,
+		UploadKey:   "uploads/42/abc.png",
+		SHA256:      "sha",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	}
+	storage := newMockStorageProvider()
+	storage.verifyFn = func(key string) (string, int64, error) {
+		return "image/png", 1024, nil // matches the asset
+	}
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithMediaStore(store),
+		WithStorageProvider(storage),
+		WithMaxUploadBytes(200*1024*1024),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
+		WithEditorLaunchTokenIssuer(editor.LaunchTokenIssuer(issuer)),
+	)
+
+	sessionToken, _, err := issuer.IssueSession(42, 7, "ve_editor_1", []string{editorlaunch.ScopeRead, editorlaunch.ScopeWrite})
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/asset-editor-complete/complete", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 with editor session bearer, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestMedia_Presign_EditorSessionBearer_WriteScopeRequired_401 pins
 // that a read-only editor bearer (or a wrong-scope one) cannot mint
 // media assets.
