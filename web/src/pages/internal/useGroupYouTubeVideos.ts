@@ -357,6 +357,28 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     return () => abortRef.current?.abort();
   }, [enabled, refreshVideos]);
 
+  // Focus/visibility refetch: the cover publish happens in InstaEditor
+  // on a DIFFERENT origin, so the same-origin invalidation bus cannot
+  // reach this tab (BroadcastChannel is origin-scoped). When the user
+  // returns here — tab refocused / made visible again — refetch the
+  // canonical list so the card thumbnails reflect the cover just
+  // published. forceRefresh=false is enough: the backend already
+  // dropped its per-account cache on publish, so a plain list fetch
+  // returns the fresh thumbnail URL.
+  useEffect(() => {
+    if (!enabled) return;
+    const refetchWhenVisible = () => {
+      if (typeof document !== "undefined" && (document.hidden || document.visibilityState === "hidden")) return;
+      void refreshVideos(false, false);
+    };
+    window.addEventListener("focus", refetchWhenVisible);
+    document.addEventListener("visibilitychange", refetchWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refetchWhenVisible);
+      document.removeEventListener("visibilitychange", refetchWhenVisible);
+    };
+  }, [enabled, refreshVideos]);
+
   const hasPendingVideos =
     state.kind === "ready" &&
     state.videos.some((video) => video.youtube_sync_status === "pending");

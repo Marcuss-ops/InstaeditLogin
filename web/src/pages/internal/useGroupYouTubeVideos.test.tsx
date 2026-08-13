@@ -372,6 +372,31 @@ describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
     expect(result.current.state.kind).toBe("ready");
   });
 
+  it("refetches the canonical list when the tab regains focus (cross-origin cover publish)", async () => {
+    authedFetchMock.mockResolvedValue(jsonResponse({ videos: [privateVideo] }));
+
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const callsBefore = authedFetchMock.mock.calls.length;
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+
+    expect(authedFetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
+    const lastCall = authedFetchMock.mock.calls.at(-1)?.[0];
+    expect(String(lastCall)).toContain("/api/v1/groups/7/youtube/videos");
+    // Plain refetch — the backend already invalidated its cache on
+    // publish, so no refresh=true bypass is needed here.
+    expect(String(lastCall)).not.toContain("refresh=true");
+    // Current rows stay rendered: no loading-state reset.
+    expect(result.current.state.kind).toBe("ready");
+  });
+
   it("saves video metadata through the shared videosApi", async () => {
     const existing = {
       ...video,
