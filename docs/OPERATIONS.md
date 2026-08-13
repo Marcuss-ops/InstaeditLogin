@@ -126,10 +126,21 @@ outage.
   Uploads draw from the separate 2026 "Video Uploads" bucket — see
   [oauth-google-limits.md](oauth-google-limits.md) — NOT from this pool.
 * **Reset**: every day at **midnight Pacific Time** (America/Los_Angeles
-  — 07:00 UTC during PDT, March–November; 08:00 UTC during PST). This
-  is the same boundary the app's quota gate uses (`YouTubeQuotaDay` in
-  `internal/repository/youtube_quota_repo.go`), so the scheduler's
-  per-bucket day always matches Google's. Quota does not roll over.
+  — the 07:00/08:00 UTC instants below are just the UTC conversion of
+  that instant, **NOT** a UTC-midnight reset). This is the same
+  boundary the app's quota gate uses (`YouTubeQuotaDay` in
+  `internal/repository/youtube_quota_repo.go` — midnight LA, never
+  `time.Now().UTC().Truncate(24h)`), so the scheduler's per-bucket day
+  always matches Google's. Quota does not roll over.
+* **Legacy comments in applied migrations**: the SQL comments in the
+  already-applied migrations `059_youtube_quota_daily.sql` and
+  `124_youtube_quota_buckets.sql` still say "UTC date". Those files are
+  **immutable history**: the migration runner stores a SHA-256 checksum
+  of the whole file (comments included) in `schema_migrations` and
+  hard-fails on any modification, so the comments MUST NOT be edited.
+  The authoritative statement is this doc + `YouTubeQuotaDay` in
+  `internal/repository/youtube_quota_repo.go`: the `youtube_quota_daily`
+  `date` column is keyed by the Pacific calendar date.
 * **Verify (Google Cloud Console)**:
   1. https://console.cloud.google.com → select the project → **APIs &
      Services** → **YouTube Data API v3** → **Quotas**.
