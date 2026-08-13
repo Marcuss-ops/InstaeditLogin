@@ -1,11 +1,19 @@
 // Package repository — YouTube daily quota gate.
 //
-// youtube_quota_daily (migration 059) is the per-UTC-day counter the
-// publish_worker checks BEFORE every YouTube Data API v3 videos.insert
-// call. The pattern mirrors internal/repository/rate_limit_repo.go
+// youtube_quota_daily (migrations 059 + 124) is the per-day counter the
+// YouTubeQuotaManager checks BEFORE every YouTube Data API v3 call. It
+// mirrors the Google 2026 quota model (effective 2026-06-01): three
+// INDEPENDENT daily buckets, each keyed by (date, bucket):
+//
+//	video_uploads → videos.insert                 (default 100 calls/day)
+//	searches      → search.list                   (default 100 calls/day)
+//	general       → videos.update, videos.list,
+//	                thumbnails.set, channels.list (default 10000 units/day)
+//
+// The pattern mirrors internal/repository/rate_limit_repo.go
 // (INSERT...ON CONFLICT + FOR UPDATE on the daily row) but is sized
 // for quota buckets (1 call == 1 bucket unit in the Google 2026 model)
-// and paginates its counter through a single row keyed by date.
+// and paginates its counter through a single row keyed by (date, bucket).
 //
 // Concurrency: two pods racing on minute 23:59:59 of day N must NOT
 // both succeed past the limit. We serialize via SELECT … FOR UPDATE on
@@ -22,8 +30,17 @@ import (
 	"time"
 )
 
+// YouTube quota bucket identifiers (Google 2026 quota model). These are
+// the storage-level keys in youtube_quota_daily.bucket; the service
+// layer re-exports them for callers.
+const (
+	YouTubeQuotaBucketVideoUploads = "video_uploads"
+	YouTubeQuotaBucketSearches     = "searches"
+	YouTubeQuotaBucketGeneral      = "general"
+)
+
 // YouTubeDailyQuotaRepository is the Postgres-backed implementation of
-// the daily quota gate used by the publisher.
+// the daily quota gate used by the YouTubeQuotaManager.
 type YouTubeDailyQuotaRepository struct {
 	db *sql.DB
 }
@@ -44,23 +61,29 @@ func todayUTC() time.Time {
 
 // ReserveQuota atomically:
 //
-//  1. Upserts today's row at limit=defaultLimit.
+//  1. Upserts today's (date, bucket) row at limit=defaultLimit.
 //  2. Locks the row via SELECT … FOR UPDATE.
-//  3. If calls >= limit, returns (false, retryAfterSeconds, nil) with
-//     retryAfterSeconds == seconds until next UTC midnight.
-//  4. Else, increments calls by 1, commits, returns (true, 0, nil).
+//  3. If calls+cost > limit, returns (false, retryAfterSeconds, nil)
+//     with retryAfterSeconds == seconds until next UTC midnight.
+//  4. Else, increments calls by cost, commits, returns (true, 0, nil).
 //
 // Concurrency: the FOR UPDATE serializes concurrent reservations
-// across pods, so the limit is enforced strictly. defaultLimit is
-// the YOUTUBE_DAILY_QUOTA_LIMIT value supplied by the publisher (the
-// config knob in internal/config/config.go). We honor an inbound bump
+// across pods, so the limit is enforced strictly. defaultLimit is the
+// bucket ceiling supplied by the YouTubeQuotaManager (the config knob
+// in internal/config/config.go). We honor an inbound bump
 // (defaultLimit > stored limit) so an operator can grow the ceiling
 // mid-day; we do NOT shrink a stored ceiling that is already larger
 // (so an operator's deliberate constraint isn't silently relaxed by
 // a config typo).
-func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, defaultLimit int) (allowed bool, retryAfterSeconds int, err error) {
+func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, bucket string, cost, defaultLimit int) (allowed bool, retryAfterSeconds int, err error) {
 	if r == nil || r.db == nil {
 		return false, 0, errors.New("youtube quota: nil repo or db")
+	}
+	if bucket == "" {
+		return false, 0, errors.New("youtube quota: bucket must not be empty")
+	}
+	if cost < 1 {
+		return false, 0, fmt.Errorf("youtube quota: cost=%d must be >= 1", cost)
 	}
 	if defaultLimit < 1 {
 		return false, 0, fmt.Errorf("youtube quota: defaultLimit=%d must be >= 1", defaultLimit)
@@ -83,10 +106,10 @@ func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, defaultL
 	// DO NOTHING branch preserves any prior metadata so a partial day
 	// already populated by RecordError isn't clobbered.
 	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO youtube_quota_daily (date, calls, errors, "limit", last_reset_at)
-		VALUES ($1, 0, 0, $2, NOW())
-		ON CONFLICT (date) DO NOTHING
-	`, today, defaultLimit); err != nil {
+		INSERT INTO youtube_quota_daily (date, bucket, calls, errors, "limit", last_reset_at)
+		VALUES ($1, $2, 0, 0, $3, NOW())
+		ON CONFLICT (date, bucket) DO NOTHING
+	`, today, bucket, defaultLimit); err != nil {
 		return false, 0, fmt.Errorf("youtube quota: upsert daily row: %w", err)
 	}
 
@@ -95,9 +118,9 @@ func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, defaultL
 	if err = tx.QueryRowContext(ctx, `
 		SELECT calls, "limit"
 		FROM youtube_quota_daily
-		WHERE date = $1
+		WHERE date = $1 AND bucket = $2
 		FOR UPDATE
-	`, today).Scan(&callsStored, &limitStored); err != nil {
+	`, today, bucket).Scan(&callsStored, &limitStored); err != nil {
 		return false, 0, fmt.Errorf("youtube quota: lock + read: %w", err)
 	}
 
@@ -106,14 +129,14 @@ func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, defaultL
 	effectiveLimit := limitStored
 	if defaultLimit > limitStored {
 		if _, err = tx.ExecContext(ctx, `
-			UPDATE youtube_quota_daily SET "limit" = $1 WHERE date = $2
-		`, defaultLimit, today); err != nil {
+			UPDATE youtube_quota_daily SET "limit" = $1 WHERE date = $2 AND bucket = $3
+		`, defaultLimit, today, bucket); err != nil {
 			return false, 0, fmt.Errorf("youtube quota: update limit: %w", err)
 		}
 		effectiveLimit = defaultLimit
 	}
 
-	if callsStored >= effectiveLimit {
+	if callsStored+cost > effectiveLimit {
 		// Compute retryAfterSeconds as the wall-clock gap to next UTC
 		// midnight (i.e. the bucket window's natural reset boundary).
 		nextMidnight := today.Add(24 * time.Hour)
@@ -127,8 +150,8 @@ func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, defaultL
 	// (4) Increment AND commit together. The commit releases the
 	// FOR UPDATE lock so the next pod can proceed.
 	if _, err = tx.ExecContext(ctx, `
-		UPDATE youtube_quota_daily SET calls = calls + 1 WHERE date = $1
-	`, today); err != nil {
+		UPDATE youtube_quota_daily SET calls = calls + $1 WHERE date = $2 AND bucket = $3
+	`, cost, today, bucket); err != nil {
 		return false, 0, fmt.Errorf("youtube quota: increment calls: %w", err)
 	}
 
@@ -139,35 +162,40 @@ func (r *YouTubeDailyQuotaRepository) ReserveQuota(ctx context.Context, defaultL
 	return true, 0, nil
 }
 
-// RecordError bumps the errors counter for today (UTC). Called by the
-// publisher when an actual videos.insert HTTP call returns 5xx, hits a
-// transport error, or fails validation. Distinct from ReserveQuota's
-// quota_exceeded path: RecordError is "we tried, Google said no", not
-// "we decided not to try". The errors column is informational — it
-// does NOT block scheduling, since quota vs. error are orthogonal
-// failure modes.
+// RecordError bumps the errors counter for today (UTC) in the given
+// bucket. Called by the YouTubeQuotaManager when an actual API call
+// returns 5xx, hits a transport error, or fails validation. Distinct
+// from ReserveQuota's quota_exceeded path: RecordError is "we tried,
+// Google said no", not "we decided not to try". The errors column is
+// informational — it does NOT block scheduling, since quota vs. error
+// are orthogonal failure modes.
 //
 // The function synthesizes the daily row on first-call-of-day so the
 // errors counter does not silently drop the very first failure.
-func (r *YouTubeDailyQuotaRepository) RecordError(ctx context.Context) error {
+// defaultLimit seeds a freshly-created row (the manager passes its
+// configured bucket ceiling).
+func (r *YouTubeDailyQuotaRepository) RecordError(ctx context.Context, bucket string, defaultLimit int) error {
 	if r == nil || r.db == nil {
 		return errors.New("youtube quota: nil repo or db")
 	}
+	if bucket == "" {
+		return errors.New("youtube quota: bucket must not be empty")
+	}
 	today := todayUTC()
 	if _, err := r.db.ExecContext(ctx, `
-		INSERT INTO youtube_quota_daily (date, calls, errors, "limit", last_reset_at)
-		VALUES ($1, 0, 1, 300, NOW())
-		ON CONFLICT (date) DO UPDATE SET errors = youtube_quota_daily.errors + 1
-	`, today); err != nil {
+		INSERT INTO youtube_quota_daily (date, bucket, calls, errors, "limit", last_reset_at)
+		VALUES ($1, $2, 0, 1, $3, NOW())
+		ON CONFLICT (date, bucket) DO UPDATE SET errors = youtube_quota_daily.errors + 1
+	`, today, bucket, defaultLimit); err != nil {
 		return fmt.Errorf("youtube quota: record error: %w", err)
 	}
 	return nil
 }
 
 // GetSnapshot returns the current daily row's (calls, errors, limit,
-// last_reset_at) as an externally-readable snapshot. Used by the
-// /admin/health endpoint and by the existing YouTubeQuotaApproximation
-// rebuild — both are read-only and do NOT touch the row.
+// last_reset_at) for a bucket as an externally-readable snapshot. Used
+// by the /admin/health surface and by operators — both read-only and
+// do NOT touch the row.
 //
 // Naming: the second return is `errCount` (NOT `errors`) because a
 // named return value of type `int` named `errors` would SHADOW the
@@ -177,16 +205,19 @@ func (r *YouTubeDailyQuotaRepository) RecordError(ctx context.Context) error {
 // keeps the package accessible. The DB column name on the
 // SELECT remains the literal `errors` — Scan binds via address so
 // `&errCount` is what postgres populates with the column value.
-func (r *YouTubeDailyQuotaRepository) GetSnapshot(ctx context.Context) (calls, errCount, limit int, lastResetAt time.Time, err error) {
+func (r *YouTubeDailyQuotaRepository) GetSnapshot(ctx context.Context, bucket string) (calls, errCount, limit int, lastResetAt time.Time, err error) {
 	if r == nil || r.db == nil {
 		return 0, 0, 0, time.Time{}, errors.New("youtube quota: nil repo or db")
+	}
+	if bucket == "" {
+		return 0, 0, 0, time.Time{}, errors.New("youtube quota: bucket must not be empty")
 	}
 	today := todayUTC()
 	if err := r.db.QueryRowContext(ctx, `
 		SELECT calls, errors, "limit", last_reset_at
 		FROM youtube_quota_daily
-		WHERE date = $1
-	`, today).Scan(&calls, &errCount, &limit, &lastResetAt); err != nil {
+		WHERE date = $1 AND bucket = $2
+	`, today, bucket).Scan(&calls, &errCount, &limit, &lastResetAt); err != nil {
 		// DO NOT rename `errCount` back to `errors` — the int named
 		// return above would shadow the `errors` package, the call
 		// below would fail to compile (type int has no method Is),

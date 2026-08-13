@@ -57,7 +57,7 @@ unchanged.
 | Other OAuth | `META_*`, `TIKTOK_*`, `X_*`, `GOOGLE_DRIVE_*`, `LINKEDIN_*` | providers optional; local callback defaults | enabled platforms require ID + secret; secrets ≥32 chars |
 | JWT/security | `JWT_SECRET`, `JWT_ACCESS_TTL_MINUTES`, `JWT_REFRESH_TTL_DAYS`, `JWT_TTL_HOURS`, `TRUSTED_PROXIES`, `ADMIN_INVITE_TOKEN` | JWT secret required; TTL 15m/30d; invite empty disables registration | JWT ≥32 bytes; invite ≥32 chars when set |
 | Workers | `PUBLISH_*`, `RECONCILE_*`, `WEBHOOK_*`, `SESSION_CLEANUP_*`, `ASSET_CLEANUP_*`, `UPLOAD_*`, `RENDER_*`, `FFMPEG_*` | see `config_load.go`; main cadence defaults include 30s publish/upload and 86400s asset cleanup | provider-dependent positive/range checks |
-| YouTube worker policy | `YOUTUBE_UPLOAD_*`, `YOUTUBE_GROUP_VIDEOS_*`, `PUBLISH_HORIZON_DAYS`, `VIDEO_RETENTION_BUFFER_DAYS` | 16 MiB chunks, 5 retries, 1s/5m backoff, horizon 30d, buffer 7d | chunk multiple, retry/backoff ordering, positive limits |
+| YouTube worker policy | `YOUTUBE_UPLOAD_*`, `YOUTUBE_DAILY_UPLOAD_LIMIT`, `YOUTUBE_SEARCH_QUOTA_LIMIT`, `YOUTUBE_GENERAL_QUOTA_LIMIT`, `YOUTUBE_GROUP_VIDEOS_*`, `PUBLISH_HORIZON_DAYS`, `VIDEO_RETENTION_BUFFER_DAYS` | 16 MiB chunks, 5 retries, 1s/5m backoff; 2026 quota buckets 100 uploads / 100 searches / 10000 general units per day; horizon 30d, buffer 7d | chunk multiple, retry/backoff ordering, positive limits; legacy `YOUTUBE_DAILY_QUOTA_LIMIT` honoured as uploads fallback |
 | Sweeps | `TOKEN_REFRESH_SWEEP_*`, `SNAPSHOT_REFRESH_SWEEP_INTERVAL_SECONDS` | 900s/120d and 60s | token sweep positive when Google OAuth is enabled; snapshot zero normalizes to 60 |
 | Observability | `METRICS_*`, `SENTRY_*` | metrics listener disabled at port 0; Sentry disabled with empty DSN | production metrics credentials; DSN URL shape and HTTPS in production |
 | Integrations | `VELOX_*`, `NVIDIA_API_KEY`, `STRIPE_*` | optional; Stripe URLs derive from `FRONTEND_URL` | Velox control URL/secret must be paired; AI remains optional |
@@ -90,7 +90,9 @@ DB_API_MAX_OPEN_CONNS DB_API_MAX_IDLE_CONNS DB_API_CONN_MAX_LIFETIME_SECONDS DB_
 DB_MAINTENANCE_MAX_OPEN_CONNS DB_MAINTENANCE_MAX_IDLE_CONNS DB_MAINTENANCE_CONN_MAX_LIFETIME_SECONDS DB_MAINTENANCE_CONN_MAX_IDLE_TIME_SECONDS
 DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME DB_SSLMODE EXPECTED_DATABASE_INSTALLATION_UUID
 YOUTUBE_UPLOAD_CHUNK_BYTES YOUTUBE_UPLOAD_MAX_RETRIES YOUTUBE_UPLOAD_BACKOFF_BASE_MS YOUTUBE_UPLOAD_BACKOFF_CAP_MS
-YOUTUBE_DAILY_QUOTA_LIMIT YOUTUBE_GROUP_VIDEOS_MAX_ACCOUNTS YOUTUBE_GROUP_VIDEOS_MAX_VIDEOS
+YOUTUBE_DAILY_UPLOAD_LIMIT YOUTUBE_SEARCH_QUOTA_LIMIT YOUTUBE_GENERAL_QUOTA_LIMIT
+YOUTUBE_DAILY_QUOTA_LIMIT (legacy uploads fallback)
+YOUTUBE_GROUP_VIDEOS_MAX_ACCOUNTS YOUTUBE_GROUP_VIDEOS_MAX_VIDEOS
 YOUTUBE_GROUP_VIDEOS_CACHE_TTL_SECONDS YOUTUBE_GROUP_VIDEOS_DEFAULT_PAGE_SIZE
 PUBLISH_HORIZON_DAYS VIDEO_RETENTION_BUFFER_DAYS
 PUBLISH_WORKER_INTERVAL_SECONDS RECONCILE_WORKER_INTERVAL_SECONDS WEBHOOK_WORKER_INTERVAL_SECONDS

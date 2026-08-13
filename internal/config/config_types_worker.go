@@ -76,8 +76,19 @@ type WorkerConfig struct {
 	YouTubeUploadBackoffBaseMs int
 	// YouTubeUploadBackoffCapMs is the backoff cap in milliseconds.
 	YouTubeUploadBackoffCapMs int
-	// YouTubeDailyQuotaLimit is the daily videos.insert quota cap.
-	YouTubeDailyQuotaLimit int
+	// YouTubeUploadQuotaLimit is the daily videos.insert cap in the
+	// dedicated video_uploads bucket (Google 2026 quota model — the
+	// bucket YouTube resets independently of the other APIs). Default
+	// 100 calls/day; legacy YOUTUBE_DAILY_QUOTA_LIMIT is honoured as a
+	// fallback for existing deployments.
+	YouTubeUploadQuotaLimit int
+	// YouTubeSearchQuotaLimit is the daily search.list cap in the
+	// dedicated searches bucket (2026 quota model). Default 100 calls/day.
+	YouTubeSearchQuotaLimit int
+	// YouTubeGeneralQuotaLimit is the daily unit budget for the general
+	// bucket shared by videos.update, videos.list, thumbnails.set and
+	// channels.list (2026 quota model). Default 10000 units/day.
+	YouTubeGeneralQuotaLimit int
 	// YouTubeGroupVideosMaxAccounts caps group-video fan-out size.
 	YouTubeGroupVideosMaxAccounts int
 	// YouTubeGroupVideosMaxVideos caps the aggregate group-video projection.

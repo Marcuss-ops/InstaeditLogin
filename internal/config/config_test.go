@@ -371,6 +371,80 @@ func TestValidateOptionalPlatform_AllPlatforms(t *testing.T) {
 	}
 }
 
+// TestLoad_YouTubeQuotaBuckets_Defaults pins the Google 2026 quota
+// defaults: uploads 100, searches 100, general 10000. The old single
+// YOUTUBE_DAILY_QUOTA_LIMIT=300 default must NOT leak back in — the
+// video_uploads bucket cap is 100 calls/day and 300 would let the
+// scheduler think it is fine while Google answers quotaExceeded.
+func TestLoad_YouTubeQuotaBuckets_Defaults(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("YOUTUBE_DAILY_UPLOAD_LIMIT", "")
+	t.Setenv("YOUTUBE_DAILY_QUOTA_LIMIT", "")
+	t.Setenv("YOUTUBE_SEARCH_QUOTA_LIMIT", "")
+	t.Setenv("YOUTUBE_GENERAL_QUOTA_LIMIT", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with default quota buckets: want nil, got %v", err)
+	}
+	if cfg.Worker.YouTubeUploadQuotaLimit != 100 {
+		t.Errorf("YouTubeUploadQuotaLimit default: want 100, got %d", cfg.Worker.YouTubeUploadQuotaLimit)
+	}
+	if cfg.Worker.YouTubeSearchQuotaLimit != 100 {
+		t.Errorf("YouTubeSearchQuotaLimit default: want 100, got %d", cfg.Worker.YouTubeSearchQuotaLimit)
+	}
+	if cfg.Worker.YouTubeGeneralQuotaLimit != 10000 {
+		t.Errorf("YouTubeGeneralQuotaLimit default: want 10000, got %d", cfg.Worker.YouTubeGeneralQuotaLimit)
+	}
+}
+
+// TestLoad_YouTubeQuotaBuckets_EnvOverride pins the three env knobs
+// and the legacy fallback: YOUTUBE_DAILY_UPLOAD_LIMIT wins over the
+// legacy YOUTUBE_DAILY_QUOTA_LIMIT, which is still honoured when the
+// new knob is unset (so existing deployments tuning the old variable
+// keep working).
+func TestLoad_YouTubeQuotaBuckets_EnvOverride(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("YOUTUBE_DAILY_UPLOAD_LIMIT", "400")
+	t.Setenv("YOUTUBE_DAILY_QUOTA_LIMIT", "999")
+	t.Setenv("YOUTUBE_SEARCH_QUOTA_LIMIT", "250")
+	t.Setenv("YOUTUBE_GENERAL_QUOTA_LIMIT", "20000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with explicit quota buckets: want nil, got %v", err)
+	}
+	if cfg.Worker.YouTubeUploadQuotaLimit != 400 {
+		t.Errorf("YouTubeUploadQuotaLimit: want 400 (new env wins over legacy), got %d", cfg.Worker.YouTubeUploadQuotaLimit)
+	}
+	if cfg.Worker.YouTubeSearchQuotaLimit != 250 {
+		t.Errorf("YouTubeSearchQuotaLimit: want 250, got %d", cfg.Worker.YouTubeSearchQuotaLimit)
+	}
+	if cfg.Worker.YouTubeGeneralQuotaLimit != 20000 {
+		t.Errorf("YouTubeGeneralQuotaLimit: want 20000, got %d", cfg.Worker.YouTubeGeneralQuotaLimit)
+	}
+}
+
+// TestLoad_YouTubeQuotaBuckets_LegacyFallback pins that a deployment
+// which only ever set YOUTUBE_DAILY_QUOTA_LIMIT (the pre-2026 knob)
+// keeps its uploads ceiling after the upgrade.
+func TestLoad_YouTubeQuotaBuckets_LegacyFallback(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("YOUTUBE_DAILY_UPLOAD_LIMIT", "")
+	t.Setenv("YOUTUBE_DAILY_QUOTA_LIMIT", "400")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with legacy quota env: want nil, got %v", err)
+	}
+	if cfg.Worker.YouTubeUploadQuotaLimit != 400 {
+		t.Errorf("YouTubeUploadQuotaLimit legacy fallback: want 400, got %d", cfg.Worker.YouTubeUploadQuotaLimit)
+	}
+}
+
 func TestLoad_AppModeRejectsUnknownValue(t *testing.T) {
 	t.Setenv("APP_MODE", "prod")
 	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
