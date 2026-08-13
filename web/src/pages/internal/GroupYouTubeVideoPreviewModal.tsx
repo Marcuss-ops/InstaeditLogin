@@ -1,17 +1,16 @@
 import { Image as ImageIcon, Loader2, Save } from "lucide-react";
-import { cn } from "../../lib/utils";
 import { useYouTubeCategories } from "../../features/youtube/hooks/useYouTubeCategories";
-import type { VideoPreview } from "./groupYouTubeVideosTypes";
-import { privacyBadge, safeAssetUrl, toneClasses } from "./groupYouTubeVideosVisual";
+import type { VideoPreview, YouTubePrivacyStatus } from "./groupYouTubeVideosTypes";
+import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 
 /**
  * "Modifica video" drawer — the Dettagli destination for a group video.
  *
  * Edits the YouTube snippet metadata (title / description / category)
- * through the single PATCH endpoint; saves via onSave (the hook's
- * saveVideoMetadata). Visibility is SHOWN but deliberately read-only in
- * V1: privacy is owned by the publish flow in InstaEditor / YouTube
- * Studio, not by this drawer.
+ * AND the visibility (Pubblico / Privato / Non in elenco) through the
+ * single PATCH endpoint; saves via onSave (the hook's
+ * saveVideoMetadata). The backend folds the visibility change into the
+ * same videos.update and only writes status when it actually differs.
  */
 export function GroupYouTubeVideoPreviewModal({
   preview,
@@ -19,10 +18,12 @@ export function GroupYouTubeVideoPreviewModal({
   draftTitle,
   draftDescription,
   editCategoryID,
+  editPrivacyStatus,
   onClose,
   onDraftTitleChange,
   onDraftDescriptionChange,
   onEditCategoryIDChange,
+  onEditPrivacyStatusChange,
   onSave,
 }: {
   preview: VideoPreview;
@@ -30,14 +31,15 @@ export function GroupYouTubeVideoPreviewModal({
   draftTitle: string;
   draftDescription: string;
   editCategoryID: string;
+  editPrivacyStatus: YouTubePrivacyStatus;
   onClose: () => void;
   onDraftTitleChange: (value: string) => void;
   onDraftDescriptionChange: (value: string) => void;
   onEditCategoryIDChange: (value: string) => void;
+  onEditPrivacyStatusChange: (value: YouTubePrivacyStatus) => void;
   onSave: () => void;
 }) {
   const thumbnail = safeAssetUrl(preview.video.thumbnail_url);
-  const privacy = privacyBadge(preview.video);
   const availability = preview.video.availability;
   const availabilityIssue = availability && availability.status !== "available";
 
@@ -134,21 +136,24 @@ export function GroupYouTubeVideoPreviewModal({
             </select>
           </label>
 
-          <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-3">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-[#9aa0aa]">Visibilità</p>
-            <span className={cn("mt-1.5 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-bold", toneClasses[privacy.tone])}>
-              <span aria-hidden="true">{privacy.emoji}</span>
-              {privacy.label}
-            </span>
-            {availabilityIssue && (
-              <p className="mt-2 text-[11px] text-amber-200/90">
-                {availability?.reason ?? "Il video non è attualmente gestibile dal canale."}
-              </p>
-            )}
-            <p className="mt-2 text-[11px] text-[#7f8591]">
-              La visibilità si modifica dal flusso di pubblicazione di InstaEditor o da YouTube Studio — non è modificabile qui nella V1.
+          <label className="grid gap-1.5 text-xs font-semibold text-[#cdd2da]">
+            Visibilità
+            <select
+              value={editPrivacyStatus}
+              onChange={(event) => onEditPrivacyStatusChange(event.target.value as YouTubePrivacyStatus)}
+              data-testid="edit-metadata-privacy"
+              className="rounded-lg border border-white/[0.10] bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-violet-400/50"
+            >
+              <option value="private">Privato</option>
+              <option value="unlisted">Non in elenco</option>
+              <option value="public">Pubblico</option>
+            </select>
+          </label>
+          {availabilityIssue && (
+            <p className="text-[11px] text-amber-200/90">
+              {availability?.reason ?? "Il video non è attualmente gestibile dal canale."}
             </p>
-          </div>
+          )}
         </div>
 
         <footer className="flex justify-end gap-2 border-t border-white/[0.08] px-5 py-4">

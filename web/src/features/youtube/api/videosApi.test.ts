@@ -34,6 +34,7 @@ const patch = {
   title: "Nuovo titolo",
   description: "Nuova descrizione",
   category_id: "24",
+  privacy_status: "public",
 };
 
 beforeEach(() => {
@@ -49,6 +50,7 @@ describe("patchGroupVideoMetadata", () => {
         title: "Nuovo titolo",
         description: "Nuova descrizione",
         category_id: "24",
+        privacy_status: "public",
       }),
     );
 
@@ -66,6 +68,7 @@ describe("patchGroupVideoMetadata", () => {
       title: "Nuovo titolo",
       description: "Nuova descrizione",
       category_id: "24",
+      privacy_status: "public",
     });
   });
 

@@ -42,6 +42,8 @@ export function GroupVideoManager({ controller }: { controller: GroupVideosContr
     setDraftDescription,
     editCategoryID,
     setEditCategoryID,
+    editPrivacyStatus,
+    setEditPrivacyStatus,
     savingMetadata,
     openThumbnailEditor,
     openVideoPreview,
@@ -306,10 +308,12 @@ export function GroupVideoManager({ controller }: { controller: GroupVideosContr
           draftTitle={draftTitle}
           draftDescription={draftDescription}
           editCategoryID={editCategoryID}
+          editPrivacyStatus={editPrivacyStatus}
           onClose={() => setPreview(null)}
           onDraftTitleChange={setDraftTitle}
           onDraftDescriptionChange={setDraftDescription}
           onEditCategoryIDChange={setEditCategoryID}
+          onEditPrivacyStatusChange={setEditPrivacyStatus}
           onSave={() => void saveVideoMetadata()}
         />
       )}

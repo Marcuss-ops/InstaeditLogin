@@ -689,9 +689,9 @@ describe("GroupCovers", () => {
     expect(titleInput.value).toBe("Video modificabile");
     const categorySelect = screen.getByTestId("edit-metadata-category") as HTMLSelectElement;
     expect(categorySelect.value).toBe("24");
-    // Visibility is shown as a read-only badge, never a control.
-    expect(screen.getByText("Pubblico")).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: /visibilità/i })).not.toBeInTheDocument();
+    // Visibility is now editable: a select pre-selected on "public".
+    const privacySelect = screen.getByRole("combobox", { name: /visibilità/i }) as HTMLSelectElement;
+    expect(privacySelect.value).toBe("public");
 
     fireEvent.change(titleInput, { target: { value: "Titolo aggiornato" } });
     fireEvent.change(categorySelect, { target: { value: "20" } });
@@ -707,6 +707,7 @@ describe("GroupCovers", () => {
         title: "Titolo aggiornato",
         description: "Descrizione esistente",
         category_id: "20",
+        privacy_status: "public",
       });
     });
     expect(toastMock.success).toHaveBeenCalledWith("Metadati video salvati.");

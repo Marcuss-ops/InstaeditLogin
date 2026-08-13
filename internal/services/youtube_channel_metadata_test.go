@@ -246,6 +246,104 @@ func TestUpdateVideoMetadata_RejectsForeignChannelBeforePut(t *testing.T) {
 	}
 }
 
+// TestUpdateVideoMetadata_PrivacyChangeFoldsIntoStatus pins the new
+// visibility dimension: a privacy patch folds a status.privacyStatus
+// write into the SAME videos.update call (part=snippet,status) while
+// the snippet merge still preserves tags / omitted fields.
+func TestUpdateVideoMetadata_PrivacyChangeFoldsIntoStatus(t *testing.T) {
+	var gotPart string
+	var putBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"items": [{
+					"id": "VID123",
+					"snippet": {"title": "T", "description": "D", "channelId": "UC123", "tags": ["t"], "categoryId": "22"},
+					"status": {"privacyStatus": "private"}
+				}]
+			}`))
+			return
+		}
+		gotPart = r.URL.Query().Get("part")
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&putBody); err != nil {
+			t.Fatalf("decode put body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	title := "Nuovo"
+	public := "public"
+	result, err := svc.UpdateVideoMetadata(t.Context(), "token", "VID123", "UC123", models.YouTubeMetadataPatch{Title: &title, PrivacyStatus: &public})
+	if err != nil {
+		t.Fatalf("UpdateVideoMetadata: %v", err)
+	}
+	if gotPart != "snippet,status" {
+		t.Errorf("part: want snippet,status, got %s", gotPart)
+	}
+	status, ok := putBody["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("status missing: %v", putBody)
+	}
+	if status["privacyStatus"] != "public" {
+		t.Errorf("privacyStatus: want public, got %v", status["privacyStatus"])
+	}
+	snippet := putBody["snippet"].(map[string]interface{})
+	if snippet["title"] != "Nuovo" {
+		t.Errorf("title: want Nuovo, got %v", snippet["title"])
+	}
+	if result.PrivacyStatus != "public" {
+		t.Errorf("result privacy: want public, got %q", result.PrivacyStatus)
+	}
+}
+
+// TestUpdateVideoMetadata_UnchangedPrivacyStaysSnippetOnly pins the
+// equality guard: a privacy patch that matches the canonical read-back
+// keeps the update a pure part=snippet call (no status write, so a
+// pending publishAt survives).
+func TestUpdateVideoMetadata_UnchangedPrivacyStaysSnippetOnly(t *testing.T) {
+	var gotPart string
+	var putBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"items": [{
+					"id": "VID123",
+					"snippet": {"title": "T", "description": "D", "channelId": "UC123", "categoryId": "22"},
+					"status": {"privacyStatus": "private"}
+				}]
+			}`))
+			return
+		}
+		gotPart = r.URL.Query().Get("part")
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&putBody); err != nil {
+			t.Fatalf("decode put body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	title := "Nuovo"
+	same := "private"
+	if _, err := svc.UpdateVideoMetadata(t.Context(), "token", "VID123", "UC123", models.YouTubeMetadataPatch{Title: &title, PrivacyStatus: &same}); err != nil {
+		t.Fatalf("UpdateVideoMetadata: %v", err)
+	}
+	if gotPart != "snippet" {
+		t.Errorf("part: want snippet, got %s", gotPart)
+	}
+	if _, ok := putBody["status"]; ok {
+		t.Errorf("status must be omitted when privacy is unchanged, got %v", putBody["status"])
+	}
+}
+
 func TestUpdateVideoMetadata_NotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -284,6 +382,7 @@ func TestUpdateVideoMetadata_ValidationErrors(t *testing.T) {
 	tooLongTitle := strings.Repeat("a", 101)
 	emptyTitle := "   "
 	tooLongDescription := strings.Repeat("a", 5001)
+	bogusPrivacy := "bogus"
 
 	cases := []struct {
 		name    string
@@ -295,6 +394,7 @@ func TestUpdateVideoMetadata_ValidationErrors(t *testing.T) {
 		{"empty title", "VID", models.YouTubeMetadataPatch{Title: &emptyTitle}, "title cannot be empty"},
 		{"title too long", "VID", models.YouTubeMetadataPatch{Title: &tooLongTitle}, "title exceeds"},
 		{"description too long", "VID", models.YouTubeMetadataPatch{Description: &tooLongDescription}, "description exceeds"},
+		{"invalid privacy", "VID", models.YouTubeMetadataPatch{PrivacyStatus: &bogusPrivacy}, "invalid privacy status"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -20,21 +20,32 @@
 import { authedFetch } from "../../../lib/auth";
 import { invalidateGroupVideos } from "../hooks/useGroupVideosInvalidation";
 
+/** YouTube's three legal visibility values for a video (same union as
+ * status.privacyStatus). Inlined here so the features layer stays free
+ * of pages-internal imports. */
+export type YouTubePrivacyStatus = "public" | "private" | "unlisted";
+
 /** The PATCH body — platform_account_id identifies the group channel
- * that owns the video (the card already carries it on every row). */
+ * that owns the video (the card already carries it on every row).
+ * privacy_status is an optional visibility change; the backend folds it
+ * into the same videos.update and only writes status when it differs
+ * from the current read-back. */
 export interface GroupVideoMetadataPatch {
   platform_account_id: number;
   title: string;
   description: string;
   category_id: string;
+  privacy_status?: YouTubePrivacyStatus;
 }
 
-/** The merged snippet projection the backend echoes after the update. */
+/** The merged projection the backend echoes after the update. */
 export interface GroupVideoMetadataResult {
   youtube_video_id: string;
   title: string;
   description: string;
   category_id: string;
+  /** Empty string when visibility was not changed. */
+  privacy_status?: string;
 }
 
 /**

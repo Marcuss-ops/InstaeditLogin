@@ -6,18 +6,27 @@ package models
 // clear a field). This mirrors how the JSON PATCH body distinguishes
 // "omitted" from "explicitly cleared".
 type YouTubeMetadataPatch struct {
-	Title       *string
-	Description *string
-	CategoryID  *string
+	Title         *string
+	Description   *string
+	CategoryID    *string
+	// PrivacyStatus is the optional visibility change ("public" |
+	// "private" | "unlisted"). nil = leave the current status
+	// untouched; non-nil = fold a status.privacyStatus write into the
+	// same videos.update call. It is NOT pointer-cleared like the
+	// snippet fields: visibility is always one of the three legal
+	// values, never "empty".
+	PrivacyStatus *string
 }
 
-// YouTubeMetadataResult is the MERGED snippet projection returned
-// after a successful videos.update(part=snippet). It carries the
-// effective values (current + patch), so the caller can echo them
-// without a follow-up read.
+// YouTubeMetadataResult is the MERGED projection returned after a
+// successful videos.update. It carries the effective snippet values
+// (current + patch) plus the privacy status actually applied (empty
+// string when visibility was not changed), so the caller can echo
+// them without a follow-up read.
 type YouTubeMetadataResult struct {
-	VideoID     string
-	Title       string
-	Description string
-	CategoryID  string
+	VideoID       string
+	Title         string
+	Description   string
+	CategoryID    string
+	PrivacyStatus string
 }

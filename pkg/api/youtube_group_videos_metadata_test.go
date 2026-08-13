@@ -122,6 +122,39 @@ func TestPatchGroupYouTubeVideoMetadata_HappyPath(t *testing.T) {
 	}
 }
 
+func TestPatchGroupYouTubeVideoMetadata_PrivacyChange(t *testing.T) {
+	var gotPatch models.YouTubeMetadataPatch
+	updateFn := func(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error) {
+		gotPatch = patch
+		return &models.YouTubeMetadataResult{
+			VideoID:       videoID,
+			Title:         "T",
+			Description:   "D",
+			CategoryID:    "22",
+			PrivacyStatus: "public",
+		}, nil
+	}
+	r, _ := newMetadataPatchRouter(t, updateFn, func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+		return &models.OAuthToken{AccessToken: "valid-token"}, nil
+	})
+
+	w := patchVideoRequest(t, r, 3, "VID123", `{"platform_account_id": 42, "title": "T", "privacy_status": "public"}`)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotPatch.PrivacyStatus == nil || *gotPatch.PrivacyStatus != "public" {
+		t.Errorf("patch privacy: want public, got %v", gotPatch.PrivacyStatus)
+	}
+	var resp groupYouTubeVideoMetadataResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.PrivacyStatus != "public" {
+		t.Errorf("response privacy: want public, got %q", resp.PrivacyStatus)
+	}
+}
+
 func TestPatchGroupYouTubeVideoMetadata_Validation(t *testing.T) {
 	cases := []struct {
 		name string
@@ -133,6 +166,7 @@ func TestPatchGroupYouTubeVideoMetadata_Validation(t *testing.T) {
 		{"empty patch", `{"platform_account_id": 42}`, "at least one"},
 		{"empty title", `{"platform_account_id": 42, "title": "   "}`, "title cannot be empty"},
 		{"unknown category", `{"platform_account_id": 42, "category_id": "9999"}`, "known YouTube category"},
+		{"invalid privacy", `{"platform_account_id": 42, "privacy_status": "bogus"}`, "privacy_status must be"},
 		{"malformed json", `{`, "invalid JSON body"},
 	}
 	for _, tc := range cases {

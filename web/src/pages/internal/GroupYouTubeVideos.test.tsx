@@ -395,13 +395,15 @@ describe("GroupYouTubeVideos", () => {
     expect(categorySelect.value).toBe("24");
     expect(categorySelect.options.length).toBeGreaterThan(3);
 
-    // Visibility is shown but read-only in V1: a badge, never a control.
-    expect(screen.getByText("Pubblico")).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: /visibilità/i })).not.toBeInTheDocument();
+    // Visibility is now editable in the drawer: a select pre-selected
+    // on the video's current privacy (public).
+    const privacySelect = screen.getByRole("combobox", { name: /visibilità/i }) as HTMLSelectElement;
+    expect(privacySelect.value).toBe("public");
 
-    // Edit title + category, then save.
+    // Edit title + category + visibility, then save.
     fireEvent.change(screen.getByTestId("edit-metadata-title-input"), { target: { value: "Nuovo titolo" } });
     fireEvent.change(categorySelect, { target: { value: "20" } });
+    fireEvent.change(privacySelect, { target: { value: "unlisted" } });
     fireEvent.click(screen.getByTestId("edit-metadata-save"));
 
     await waitFor(() => {
@@ -414,6 +416,7 @@ describe("GroupYouTubeVideos", () => {
         title: "Nuovo titolo",
         description: "Descrizione esistente",
         category_id: "20",
+        privacy_status: "unlisted",
       });
     });
   });

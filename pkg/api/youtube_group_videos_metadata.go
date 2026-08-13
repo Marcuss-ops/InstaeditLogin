@@ -23,12 +23,14 @@ import (
 //
 // title / description / category_id are pointers so the merge can
 // distinguish "omitted" (nil — keep the current value) from
-// "explicitly cleared" (empty string — clear it).
+// "explicitly cleared" (empty string — clear it). privacy_status is
+// an optional visibility change ("public" | "private" | "unlisted").
 type youtubeVideoMetadataPatchRequest struct {
 	PlatformAccountID int64   `json:"platform_account_id"`
 	Title             *string `json:"title"`
 	Description       *string `json:"description"`
 	CategoryID        *string `json:"category_id"`
+	PrivacyStatus     *string `json:"privacy_status"`
 }
 
 // groupYouTubeVideoMetadataResponse echoes the effective (merged)
@@ -39,6 +41,7 @@ type groupYouTubeVideoMetadataResponse struct {
 	Title          string `json:"title"`
 	Description    string `json:"description"`
 	CategoryID     string `json:"category_id"`
+	PrivacyStatus  string `json:"privacy_status"`
 }
 
 // handlePatchGroupYouTubeVideoMetadata is the HTTP entry point for
@@ -96,13 +99,23 @@ func (r *Router) handlePatchGroupYouTubeVideoMetadata(w http.ResponseWriter, req
 		writeError(w, http.StatusBadRequest, "platform_account_id is required")
 		return
 	}
-	if body.Title == nil && body.Description == nil && body.CategoryID == nil {
-		writeError(w, http.StatusBadRequest, "at least one of title, description, category_id must be provided")
+	if body.Title == nil && body.Description == nil && body.CategoryID == nil && body.PrivacyStatus == nil {
+		writeError(w, http.StatusBadRequest, "at least one of title, description, category_id, privacy_status must be provided")
 		return
 	}
 	if body.Title != nil && strings.TrimSpace(*body.Title) == "" {
 		writeError(w, http.StatusBadRequest, "title cannot be empty")
 		return
+	}
+	if body.PrivacyStatus != nil {
+		privacy := strings.ToLower(strings.TrimSpace(*body.PrivacyStatus))
+		switch privacy {
+		case "public", "private", "unlisted":
+			// ok
+		default:
+			writeError(w, http.StatusBadRequest, "privacy_status must be one of public, private, unlisted")
+			return
+		}
 	}
 	if body.CategoryID != nil {
 		categoryID := strings.TrimSpace(*body.CategoryID)
@@ -143,9 +156,10 @@ func (r *Router) handlePatchGroupYouTubeVideoMetadata(w http.ResponseWriter, req
 	}
 
 	patch := models.YouTubeMetadataPatch{
-		Title:       body.Title,
-		Description: body.Description,
-		CategoryID:  body.CategoryID,
+		Title:         body.Title,
+		Description:   body.Description,
+		CategoryID:    body.CategoryID,
+		PrivacyStatus: body.PrivacyStatus,
 	}
 	result, err := r.youTubeSvc.UpdateVideoMetadata(req.Context(), token.AccessToken, videoID, acc.PlatformUserID, patch)
 	if err != nil {
@@ -180,5 +194,6 @@ func (r *Router) handlePatchGroupYouTubeVideoMetadata(w http.ResponseWriter, req
 		Title:          result.Title,
 		Description:    result.Description,
 		CategoryID:     result.CategoryID,
+		PrivacyStatus:  result.PrivacyStatus,
 	})
 }

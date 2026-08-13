@@ -49,6 +49,7 @@ import {
   type GroupYouTubeVideo,
   type LoadState,
   type VideoPreview,
+  type YouTubePrivacyStatus,
 } from "./groupYouTubeVideosTypes";
 
 interface GroupWorkspaceResponse {
@@ -89,6 +90,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
   const [draftTitle, setDraftTitle] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
   const [editCategoryID, setEditCategoryID] = useState("");
+  const [editPrivacyStatus, setEditPrivacyStatus] = useState<YouTubePrivacyStatus>("private");
   const [savingMetadata, setSavingMetadata] = useState(false);
   const toast = useToast();
 
@@ -205,6 +207,10 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     setDraftTitle(video.title ?? "");
     setDraftDescription(video.draft_description ?? video.description ?? "");
     setEditCategoryID(video.category_id ?? "");
+    setEditPrivacyStatus(
+      video.privacy_status
+        ?? (isYouTubePrivacyStatus(video.actual_privacy) ? video.actual_privacy : "private"),
+    );
   }, []);
 
   // "Modifica video" drawer save: PATCH the single metadata endpoint
@@ -224,6 +230,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
         title: draftTitle,
         description: draftDescription,
         category_id: editCategoryID,
+        privacy_status: editPrivacyStatus,
       });
       setPreview({
         video: {
@@ -231,6 +238,8 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
           title: draftTitle,
           description: draftDescription,
           category_id: editCategoryID,
+          privacy_status: editPrivacyStatus,
+          actual_privacy: editPrivacyStatus,
         },
       });
       toast.success("Metadati video salvati.");
@@ -243,7 +252,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     } finally {
       setSavingMetadata(false);
     }
-  }, [draftDescription, draftTitle, editCategoryID, groupId, navigate, preview, savingMetadata, toast]);
+  }, [draftDescription, draftTitle, editCategoryID, editPrivacyStatus, groupId, navigate, preview, savingMetadata, toast]);
 
   const loadVideos = useCallback(
     async (signal: AbortSignal, offset = 0, append = false, forceRefresh = false): Promise<void> => {
@@ -389,6 +398,8 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     setDraftDescription,
     editCategoryID,
     setEditCategoryID,
+    editPrivacyStatus,
+    setEditPrivacyStatus,
     savingMetadata,
     openThumbnailEditor,
     quickCreateCover,

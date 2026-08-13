@@ -398,8 +398,36 @@ describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
       title: "Video privato",
       description: "",
       category_id: "",
+      privacy_status: "private",
     });
     expect(patchGroupVideoMetadataMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("PATCHes privacy_status when the visibility changes and reflects it on the preview", async () => {
+    const existing = { ...video, privacy_status: "private", actual_privacy: "private" };
+    const { result } = renderHook(() => useGroupYouTubeVideos(7));
+
+    await act(async () => {
+      await result.current.openVideoPreview(existing);
+    });
+    expect(result.current.editPrivacyStatus).toBe("private");
+
+    await act(async () => {
+      result.current.setEditPrivacyStatus("public");
+    });
+    await act(async () => {
+      await result.current.saveVideoMetadata();
+    });
+
+    expect(patchGroupVideoMetadataMock).toHaveBeenCalledWith(7, "video-1", {
+      platform_account_id: 42,
+      title: "Video privato",
+      description: "",
+      category_id: "",
+      privacy_status: "public",
+    });
+    expect(result.current.preview?.video.privacy_status).toBe("public");
+    expect(result.current.preview?.video.actual_privacy).toBe("public");
   });
 
   it("seeds the category draft from the video and PATCHes title/description/category on save", async () => {
@@ -426,6 +454,7 @@ describe("useGroupYouTubeVideos — targeted group-videos invalidation", () => {
       title: "Nuovo titolo",
       description: "Descrizione esistente",
       category_id: "20",
+      privacy_status: "private",
     });
     // The drawer preview reflects the edited values immediately.
     expect(result.current.preview?.video.title).toBe("Nuovo titolo");

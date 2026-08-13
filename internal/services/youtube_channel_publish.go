@@ -358,10 +358,25 @@ func (s *YouTubeOAuthService) UpdateVideoMetadata(ctx context.Context, accessTok
 		return nil, fmt.Errorf("youtube update video metadata: %w", err)
 	}
 
+	// Normalize + validate the optional visibility change up front so
+	// an invalid value never burns the (quota-expensive) read. Unlike
+	// the snippet fields, privacy is never "cleared" — it is always
+	// one of the three legal YouTube values or omitted (nil).
+	var patchPrivacy string
+	if patch.PrivacyStatus != nil {
+		patchPrivacy = strings.ToLower(strings.TrimSpace(*patch.PrivacyStatus))
+		switch patchPrivacy {
+		case "public", "private", "unlisted":
+			// ok
+		default:
+			return nil, fmt.Errorf("youtube update video metadata: invalid privacy status %q", patchPrivacy)
+		}
+	}
+
 	// 1. Read the current canonical snippet (incl. tags, categoryId,
 	// default languages) so the merge below never drops them.
 	params := url.Values{}
-	params.Set("part", "snippet")
+	params.Set("part", "snippet,status")
 	params.Set("id", videoID)
 	reqURL := "https://www.googleapis.com/youtube/v3/videos?" + params.Encode()
 	readReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -453,16 +468,32 @@ func (s *YouTubeOAuthService) UpdateVideoMetadata(ctx context.Context, accessTok
 		snippet["defaultAudioLanguage"] = video.Snippet.DefaultAudioLanguage
 	}
 
+	// 4. Fold the optional visibility change into the SAME update.
+	// Only emit a status part when the desired privacy actually differs
+	// from the canonical read-back — an unchanged value keeps this a
+	// pure snippet update (status untouched, a pending publishAt
+	// survives). When it DOES change, send {privacyStatus} only: the
+	// drawer sets the current visibility and does not manage scheduling.
+	changedPrivacy := ""
+	if patch.PrivacyStatus != nil && patchPrivacy != strings.ToLower(strings.TrimSpace(video.Status.PrivacyStatus)) {
+		changedPrivacy = patchPrivacy
+	}
+
 	payload := map[string]interface{}{
 		"id":      videoID,
 		"snippet": snippet,
+	}
+	parts := "snippet"
+	if changedPrivacy != "" {
+		payload["status"] = map[string]string{"privacyStatus": changedPrivacy}
+		parts = "snippet,status"
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("youtube update video metadata: marshal payload: %w", err)
 	}
 
-	updateReq, err := http.NewRequestWithContext(ctx, http.MethodPut, "https://www.googleapis.com/youtube/v3/videos?part=snippet", bytes.NewReader(body))
+	updateReq, err := http.NewRequestWithContext(ctx, http.MethodPut, "https://www.googleapis.com/youtube/v3/videos?part="+parts, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("youtube update video metadata: create update request: %w", err)
 	}
@@ -477,10 +508,11 @@ func (s *YouTubeOAuthService) UpdateVideoMetadata(ctx context.Context, accessTok
 	if updateResp.StatusCode == http.StatusOK || updateResp.StatusCode == http.StatusNoContent {
 		_, _ = io.Copy(io.Discard, updateResp.Body)
 		return &models.YouTubeMetadataResult{
-			VideoID:     videoID,
-			Title:       title,
-			Description: description,
-			CategoryID:  categoryID,
+			VideoID:       videoID,
+			Title:         title,
+			Description:   description,
+			CategoryID:    categoryID,
+			PrivacyStatus: changedPrivacy,
 		}, nil
 	}
 
