@@ -150,32 +150,6 @@ export const EMPTY_STEP2_FORM: LivestreamStep2Form = {
 };
 
 /**
- * Known YouTube video category ids (videoCategories.list, default
- * global region). Static list for the wizard select — YouTube remains
- * the authority at broadcast creation time.
- */
-export const YOUTUBE_CATEGORIES: Array<{ id: string; label: string }> = [
-  { id: "1", label: "Film e animazione" },
-  { id: "2", label: "Auto e veicoli" },
-  { id: "10", label: "Musica" },
-  { id: "15", label: "Animali domestici" },
-  { id: "17", label: "Sport" },
-  { id: "18", label: "Cortometraggi" },
-  { id: "19", label: "Viaggi e eventi" },
-  { id: "20", label: "Gaming" },
-  { id: "21", label: "Video blog" },
-  { id: "22", label: "Persone e blog" },
-  { id: "23", label: "Commedia" },
-  { id: "24", label: "Intrattenimento" },
-  { id: "25", label: "Notizie e politica" },
-  { id: "26", label: "Istruzione e tutorial" },
-  { id: "27", label: "Educazione" },
-  { id: "28", label: "Scienza e tecnologia" },
-  { id: "29", label: "Non profit e attivismo" },
-  { id: "42", label: "Shorts" },
-];
-
-/**
  * ISO 639-1 languages offered by the wizard (matches the app's
  * language-flag set plus the most common YouTube live languages).
  */

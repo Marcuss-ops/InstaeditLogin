@@ -1,7 +1,7 @@
+import { YOUTUBE_CATEGORIES } from "../../features/youtube/api/categoriesApi";
 import {
   LATENCY_OPTIONS,
   LIVESTREAM_LANGUAGES,
-  YOUTUBE_CATEGORIES,
   type LivestreamRow,
   type LivestreamSummary,
   type LivestreamTab,

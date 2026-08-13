@@ -18,9 +18,9 @@ import type { MediaAssetContentType } from "../../features/publishing/api/types"
 import {
   LATENCY_OPTIONS,
   LIVESTREAM_LANGUAGES,
-  YOUTUBE_CATEGORIES,
   type LivestreamStep2Form,
 } from "./livestreamsTypes";
+import { YOUTUBE_CATEGORIES } from "../../features/youtube/api/categoriesApi";
 import { categoryLabel, languageLabel, latencyLabel, privacyLabel } from "./livestreamsVisual";
 
 const TITLE_MAX = 100;
