@@ -124,8 +124,17 @@ export function CoversPage() {
                         )}
                         style={active ? { boxShadow: `inset 3px 0 0 ${accent.text}, 0 8px 22px rgba(0,0,0,0.16)` } : undefined}
                       >
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: accent.bg, color: accent.text }}>
-                          <FolderKanban size={15} aria-hidden="true" />
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg" style={{ backgroundColor: accent.bg, color: accent.text }}>
+                          {firstChannelAvatar(node) ? (
+                            <img
+                              src={firstChannelAvatar(node)}
+                              alt=""
+                              loading="lazy"
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <FolderKanban size={15} aria-hidden="true" />
+                          )}
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[13px] font-semibold">{node.name}</span>
@@ -162,4 +171,15 @@ export function CoversPage() {
 }
 function flattenTree(nodes: TreeNode[]): TreeNode[] {
   return nodes.flatMap((node) => [node, ...flattenTree(node.children)]);
+}
+
+/**
+ * Avatar of the first channel in the group that has one. The group
+ * folder row shows a real channel avatar instead of a generic icon, so
+ * users recognise the space at a glance; groups without any avatar keep
+ * the folder glyph. Picks the first member deterministically (the
+ * membership order returned by the aggregate) — no randomness.
+ */
+function firstChannelAvatar(node: TreeNode): string | undefined {
+  return node.accounts.find((account) => account.avatar_url)?.avatar_url;
 }
