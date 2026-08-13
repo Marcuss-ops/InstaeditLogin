@@ -9,23 +9,23 @@
  * under `youtube:categories:<regionCode>` and deduplicates concurrent
  * callers.
  *
- * Server contract (planned):
+ * Server contract:
  *
  *   GET /api/v1/youtube/video-categories?region_code=IT
  *     resp: { categories: [{ id, label }, …] }
  *     200:  the videoCategories.list projection for the region
  *
- * The backend proxy is not deployed yet — videoCategories.list needs
- * an OAuth token the backend owns — so `getVideoCategories` serves the
- * canonical `YOUTUBE_CATEGORIES` snapshot (same shape) whenever the
- * endpoint 404s. The swap is transparent to consumers.
+ * The backend proxy is live (it mints an OAuth token and calls
+ * videoCategories.list), so `getVideoCategories` returns the real
+ * projection verbatim and lets failures propagate to the shared query
+ * registry, which surfaces them as an inline error snapshot.
  *
  * apiClient is used instead of authedFetch on purpose: authedFetch
- * toasts every non-2xx, and a missing endpoint (404) must resolve to
- * the snapshot, not to a spurious error toast.
+ * toasts every non-2xx, while a category fetch failure should surface
+ * as an inline error state in the form, not a viewport-level toast.
  */
 
-import { ApiClientError, apiClient } from "../../../lib/api-client";
+import { apiClient } from "../../../lib/api-client";
 
 /** One YouTube video category (id = the numeric categoryId). */
 export interface YouTubeCategory {
@@ -36,10 +36,12 @@ export interface YouTubeCategory {
 export const YOUTUBE_CATEGORIES_PATH = "/api/v1/youtube/video-categories";
 
 /**
- * Canonical snapshot of YouTube's videoCategories.list (default/global
- * region, Italian labels). This is the single source of truth for the
- * category selects until the backend endpoint lands; it also doubles
- * as the 404 fallback so forms never break on an undeployed backend.
+ * Static id → label reference for YouTube's videoCategories.list
+ * (default/global region, Italian labels). Used where a row only
+ * carries a `category_id` and the UI must render a label WITHOUT
+ * fetching the category list (e.g. `categoryLabel` on the video cards,
+ * the livestreams wizard). It is NOT a fetch fallback: the category
+ * select itself goes through `getVideoCategories`.
  */
 export const YOUTUBE_CATEGORIES: YouTubeCategory[] = [
   { id: "1", label: "Film e animazione" },
@@ -70,26 +72,17 @@ interface VideoCategoriesResponse {
  * GET /api/v1/youtube/video-categories — the categories available for
  * a region (ISO 3166-1 alpha-2, e.g. "IT").
  *
- * Falls back to the canonical `YOUTUBE_CATEGORIES` snapshot when the
- * endpoint is not deployed yet (404); every other failure propagates
- * so callers can distinguish "server unreachable" from "endpoint
- * missing".
+ * Returns the live projection verbatim; failures propagate so the
+ * shared query registry can surface them as an inline error state.
  */
 export async function getVideoCategories(
   regionCode: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<YouTubeCategory[]> {
   const params = new URLSearchParams({ region_code: regionCode });
-  try {
-    const data = await apiClient<VideoCategoriesResponse>(
-      `${YOUTUBE_CATEGORIES_PATH}?${params.toString()}`,
-      { signal: options.signal },
-    );
-    if (Array.isArray(data.categories)) return data.categories;
-  } catch (error) {
-    // 404 = the videoCategories proxy is not deployed on this backend
-    // yet; serve the canonical snapshot instead of failing the form.
-    if (!(error instanceof ApiClientError) || error.status !== 404) throw error;
-  }
-  return YOUTUBE_CATEGORIES;
+  const data = await apiClient<VideoCategoriesResponse>(
+    `${YOUTUBE_CATEGORIES_PATH}?${params.toString()}`,
+    { signal: options.signal },
+  );
+  return data.categories ?? [];
 }

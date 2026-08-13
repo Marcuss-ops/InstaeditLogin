@@ -20,7 +20,6 @@ vi.mock("../../../lib/api-client", () => ({
 import { ApiClientError } from "../../../lib/api-client";
 import {
   getVideoCategories,
-  YOUTUBE_CATEGORIES,
   YOUTUBE_CATEGORIES_PATH,
 } from "./categoriesApi";
 
@@ -41,18 +40,16 @@ describe("getVideoCategories", () => {
     );
   });
 
-  it("falls back to the canonical snapshot on 404 (endpoint not deployed)", async () => {
-    apiClientMock.mockRejectedValue(new ApiClientError("request failed (status 404)", 404));
-    await expect(getVideoCategories("US")).resolves.toEqual(YOUTUBE_CATEGORIES);
-  });
-
-  it("falls back to the canonical snapshot when the response has no categories", async () => {
+  it("returns an empty list when the response has no categories", async () => {
     apiClientMock.mockResolvedValue({});
-    await expect(getVideoCategories("IT")).resolves.toEqual(YOUTUBE_CATEGORIES);
+    await expect(getVideoCategories("IT")).resolves.toEqual([]);
   });
 
-  it("propagates non-404 failures", async () => {
+  it("propagates failures (including 404 — the endpoint is live)", async () => {
     apiClientMock.mockRejectedValue(new ApiClientError("boom", 500));
     await expect(getVideoCategories("IT")).rejects.toThrow("boom");
+
+    apiClientMock.mockRejectedValue(new ApiClientError("request failed (status 404)", 404));
+    await expect(getVideoCategories("IT")).rejects.toThrow("request failed (status 404)");
   });
 });
