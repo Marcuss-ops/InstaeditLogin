@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearSharedQueryCache, invalidateSharedQueries, useSharedQuery } from "./queryRegistry";
@@ -33,6 +34,21 @@ describe("useSharedQuery", () => {
     expect(second.result.current.data).toEqual({ value: 1 });
     first.unmount();
     second.unmount();
+  });
+
+  it("recovers from a StrictMode double-mount abort (no stuck loading)", async () => {
+    // StrictMode mounts effects twice (subscribe → cleanup(abort) →
+    // subscribe). The aborted first fetch must not leave the snapshot
+    // stuck in isLoading: the re-subscribe starts a fresh fetch and the
+    // data lands.
+    const fetcher = vi.fn().mockResolvedValue({ value: 42 });
+    const { result } = renderHook(
+      () => useSharedQuery("strict", { staleTime: 60_000, fetcher }),
+      { wrapper: StrictMode },
+    );
+    await flush();
+    expect(result.current.data).toEqual({ value: 42 });
+    expect(result.current.isLoading).toBe(false);
   });
 
   it("does not refetch fresh data until staleTime expires", async () => {

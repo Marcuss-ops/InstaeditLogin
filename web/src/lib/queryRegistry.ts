@@ -141,7 +141,13 @@ function schedule<T>(entry: Entry<T>): void {
 async function fetchEntry<T>(entry: Entry<T>, force: boolean): Promise<T | undefined> {
   if (entry.options.enabled === false || entry.listeners.size === 0) return entry.snapshot.data;
   if (isHidden() && !force) return entry.snapshot.data;
-  if (entry.inFlight) return entry.inFlight;
+  // Reuse the in-flight request for dedup — EXCEPT when its controller
+  // was already aborted. React StrictMode double-mounts effects
+  // (subscribe → cleanup(abort) → subscribe), so the first fetch's
+  // controller is aborted synchronously before it settles; reusing it
+  // would return a doomed promise and leave the snapshot stuck in
+  // `isLoading: true` forever. Start a fresh fetch instead.
+  if (entry.inFlight && !entry.controller?.signal.aborted) return entry.inFlight;
 
   const staleTime = entry.options.staleTime ?? DEFAULT_STALE_TIME_MS;
   const isFresh = entry.snapshot.updatedAt > 0 && Date.now() - entry.snapshot.updatedAt < staleTime;
@@ -192,8 +198,14 @@ async function fetchEntry<T>(entry: Entry<T>, force: boolean): Promise<T | undef
       throw error;
     })
     .finally(() => {
-      entry.inFlight = null;
-      entry.controller = null;
+      // Only clear the in-flight marker if THIS request is still the
+      // current one. A StrictMode re-subscribe can start a replacement
+      // fetch before the aborted first request settles; the first
+      // request's finally must not clobber the replacement's marker.
+      if (entry.inFlight === request) {
+        entry.inFlight = null;
+        entry.controller = null;
+      }
       schedule(entry);
     });
 
