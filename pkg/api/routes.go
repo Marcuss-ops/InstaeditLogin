@@ -211,9 +211,10 @@ func (r *Router) Setup() http.Handler {
 		r.mux.Method(http.MethodPost, "/api/v1/template-library/{template_id}/archive", coverLibraryMutation(http.HandlerFunc(r.handleArchiveCoverTemplate)))
 	}
 	reg.Register(NewMediaModule(MediaModuleDeps{
-		RateLimitSvc:       r.rateLimitSvc,
-		Protected:          r.protected,
-		PresignMedia:       r.handlePresignMedia,
+		RateLimitSvc:            r.rateLimitSvc,
+		Protected:               r.protected,
+		EditorSessionProtected:  r.editorSessionProtectedUnscoped,
+		PresignMedia:            r.handlePresignMedia,
 		DriveImport:        r.handleDriveImport,
 		DriveImportAsync:   r.handleDriveImportAsync,
 		DriveBatchImport:   r.handleDriveBatchImport,

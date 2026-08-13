@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/editorlaunch"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/editor"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -290,6 +292,98 @@ func TestMedia_Presign_NoJWT_401(t *testing.T) {
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", w.Code)
+	}
+}
+
+// TestMedia_Presign_EditorSessionBearer_200 pins the InstaEditor save
+// flow: the editor SPA holds only a short-lived editor session bearer
+// (no cookie-based InstaEdit session), so /api/v1/media/presign must
+// accept it and mint a media asset for the bearer's user. Regression
+// guard for the 404/401 the browser hit on drag-and-drop save when the
+// media routes only accepted the normal session chain.
+func TestMedia_Presign_EditorSessionBearer_200(t *testing.T) {
+	issuer, err := editorlaunch.New("test-launch-secret-0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("new issuer: %v", err)
+	}
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithMediaStore(newMockMediaStore()),
+		WithStorageProvider(newMockStorageProvider()),
+		WithMaxUploadBytes(200*1024*1024),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
+		WithEditorLaunchTokenIssuer(editor.LaunchTokenIssuer(issuer)),
+	)
+
+	sessionToken, _, err := issuer.IssueSession(42, 7, "ve_editor_1", []string{editorlaunch.ScopeRead, editorlaunch.ScopeWrite})
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+
+	body := `{"filename":"preview.png","content_type":"image/png","size_bytes":1024}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/presign", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 with editor session bearer, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp PresignMediaResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.AssetID == "" {
+		t.Error("asset_id should be set")
+	}
+	// The asset must be owned by the bearer's user so the later
+	// PATCH by-project (editorSessionProtected) can attach it.
+	store := r.mediaStore.(*mockMediaStore)
+	if asset, ok := store.assets[resp.AssetID]; ok && asset.UserID != 42 {
+		t.Errorf("asset user_id = %d, want 42 (bearer's user)", asset.UserID)
+	}
+}
+
+// TestMedia_Presign_EditorSessionBearer_WriteScopeRequired_401 pins
+// that a read-only editor bearer (or a wrong-scope one) cannot mint
+// media assets.
+func TestMedia_Presign_EditorSessionBearer_WriteScopeRequired_401(t *testing.T) {
+	issuer, err := editorlaunch.New("test-launch-secret-0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("new issuer: %v", err)
+	}
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithMediaStore(newMockMediaStore()),
+		WithStorageProvider(newMockStorageProvider()),
+		WithMaxUploadBytes(200*1024*1024),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
+		WithEditorLaunchTokenIssuer(editor.LaunchTokenIssuer(issuer)),
+	)
+
+	sessionToken, _, err := issuer.IssueSession(42, 7, "ve_editor_1", []string{editorlaunch.ScopeRead})
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+
+	body := `{"filename":"preview.png","content_type":"image/png","size_bytes":1024}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/presign", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401 for read-only editor bearer, got %d", w.Code)
 	}
 }
 

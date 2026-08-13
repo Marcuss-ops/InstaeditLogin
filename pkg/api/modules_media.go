@@ -13,6 +13,11 @@ import (
 type MediaModuleDeps struct {
 	RateLimitSvc       *services.RateLimitService
 	Protected          func(http.HandlerFunc) http.HandlerFunc
+	// EditorSessionProtected guards presign/complete with the editor
+	// session bearer too (in addition to the normal session), so the
+	// InstaEditor SPA can persist rendered previews as durable media
+	// assets without holding a cookie-based InstaEdit session.
+	EditorSessionProtected func(http.HandlerFunc) http.HandlerFunc
 	PresignMedia       http.HandlerFunc
 	DriveImport        http.HandlerFunc
 	DriveImportAsync   http.HandlerFunc
@@ -46,7 +51,11 @@ func (m *MediaModule) Register(mux chi.Router) {
 	if m.deps.RateLimitSvc != nil {
 		mediaPresignMw = append(mediaPresignMw, MediaPresignLimit(m.deps.RateLimitSvc))
 	}
-	mux.Method(http.MethodPost, "/api/v1/media/presign", chain(m.deps.Protected(m.deps.PresignMedia), mediaPresignMw...))
+	mediaProtected := m.deps.Protected
+	if m.deps.EditorSessionProtected != nil {
+		mediaProtected = m.deps.EditorSessionProtected
+	}
+	mux.Method(http.MethodPost, "/api/v1/media/presign", chain(mediaProtected(m.deps.PresignMedia), mediaPresignMw...))
 	mux.Method(http.MethodPost, "/api/v1/media/import/drive", m.deps.Protected(m.deps.DriveImport))
 	mux.Method(http.MethodPost, "/api/v1/media/import/drive/async", m.deps.Protected(m.deps.DriveImportAsync))
 	mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder", m.deps.Protected(m.deps.DriveBatchImport))

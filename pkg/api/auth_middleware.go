@@ -97,6 +97,41 @@ func (r *Router) editorSessionProtected(next http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
+// editorSessionProtectedUnscoped accepts the short-lived editor session
+// bearer on endpoints whose URL does not carry a velox_project_id
+// segment (media presign/complete). The project is already bound inside
+// the bearer's own claims, so the same VerifySession call that guards
+// the project-scoped routes is used with an empty URL project — the
+// token's own project_id + workspace + user claims become the identity,
+// exactly like the project-scoped variant. Requests without a valid
+// editor bearer fall through to the regular protected chain (cookie /
+// normal JWT session), so the InstaEdit SPA keeps working unchanged.
+func (r *Router) editorSessionProtectedUnscoped(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if r.editorLaunchTokenIssuer != nil {
+			raw := strings.TrimSpace(strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
+			if raw != "" {
+				scope := editorlaunch.ScopeRead
+				if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions {
+					scope = editorlaunch.ScopeWrite
+				}
+				if claims, err := r.editorLaunchTokenIssuer.VerifySession(raw, "", scope); err == nil {
+					ctx := editorlaunch.WithClaims(req.Context(), claims)
+					ctx = auth.WithIdentity(ctx, auth.NewUserIdentity(claims.UserID, claims.WorkspaceID, 0))
+					// requireUserID in the media handlers reads the user_id
+					// context key (set by auth.Manager.putIdentity on the
+					// normal session path); mirror it so presign/complete
+					// work identically for editor-session callers.
+					ctx = auth.WithUserID(ctx, claims.UserID)
+					next(w, req.WithContext(ctx))
+					return
+				}
+			}
+		}
+		r.protected(next)(w, req)
+	}
+}
+
 // oauthSessionRedirect validates the session (Bearer or HttpOnly
 // cookie) BEFORE running the wrapped OAuth handler, but unlike
 // `protected` it does not write a 401 on failure: it 302-redirects
