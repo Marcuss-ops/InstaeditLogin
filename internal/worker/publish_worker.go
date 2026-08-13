@@ -237,6 +237,17 @@ type PublishWorker struct {
 	// sibling targets of the same post sharing a language trigger a
 	// single NVIDIA call. Bounded by posts × distinct languages.
 	translationCache sync.Map
+
+	// publishConcurrency bounds the number of pending targets a single
+	// tick processes IN PARALLEL (worker-pool). 30 videos scheduled at
+	// the same minute no longer serialize behind one slow publish; the
+	// pool keeps at most `publishConcurrency` in flight per tick while
+	// the platform throttle still spaces out the actual API calls
+	// (each target owns its own claim/lease/retry budget, so parallel
+	// processing is safe at the row level). Default 4; 1 = legacy
+	// sequential behaviour. Wired via SetPublishConcurrency (the
+	// constructor's positional args are pinned by every test rig).
+	publishConcurrency int
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to
@@ -272,15 +283,27 @@ func NewPublishWorker(
 		workerID = "unset"
 	}
 	return &PublishWorker{
-		postRepo:      postRepo,
-		userRepo:      userRepo,
-		router:        router,
-		vault:         vault,
-		throttle:      NewPlatformThrottle(), // FASE 1.3
-		workerID:      workerID,
-		memoryLimiter: memoryLimiter,
-		interval:      interval,
-		logger:        logger,
-		resolver:      resolver,
+		postRepo:           postRepo,
+		userRepo:           userRepo,
+		router:             router,
+		vault:              vault,
+		throttle:           NewPlatformThrottle(), // FASE 1.3
+		workerID:           workerID,
+		memoryLimiter:      memoryLimiter,
+		interval:           interval,
+		logger:             logger,
+		resolver:           resolver,
+		publishConcurrency: 4, // default burst capacity; override via SetPublishConcurrency
 	}
+}
+
+// SetPublishConcurrency bounds the parallel worker pool of tick().
+// Values <= 1 restore the legacy sequential processing. Setter pattern
+// keeps NewPublishWorker's signature stable for every existing test rig
+// while letting the bootstrap wire the operator-facing env knob.
+func (w *PublishWorker) SetPublishConcurrency(n int) {
+	if n < 1 {
+		n = 1
+	}
+	w.publishConcurrency = n
 }

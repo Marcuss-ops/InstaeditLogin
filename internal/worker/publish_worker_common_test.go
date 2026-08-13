@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	"sync"
 	"time"
 
 	"encoding/json"
@@ -33,6 +34,11 @@ import (
 // related counters. Those moved to mockReconcilePostStore
 // (reconcile_worker_test.go) on the Reconciler's surface.
 type mockPostStore struct {
+	// mu guards every counter + captured slice below: tick() now drains
+	// pending batches through a parallel worker pool, so the mock can be
+	// touched by several goroutines at once (assertions after runOnce
+	// remain race-free).
+	mu               sync.Mutex
 	// Call counters — one per method, incremented on every invocation.
 	// Tests assert on the relative ordering (e.g. claimCalls > 0 before
 	// findByIDCalls is allowed) and the final counts.
@@ -84,9 +90,11 @@ type mockPostStore struct {
 // scheduling); production uses the lease-CAS variant in
 // MarkRateLimitedRetryWithLeaseImpl.
 func (m *mockPostStore) MarkRateLimitedRetryWithLease(id int64, _ string, nextAttemptAt time.Time, lastError string) error {
+	m.mu.Lock()
 	m.markRateLimitedRetryCalls++
 	m.markRateLimitedRetryAts = append(m.markRateLimitedRetryAts, nextAttemptAt)
 	m.markRateLimitedRetryErrs = append(m.markRateLimitedRetryErrs, lastError)
+	m.mu.Unlock()
 	if m.markRateLimitedRetryFn == nil {
 		return nil
 	}
@@ -94,7 +102,9 @@ func (m *mockPostStore) MarkRateLimitedRetryWithLease(id int64, _ string, nextAt
 }
 
 func (m *mockPostStore) ListPending(before time.Time) ([]models.PostTarget, error) {
+	m.mu.Lock()
 	m.listPendingCalls++
+	m.mu.Unlock()
 	if m.listPendingFn == nil {
 		return nil, nil
 	}
@@ -102,7 +112,9 @@ func (m *mockPostStore) ListPending(before time.Time) ([]models.PostTarget, erro
 }
 
 func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
+	m.mu.Lock()
 	m.findByIDCalls++
+	m.mu.Unlock()
 	if m.findByIDFn == nil {
 		return nil, errors.New("FindByID not implemented in this test")
 	}
@@ -116,7 +128,9 @@ func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 // claimFn. The owner/leaseTTL args are intentionally ignored — the
 // mock simulates the winner/loser outcome the test configures.
 func (m *mockPostStore) ClaimQueuedTargetWithLease(id int64, _ string, _ time.Duration) (bool, error) {
+	m.mu.Lock()
 	m.claimCalls++
+	m.mu.Unlock()
 	if m.claimFn == nil {
 		return false, errors.New("ClaimQueuedTargetWithLease not implemented in this test")
 	}
@@ -124,6 +138,7 @@ func (m *mockPostStore) ClaimQueuedTargetWithLease(id int64, _ string, _ time.Du
 }
 
 func (m *mockPostStore) UpdateStatus(target *models.PostTarget) error {
+	m.mu.Lock()
 	m.updateCalls++
 	// Snapshot the struct by value so later mutations to the
 	// caller's target don't leak into the captured row. Pointers
@@ -131,6 +146,7 @@ func (m *mockPostStore) UpdateStatus(target *models.PostTarget) error {
 	// alias, but the worker only writes PublishedAt once and the
 	// test reads it at assertion time, so this is safe.
 	m.updateTargets = append(m.updateTargets, *target)
+	m.mu.Unlock()
 	if m.updateStatusFn == nil {
 		return nil
 	}
@@ -142,9 +158,11 @@ func (m *mockPostStore) UpdateStatus(target *models.PostTarget) error {
 // tests that don't exercise the stamp path continue to pass
 // without configuring a setKeyFn.
 func (m *mockPostStore) SetProviderIdempotencyKey(id int64, key string) error {
+	m.mu.Lock()
 	m.setKeyCalls++
 	m.setKeyIDs = append(m.setKeyIDs, id)
 	m.setKeyVals = append(m.setKeyVals, key)
+	m.mu.Unlock()
 	if m.setKeyFn == nil {
 		return nil
 	}

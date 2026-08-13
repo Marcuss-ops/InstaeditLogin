@@ -7,6 +7,13 @@ type WorkerConfig struct {
 	YouTubeCopyrightCheckIntervalSeconds int
 	// PublishWorkerIntervalSeconds is the cadence of the publish worker.
 	PublishWorkerIntervalSeconds int
+	// PublishConcurrency bounds how many pending targets a single
+	// publish tick processes in parallel (worker pool). 30 videos
+	// scheduled at the same minute publish concurrently instead of
+	// serializing behind one slow target; the per-platform throttle
+	// still spaces the real API calls. Default 4; 1 = legacy
+	// sequential tick.
+	PublishConcurrency int
 	// MetadataGenerationWorkerIntervalSeconds is the cadence of the
 	// async NVIDIA metadata generation worker (migration 113). It polls
 	// metadata_generation_jobs and calls NVIDIA in the background so

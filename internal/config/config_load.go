@@ -134,6 +134,7 @@ func Load() (*Config, error) {
 			VideoRetentionBufferDays:                getEnvInt("VIDEO_RETENTION_BUFFER_DAYS", 7),
 			UploadPrepareLeadMinutes:                getEnvInt("UPLOAD_PREPARE_LEAD_MINUTES", 15),
 			PublishWorkerIntervalSeconds:            getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
+			PublishConcurrency:                      getEnvInt("PUBLISH_CONCURRENCY", 4),
 			YouTubeCopyrightCheckIntervalSeconds:    getEnvInt("YOUTUBE_COPYRIGHT_CHECK_INTERVAL_SECONDS", 1200),
 			MetadataGenerationWorkerIntervalSeconds: getEnvInt("METADATA_GENERATION_WORKER_INTERVAL_SECONDS", 5),
 			ReconcileWorkerIntervalSeconds:          getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),

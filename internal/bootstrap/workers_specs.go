@@ -38,6 +38,10 @@ func (a *App) publishWorkerSpec() worker.WorkerSpec {
 				time.Duration(a.Cfg.Worker.PublishWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
+			// Burst capacity: pending targets in a single tick are drained
+			// by a bounded worker pool (PUBLISH_CONCURRENCY, default 4) so
+			// N videos scheduled at the same minute publish concurrently.
+			pw.SetPublishConcurrency(a.Cfg.Worker.PublishConcurrency)
 			deliveryRegistry := services.NewDeliveryRegistry()
 			if ytPub, ok := a.CapRouter.Publisher(models.PlatformYouTube); ok {
 				_ = deliveryRegistry.Register(services.NewYouTubeDeliveryAdapter(ytPub))

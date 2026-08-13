@@ -677,3 +677,28 @@ func TestLoad_Production_RequiresMetricsBasicAuth(t *testing.T) {
 		})
 	}
 }
+
+// TestLoad_PublishConcurrency pins the publish-worker burst knob:
+// default 4 when unset, override via PUBLISH_CONCURRENCY.
+func TestLoad_PublishConcurrency(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("PUBLISH_CONCURRENCY", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() default: %v", err)
+	}
+	if cfg.Worker.PublishConcurrency != 4 {
+		t.Errorf("PublishConcurrency default: want 4, got %d", cfg.Worker.PublishConcurrency)
+	}
+
+	t.Setenv("PUBLISH_CONCURRENCY", "12")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() override: %v", err)
+	}
+	if cfg.Worker.PublishConcurrency != 12 {
+		t.Errorf("PublishConcurrency override: want 12, got %d", cfg.Worker.PublishConcurrency)
+	}
+}
