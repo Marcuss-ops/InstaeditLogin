@@ -47,6 +47,38 @@ func (r *UploadJobRepository) MarkCompleted(ctx context.Context, id int64, worke
 	return nil
 }
 
+// MarkPrepared records that Drive preparation and any early private upload
+// finished while the public publish cursor is still in the future.
+func (r *UploadJobRepository) MarkPrepared(ctx context.Context, id int64, workerID string, postID int64, assetID string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_jobs
+         SET status           = 'publish_scheduled',
+             post_id          = $2,
+             asset_id         = $3,
+             error_message    = NULL,
+             error_code       = NULL,
+             lease_owner      = NULL,
+             lease_expires_at = NULL,
+             heartbeat_at     = NULL,
+             updated_at       = NOW()
+         WHERE id = $1
+           AND lease_owner   = $4
+           AND status        = 'leased'`,
+		id, postID, assetID, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark upload job prepared: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read prepared rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
+	return nil
+}
+
 // MarkFailed is the worker-classified terminal fail: status = 'failed',
 // error_code + error_message stamped, lease cleared, completed_at = NOW().
 // Reserved for transient-but-classified-as-fatal failures (e.g. a 4xx

@@ -399,6 +399,17 @@ function validateEditorURL(editorUrl: string): URL {
   return parsed;
 }
 
+// The old Caddy hostname is still returned by sessions created before the
+// Vercel editor cutover. Keep those links usable while its DNS is migrated;
+// new launches must land on the production Vercel editor so the active bundle
+// and the visible InstaEdit 1.0 marker are actually served.
+function normalizeEditorURLForDeployment(parsed: URL): URL {
+  if (parsed.hostname.toLowerCase() !== "dev.instaedit.org") return parsed;
+  const next = new URL("https://instaeditor.vercel.app");
+  next.pathname = parsed.pathname;
+  return next;
+}
+
 export function openInstaEditorInNewTab(editorUrl: string): void {
   const parsed = validateEditorURL(editorUrl);
   window.open(parsed.toString(), "_blank", "noopener,noreferrer");
@@ -429,7 +440,7 @@ export async function createEditorLaunchURL(
   projectId: string,
   opts: EditorLaunchOptions = {},
 ): Promise<string> {
-  const parsed = validateEditorURL(editorUrl);
+  const parsed = normalizeEditorURLForDeployment(validateEditorURL(editorUrl));
   if (opts.returnTo) {
     parsed.searchParams.set("return_to", opts.returnTo);
   }

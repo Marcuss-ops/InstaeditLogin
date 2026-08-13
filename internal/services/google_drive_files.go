@@ -38,7 +38,7 @@ const driveDownloadMaxBytes = 10 * 1024 * 1024 * 1024
 //     My Drive files
 //   - parents               — used by future nested-folder traversal
 //   - createdTime, modifiedTime — for batch-crawler ordering
-const driveFileFields = "id,name,mimeType,size,sha256Checksum,capabilities,driveId,parents,createdTime,modifiedTime"
+const driveFileFields = "id,name,mimeType,size,sha256Checksum,capabilities,driveId,parents,createdTime,modifiedTime,thumbnailLink"
 
 // driveListFields wraps driveFileFields in the `files(...)` envelope
 // the files.list response uses, plus the nextPageToken pagination
@@ -193,6 +193,7 @@ type GoogleDriveFile struct {
 	Parents        []string      `json:"parents,omitempty"`
 	CreatedTime    string        `json:"createdTime,omitempty"`
 	ModifiedTime   string        `json:"modifiedTime,omitempty"`
+	ThumbnailLink  string        `json:"thumbnailLink,omitempty"`
 	Capabilities   *Capabilities `json:"capabilities,omitempty"`
 }
 
@@ -323,6 +324,65 @@ func (s *GoogleDriveOAuthService) ListFolder(ctx context.Context, folderID, driv
 			continue
 		}
 		files = append(files, f)
+	}
+	return files, parsed.NextPageToken, nil
+}
+
+// ListImageFolder enumerates PNG children for the thumbnail editor asset library.
+func (s *GoogleDriveOAuthService) ListImageFolder(ctx context.Context, folderID, driveID, accessToken, pageToken string) ([]GoogleDriveFile, string, error) {
+	if folderID == "" || !driveFolderIDPattern.MatchString(folderID) {
+		return nil, "", fmt.Errorf("google drive ListImageFolder: invalid folder id")
+	}
+	if s.cfg.Storage.GoogleDriveAPIKey == "" && accessToken == "" {
+		return nil, "", fmt.Errorf("%w: GOOGLE_DRIVE_API_KEY not configured and no user-specific drive access token supplied", ErrDriveListRequiresAPIKey)
+	}
+	params := url.Values{}
+	params.Set("q", "'"+folderID+"' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'")
+	params.Set("fields", driveListFields)
+	params.Set("pageSize", "200")
+	params.Set("orderBy", "name")
+	params.Set("supportsAllDrives", "true")
+	params.Set("includeItemsFromAllDrives", "true")
+	if driveID != "" {
+		params.Set("corpora", "drive")
+		params.Set("driveId", driveID)
+	}
+	if pageToken != "" {
+		params.Set("pageToken", pageToken)
+	}
+	if accessToken != "" {
+		params.Set("access_token", accessToken)
+	} else {
+		params.Set("key", s.cfg.Storage.GoogleDriveAPIKey)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/drive/v3/files?"+params.Encode(), nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("google drive image list request: %w", err)
+	}
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("google drive image list request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("google drive image list failed (status %d)", resp.StatusCode)
+	}
+	var parsed struct {
+		Files         []GoogleDriveFile `json:"files"`
+		NextPageToken string            `json:"nextPageToken"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, "", fmt.Errorf("google drive image list parse: %w", err)
+	}
+	files := make([]GoogleDriveFile, 0, len(parsed.Files))
+	for _, file := range parsed.Files {
+		if strings.EqualFold(file.MimeType, "image/png") {
+			files = append(files, file)
+		}
 	}
 	return files, parsed.NextPageToken, nil
 }

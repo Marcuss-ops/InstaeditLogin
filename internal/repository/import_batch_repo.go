@@ -118,7 +118,7 @@ func (r *ImportBatchRepository) FindByID(id uuid.UUID) (*models.ImportBatch, err
 		        publish_schedule_start_at, publish_schedule_min_gap_seconds, publish_schedule_max_gap_seconds,
 		        status, cursor_page_token, cursor_indexed_count,
 		        schedule_clamped, schedule_clamp_reason, warnings, error_message,
-		        created_count, created_at, updated_at, completed_at
+		        created_count, created_at, updated_at, completed_at, default_privacy_level
 		 FROM import_batches
 		 WHERE id = $1`,
 		id,
@@ -170,7 +170,7 @@ func (r *ImportBatchRepository) ClaimNextBatch(ctx context.Context, workerID str
                   b.publish_schedule_start_at, b.publish_schedule_min_gap_seconds, b.publish_schedule_max_gap_seconds,
                   b.status, b.cursor_page_token, b.cursor_indexed_count,
                   b.schedule_clamped, b.schedule_clamp_reason, b.warnings, b.error_message,
-                  b.created_count, b.created_at, b.updated_at, b.completed_at`,
+                  b.created_count, b.created_at, b.updated_at, b.completed_at, b.default_privacy_level`,
 		workerID, leaseUntil,
 	)
 	return scanImportBatch(row)
@@ -435,7 +435,7 @@ func scanImportBatch(row interface {
 		&batch.SourceProvider,
 		&rawSourceDrive,
 		&batch.SourceFolderID,
-		&rawTargetIDs,
+		pq.Array(&rawTargetIDs),
 		&rawTargetGroup,
 		&batch.PublishScheduleStartAt,
 		&batch.PublishScheduleMinGap,
@@ -451,6 +451,7 @@ func scanImportBatch(row interface {
 		&batch.CreatedAt,
 		&batch.UpdatedAt,
 		&rawCompletedAt,
+		&batch.DefaultPrivacyLevel,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

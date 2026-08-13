@@ -34,6 +34,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -110,13 +111,15 @@ func (m *mockImportBatchStoreV2) FindByID(id uuid.UUID) (*models.ImportBatch, er
 // Prefixed with `stubUserStoreV2` to avoid colliding with the
 // shared mockUserStore in routes_test.go (which exercises the
 // OAuth callback path with a richer surface).
-type stubUserStoreV2 struct{}
+type stubUserStoreV2 struct {
+	accounts []*models.PlatformAccount
+}
 
 func (m *stubUserStoreV2) AttachPlatformAccount(int64, *models.PlatformProfile, string) (*models.PlatformAccount, error) {
 	return nil, errors.New("stubUserStoreV2: not used by handleDriveBatchImportV2")
 }
 func (m *stubUserStoreV2) ListPlatformAccountsByUser(int64, string) ([]*models.PlatformAccount, error) {
-	return nil, nil
+	return m.accounts, nil
 }
 func (m *stubUserStoreV2) ListPlatformAccountsWithSnapshotsByUser(int64, string) ([]*repository.AccountWithSnapshot, error) {
 	return nil, nil
@@ -319,6 +322,27 @@ func newTestRouterV2(store ImportBatchStore, workspaceID int64) *Router {
 			ownedWorkspaces: map[int64]bool{workspaceID: true},
 		},
 		maxUploadBytes: 1 << 20, // 1 MiB
+	}
+}
+
+func TestResolveV2Targets_DirectAccountsAreOwnedAndDeduplicated(t *testing.T) {
+	router := &Router{
+		userRepo: &stubUserStoreV2{accounts: []*models.PlatformAccount{
+			{ID: 42, UserID: 1},
+			{ID: 43, UserID: 1},
+		}},
+	}
+
+	got, err := router.resolveV2Targets(context.Background(), 1, 1, []int64{42, 42, 43}, nil)
+	if err != nil {
+		t.Fatalf("resolve direct targets: %v", err)
+	}
+	if want := []int64{42, 43}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct targets: got %v, want %v", got, want)
+	}
+
+	if _, err := router.resolveV2Targets(context.Background(), 1, 1, []int64{99}, nil); err == nil {
+		t.Fatal("cross-tenant direct target should be rejected")
 	}
 }
 

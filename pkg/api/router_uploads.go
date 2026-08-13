@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -66,6 +67,13 @@ type UploadJobStore interface {
 	// error) when no rows match — the handler turns that into a
 	// 200 + note rather than 404.
 	AggregateByFolder(folderID string, userID int64) (models.BatchStatusSummary, error)
+}
+
+// ScheduledUploadEditor is optional so legacy in-memory stores remain
+// source-compatible. The production repository implements it to let users
+// change the draft metadata while a Drive job is still pending.
+type ScheduledUploadEditor interface {
+	UpdateScheduledContent(ctx context.Context, jobID, userID int64, title, caption *string, metadata json.RawMessage, metadataSet bool) (models.UploadJob, error)
 }
 
 // YouTubeVideoEditStore is the persistence contract for thumbnail

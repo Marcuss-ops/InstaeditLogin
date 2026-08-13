@@ -64,6 +64,11 @@ type DriveFolderLister interface {
 	ListFolder(ctx context.Context, folderID, driveID, accessToken, pageToken string) (files []GoogleDriveFile, nextPageToken string, err error)
 }
 
+// DriveImageFolderLister lists PNG assets for the thumbnail editor.
+type DriveImageFolderLister interface {
+	ListImageFolder(ctx context.Context, folderID, driveID, accessToken, pageToken string) (files []GoogleDriveFile, nextPageToken string, err error)
+}
+
 // ErrDriveListRequiresAPIKey is the typed sentinel ListFolder returns
 // when the caller asks to list a public folder WITHOUT both a Drive
 // OAuth accessToken AND cfg.Storage.GoogleDriveAPIKey. The handler uses
@@ -126,8 +131,9 @@ func ResolveFolderDriveID(ctx context.Context, svc DriveFolderInspector, folderI
 
 // Compile-time conformance to the central Platform Registry contract.
 var (
-	_ OAuthProvider        = (*GoogleDriveOAuthService)(nil)
-	_ DriveImporter        = (*GoogleDriveOAuthService)(nil)
-	_ DriveFolderLister    = (*GoogleDriveOAuthService)(nil)
-	_ DriveFolderInspector = (*GoogleDriveOAuthService)(nil)
+	_ OAuthProvider          = (*GoogleDriveOAuthService)(nil)
+	_ DriveImporter          = (*GoogleDriveOAuthService)(nil)
+	_ DriveFolderLister      = (*GoogleDriveOAuthService)(nil)
+	_ DriveImageFolderLister = (*GoogleDriveOAuthService)(nil)
+	_ DriveFolderInspector   = (*GoogleDriveOAuthService)(nil)
 )

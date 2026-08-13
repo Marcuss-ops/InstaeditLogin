@@ -2,68 +2,54 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-// SaveYouTubeSession persists the resumable upload session for a leased
-// upload job. The session URI, byte offset, chunk size and token expiry
-// are stamped so a crashed worker can resume the upload. The update is
-// CAS-guarded by lease_owner and status='leased' so a recovered row
-// cannot be overwritten by a stale worker.
-func (r *UploadJobRepository) SaveYouTubeSession(ctx context.Context, id int64, workerID, sessionURI string, offset, chunkSize int64, expiresAt time.Time) error {
-	if workerID == "" {
-		return fmt.Errorf("upload job SaveYouTubeSession: empty workerID")
-	}
-	if sessionURI == "" {
-		return fmt.Errorf("upload job SaveYouTubeSession: empty sessionURI")
-	}
-	res, err := r.db.ExecContext(ctx, SQLSaveYouTubeSession,
-		id, sessionURI, offset, expiresAt, chunkSize, workerID,
-	)
-	if err != nil {
-		return fmt.Errorf("upload job SaveYouTubeSession: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("upload job SaveYouTubeSession rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
-	}
-	return nil
-}
-
-// ClearYouTubeSession wipes the resumable upload session for a leased
-// upload job. Called after a successful publish or when the session
-// token expires and must be discarded. Like SaveYouTubeSession, the
-// operation is CAS-guarded by lease_owner and status='leased'.
-func (r *UploadJobRepository) ClearYouTubeSession(ctx context.Context, id int64, workerID string) error {
-	if workerID == "" {
-		return fmt.Errorf("upload job ClearYouTubeSession: empty workerID")
+// UpdateScheduledContent changes the mutable draft of a pending upload job.
+// It is scoped by user and status so a late edit cannot mutate a job already
+// claimed by preparation. The worker reads these columns when it materialises
+// the post, giving edits made before the preparation window last-write-wins
+// semantics.
+func (r *UploadJobRepository) UpdateScheduledContent(
+	ctx context.Context,
+	jobID, userID int64,
+	title, caption *string,
+	metadata json.RawMessage,
+	metadataSet bool,
+) (models.UploadJob, error) {
+	if jobID <= 0 || userID <= 0 {
+		return models.UploadJob{}, ErrUploadJobNotFound
 	}
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE upload_jobs
-		 SET youtube_session_uri       = NULL,
-		     youtube_session_offset    = NULL,
-		     youtube_session_expires_at  = NULL,
-		     youtube_chunk_size        = NULL,
-		     youtube_last_chunk_at     = NULL,
-		     updated_at                = NOW()
-		 WHERE id = $1
-		   AND lease_owner = $2
-		   AND status      = 'leased'`,
-		id, workerID,
+         SET title      = COALESCE($3, title),
+             caption    = COALESCE($4, caption),
+             metadata   = CASE WHEN $5 THEN $6 ELSE metadata END,
+             updated_at = NOW()
+         WHERE id = $1
+           AND user_id = $2
+           AND status = 'pending'`,
+		jobID, userID, title, caption, metadataSet, metadata,
 	)
 	if err != nil {
-		return fmt.Errorf("upload job ClearYouTubeSession: %w", err)
+		return models.UploadJob{}, fmt.Errorf("failed to update scheduled upload content: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("upload job ClearYouTubeSession rows affected: %w", err)
+		return models.UploadJob{}, fmt.Errorf("failed to read scheduled content rows affected: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+		return models.UploadJob{}, ErrUploadJobNotFound
 	}
-	return nil
+	job, err := r.FindByID(jobID)
+	if err != nil {
+		return models.UploadJob{}, fmt.Errorf("failed to reread scheduled upload content: %w", err)
+	}
+	if job == nil || job.UserID != userID {
+		return models.UploadJob{}, ErrUploadJobNotFound
+	}
+	return *job, nil
 }

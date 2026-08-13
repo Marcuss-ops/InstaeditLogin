@@ -193,7 +193,7 @@ func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Reque
 
 	// Resolve target account list — XOR rule was enforced in
 	// validateDriveBatchV2Request; here we expand target_group_id → accounts.
-	accountIDs, err := r.resolveV2Targets(req.Context(), ws.ID, body.TargetGroupID)
+	accountIDs, err := r.resolveV2Targets(req.Context(), userID, ws.ID, body.TargetAccountIDs, body.TargetGroupID)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "could not resolve targets: "+err.Error())
 		return
@@ -395,7 +395,36 @@ func validateDriveBatchV2Request(req *DriveBatchImportV2Request) error {
 // (after a duplicate-cull). For target_group_id, queries
 // workspace_channels where group_name = $1 AND workspace_id = $2
 // AND enabled IS TRUE.
-func (r *Router) resolveV2Targets(ctx context.Context, workspaceID int64, groupID *string) ([]int64, error) {
+func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64, accountIDs []int64, groupID *string) ([]int64, error) {
+	if len(accountIDs) > 0 {
+		// Direct targets are accepted only when they belong to the
+		// authenticated user. The request validator already checked
+		// positivity; this second check prevents cross-tenant target
+		// injection before the batch header is persisted.
+		accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, "")
+		if err != nil {
+			return nil, fmt.Errorf("list target accounts: %w", err)
+		}
+		owned := make(map[int64]struct{}, len(accounts))
+		for _, account := range accounts {
+			if account != nil {
+				owned[account.ID] = struct{}{}
+			}
+		}
+		out := make([]int64, 0, len(accountIDs))
+		seen := make(map[int64]struct{}, len(accountIDs))
+		for _, id := range accountIDs {
+			if _, ok := owned[id]; !ok {
+				return nil, fmt.Errorf("target account %d does not belong to user %d", id, userID)
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+		return out, nil
+	}
 	if groupID == nil || *groupID == "" {
 		// Should never reach here — validateDriveBatchV2Request
 		// enforces XOR, so by this point either target_account_ids

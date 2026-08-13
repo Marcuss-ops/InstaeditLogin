@@ -222,6 +222,11 @@ type PublishWorker struct {
 	// the Content Package aggregate. It is optional for legacy test fixtures.
 	packageStateSync ContentPackageStateSynchronizer
 
+	// argosDescriptionTranslator keeps long descriptions off NVIDIA. The
+	// title still comes from nvidiaTranslator; this provider is optional for
+	// backwards-compatible deployments without the Argos sidecar.
+	argosDescriptionTranslator services.DescriptionTranslator
+
 	// nvidiaTranslator (per-channel-language posting) translates the
 	// post title/caption into each target channel's language at
 	// publish time (account.Metadata["language"]). nil = feature off

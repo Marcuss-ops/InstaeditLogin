@@ -79,6 +79,9 @@ type DriveBatchCrawlerOptions struct {
 	// Zero / negative → the check is skipped (matches the producer's
 	// "no cap" silent-truncation pre-Blocco #2 behaviour).
 	PublishHorizonDays int
+	// PrepareLeadTime is subtracted from publish_at for Drive ingest and
+	// private YouTube preparation. Default 15 minutes.
+	PrepareLeadTime time.Duration
 }
 
 // DriveBatchCrawler is the P1#7 background consumer that drains
@@ -161,6 +164,9 @@ func (c *DriveBatchCrawler) applyDefaults() {
 		c.opts.PublishHorizonDays = 0
 	} else if c.opts.PublishHorizonDays == 0 {
 		c.opts.PublishHorizonDays = 30
+	}
+	if c.opts.PrepareLeadTime <= 0 {
+		c.opts.PrepareLeadTime = 15 * time.Minute
 	}
 }
 

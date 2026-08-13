@@ -36,6 +36,7 @@ type PublishingModuleDeps struct {
 	ListUploadsByAccount http.HandlerFunc
 	UploadsBatchByFolder http.HandlerFunc
 	RescheduleUpload     http.HandlerFunc
+	EditScheduledUpload  http.HandlerFunc
 	CancelUpload         http.HandlerFunc
 }
 
@@ -84,6 +85,7 @@ func (m *PublishingModule) Register(mux chi.Router) {
 		sr.Get("/by-account", m.deps.Protected(m.deps.ListUploadsByAccount))
 		sr.Post("/batch/by-folder", m.deps.Protected(m.deps.UploadsBatchByFolder))
 		sr.Patch("/{id}/reschedule", m.deps.Protected(m.deps.RescheduleUpload))
+		sr.Patch("/{id}/metadata", m.deps.Protected(m.deps.EditScheduledUpload))
 		sr.Delete("/{id}", m.deps.Protected(m.deps.CancelUpload))
 	})
 }

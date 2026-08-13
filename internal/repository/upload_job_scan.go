@@ -80,6 +80,9 @@ const (
             SELECT id
             FROM upload_jobs
             WHERE status IN ('pending', 'retry_wait')
+              -- A retry with an asset already staged belongs to the
+              -- publish/preparation pool; never download Drive again.
+              AND (status = 'pending' OR asset_id IS NULL)
               AND COALESCE(next_attempt_at, NOW()) <= NOW()
               AND (ingest_after IS NULL OR ingest_after <= NOW())
               AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
@@ -107,8 +110,12 @@ const (
 	SQLClaimBatchForPublish = `WITH candidates AS (
             SELECT id
             FROM upload_jobs
-            WHERE status = 'ingest_completed'
-              AND (publish_at IS NULL OR publish_at <= NOW())
+            WHERE (status = 'ingest_completed'
+                   OR (status = 'retry_wait' AND asset_id IS NOT NULL))
+              -- Claim at the preparation cursor, not at publish_at. The
+              -- publish worker remains responsible for the final
+              -- publish_at IS NULL / publish_at <= NOW() gate.
+              AND (ingest_after IS NULL OR ingest_after <= NOW())
               AND COALESCE(next_attempt_at, NOW()) <= NOW()
               AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
             ORDER BY priority ASC, created_at ASC, id ASC

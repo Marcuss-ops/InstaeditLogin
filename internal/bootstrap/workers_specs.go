@@ -99,6 +99,12 @@ func (a *App) publishWorkerSpec() worker.WorkerSpec {
 				a.Cfg.AI.NVIDIAAPIKey,
 				services.WithModel(a.Cfg.AI.NVIDIAModel),
 			))
+			if a.Cfg.AI.ArgosTranslateURL != "" {
+				pw.SetArgosDescriptionTranslator(services.NewArgosDescriptionTranslator(a.Cfg.AI.ArgosTranslateURL))
+				slog.Info("publish worker: Argos description translator wired", "endpoint", a.Cfg.AI.ArgosTranslateURL)
+			} else {
+				slog.Warn("publish worker: Argos description translator not configured; NVIDIA remains responsible for descriptions")
+			}
 			return pw.Run(ctx)
 		},
 	}
@@ -334,6 +340,7 @@ func (a *App) driveBatchCrawlerWorkerSpec() worker.WorkerSpec {
 				// worst-case producer check; the crawler applies the
 				// REAL file count instead of the 10k-file heuristic.
 				PublishHorizonDays: a.Cfg.Worker.PublishHorizonDays,
+				PrepareLeadTime:    time.Duration(a.Cfg.Worker.UploadPrepareLeadMinutes) * time.Minute,
 			}
 			dbcc := worker.NewDriveBatchCrawler(
 				repository.NewImportBatchRepository(a.DB),

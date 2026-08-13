@@ -288,12 +288,13 @@ func (r *Router) scheduleDriveBatchFiles(
 			// FolderID is the migration-038 column: the dashboard
 			// status endpoint GROUPs BY folder without scanning the
 			// whole upload_jobs table on every poll.
-			FolderID:  &p.FolderID, // pointer so SQL NULL when empty
-			Title:     title,
-			Caption:   caption,
-			Targets:   []int64{p.FacebookAccountID},
-			Status:    models.UploadJobStatusPending,
-			PublishAt: &scheduledAt,
+			FolderID:    &p.FolderID, // pointer so SQL NULL when empty
+			Title:       title,
+			Caption:     caption,
+			Targets:     []int64{p.FacebookAccountID},
+			Status:      models.UploadJobStatusPending,
+			IngestAfter: r.prepareAtForPublish(scheduledAt),
+			PublishAt:   &scheduledAt,
 		}
 		if err := r.uploadJobStore.Create(job); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("create upload job for %s: %v", f.Name, err))

@@ -24,7 +24,9 @@ type MediaModuleDeps struct {
 	// ListMedia backs GET /api/v1/media — the reduced Media Library list.
 	ListMedia http.HandlerFunc
 	// GetMedia backs GET /api/v1/media/{id} — detail + on-demand preview.
-	GetMedia http.HandlerFunc
+	GetMedia        http.HandlerFunc
+	ListDriveAssets http.HandlerFunc
+	GetDriveAsset   http.HandlerFunc
 }
 
 // MediaModule mounts the presigned-upload and Drive-import routes.
@@ -54,4 +56,6 @@ func (m *MediaModule) Register(mux chi.Router) {
 	mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", m.deps.Protected(m.deps.CompleteMedia))
 	mux.Method(http.MethodGet, "/api/v1/media", m.deps.Protected(m.deps.ListMedia))
 	mux.Method(http.MethodGet, "/api/v1/media/{id}", m.deps.Protected(m.deps.GetMedia))
+	mux.Method(http.MethodGet, "/api/v1/drive/assets", m.deps.Protected(m.deps.ListDriveAssets))
+	mux.Method(http.MethodGet, "/api/v1/drive/assets/{id}/content", m.deps.Protected(m.deps.GetDriveAsset))
 }

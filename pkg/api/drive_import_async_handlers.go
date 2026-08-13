@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -27,6 +28,9 @@ type DriveImportAsyncRequest struct {
 	Caption string `json:"caption"`
 	// Targets are the platform account IDs where the clip should be published.
 	Targets []int64 `json:"targets"`
+	// PublishAt is optional for immediate imports and required to be in the
+	// future when supplied. Preparation starts up to 15 minutes earlier.
+	PublishAt *time.Time `json:"publish_at,omitempty"`
 }
 
 // DriveImportAsyncResponse returns the queued upload job id.
@@ -84,6 +88,10 @@ func (r *Router) handleDriveImportAsync(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusUnprocessableEntity, "at least one target is required")
 		return
 	}
+	if body.PublishAt != nil && !body.PublishAt.After(time.Now()) {
+		writeError(w, http.StatusUnprocessableEntity, "publish_at must be in the future")
+		return
+	}
 
 	// Workspace ownership check.
 	ws, err := r.workspaceStore.FindByID(body.WorkspaceID)
@@ -139,15 +147,22 @@ func (r *Router) handleDriveImportAsync(w http.ResponseWriter, req *http.Request
 	}
 
 	job := &models.UploadJob{
-		UserID:         userID,
-		WorkspaceID:    body.WorkspaceID,
-		SourceType:     models.UploadJobSource(body.SourceType),
-		SourceID:       body.SourceID,
-		DriveAccountID: driveAccountID,
-		Title:          body.Title,
-		Caption:        body.Caption,
-		Targets:        body.Targets,
-		Status:         models.UploadJobStatusPending,
+		UserID:              userID,
+		WorkspaceID:         body.WorkspaceID,
+		SourceType:          models.UploadJobSource(body.SourceType),
+		SourceID:            body.SourceID,
+		DriveAccountID:      driveAccountID,
+		Title:               body.Title,
+		Caption:             body.Caption,
+		Targets:             body.Targets,
+		Status:              models.UploadJobStatusPending,
+		DefaultPrivacyLevel: "private",
+		PublishAt:           body.PublishAt,
+	}
+	if body.PublishAt != nil {
+		job.IngestAfter = r.prepareAtForPublish(*body.PublishAt)
+	} else {
+		job.IngestAfter = time.Now()
 	}
 	if err := r.uploadJobStore.Create(job); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create upload job: "+err.Error())

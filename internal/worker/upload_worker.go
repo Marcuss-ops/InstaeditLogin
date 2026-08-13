@@ -47,6 +47,13 @@ type UploadJobStore interface {
 	ClearYouTubeSession(ctx context.Context, id int64, workerID string) error
 }
 
+// PreparedUploadJobStore is optional for compatibility with small test
+// doubles and legacy adapters. Production repositories implement it so a
+// future job is not reported as publish_completed before publish_at.
+type PreparedUploadJobStore interface {
+	MarkPrepared(ctx context.Context, id int64, workerID string, postID int64, assetID string) error
+}
+
 // UploadMediaStore is the narrow media asset repository interface.
 type UploadMediaStore interface {
 	Create(asset *models.MediaAsset) error

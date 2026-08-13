@@ -223,6 +223,8 @@ func (r *Router) Setup() http.Handler {
 		CompleteMedia:      r.handleCompleteMedia,
 		ListMedia:          r.handleListMediaAssets,
 		GetMedia:           r.handleGetMediaAsset,
+		ListDriveAssets:    r.handleListDriveAssets,
+		GetDriveAsset:      r.handleGetDriveAsset,
 	}))
 	// Livestream configuration CRUD base. The state machine
 	// (desired_state/actual_state) is worker-owned; the control
@@ -268,6 +270,7 @@ func (r *Router) Setup() http.Handler {
 		ListUploadsByAccount: r.handleListUploadsByAccount,
 		UploadsBatchByFolder: r.handleUploadsBatchByFolder,
 		RescheduleUpload:     r.handleRescheduleUpload,
+		EditScheduledUpload:  r.handleEditScheduledUpload,
 		CancelUpload:         r.handleCancelUpload,
 	}))
 	// Content Packages are the editable product aggregate. This bounded

@@ -122,16 +122,15 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 	// when publish_at <= now(). Calling PublishPost on a future post
 	// would race the scheduler and risk an out-of-order publish.
 	//
-	// P1#4 — defense-in-depth keep this go-level gate: ingest and
-	// publish pools are separate goroutines; the publish pool's
-	// ClaimBatchForPublish CTE also gates on (publish_at IS NULL OR
-	// publish_at <= NOW()) so under normal conditions a row claimed
-	// here already has publish_at <= now. The go-level check stays
+	// P1#4 — defense-in-depth keep this go-level gate. The publish pool
+	// now claims at ingest_after (the preparation cursor), so future
+	// rows must remain queued in the post table until publish_at. The
+	// go-level check stays
 	// for legacy single-file flows (POST /posts direct + cmd
 	// binaries) where rows bypass the upload_jobs batching path and
 	// the publish pool's CTE has no claim opportunity. A future
-	// Taskilino can remove this check once every flow routes through
-	// ClaimBatchForPublish.
+	// Taskilino can remove this check once every flow routes through the
+	// canonical scheduled-post path.
 	if job.PublishAt == nil || !job.PublishAt.After(time.Now()) {
 		if err := w.postStore.PublishPost(post.ID); err != nil {
 			return fmt.Errorf("trigger publish: %w", err)
@@ -152,9 +151,24 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 		metrics.RecordUploadBytes(models.PlatformYouTube, "publish", *job.TotalBytes)
 	}
 
-	// Mark job completed. CAS against workerID ensures a peer that
+	// Mark the job prepared or completed. CAS against workerID ensures a peer that
 	// stole the lease (reaper release + peer's ClaimBatch
 	// re-claim) cannot overwrite a peer's terminal write.
+	if job.PublishAt != nil && job.PublishAt.After(time.Now()) {
+		if prepared, ok := w.jobRepo.(PreparedUploadJobStore); ok {
+			if err := prepared.MarkPrepared(ctx, job.ID, workerID, post.ID, assetID); err != nil {
+				return fmt.Errorf("mark job prepared: %w", err)
+			}
+		} else if err := w.jobRepo.MarkCompleted(ctx, job.ID, workerID, post.ID, assetID); err != nil {
+			// Compatibility fallback for legacy adapters. The post itself
+			// remains protected by publish_at.
+			return fmt.Errorf("mark scheduled job prepared: %w", err)
+		}
+		w.logger.Info("upload worker: preparation done; publish scheduled",
+			"pool", "upload", "job_id", job.ID, "post_id", post.ID,
+			"publish_at", job.PublishAt.Format(time.RFC3339))
+		return nil
+	}
 	if err := w.jobRepo.MarkCompleted(ctx, job.ID, workerID, post.ID, assetID); err != nil {
 		return fmt.Errorf("mark job completed: %w", err)
 	}
@@ -266,13 +280,19 @@ func (w *UploadWorker) uploadVideoAsPrivateForTarget(
 		return nil
 	}
 	if pub == nil {
+		desiredPrivacy := resolveDesiredPrivacyForTarget(post, target)
 		pub = &models.YouTubeTargetPublication{
 			UploadJobID:         job.ID,
 			PostTargetID:        target.ID,
 			PlatformAccountID:   account.ID,
 			YouTubeUploadStatus: "youtube_uploading",
-			DesiredPrivacy:      resolveDesiredPrivacy(post),
+			DesiredPrivacy:      desiredPrivacy,
 			PublishAt:           post.PublishAt,
+		}
+		if snapshot, ok := snapshotForAccount(post.Metadata, target.PlatformAccountID); ok && snapshot.ThumbnailMediaID != "" {
+			pub.ThumbnailMediaID = strPtr(snapshot.ThumbnailMediaID)
+			status := "pending"
+			pub.ThumbnailStatus = &status
 		}
 		if err := w.ytPubStore.Create(ctx, pub); err != nil {
 			// UNIQUE violation on post_target_id OR a peer raced to
@@ -413,4 +433,13 @@ func resolveDesiredPrivacy(post *models.Post) string {
 		return post.DefaultPrivacyLevel
 	}
 	return "unlisted"
+}
+
+func resolveDesiredPrivacyForTarget(post *models.Post, target *models.PostTarget) string {
+	if target != nil {
+		if snapshot, ok := snapshotForAccount(post.Metadata, target.PlatformAccountID); ok && snapshot.PrivacyStatus != "" {
+			return snapshot.PrivacyStatus
+		}
+	}
+	return resolveDesiredPrivacy(post)
 }

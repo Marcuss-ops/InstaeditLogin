@@ -12,6 +12,53 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
+type editScheduledUploadRequest struct {
+	Title    *string         `json:"title"`
+	Caption  *string         `json:"caption"`
+	Metadata json.RawMessage `json:"metadata"`
+}
+
+// handleEditScheduledUpload updates the current draft used by the deferred
+// Drive worker. It is intentionally limited to pending jobs: once preparation
+// creates a post, the normal post PATCH endpoint is the authoritative draft.
+func (r *Router) handleEditScheduledUpload(w http.ResponseWriter, req *http.Request) {
+	editor, ok := r.uploadJobStore.(ScheduledUploadEditor)
+	if r.uploadJobStore == nil || !ok {
+		writeError(w, http.StatusNotImplemented, "scheduled upload editing not configured")
+		return
+	}
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.UserID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+	jobID, err := parseInt64PathParam(req, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var body editScheduledUploadRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if body.Title == nil && body.Caption == nil && body.Metadata == nil {
+		writeError(w, http.StatusBadRequest, "at least one metadata field is required")
+		return
+	}
+	job, err := editor.UpdateScheduledContent(req.Context(), jobID, identity.UserID(), body.Title, body.Caption, body.Metadata, body.Metadata != nil)
+	if err != nil {
+		if errors.Is(err, repository.ErrUploadJobNotFound) {
+			writeError(w, http.StatusNotFound, "upload job not found or no longer pending")
+			return
+		}
+		slog.Warn("scheduled upload metadata update failed", "job_id", jobID, "error", err)
+		writeError(w, http.StatusInternalServerError, "could not update scheduled upload")
+		return
+	}
+	writeJSON(w, http.StatusOK, toUploadJobDTO(&job))
+}
+
 // rescheduleUploadRequest is the body for PATCH /api/v1/uploads/{id}/reschedule.
 // We accept only the new publish_at — title, caption, and targets
 // remain unchanged (a future "edit" endpoint can fan those out).

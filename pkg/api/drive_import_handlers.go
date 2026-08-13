@@ -37,12 +37,16 @@ type DriveImportRequest struct {
 	Caption string `json:"caption"`
 	// Targets are the platform accounts where the clip should be published.
 	Targets []CreatePostTarget `json:"targets"`
+	// PublishAt turns this endpoint into a deferred calendar entry. In that
+	// mode no Drive bytes are downloaded and no YouTube upload is created.
+	PublishAt *time.Time `json:"publish_at,omitempty"`
 }
 
 // DriveImportResponse returns the created post and the imported media asset.
 type DriveImportResponse struct {
 	Post  *models.Post       `json:"post"`
 	Asset *models.MediaAsset `json:"asset"`
+	Job   *models.UploadJob  `json:"job,omitempty"`
 }
 
 // handleDriveImport imports a video from Google Drive and creates a post.
@@ -59,16 +63,8 @@ type DriveImportResponse struct {
 //  8. Create a post with the internal S3 URL and queue it for publishing.
 //  9. Trigger PublishPost so the worker picks it up immediately.
 func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
-	if r.storageProvider == nil || r.mediaStore == nil {
-		writeError(w, http.StatusNotImplemented, "media not configured on this server")
-		return
-	}
-	if r.postStore == nil || r.workspaceStore == nil {
+	if r.workspaceStore == nil {
 		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
-		return
-	}
-	if r.vault == nil {
-		writeError(w, http.StatusNotImplemented, "credential vault not configured")
 		return
 	}
 
@@ -106,6 +102,10 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	}
 	if len(body.Targets) == 0 {
 		writeError(w, http.StatusUnprocessableEntity, "at least one target is required")
+		return
+	}
+	if body.PublishAt != nil && !body.PublishAt.After(time.Now()) {
+		writeError(w, http.StatusUnprocessableEntity, "publish_at must be in the future")
 		return
 	}
 	for i, t := range body.Targets {
@@ -160,6 +160,49 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 				fmt.Sprintf("targets[%d].platform_account_id does not belong to this user", i))
 			return
 		}
+	}
+
+	// Future calendar entries are durable references only. The worker will
+	// resolve the current Drive file and metadata inside the preparation
+	// window; this branch deliberately does not touch storage, the vault or
+	// the Drive download API.
+	if body.PublishAt != nil {
+		if r.uploadJobStore == nil {
+			writeError(w, http.StatusNotImplemented, "upload jobs not configured on this server")
+			return
+		}
+		targetIDs := make([]int64, 0, len(body.Targets))
+		for _, target := range body.Targets {
+			targetIDs = append(targetIDs, target.PlatformAccountID)
+		}
+		job := &models.UploadJob{
+			UserID: userID, WorkspaceID: body.WorkspaceID,
+			SourceType: models.UploadJobSourceAuthenticatedDrive,
+			SourceID:   body.DriveFileID, DriveAccountID: &body.DriveAccountID,
+			Title: body.Title, Caption: body.Caption, Targets: targetIDs,
+			Status: models.UploadJobStatusPending, PublishAt: body.PublishAt,
+			DefaultPrivacyLevel: "private",
+			IngestAfter:         r.prepareAtForPublish(*body.PublishAt),
+		}
+		if err := r.uploadJobStore.Create(job); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create deferred upload job: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, DriveImportResponse{Job: job})
+		return
+	}
+
+	if r.storageProvider == nil || r.mediaStore == nil {
+		writeError(w, http.StatusNotImplemented, "media not configured on this server")
+		return
+	}
+	if r.postStore == nil {
+		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
+		return
+	}
+	if r.vault == nil {
+		writeError(w, http.StatusNotImplemented, "credential vault not configured")
+		return
 	}
 
 	// Resolve the Google Drive provider.

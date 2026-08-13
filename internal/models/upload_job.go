@@ -82,6 +82,9 @@ const (
 	// migrate those tests to the new names).
 	UploadJobStatusIngestCompleted  UploadJobStatus = "ingest_completed"
 	UploadJobStatusPublishCompleted UploadJobStatus = "publish_completed"
+	// PublishScheduled means preparation/private upload finished while the
+	// public publish cursor is still in the future.
+	UploadJobStatusPublishScheduled UploadJobStatus = "publish_scheduled"
 	// Deprecated alias — kept as a Go const so legacy test fixtures
 	// that still match the old value compile. New code MUST use
 	// UploadJobStatusIngestCompleted. Migration 049c UPDATE'd any
@@ -110,6 +113,15 @@ func (s UploadJobStatus) IsIngestTerminal() bool {
 func (s UploadJobStatus) IsPublishTerminal() bool {
 	return s == UploadJobStatusPublishCompleted ||
 		// Legacy alias for backward read.
+		s == UploadJobStatusCompleted
+}
+
+// IsPrepared reports whether the expensive Drive preparation phase finished.
+func (s UploadJobStatus) IsPrepared() bool {
+	return s == UploadJobStatusIngestCompleted ||
+		s == UploadJobStatusPublishScheduled ||
+		s == UploadJobStatusPublishCompleted ||
+		s == UploadJobStatusReadyToPublish ||
 		s == UploadJobStatusCompleted
 }
 

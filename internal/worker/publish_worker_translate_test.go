@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,16 @@ type fakeTranslator struct {
 	tr    *models.YouTubeTranslation
 	err   error
 	calls []services.TranslateRequest
+}
+
+type fakeArgosDescriptionTranslator struct {
+	description string
+	calls       []services.TranslateRequest
+}
+
+func (f *fakeArgosDescriptionTranslator) TranslateDescription(_ context.Context, req services.TranslateRequest) (string, error) {
+	f.calls = append(f.calls, req)
+	return f.description, nil
 }
 
 func (f *fakeTranslator) Translate(_ context.Context, req services.TranslateRequest) (*models.YouTubeTranslation, error) {
@@ -53,6 +64,14 @@ func (f *fakeTranslator) lastCall() services.TranslateRequest {
 // language is metadata["language"]. The provider's publishFn records
 // the payload it received.
 func newTranslateTestRig(channelLang string, post *models.Post) (*mockPostStore, *mockProvider, *PublishWorker) {
+	return newTranslateTestRigForAccount(channelLang, 0, post)
+}
+
+func newTranslateTestRigForAccount(channelLang string, accountID int64, post *models.Post) (*mockPostStore, *mockProvider, *PublishWorker) {
+	fixtureAccountID := accountID
+	if fixtureAccountID == 0 {
+		fixtureAccountID = 10
+	}
 	posts := &mockPostStore{
 		claimFn: func(id int64) (bool, error) { return true, nil },
 		findByIDFn: func(id int64) (*models.Post, error) {
@@ -61,8 +80,11 @@ func newTranslateTestRig(channelLang string, post *models.Post) (*mockPostStore,
 	}
 	users := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if accountID != 0 && id != accountID {
+				return nil, fmt.Errorf("unexpected platform account lookup: got %d, want %d", id, accountID)
+			}
 			acct := &models.PlatformAccount{
-				ID: 10, UserID: 1, Platform: "youtube",
+				ID: fixtureAccountID, UserID: 1, Platform: "youtube",
 				PlatformUserID: "UC_chan", Status: "active",
 			}
 			if channelLang != "" {
@@ -141,6 +163,36 @@ func TestPublishTarget_TranslatesForChannelLanguage(t *testing.T) {
 	}
 	if final := posts.updateTargets[len(posts.updateTargets)-1]; final.Status != models.PostStatusPublished {
 		t.Errorf("final target status: want published, got %q (err=%s)", final.Status, final.ErrorMessage)
+	}
+}
+
+// TestPublishTarget_NVIDIAOnlyTitle_ArgosOnlyDescription verifies the
+// provider split used in production: NVIDIA supplies the title while Argos
+// translates the long description, and the fake YouTube publisher receives
+// the combined localized payload.
+func TestPublishTarget_NVIDIAOnlyTitle_ArgosOnlyDescription(t *testing.T) {
+	post := translateTestPost("I 50 Migliori Gol di Cristiano Ronaldo", "Descrizione italiana dei gol più belli.", "it")
+	_, svc, w := newTranslateTestRig("es", post)
+
+	nvidia := &fakeTranslator{tr: &models.YouTubeTranslation{Title: "Los 50 Mejores Goles de Cristiano Ronaldo", Description: "IGNORED NVIDIA DESCRIPTION"}}
+	argos := &fakeArgosDescriptionTranslator{description: "Descripción traducida localmente por Argos."}
+	w.nvidiaTranslator = nvidia
+	w.SetArgosDescriptionTranslator(argos)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+	if len(nvidia.calls) != 1 || len(argos.calls) != 1 {
+		t.Fatalf("provider calls: NVIDIA=%d Argos=%d", len(nvidia.calls), len(argos.calls))
+	}
+	if svc.capturedPayload == nil {
+		t.Fatal("fake YouTube payload missing")
+	}
+	if svc.capturedPayload.Title != "Los 50 Mejores Goles de Cristiano Ronaldo" {
+		t.Errorf("title: got %q", svc.capturedPayload.Title)
+	}
+	if svc.capturedPayload.Text != argos.description {
+		t.Errorf("description: got %q, want Argos output %q", svc.capturedPayload.Text, argos.description)
 	}
 }
 

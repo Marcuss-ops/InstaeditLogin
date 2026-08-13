@@ -63,4 +63,9 @@ type AIConfig struct {
 	// per NVIDIA account, so a deployment whose key cannot access the
 	// default must set this to a model its key can invoke.
 	NVIDIAModel string
+
+	// ArgosTranslateURL is the internal Argos/LibreTranslate-compatible
+	// endpoint used for local, CPU-only description translation. Empty means
+	// the optional description translator is not wired.
+	ArgosTranslateURL string
 }

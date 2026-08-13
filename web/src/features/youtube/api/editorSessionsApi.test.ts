@@ -405,6 +405,26 @@ describe("createEditorLaunchURL", () => {
 });
 
 describe("openInstaEditorWithLaunch", () => {
+  it("routes legacy dev editor URLs to the active Vercel deployment", async () => {
+    authedFetchMock.mockResolvedValueOnce(
+      jsonResponse({ launch_token: "launch-token-test" }),
+    );
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => null);
+
+    await openInstaEditorWithLaunch(
+      "https://dev.instaedit.org/instaeditor/editor/ve_x",
+      "ve_x",
+    );
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://instaeditor.vercel.app/instaeditor/editor/ve_x#launch_token=launch-token-test",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
   it("opens the editor in a new tab carrying the return_to context", async () => {
     authedFetchMock.mockResolvedValueOnce(
       jsonResponse({ launch_token: "launch-token-test" }),

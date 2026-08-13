@@ -180,17 +180,19 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 			// this onto post.default_privacy_level; the publish_worker
 			// uses it as the middle term in its precedence cascade.
 			job := &models.UploadJob{
-				UserID:              batch.UserID,
-				WorkspaceID:         batch.WorkspaceID,
-				SourceType:          models.UploadJobSourceAuthenticatedDrive,
-				SourceID:            f.ID,
-				DriveAccountID:      batch.SourceDriveAccountID, // pointer alias — safe per the guard above
-				FolderID:            &batch.SourceFolderID,
-				Title:               f.Name,
-				Caption:             "",
-				Targets:             append([]int64{}, batch.TargetAccountIDs...),
-				Status:              models.UploadJobStatusPending,
-				IngestAfter:         time.Now(),
+				UserID:         batch.UserID,
+				WorkspaceID:    batch.WorkspaceID,
+				SourceType:     models.UploadJobSourceAuthenticatedDrive,
+				SourceID:       f.ID,
+				DriveAccountID: batch.SourceDriveAccountID, // pointer alias — safe per the guard above
+				FolderID:       &batch.SourceFolderID,
+				Title:          f.Name,
+				Caption:        "",
+				Targets:        append([]int64{}, batch.TargetAccountIDs...),
+				Status:         models.UploadJobStatusPending,
+				// Prepare before the public cursor: the upload worker claims
+				// at this time, downloads Drive and uploads YouTube privately.
+				IngestAfter:         currentPublishAt.Add(-c.opts.PrepareLeadTime),
 				PublishAt:           &currentPublishAt,
 				BatchID:             &batch.ID,
 				DefaultPrivacyLevel: batch.DefaultPrivacyLevel,

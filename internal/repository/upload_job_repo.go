@@ -153,6 +153,14 @@ func createUploadJob(ctx context.Context, q queryer, job *models.UploadJob) erro
 	if err != nil {
 		return fmt.Errorf("failed to marshal upload job targets: %w", err)
 	}
+	metadataJSON := job.Metadata
+	if len(metadataJSON) == 0 {
+		metadataJSON = []byte(`{}`)
+	}
+	privacyLevel := job.DefaultPrivacyLevel
+	if privacyLevel == "" {
+		privacyLevel = "private"
+	}
 
 	var publishAt sql.NullTime
 	if job.PublishAt != nil {
@@ -193,13 +201,13 @@ func createUploadJob(ctx context.Context, q queryer, job *models.UploadJob) erro
 		folderID,
 		job.Title,
 		job.Caption,
-		job.Metadata,
+		metadataJSON,
 		targetsJSON,
 		string(job.Status),
 		job.IngestAfter,
 		publishAt,
 		batchID,
-		job.DefaultPrivacyLevel,
+		privacyLevel,
 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
 }
 

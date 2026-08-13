@@ -10,8 +10,9 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		AI: AIConfig{
-			NVIDIAAPIKey: getEnv("NVIDIA_API_KEY", ""),
-			NVIDIAModel:  getEnv("NVIDIA_MODEL", ""),
+			NVIDIAAPIKey:      getEnv("NVIDIA_API_KEY", ""),
+			NVIDIAModel:       getEnv("NVIDIA_MODEL", ""),
+			ArgosTranslateURL: getEnv("ARGOS_TRANSLATE_URL", ""),
 		},
 		Velox: VeloxConfig{
 			ProjectBridgeContractVersion: getEnv("VELOX_PROJECT_BRIDGE_CONTRACT_VERSION", ProjectBridgeContractVersion),
