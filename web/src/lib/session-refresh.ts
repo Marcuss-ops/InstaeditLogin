@@ -41,6 +41,16 @@ import { isDemoMode } from "./demo";
 const REFRESH_URL = "/api/v1/auth/refresh";
 /** Heartbeat cooldown: refresh at most once per 10 minutes (access TTL is 15 min). */
 export const SESSION_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+/**
+ * Reactive-refresh cooldown. The backend treats a replayed refresh
+ * token as theft and revokes the ENTIRE family, so the reactive
+ * 401→refresh path must not present the same token twice across tabs:
+ * when the access JWT expires, every open tab 401s within the same
+ * polling window. If another tab already refreshed moments ago, the
+ * rotated cookies are ALREADY in this browser — retry the original
+ * request without POSTing the same refresh token again.
+ */
+export const REACTIVE_REFRESH_COOLDOWN_MS = 10_000;
 /** localStorage key for the cross-tab last-refresh timestamp. */
 export const SESSION_REFRESH_AT_KEY = "instaedit:session-refresh-at";
 
@@ -75,7 +85,25 @@ export async function refreshSession(): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
-      if (isDemoMode()) return false;
+      if (isDemoMode()) {
+        await Promise.resolve();
+        return false;
+      }
+      // Cross-tab reactive guard: the heartbeat's optimistic stamp
+      // (written BEFORE its POST) also covers the reactive path. If a
+      // refresh just ran in this browser — this tab or another — the
+      // rotated cookies are already available, so POSTing the same
+      // refresh token again risks the backend's family-wide revocation
+      // (replay = theft). Report success so the caller retries the
+      // original request with the freshly rotated cookies.
+      if (Date.now() - readLastRefreshAt() < REACTIVE_REFRESH_COOLDOWN_MS) {
+        // Yield a microtask: a synchronous return here would complete
+        // the IIFE BEFORE the outer `refreshInFlight = …` assignment,
+        // and the finally's `null` reset would be clobbered — leaving
+        // a settled stale promise behind for the next caller.
+        await Promise.resolve();
+        return true;
+      }
       // Optimistic cooldown stamp BEFORE the POST (not after success):
       //   - shrinks the cross-tab race window — two tabs both passing
       //     the guard and rotating the SAME refresh token concurrently

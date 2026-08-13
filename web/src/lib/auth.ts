@@ -91,6 +91,22 @@ export function clearSessionCache(): void {
   }
 }
 
+/**
+ * Fired when an authed request reaches a 401 that a single
+ * session-refresh + retry could NOT heal — i.e. the session is
+ * genuinely gone, not merely expired. The global SessionLossRedirect
+ * listens for this to bounce the user to /login consistently from
+ * EVERY surface (page hooks, sidebar polls, shared queries), so no
+ * code path keeps silently 401-ing after the session dies.
+ */
+export const AUTH_EXPIRED_EVENT = "instaedit:auth-expired";
+
+export function dispatchAuthExpiredEvent(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+  }
+}
+
 export class AuthError extends Error {
   constructor() {
     super("not authenticated");
@@ -200,7 +216,11 @@ export async function authedFetch(
   if (response.status === 401) {
     // 401 path intentionally does NOT emit a toast — the caller
     // navigates to /login instead, which already signals to the user.
+    // The event lets the global SessionLossRedirect act as a safety
+    // net for surfaces that swallow AuthError (pollers, shared
+    // queries): they must not keep 401-ing after the session dies.
     clearSessionCache();
+    dispatchAuthExpiredEvent();
     throw new AuthError();
   }
 

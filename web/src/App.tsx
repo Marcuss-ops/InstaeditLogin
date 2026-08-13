@@ -28,6 +28,7 @@ import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
 import { BookingProvider } from "./components/booking/BookingProvider";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
+import { SessionLossRedirect } from "./components/auth/SessionLossRedirect";
 import { AdminProtectedRoute } from "./components/auth/AdminProtectedRoute";
 import { InternalLayout } from "./components/layout/InternalLayout";
 
@@ -137,6 +138,7 @@ function App() {
       <ErrorBoundary>
         <BookingProvider>
           <BrowserRouter>
+          <SessionLossRedirect />
           <CookieBanner />
           <Routes>
             <Route path="/" element={<Landing />} />

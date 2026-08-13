@@ -79,6 +79,24 @@ describe("refreshSession", () => {
     expect(results).toEqual([true, true, true]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("skips the POST when another tab refreshed within the reactive cooldown", async () => {
+    // A fresh stamp means the rotated cookies are already in this
+    // browser (another tab, or the heartbeat moments ago). Presenting
+    // the same refresh token again would trigger family-wide
+    // revocation on the backend, so report success without a POST and
+    // let the caller retry with the rotated cookies.
+    localStorage.setItem(SESSION_REFRESH_AT_KEY, String(Date.now()));
+    await expect(refreshSession()).resolves.toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("POSTs again once the reactive cooldown has passed", async () => {
+    localStorage.setItem(SESSION_REFRESH_AT_KEY, String(Date.now() - 60_000));
+    fetchMock.mockResolvedValue(noContentResponse());
+    await expect(refreshSession()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("withSessionRefresh", () => {

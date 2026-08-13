@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./cookie", () => ({ readCookie: () => "test-csrf-token" }));
 vi.mock("../components/toast", () => ({ toastBus: { push: vi.fn() } }));
 
-import { ApiError, AuthError, authedFetch } from "./auth";
+import { ApiError, AUTH_EXPIRED_EVENT, AuthError, authedFetch } from "./auth";
 
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -28,6 +28,7 @@ describe("authedFetch error contract", () => {
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    localStorage.clear();
   });
 
   afterEach(() => {
@@ -67,6 +68,19 @@ describe("authedFetch error contract", () => {
     await expect(authedFetch("/api/v1/thumbnail-projects")).rejects.toBeInstanceOf(
       AuthError,
     );
+  });
+
+  it("dispatches instaedit:auth-expired when a 401 cannot be healed", async () => {
+    const listener = vi.fn();
+    window.addEventListener(AUTH_EXPIRED_EVENT, listener);
+    fetchMock.mockResolvedValue(jsonResponse({ error: "unauthorized" }, 401));
+    await expect(authedFetch("/api/v1/thumbnail-projects")).rejects.toBeInstanceOf(
+      AuthError,
+    );
+    // The global SessionLossRedirect relies on this event to bounce
+    // pollers and shared queries to /login consistently.
+    expect(listener).toHaveBeenCalledTimes(1);
+    window.removeEventListener(AUTH_EXPIRED_EVENT, listener);
   });
 
   it("heals an expired access token: 401 → session refresh → retry → resolves", async () => {
