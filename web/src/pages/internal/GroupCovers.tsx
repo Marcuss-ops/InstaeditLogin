@@ -3,23 +3,28 @@ import { ArrowUpRight, Image as ImageIcon, Loader2, Plus, Sparkles } from "lucid
 import { GroupCoverCard } from "./GroupCoverCard";
 import { useGroupCovers } from "./useGroupCovers";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
+import { GroupVideoManager } from "./GroupVideoManager";
 import type { GroupCover } from "./groupCoversTypes";
 import { GroupCoverPreviewModal } from "./GroupCoverPreviewModal";
 
 /**
- * Covers grid for one group (the Copertine hub body). Replaces the
- * video grid: the user picks a group and sees every cover project
- * created in it — current + archived history — with its rendered
- * preview, status, channel/video and a "Modifica in InstaEditor" CTA
- * that opens the editor in a new tab (the SPA never navigates away).
+ * Video/Cover Manager for one group (the Copertine hub body). The
+ * covers zone lists every cover project created in the group — current
+ * + archived history — with its rendered preview, status, channel/video
+ * and a "Modifica in InstaEditor" CTA that opens the editor in a new
+ * tab (the SPA never navigates away). Below it, GroupVideoManager
+ * offers the full video management UI (search, visibility tabs with
+ * counts, category filter, VideoGrid with "Modifica copertina" and
+ * "Dettagli" actions). Both zones share ONE canonical video-list hook
+ * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
   const { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
-  // Video manifest for the one-click create: quickCreateCover opens
-  // InstaEditor directly on the group's most recent private video and
-  // saves the new cover under a random name (no picker dialog). The name
-  // embeds the group name so the cover reads as belonging to this group.
-  const { quickCreateCover, openingVideoID } = useGroupYouTubeVideos(groupId, true, groupName);
+  // ONE canonical video-list hook for the whole page: the one-click
+  // quick-create AND the Video/Cover manager below share the same list
+  // state instead of firing two parallel fetches.
+  const videosController = useGroupYouTubeVideos(groupId, true, groupName);
+  const { quickCreateCover, openingVideoID } = videosController;
   const [previewCover, setPreviewCover] = useState<GroupCover | null>(null);
   const [previewTitle, setPreviewTitle] = useState("");
   const [previewDescription, setPreviewDescription] = useState("");
@@ -56,6 +61,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
   };
 
   return (
+    <>
     <section className="mb-6" data-testid="group-covers">
       <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-white/[0.09] bg-[#0d0f15]/90 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.16)] sm:flex-row sm:items-center sm:justify-between sm:p-6">
         <div className="min-w-0">
@@ -144,7 +150,11 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
           }}
         />
       ) : null}
-
     </section>
+
+    <div className="border-t border-white/[0.06] pt-6">
+      <GroupVideoManager controller={videosController} />
+    </div>
+    </>
   );
 }

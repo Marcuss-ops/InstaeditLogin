@@ -198,6 +198,153 @@ describe("GroupYouTubeVideos", () => {
     expect(screen.queryByText("Video privato")).not.toBeInTheDocument();
   });
 
+  it("filters the grid by free-text search across title, channel and video id", async () => {
+    authedFetchMock.mockResolvedValue(
+      jsonResponse({
+        videos: [
+          {
+            youtube_video_id: "abc-1",
+            title: "Wrestling Highlights",
+            channel_name: "Wrestling Insider RU",
+            privacy_status: "private",
+            actual_privacy: "private",
+            platform_account_id: 42,
+          },
+          {
+            youtube_video_id: "xyz-2",
+            title: "Cucina veloce",
+            channel_name: "Chef Mario",
+            privacy_status: "private",
+            actual_privacy: "private",
+            platform_account_id: 43,
+          },
+        ],
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Wrestling Highlights")).toBeInTheDocument();
+      expect(screen.getByText("Cucina veloce")).toBeInTheDocument();
+    });
+
+    // Match by channel name (case-insensitive).
+    fireEvent.change(screen.getByTestId("group-videos-search"), { target: { value: "wrestling" } });
+    await waitFor(() => {
+      expect(screen.getByText("Wrestling Highlights")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Cucina veloce")).not.toBeInTheDocument();
+
+    // Match by video id.
+    fireEvent.change(screen.getByTestId("group-videos-search"), { target: { value: "xyz-2" } });
+    await waitFor(() => {
+      expect(screen.getByText("Cucina veloce")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Wrestling Highlights")).not.toBeInTheDocument();
+
+    // Clear restores the whole list.
+    fireEvent.click(screen.getByTestId("group-videos-search-clear"));
+    await waitFor(() => {
+      expect(screen.getByText("Wrestling Highlights")).toBeInTheDocument();
+      expect(screen.getByText("Cucina veloce")).toBeInTheDocument();
+    });
+  });
+
+  it("filters the grid by category, resolving labels from the canonical snapshot", async () => {
+    authedFetchMock.mockResolvedValue(
+      jsonResponse({
+        videos: [
+          {
+            youtube_video_id: "cat-1",
+            title: "Video sport",
+            privacy_status: "public",
+            actual_privacy: "public",
+            platform_account_id: 42,
+            category_id: "17",
+            category_title: "Sport",
+          },
+          {
+            youtube_video_id: "cat-2",
+            title: "Video gaming",
+            privacy_status: "public",
+            actual_privacy: "public",
+            platform_account_id: 42,
+            category_id: "20",
+          },
+          {
+            youtube_video_id: "cat-3",
+            title: "Senza categoria",
+            privacy_status: "public",
+            actual_privacy: "public",
+            platform_account_id: 42,
+          },
+        ],
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Video sport")).toBeInTheDocument();
+      expect(screen.getByText("Video gaming")).toBeInTheDocument();
+    });
+
+    const select = screen.getByTestId("group-videos-category") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "17" } });
+    await waitFor(() => {
+      expect(screen.getByText("Video sport")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Video gaming")).not.toBeInTheDocument();
+    expect(screen.queryByText("Senza categoria")).not.toBeInTheDocument();
+
+    // category_id without category_title resolves to the canonical label.
+    fireEvent.change(select, { target: { value: "20" } });
+    await waitFor(() => {
+      expect(screen.getByText("Video gaming")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Video sport")).not.toBeInTheDocument();
+
+    // Back to all categories.
+    fireEvent.change(select, { target: { value: "all" } });
+    await waitFor(() => {
+      expect(screen.getByText("Senza categoria")).toBeInTheDocument();
+    });
+  });
+
+  it("shows a clear-filters empty state when search matches nothing", async () => {
+    authedFetchMock.mockResolvedValue(
+      jsonResponse({
+        videos: [
+          {
+            youtube_video_id: "abc-1",
+            title: "Wrestling Highlights",
+            privacy_status: "private",
+            actual_privacy: "private",
+            platform_account_id: 42,
+          },
+        ],
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Wrestling Highlights")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId("group-videos-search"), { target: { value: "inesistente" } });
+    await waitFor(() => {
+      expect(screen.getByText(/nessun video corrisponde ai filtri/i)).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("group-videos-clear-filters")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("group-videos-clear-filters"));
+    await waitFor(() => {
+      expect(screen.getByText("Wrestling Highlights")).toBeInTheDocument();
+    });
+  });
+
   it("shows an actionable message when YouTube returns a 502", async () => {
     authedFetchMock.mockRejectedValue(new ApiError(502, "youtube list failed for every account"));
 

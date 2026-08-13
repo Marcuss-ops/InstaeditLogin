@@ -1,3 +1,4 @@
+import { YOUTUBE_CATEGORIES } from "../../features/youtube/api/categoriesApi";
 import type { GroupYouTubeVideo, VideoAvailability } from "./groupYouTubeVideosTypes";
 
 // Derive the availability projection from the raw wire fields. The API
@@ -25,6 +26,40 @@ export function videoAvailability(video: GroupYouTubeVideo): VideoAvailability {
     };
   }
   return { status: "available" };
+}
+
+/**
+ * Human label for a video's YouTube category: the row's own
+ * `category_title` first, then the canonical snapshot by `category_id`
+ * (e.g. "24" → "Intrattenimento"), then the raw id as last resort.
+ * The backend does not emit category fields yet, so `undefined` is a
+ * valid answer — consumers render it as "Categoria non impostata".
+ */
+export function categoryLabel(video: GroupYouTubeVideo): string | undefined {
+  if (video.category_title) return video.category_title;
+  if (video.category_id) {
+    return (
+      YOUTUBE_CATEGORIES.find((category) => category.id === video.category_id)?.label
+      ?? video.category_id
+    );
+  }
+  return undefined;
+}
+
+/** Distinct category options derived from a video list, sorted by label. */
+export function categoryOptions(
+  videos: GroupYouTubeVideo[],
+): Array<{ key: string; label: string }> {
+  const seen = new Map<string, string>();
+  for (const video of videos) {
+    const key = video.category_id ?? video.category_title;
+    if (!key) continue;
+    const label = categoryLabel(video) ?? key;
+    if (!seen.has(key)) seen.set(key, label);
+  }
+  return Array.from(seen, ([key, label]) => ({ key, label })).sort((a, b) =>
+    a.label.localeCompare(b.label, "it"),
+  );
 }
 
 export function safeAssetUrl(value?: string): string | undefined {

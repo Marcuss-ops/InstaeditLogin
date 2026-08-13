@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Edit3, ExternalLink, Loader2, MoreHorizontal, Video } from "lucide-react";
+import { Edit3, ExternalLink, Loader2, Settings2, Video } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { GroupYouTubeVideo } from "./groupYouTubeVideosTypes";
 import { LanguageFlag } from "../../components/brand/LanguageFlag";
@@ -72,15 +72,28 @@ export const GroupYouTubeVideoCard = memo(function GroupYouTubeVideoCard({
               </span>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1.5">
             <a href={watchUrl} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="grid h-8 w-8 place-items-center rounded-lg text-[#cdd2da] hover:bg-white/[0.08] hover:text-white" title="Apri su YouTube" aria-label="Apri su YouTube">
               <ExternalLink size={14} aria-hidden="true" />
             </a>
-            <button type="button" onClick={(event) => { event.stopPropagation(); onThumbnail(video); }} disabled={openingVideoID !== null} className="grid h-8 w-8 place-items-center rounded-lg text-violet-300 hover:bg-violet-500/[0.12] hover:text-violet-200 disabled:cursor-wait disabled:opacity-60" title="Modifica copertina" aria-label="Modifica copertina">
-              {openingVideoID === video.youtube_video_id ? <Loader2 size={14} className="animate-spin" /> : <Edit3 size={14} aria-hidden="true" />}
+            <button
+              type="button"
+              onClick={(event) => { event.stopPropagation(); onThumbnail(video); }}
+              disabled={openingVideoID !== null}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-violet-400/25 bg-violet-500/[0.12] px-2.5 text-[11px] font-bold text-violet-100 transition-colors hover:bg-violet-500/[0.22] hover:text-white disabled:cursor-wait disabled:opacity-60"
+              title="Apri InstaEditor per modificare la copertina"
+            >
+              {openingVideoID === video.youtube_video_id ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Edit3 size={13} aria-hidden="true" />}
+              <span>{openingVideoID === video.youtube_video_id ? "Apertura…" : "Modifica copertina"}</span>
             </button>
-            <button type="button" onClick={(event) => { event.stopPropagation(); onPreview(video); }} className="grid h-8 w-8 place-items-center rounded-lg text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" title="Altre azioni" aria-label="Altre azioni">
-              <MoreHorizontal size={15} aria-hidden="true" />
+            <button
+              type="button"
+              onClick={(event) => { event.stopPropagation(); onPreview(video); }}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 text-[11px] font-bold text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white"
+              title="Titolo, descrizione e dettagli del video"
+            >
+              <Settings2 size={13} aria-hidden="true" />
+              <span>Dettagli</span>
             </button>
           </div>
         </div>

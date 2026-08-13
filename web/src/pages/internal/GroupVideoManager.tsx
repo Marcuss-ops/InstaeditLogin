@@ -1,0 +1,316 @@
+import { useState } from "react";
+import { AlertTriangle, Loader2, RefreshCw, Search, Video, X } from "lucide-react";
+import { EmptyState } from "../../components/feedback/EmptyState";
+import { cn } from "../../lib/utils";
+import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
+import { GroupYouTubeVideoCard } from "./GroupYouTubeVideoCard";
+import { GroupYouTubeVideoPreviewModal } from "./GroupYouTubeVideoPreviewModal";
+import { categoryLabel, categoryOptions } from "./groupYouTubeVideosVisual";
+import { DEFAULT_PAGE_SIZE, RECENCY_OPTIONS, type GroupYouTubeVideo, type YouTubePrivacyStatus } from "./groupYouTubeVideosTypes";
+
+const VISIBILITY_FILTERS: Array<{ id: "all" | YouTubePrivacyStatus; label: string }> = [
+  { id: "all", label: "Tutti" },
+  { id: "private", label: "Privati" },
+  { id: "unlisted", label: "Non in elenco" },
+  { id: "public", label: "Pubblici" },
+];
+
+/** The hook state machine that owns the canonical video list. */
+export type GroupVideosController = ReturnType<typeof useGroupYouTubeVideos>;
+
+/**
+ * GroupVideoManager — the Video/Cover manager body. Search + visibility
+ * tabs (with counts) + category filter over the canonical video list,
+ * then the VideoGrid with the two actions per card: "Modifica copertina"
+ * (opens InstaEditor) and "Dettagli" (title/description details modal).
+ *
+ * The controller is passed in so the parent owns ONE hook instance per
+ * group: the covers hub and this manager share the same canonical list
+ * instead of firing two parallel fetches.
+ */
+export function GroupVideoManager({ controller }: { controller: GroupVideosController }) {
+  const {
+    state,
+    recencyDays,
+    setRecencyDays,
+    openingVideoID,
+    preview,
+    setPreview,
+    draftTitle,
+    setDraftTitle,
+    draftDescription,
+    setDraftDescription,
+    savingMetadata,
+    openThumbnailEditor,
+    openVideoPreview,
+    saveVideoMetadata,
+    refreshVideos,
+    loadMoreVideos,
+  } = controller;
+  const [visibility, setVisibility] = useState<"all" | YouTubePrivacyStatus>("all");
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState<string>("all");
+
+  const trimmedSearch = search.trim().toLowerCase();
+
+  // Derived filters over the canonical list: the hook returns EVERY
+  // manageable video (private/public/unlisted/phantom) and the UI narrows
+  // it on privacyStatus, free-text search and category — one query, one
+  // cache, derived filters.
+  const matchesSearch = (video: GroupYouTubeVideo): boolean => {
+    if (!trimmedSearch) return true;
+    return [video.title, video.channel_name, video.youtube_video_id, categoryLabel(video)]
+      .some((field) => field != null && field.toLowerCase().includes(trimmedSearch));
+  };
+  const visibleVideos = state.kind === "ready"
+    ? state.videos.filter(
+        (video) =>
+          (visibility === "all" || video.privacy_status === visibility) &&
+          (category === "all" || (video.category_id ?? video.category_title) === category) &&
+          matchesSearch(video),
+      )
+    : [];
+  const counts = state.kind === "ready"
+    ? {
+        all: state.videos.length,
+        private: state.videos.filter((video) => video.privacy_status === "private").length,
+        unlisted: state.videos.filter((video) => video.privacy_status === "unlisted").length,
+        public: state.videos.filter((video) => video.privacy_status === "public").length,
+      }
+    : null;
+  const categoryFilters = state.kind === "ready" ? categoryOptions(state.videos) : [];
+  const hasActiveFilters = trimmedSearch.length > 0 || category !== "all";
+
+  // Open the destination tab synchronously inside the click gesture so a
+  // popup blocker cannot swallow the editor window while the session
+  // create + launch-token round-trips are in flight. Noopener is omitted
+  // on purpose: the returned Window reference is needed for the later
+  // navigation to the (first-party) editor origin.
+  const handleOpenThumbnail = (video: GroupYouTubeVideo) => {
+    const tab = window.open("about:blank", "_blank");
+    void openThumbnailEditor(video, { tab }).then((opened) => {
+      // The tab is still about:blank whenever the flow bailed out
+      // (loading/error/no session); close it instead of leaking it.
+      if (!opened) tab?.close();
+    });
+  };
+
+  const handleClearFilters = () => {
+    setSearch("");
+    setCategory("all");
+    setVisibility("all");
+  };
+
+  return (
+    <section className="mb-6" data-testid="group-youtube-videos">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-[13px] font-bold text-white">Video del gruppo</h3>
+        <div className="flex items-center gap-2">
+          <label className="text-[11px] text-[#9aa0aa]" htmlFor="group-video-recency">Periodo</label>
+          <select
+            id="group-video-recency"
+            value={recencyDays}
+            onChange={(event) => {
+              setRecencyDays(Number(event.target.value));
+            }}
+            className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[11px] font-semibold text-[#cdd2da]"
+            data-testid="group-youtube-videos-recency"
+          >
+            {RECENCY_OPTIONS.map((days) => <option key={days} value={days}>{days} giorni</option>)}
+          </select>
+          <button
+            type="button"
+            onClick={() => refreshVideos(true, true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-semibold text-[#cdd2da] hover:bg-white/[0.08] hover:text-white transition-colors"
+            data-testid="group-youtube-videos-refresh"
+          >
+            <RefreshCw size={12} aria-hidden="true" />
+            Aggiorna
+          </button>
+        </div>
+      </div>
+
+      <div className="relative mb-3">
+        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/30" aria-hidden="true" />
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Cerca per titolo, canale o ID video…"
+          aria-label="Cerca video"
+          data-testid="group-videos-search"
+          className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] py-2 pl-9 pr-9 text-[12px] text-[#e6e9ef] placeholder:text-[#7f8591] transition-colors focus:border-violet-400/40 focus:bg-white/[0.06] focus:outline-none"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            aria-label="Cancella ricerca"
+            data-testid="group-videos-search-clear"
+            className="absolute right-2.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white"
+          >
+            <X size={13} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+
+      {state.kind === "ready" && state.videos.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filtra per visibilità">
+          {VISIBILITY_FILTERS.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              aria-pressed={visibility === filter.id}
+              onClick={() => setVisibility(filter.id)}
+              data-testid={`group-videos-filter-${filter.id}`}
+              className={cn(
+                "rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors",
+                visibility === filter.id
+                  ? "border-violet-400/50 bg-violet-500/[0.12] text-violet-100"
+                  : "border-white/[0.08] bg-white/[0.04] text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white",
+              )}
+            >
+              {filter.label}
+              <span className="ml-1.5 text-[10px] font-medium text-white/40">{counts?.[filter.id] ?? 0}</span>
+            </button>
+          ))}
+          <label className="ml-auto flex items-center gap-1.5 text-[11px] text-[#9aa0aa]" htmlFor="group-videos-category">
+            Categoria
+            <select
+              id="group-videos-category"
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+              className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[11px] font-semibold text-[#cdd2da]"
+              data-testid="group-videos-category"
+            >
+              <option value="all">Tutte le categorie</option>
+              {categoryFilters.map(({ key, label }) => (
+                <option key={key} value={key}>{label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {state.kind === "loading" && (
+        <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-5 text-[12px] text-[#9aa0aa]">
+          <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+          Caricamento stato video…
+        </div>
+      )}
+
+      {state.kind === "error" && (
+        <div
+          className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-4 text-[12px] text-amber-200"
+          role="alert"
+          data-testid={state.upstream ? "group-youtube-upstream-error" : undefined}
+        >
+          {state.message}
+        </div>
+      )}
+
+      {state.kind === "ready" && state.warnings.length > 0 && (
+        <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.05] px-3 py-2 text-[11px] text-amber-200" role="status">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <span>Alcuni canali non sono stati verificati: {state.warnings.join(" · ")}</span>
+        </div>
+      )}
+
+      {state.kind === "ready" && visibleVideos.length === 0 && (
+        <EmptyState
+          title={hasActiveFilters
+            ? "Nessun video corrisponde ai filtri"
+            : visibility === "all"
+              ? "Nessun video recente"
+              : `Nessun video ${visibility === "private" ? "privato" : visibility === "unlisted" ? "non in elenco" : "pubblico"}`}
+          description={hasActiveFilters
+            ? "Prova a modificare ricerca, visibilità o categoria."
+            : `Non ci sono video negli ultimi ${recencyDays} giorni.`}
+          icon={<Video size={24} />}
+          className="mx-auto max-w-sm bg-white/[0.02] py-8 border-white/[0.08]"
+          cta={
+            hasActiveFilters ? (
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                data-testid="group-videos-clear-filters"
+                className="rounded-lg border border-white/[0.10] bg-white/[0.04] px-3 py-1.5 text-[12px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white"
+              >
+                Rimuovi filtri
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => document.getElementById("group-video-recency")?.focus()}
+                className="rounded-lg border border-white/[0.10] bg-white/[0.04] px-3 py-1.5 text-[12px] font-semibold text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white"
+              >
+                Cambia periodo
+              </button>
+            )
+          }
+        />
+      )}
+
+      {state.kind === "ready" && visibleVideos.length > 0 && (
+        <div className="space-y-3">
+          {(() => {
+            const midpoint = Math.ceil(visibleVideos.length / 2);
+            const columns = [visibleVideos.slice(0, midpoint), visibleVideos.slice(midpoint)];
+            return (
+              <div className="grid grid-cols-1 gap-3 min-[1001px]:grid-cols-2">
+                {columns.map((videos, index) => (
+                  <section key={index} className="rounded-2xl border border-white/[0.08] bg-white/[0.018] p-4">
+                    <div className="flex flex-col gap-2.5">
+                      {videos.map((video) => (
+                        <GroupYouTubeVideoCard
+                          key={`${video.platform_account_id}:${video.youtube_video_id}`}
+                          video={video}
+                          openingVideoID={openingVideoID}
+                          onPreview={openVideoPreview}
+                          onThumbnail={handleOpenThumbnail}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            );
+          })()}
+          {(
+            <div className="grid min-h-[58px] grid-cols-[1fr_auto_1fr] items-center rounded-2xl border border-white/[0.08] bg-white/[0.018] px-4 text-[11px] text-[#9aa0aa]">
+              <span>1–{visibleVideos.length} video</span>
+              {state.hasMore ? (
+                <button
+                  type="button"
+                  onClick={loadMoreVideos}
+                  disabled={state.isLoadingMore}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/[0.10] bg-white/[0.04] px-3 py-2 text-[11px] font-semibold text-[#cdd2da] hover:bg-white/[0.08] hover:text-white disabled:opacity-50"
+                  data-testid="group-youtube-videos-load-more"
+                >
+                  {state.isLoadingMore ? <Loader2 size={14} className="animate-spin" /> : null}
+                  {state.isLoadingMore ? "Caricamento…" : "Carica altri video"}
+                </button>
+              ) : <span className="rounded-lg border border-white/[0.06] px-3 py-2 text-[11px] text-[#7f8591]">Tutti i video caricati</span>}
+              <span className="justify-self-end">Righe per pagina: {DEFAULT_PAGE_SIZE}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {preview && (
+        <GroupYouTubeVideoPreviewModal
+          preview={preview}
+          openingVideoID={openingVideoID}
+          savingMetadata={savingMetadata}
+          draftTitle={draftTitle}
+          draftDescription={draftDescription}
+          onClose={() => setPreview(null)}
+          onDraftTitleChange={setDraftTitle}
+          onDraftDescriptionChange={setDraftDescription}
+          onSave={() => void saveVideoMetadata()}
+          onThumbnail={handleOpenThumbnail}
+        />
+      )}
+    </section>
+  );
+}

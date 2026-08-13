@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 const {
@@ -203,11 +203,14 @@ describe("GroupCovers", () => {
     });
     expect(screen.getByTestId("group-covers-create-card")).toBeInTheDocument();
     expect(screen.queryByTestId("group-covers-create-header")).not.toBeInTheDocument();
-    expect(screen.queryByText("Tutte")).not.toBeInTheDocument();
-    expect(screen.queryByText("Bozze")).not.toBeInTheDocument();
-    expect(screen.queryByText("Pronte")).not.toBeInTheDocument();
-    expect(screen.queryByText("Archiviate")).not.toBeInTheDocument();
-    expect(screen.queryByText("Aggiorna")).not.toBeInTheDocument();
+    // The covers zone stays a simplified create-tile + grid (no status
+    // tabs); the Video/Cover manager below the grid has its own controls.
+    const coversZone = within(screen.getByTestId("group-covers"));
+    expect(coversZone.queryByText("Tutte")).not.toBeInTheDocument();
+    expect(coversZone.queryByText("Bozze")).not.toBeInTheDocument();
+    expect(coversZone.queryByText("Pronte")).not.toBeInTheDocument();
+    expect(coversZone.queryByText("Archiviate")).not.toBeInTheDocument();
+    expect(coversZone.queryByText("Aggiorna")).not.toBeInTheDocument();
   });
 
   it("opens InstaEditor directly from the header + on the most recent private video with a random name", async () => {
@@ -514,9 +517,44 @@ describe("GroupCovers", () => {
 
     renderPanel();
 
+    // The covers zone and the Video/Cover manager each render their own
+    // error block; scope to the covers zone for its specific copy.
+    const coversZone = () => within(screen.getByTestId("group-covers"));
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(coversZone().getByRole("alert")).toBeInTheDocument();
     });
-    expect(screen.getByText(/impossibile caricare le copertine/i)).toBeInTheDocument();
+    expect(coversZone().getByText(/impossibile caricare le copertine/i)).toBeInTheDocument();
+  });
+
+  it("renders the Video/Cover manager (search, tabs, category) sharing the canonical list", async () => {
+    routeFetch({
+      videos: [
+        privateVideoFixture({ youtube_video_id: "v1", title: "Primo video", category_id: "24", category_title: "Intrattenimento" }),
+        privateVideoFixture({ youtube_video_id: "v2", title: "Secondo video" }),
+      ],
+    });
+
+    renderPanel();
+
+    // The manager body is part of the Copertine hub page.
+    await waitFor(() => {
+      expect(screen.getByTestId("group-videos-search")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("group-videos-category")).toBeInTheDocument();
+    expect(screen.getByTestId("group-videos-filter-all")).toBeInTheDocument();
+    expect(screen.getByTestId("group-videos-filter-private")).toBeInTheDocument();
+    expect(screen.getByTestId("group-videos-filter-public")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText("Primo video")).toBeInTheDocument();
+      expect(screen.getByText("Secondo video")).toBeInTheDocument();
+    });
+
+    // ONE canonical list serves both the quick-create flow and the
+    // manager (a single hook instance per group).
+    const videosCalls = authedFetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/youtube/videos"),
+    );
+    expect(videosCalls).toHaveLength(1);
   });
 });
