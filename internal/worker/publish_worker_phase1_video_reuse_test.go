@@ -231,6 +231,121 @@ func TestPublishTarget_YouTube_ReusesPhase1VideoID_VideosUpdate(t *testing.T) {
 	}
 }
 
+// TestPublishTarget_YouTube_NativePublishAt_SkipsVideosUpdate validates
+// the migration-126 native-scheduling fast path: when the Phase-1
+// videos.insert carried status.publishAt (recorded on
+// youtube_target_publications.native_publish_at), YouTube itself owns
+// the private→public transition — so at publish_at the worker must NOT
+// call UpdateVideoPrivacy (videos.update): that call would be redundant
+// AND burns ~50 units from the 2026 "general" quota bucket per
+// scheduled public video. The worker only stamps the target published.
+//
+// Assertions:
+//  1. publisher.Publish NOT called (bypass preserved).
+//  2. UpdateVideoPrivacy NOT called (native fast path — the whole point).
+//  3. The post_target transitioned to status=published with the
+//     composite PlatformPostID (channelID:videoID) + PublishedAt set.
+//  4. The youtube_target_publications row got MarkPublished exactly once.
+func TestPublishTarget_YouTube_NativePublishAt_SkipsVideosUpdate(t *testing.T) {
+	const (
+		phase1VideoID  = "PHASE1_VID_NATIVE"
+		phase1YTPubRowID int64 = 8888
+	)
+
+	publishAt := time.Now().UTC().Add(1 * time.Hour)
+
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{
+				ID:           100,
+				Caption:      "yt-caption",
+				Title:        "yt-title",
+				MediaURL:     "https://cdn.example.com/yt-video.mp4",
+				PrivacyLevel: "public",
+				PublishAt:    &publishAt,
+				Status:       models.PostStatusScheduled,
+			}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{
+				ID:             10,
+				Platform:       "youtube",
+				PlatformUserID: "UCexpectedYtChan",
+			}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "youtube"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			t.Fatalf("FIX VIOLATION: publisher.Publish was called for a native-publishAt Phase-1 row (video_id=%q)", phase1VideoID)
+			return nil, nil // unreachable; t.Fatalf already killed the test
+		},
+		validateChannelBindingFn: func(ctx context.Context, accessToken, expectedChannelID string) error {
+			return nil
+		},
+		updateVideoPrivacyFn: func(ctx context.Context, accessToken, videoID, privacyStatus string, pa *time.Time, title, description string) error {
+			t.Fatalf("FIX VIOLATION: UpdateVideoPrivacy (videos.update) was called for a native-publishAt row (video_id=%q); YouTube owns the transition and the ~50-unit call must be skipped", phase1VideoID)
+			return nil // unreachable; t.Fatalf already killed the test
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "fresh-bearer"}, nil
+		},
+	}
+	ytPubLookup := &mockYouTubeTargetPublicationLookup{
+		findByPostTargetIDFn: func(ctx context.Context, postTargetID int64) (*models.YouTubeTargetPublication, error) {
+			vid := phase1VideoID
+			return &models.YouTubeTargetPublication{
+				ID:                  phase1YTPubRowID,
+				PostTargetID:        postTargetID,
+				YouTubeUploadStatus: "youtube_uploaded",
+				YouTubeVideoID:      &vid,
+				// Migration 126: the Phase-1 videos.insert carried
+				// status.publishAt → YouTube owns the transition.
+				NativePublishAt: &publishAt,
+			}, nil
+		},
+	}
+	w := newTestWorker(posts, users, "youtube", svc, vault)
+	w.SetYouTubeTargetPublicationStore(ytPubLookup)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+
+	// (1) Neither the fresh videos.insert nor the videos.update may fire.
+	if svc.publishCalls != 0 {
+		t.Errorf("publishCalls: want 0 (Phase-2 bypass must skip publisher.Publish), got %d", svc.publishCalls)
+	}
+	if svc.updateVideoPrivacyCalls != 0 {
+		t.Errorf("updateVideoPrivacyCalls: want 0 (native publishAt must skip the ~50-unit videos.update), got %d", svc.updateVideoPrivacyCalls)
+	}
+
+	// (2) The target is stamped published with the composite id + timestamp.
+	if len(posts.updateTargets) == 0 {
+		t.Fatalf("UpdateStatus was never called; expected at least one call after publishTarget")
+	}
+	finalTarget := posts.updateTargets[len(posts.updateTargets)-1]
+	if finalTarget.Status != models.PostStatusPublished {
+		t.Errorf("final target.Status: want published, got %q", finalTarget.Status)
+	}
+	if finalTarget.PlatformPostID != "UCexpectedYtChan:"+phase1VideoID {
+		t.Errorf("final target.PlatformPostID: want %q, got %q", "UCexpectedYtChan:"+phase1VideoID, finalTarget.PlatformPostID)
+	}
+	if finalTarget.PublishedAt == nil {
+		t.Errorf("final target.PublishedAt: want non-nil, got nil")
+	}
+
+	// (3) The yt_pub row is stamped published exactly once.
+	if ytPubLookup.markPublishedCalls != 1 {
+		t.Errorf("markPublishedCalls: want 1, got %d", ytPubLookup.markPublishedCalls)
+	}
+}
+
 // TestPublishTarget_YouTube_NoPhase1Row_FallsThroughToPublish captures
 // the FALL-THROUGH behaviour required for the bypass to be safe: when
 // no youtube_target_publications row exists for the target (Phase 1

@@ -335,7 +335,10 @@ type SessionEncryptor interface {
 // performs the Drive→YouTube resumable upload for one target, marking
 // the video's status.privacyStatus='private' and returning the assigned
 // YouTube video id. NO publish phase — the publish worker drives the
-// videos.update call later (privacy=public + publishAt cursor).
+// videos.update call later (privacy=public + publishAt cursor) UNLESS
+// the upload carried a native status.publishAt (migration 126), in
+// which case YouTube owns the private→public transition and the worker
+// skips the videos.update.
 //
 // Differs from Publish() in that Publish drives the full upload + videos.update
 // synchronously (privacy=public + publishAt=...). Here we want the
@@ -346,7 +349,8 @@ type SessionEncryptor interface {
 //
 // Lifecycle within one call:
 //  1. HEAD source URL → size + content-type for chunk math.
-//  2. POST metadata (snippet=post.title+caption; status.privacyStatus=private)
+//  2. POST metadata (snippet=post.title+caption; status.privacyStatus=private,
+//     plus status.publishAt when nativePublishAt is non-nil and future)
 //     with X-Upload-Content-Length + X-Upload-Content-Type → Location URL.
 //  3. PUT chunks via the existing chunked loop (handles Resume-After,
 //     404 session recovery, Retry-After aware backoff).
@@ -359,7 +363,7 @@ type SessionEncryptor interface {
 // Defensive guards: nil receiver / nil post / empty accessToken / empty
 // videoURL → typed error so the worker logs a clear breadcrumb instead of
 // a generic nil pointer panic.
-func (s *YouTubeOAuthService) UploadVideoAsPrivate(ctx context.Context, accessToken string, post *models.Post, videoURL string) (string, error) {
+func (s *YouTubeOAuthService) UploadVideoAsPrivate(ctx context.Context, accessToken string, post *models.Post, videoURL string, nativePublishAt *time.Time) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("youtube UploadVideoAsPrivate: nil service")
 	}
@@ -383,19 +387,13 @@ func (s *YouTubeOAuthService) UploadVideoAsPrivate(ctx context.Context, accessTo
 	}
 
 	// 2. Build metadata. status.privacyStatus='private' is MANDATORY
-	// here — the Velox thumbnail editor requires a non-public video,
-	// and the publish phase will flip privacy to the desired
-	// post.PrivacyLevel (or cascade fallback) via the separate
-	// videos.update call the publish worker drives at publish_at.
-	metadata := map[string]interface{}{
-		"snippet": map[string]interface{}{
-			"title":       post.Title,
-			"description": post.Caption,
-		},
-		"status": map[string]interface{}{
-			"privacyStatus": "private",
-		},
-	}
+	// here — the Velox thumbnail editor requires a non-public video.
+	// When nativePublishAt is non-nil and in the future, status.publishAt
+	// is set so YouTube schedules the private→public transition itself
+	// (the publish worker then skips its videos.update; the flag is
+	// recorded on youtube_target_publications.native_publish_at so the
+	// publish phase can distinguish the two modes).
+	metadata := s.buildPrivateUploadMetadata(post, nativePublishAt)
 
 	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, size, contentType)
 	if err != nil {
@@ -414,6 +412,31 @@ func (s *YouTubeOAuthService) UploadVideoAsPrivate(ctx context.Context, accessTo
 		return "", fmt.Errorf("youtube UploadVideoAsPrivate: completed but no video id returned")
 	}
 	return videoID, nil
+}
+
+// buildPrivateUploadMetadata constructs the videos.insert metadata for
+// the private-upload phase (the upload worker's per-target upload).
+// privacyStatus is always "private" (the Velox thumbnail editor requires
+// a non-public video). When nativePublishAt is non-nil and in the
+// future, status.publishAt is set so YouTube owns the private→public
+// transition at that time — the publish worker must then NOT re-issue a
+// videos.update (the 2026 "general" bucket charges ~50 units per call).
+// A past nativePublishAt is ignored (YouTube rejects publishAt in the
+// past) and the video stays a plain private upload.
+func (s *YouTubeOAuthService) buildPrivateUploadMetadata(post *models.Post, nativePublishAt *time.Time) map[string]interface{} {
+	status := map[string]interface{}{
+		"privacyStatus": "private",
+	}
+	if nativePublishAt != nil && nativePublishAt.After(s.now()) {
+		status["publishAt"] = nativePublishAt.UTC().Format(time.RFC3339)
+	}
+	return map[string]interface{}{
+		"snippet": map[string]interface{}{
+			"title":       post.Title,
+			"description": post.Caption,
+		},
+		"status": status,
+	}
 }
 
 // Compile-time assertion: services.YouTubeOAuthService must satisfy

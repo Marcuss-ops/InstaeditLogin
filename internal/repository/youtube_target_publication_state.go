@@ -29,15 +29,14 @@ func (r *YouTubeTargetPublicationRepository) Update(ctx context.Context, pub *mo
 		`UPDATE youtube_target_publications
 		 SET upload_job_id = $2, post_target_id = $3, platform_account_id = $4,
 		     youtube_video_id = $5, youtube_upload_status = $6, youtube_processing_status = $7,
-		     editor_session_id = $8, velox_project_id = $9, thumbnail_media_id = $10,
-		     thumbnail_status = $11, desired_privacy = $12, publish_at = $13, published_at = $14,
-		     last_error = $15, attempt_count = $16, updated_at = NOW()
+		     editor_session_id = $8, velox_project_id = $9, thumbnail_media_id = $10,	     thumbnail_status = $11, desired_privacy = $12, publish_at = $13, native_publish_at = $14,
+	     published_at = $15, last_error = $16, attempt_count = $17, updated_at = NOW()
 		 WHERE id = $1`,
 		pub.ID, pub.UploadJobID, pub.PostTargetID, pub.PlatformAccountID,
 		ytPubsNullableString(pub.YouTubeVideoID), pub.YouTubeUploadStatus, ytPubsNullableString(pub.YouTubeProcessingStatus),
 		ytPubsNullableString(pub.EditorSessionID), ytPubsNullableString(pub.VeloxProjectID),
 		ytPubsNullableString(pub.ThumbnailMediaID), ytPubsNullableString(pub.ThumbnailStatus),
-		pub.DesiredPrivacy, ytPubsNullableTime(pub.PublishAt), ytPubsNullableTime(pub.PublishedAt),
+		pub.DesiredPrivacy, ytPubsNullableTime(pub.PublishAt), ytPubsNullableTime(pub.NativePublishAt), ytPubsNullableTime(pub.PublishedAt),
 		pub.LastError, pub.AttemptCount,
 	)
 	if err != nil {

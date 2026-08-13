@@ -120,7 +120,7 @@ const ytTargetPubsSelectColumns = `
 	youtube_video_id, youtube_upload_status, youtube_processing_status,
 	youtube_uploaded_at, youtube_processed_at,
 	editor_session_id, velox_project_id, thumbnail_media_id, thumbnail_status,
-	desired_privacy, publish_at, published_at, last_error, attempt_count,
+	desired_privacy, publish_at, native_publish_at, published_at, last_error, attempt_count,
 	created_at, updated_at`
 
 // ytPubsRowScanner matches both *sql.Row and *sql.Rows via their shared
@@ -151,6 +151,7 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
 		thumbnailMediaID        sql.NullString
 		thumbnailStatus         sql.NullString
 		publishAt               sql.NullTime
+		nativePublishAt         sql.NullTime
 		publishedAt             sql.NullTime
 	)
 	if err := s.Scan(
@@ -158,7 +159,7 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
 		&youtubeVideoID, &pub.YouTubeUploadStatus, &youtubeProcessingStatus,
 		&youtubeUploadedAt, &youtubeProcessedAt,
 		&editorSessionID, &veloxProjectID, &thumbnailMediaID, &thumbnailStatus,
-		&pub.DesiredPrivacy, &publishAt, &publishedAt, &pub.LastError, &pub.AttemptCount,
+		&pub.DesiredPrivacy, &publishAt, &nativePublishAt, &publishedAt, &pub.LastError, &pub.AttemptCount,
 		&pub.CreatedAt, &pub.UpdatedAt,
 	); err != nil {
 		return err
@@ -172,6 +173,7 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
 	pub.ThumbnailMediaID = ytPubsNullStringPtr(thumbnailMediaID)
 	pub.ThumbnailStatus = ytPubsNullStringPtr(thumbnailStatus)
 	pub.PublishAt = ytPubsNullTimePtr(publishAt)
+	pub.NativePublishAt = ytPubsNullTimePtr(nativePublishAt)
 	pub.PublishedAt = ytPubsNullTimePtr(publishedAt)
 	return nil
 }
@@ -231,14 +233,14 @@ func (r *YouTubeTargetPublicationRepository) Create(ctx context.Context, pub *mo
 			(upload_job_id, post_target_id, platform_account_id,
 			 youtube_video_id, youtube_upload_status, youtube_processing_status,
 			 editor_session_id, velox_project_id, thumbnail_media_id, thumbnail_status,
-			 desired_privacy, publish_at, last_error, attempt_count)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			 desired_privacy, publish_at, native_publish_at, last_error, attempt_count)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		 RETURNING id, created_at, updated_at`,
 		pub.UploadJobID, pub.PostTargetID, pub.PlatformAccountID,
 		ytPubsNullableString(pub.YouTubeVideoID), pub.YouTubeUploadStatus, ytPubsNullableString(pub.YouTubeProcessingStatus),
 		ytPubsNullableString(pub.EditorSessionID), ytPubsNullableString(pub.VeloxProjectID),
 		ytPubsNullableString(pub.ThumbnailMediaID), ytPubsNullableString(pub.ThumbnailStatus),
-		pub.DesiredPrivacy, ytPubsNullableTime(pub.PublishAt), pub.LastError, pub.AttemptCount,
+		pub.DesiredPrivacy, ytPubsNullableTime(pub.PublishAt), ytPubsNullableTime(pub.NativePublishAt), pub.LastError, pub.AttemptCount,
 	).Scan(&pub.ID, &pub.CreatedAt, &pub.UpdatedAt)
 }
 

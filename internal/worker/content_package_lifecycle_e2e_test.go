@@ -40,7 +40,7 @@ func (p *lifecycleYouTubeProvider) RefreshOAuthToken(_ context.Context, _ string
 	return &models.TokenData{AccessToken: "fake-youtube-access", TokenType: "Bearer"}, nil
 }
 
-func (p *lifecycleYouTubeProvider) UploadVideoAsPrivate(_ context.Context, _ string, _ *models.Post, _ string) (string, error) {
+func (p *lifecycleYouTubeProvider) UploadVideoAsPrivate(_ context.Context, _ string, _ *models.Post, _ string, _ *time.Time) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.privateUploadCalls++

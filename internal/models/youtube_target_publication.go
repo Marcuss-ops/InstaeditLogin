@@ -93,7 +93,15 @@ type YouTubeTargetPublication struct {
 	ThumbnailStatus    *string    `json:"thumbnail_status,omitempty"`
 	DesiredPrivacy     string     `json:"desired_privacy"`
 	PublishAt          *time.Time `json:"publish_at,omitempty"`
-	PublishedAt        *time.Time `json:"published_at,omitempty"`
+	// NativePublishAt (migration 126): the publish_at value baked into
+	// the initial videos.insert status.publishAt. Non-nil means YouTube
+	// owns the private→public transition at that time, so the publish
+	// worker must NOT re-issue a videos.update for the same transition
+	// (saves one ~50-unit call from the 2026 general quota bucket per
+	// scheduled public video). NULL when the upload did not carry a
+	// native schedule (immediate publish, or desired privacy != public).
+	NativePublishAt *time.Time `json:"native_publish_at,omitempty"`
+	PublishedAt     *time.Time `json:"published_at,omitempty"`
 	LastError          string     `json:"last_error,omitempty"`
 	AttemptCount       int        `json:"attempt_count"`
 	CreatedAt          time.Time  `json:"created_at"`

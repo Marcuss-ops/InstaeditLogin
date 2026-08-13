@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -38,5 +39,12 @@ type UploadChannelUploader interface {
 	// provider-side video id. The caller is responsible for token
 	// refresh, channel-binding validation, and persistence of the
 	// returned video id.
-	UploadVideoAsPrivate(ctx context.Context, accessToken string, post *models.Post, videoURL string) (videoID string, err error)
+	//
+	// nativePublishAt, when non-nil, is baked into the upload's
+	// status.publishAt so YouTube itself schedules the private→public
+	// transition at that time (only valid for a FUTURE time; the
+	// implementation ignores a past value). Pass nil for immediate
+	// publishes and for any video whose desired privacy is not
+	// public — those keep the caller's later videos.update path.
+	UploadVideoAsPrivate(ctx context.Context, accessToken string, post *models.Post, videoURL string, nativePublishAt *time.Time) (videoID string, err error)
 }

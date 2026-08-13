@@ -93,7 +93,11 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 	// the pipeline (Velox thumbnail editor, etc.) can resolve to a
 	// real youtube_video_id without waiting on the user's calendar
 	// cursor. publish_at stays on the post_target row for the LATER
-	// videos.update phase (Blocco #1 phase 2, owned by publish_worker).
+	// publish phase (Blocco #1 phase 2, owned by publish_worker):
+	// for scheduled public videos the Phase-1 videos.insert now
+	// carries status.publishAt (migration 126) so YouTube itself
+	// performs the private→public transition and the videos.update
+	// is skipped; all other videos keep the videos.update path.
 	//
 	// Inside the loop, transient failures bubble up so handleProcessingError
 	// MarkRetry's the parent upload_job (next claim re-runs the helper
@@ -279,8 +283,22 @@ func (w *UploadWorker) uploadVideoAsPrivateForTarget(
 			"job_id", job.ID, "target_id", target.ID, "yt_pub_id", pub.ID)
 		return nil
 	}
+
+	// Native scheduled publishing (migration 126): when the post has a
+	// FUTURE publish_at AND the desired privacy is public, bake
+	// status.publishAt into the private videos.insert so YouTube itself
+	// owns the private→public transition at that time — the publish
+	// worker then skips its videos.update (saves one ~50-unit call from
+	// the 2026 general quota bucket per scheduled public video). All
+	// other cases (immediate publish, past publish_at, desired privacy
+	// unlisted/private) pass nil and keep the videos.update path.
+	desiredPrivacy := resolveDesiredPrivacyForTarget(post, target)
+	var nativePublishAt *time.Time
+	if post.PublishAt != nil && post.PublishAt.After(time.Now()) && desiredPrivacy == "public" {
+		nativePublishAt = post.PublishAt
+	}
+
 	if pub == nil {
-		desiredPrivacy := resolveDesiredPrivacyForTarget(post, target)
 		pub = &models.YouTubeTargetPublication{
 			UploadJobID:         job.ID,
 			PostTargetID:        target.ID,
@@ -288,6 +306,9 @@ func (w *UploadWorker) uploadVideoAsPrivateForTarget(
 			YouTubeUploadStatus: "youtube_uploading",
 			DesiredPrivacy:      desiredPrivacy,
 			PublishAt:           post.PublishAt,
+			// Stamped when the upload actually carries status.publishAt so
+			// the publish phase can skip the redundant videos.update.
+			NativePublishAt: nativePublishAt,
 		}
 		if snapshot, ok := snapshotForAccount(post.Metadata, target.PlatformAccountID); ok && snapshot.ThumbnailMediaID != "" {
 			pub.ThumbnailMediaID = strPtr(snapshot.ThumbnailMediaID)
@@ -321,7 +342,7 @@ func (w *UploadWorker) uploadVideoAsPrivateForTarget(
 		}
 		return fmt.Errorf("resolve media asset for private YouTube upload: %w", err)
 	}
-	videoID, err := uploader.UploadVideoAsPrivate(ctx, oauthToken.AccessToken, post, mediaURL)
+	videoID, err := uploader.UploadVideoAsPrivate(ctx, oauthToken.AccessToken, post, mediaURL, nativePublishAt)
 	if err != nil {
 		// Stamp attempt + last_error then bubble up so the parent
 		// upload_job retry path picks up the row on its next claim.
@@ -390,10 +411,13 @@ func (w *UploadWorker) handleTargetBlockedAuth(
 			YouTubeUploadStatus: "failed",
 			DesiredPrivacy:      pub.DesiredPrivacy,
 			PublishAt:           pub.PublishAt,
-			LastError:           "youtube_channel_mismatch: " + reason,
-			AttemptCount:        pub.AttemptCount + 1,
-			CreatedAt:           pub.CreatedAt,
-			UpdatedAt:           time.Now().UTC(),
+			// Preserve the native-publish stamp across the blocked_auth
+			// rewrite (Update persists the whole field set).
+			NativePublishAt: pub.NativePublishAt,
+			LastError:       "youtube_channel_mismatch: " + reason,
+			AttemptCount:    pub.AttemptCount + 1,
+			CreatedAt:       pub.CreatedAt,
+			UpdatedAt:       time.Now().UTC(),
 		}); uErr != nil {
 			w.logger.Warn("upload worker: YT pub row Update on blocked_auth failed (continuing)",
 				"yt_pub_id", pub.ID, "target_id", target.ID, "error", uErr)

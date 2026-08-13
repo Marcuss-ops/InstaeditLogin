@@ -316,6 +316,85 @@ func TestYouTubeBuildUploadMetadata_ImmediatePublish(t *testing.T) {
 	}
 }
 
+// TestYouTubeBuildPrivateUploadMetadata_NativePublish pins the
+// migration-126 private-upload metadata: privacyStatus is always
+// "private" and, when nativePublishAt is set and in the future,
+// status.publishAt is included in RFC3339 UTC so YouTube itself
+// schedules the private→public transition (the publish worker then
+// skips its ~50-unit videos.update).
+func TestYouTubeBuildPrivateUploadMetadata_NativePublish(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	future := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	post := &models.Post{Title: "Scheduled Video", Caption: "A scheduled video"}
+
+	meta := svc.buildPrivateUploadMetadata(post, &future)
+
+	status, ok := meta["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("status metadata type: want map[string]interface{}, got %T", meta["status"])
+	}
+	if status["privacyStatus"] != "private" {
+		t.Errorf("privacyStatus: want private, got %v", status["privacyStatus"])
+	}
+	if got := status["publishAt"]; got != future.UTC().Format(time.RFC3339) {
+		t.Errorf("publishAt: want %q, got %v", future.UTC().Format(time.RFC3339), got)
+	}
+}
+
+// TestYouTubeBuildPrivateUploadMetadata_NoNativePublish pins the plain
+// private-upload metadata: no publishAt key when nativePublishAt is nil
+// (immediate publishes and non-public desired privacy keep the caller's
+// later videos.update path).
+func TestYouTubeBuildPrivateUploadMetadata_NoNativePublish(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	post := &models.Post{Title: "Immediate Video", Caption: "An immediate video"}
+
+	meta := svc.buildPrivateUploadMetadata(post, nil)
+
+	status, ok := meta["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("status metadata type: want map[string]interface{}, got %T", meta["status"])
+	}
+	if status["privacyStatus"] != "private" {
+		t.Errorf("privacyStatus: want private, got %v", status["privacyStatus"])
+	}
+	if _, exists := status["publishAt"]; exists {
+		t.Errorf("publishAt must not be set when nativePublishAt is nil")
+	}
+}
+
+// TestYouTubeBuildPrivateUploadMetadata_PastNativePublishIgnored pins
+// that a past nativePublishAt is ignored (YouTube rejects publishAt in
+// the past with invalidPublishAt) and the upload stays a plain private
+// upload — the caller's videos.update handles the late transition.
+func TestYouTubeBuildPrivateUploadMetadata_PastNativePublishIgnored(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	past := time.Now().UTC().Add(-2 * time.Hour)
+	post := &models.Post{Title: "Late Video", Caption: "Ran behind schedule"}
+
+	meta := svc.buildPrivateUploadMetadata(post, &past)
+
+	status, ok := meta["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("status metadata type: want map[string]interface{}, got %T", meta["status"])
+	}
+	if status["privacyStatus"] != "private" {
+		t.Errorf("privacyStatus: want private, got %v", status["privacyStatus"])
+	}
+	if _, exists := status["publishAt"]; exists {
+		t.Errorf("publishAt must not be set for a past nativePublishAt")
+	}
+}
+
 // TestYouTubeBuildUploadMetadata_PastPublishAt_Ignored verifies that a
 // PublishAt in the past is ignored and the requested privacy is used.
 func TestYouTubeBuildUploadMetadata_PastPublishAt_Ignored(t *testing.T) {

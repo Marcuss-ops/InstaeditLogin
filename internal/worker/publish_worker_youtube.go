@@ -80,6 +80,17 @@ func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models
 			ytPub.YouTubeUploadStatus == "youtube_uploaded" &&
 			ytPub.YouTubeVideoID != nil &&
 			*ytPub.YouTubeVideoID != "":
+			// Native scheduled publishing (migration 126): the Phase-1
+			// videos.insert carried status.publishAt (recorded on
+			// native_publish_at), so YouTube itself owns the private→public
+			// transition at that time. Skip the videos.update entirely —
+			// the worker stays a control/recovery layer, not the publish
+			// clock — and stamp the target published. This saves one
+			// ~50-unit call from the 2026 general quota bucket per
+			// scheduled public video.
+			if ytPub.NativePublishAt != nil {
+				return w.markYouTubeTargetPublished(ctx, target, account, ytPub, post)
+			}
 			raw, hasRaw := w.router.Get(account.Platform)
 			if hasRaw {
 				if updater, ok := raw.(services.YouTubePrivacyUpdater); ok {
@@ -138,58 +149,10 @@ func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models
 							return false, w.markFailed(target, "UpdateVideoPrivacy: "+err.Error())
 						}
 					} else {
-						// YouTube privacy transition succeeded — stamp
-						// published_at on the YT pub row. MarkPublished
-						// is an Upsert-shaped stamped-once helper
-						// (youtube_target_publication_repo.go::422),
-						// 0 rows affected is treated as transient /
-						// already-published and we continue downstream.
-						if err := w.ytPubLookup.MarkPublished(ctx, ytPub.ID); err != nil {
-							w.logger.Warn(
-								"publish worker: yt-pub MarkPublished failed (non-fatal; post_target publish transition continues)",
-								"yt_pub_id", ytPub.ID, "target_id", target.ID, "error", err,
-							)
-						}
-						// Mirror the SYNC-PUBLISH branch's full target
-						// stamp shape (publish_worker.go SYNC block):
-						// status + PlatformPostID + PublishedAt — so the
-						// dashboard's "published" filter renders correctly
-						// and the Published Video link points at the
-						// Phase-1 reused video_id (NOT a phantom).
-						now := time.Now()
-						target.Status = models.PostStatusPublished
-						// Composite-shape fix (Blocco #1 followup — Finding #1):
-						// stamp `channelID:videoID` so this branch produces the
-						// SAME PlatformPostID shape the async-publish branch
-						// already stamps via
-						// services.EncodeYouTubePublishID(platformUserID,
-						// videoID) inside StartPublish. decodeYouTubePublishID
-						// (in ReconcileWorker) only accepts the composite shape,
-						// so a plain video_id stamp here would surface as
-						// `invalid youtube publish id` on every reconciler tick
-						// and never transition publishing → published.
-						target.PlatformPostID = services.EncodeYouTubePublishID(account.PlatformUserID, *ytPub.YouTubeVideoID)
-						target.PublishedAt = &now
-						if err := w.updateTargetStatus(ctx, target); err != nil {
-							return false, fmt.Errorf("publish worker: update target after YouTube reuse: %w", err)
-						}
-						w.syncContentPackageState(ctx, post)
-						// Post-completion dispatch is best-effort. Resolve a fresh
-						// URL for the delivery hook too; never re-emit the
-						// persisted signed URL after Phase-2 reuse.
-						if w.resolver != nil {
-							deliveryURL, resolveErr := w.resolver.ResolveForUpload(ctx, post, time.Hour)
-							if resolveErr != nil {
-								w.logger.Warn("publish worker: skipping Phase-2 completion delivery because fresh media URL resolution failed",
-									"target_id", target.ID, "post_id", target.PostID, "error", resolveErr)
-							} else {
-								w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
-									ID: mediaReferenceValue(post.MediaAssetID), UploadKey: mediaReferenceValue(post.StorageObjectKey),
-									Bucket: mediaReferenceValue(post.Bucket), ContentType: "video/mp4",
-								}, deliveryURL)
-							}
-						}
-						return true, nil
+						// Privacy transition succeeded — stamp the terminal
+						// published state via the shared helper (also used by
+						// the native-publishAt fast path above).
+						return w.markYouTubeTargetPublished(ctx, target, account, ytPub, post)
 					}
 				}
 			}
@@ -201,6 +164,70 @@ func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models
 	}
 
 	return false, nil
+}
+
+// markYouTubeTargetPublished stamps the terminal published state for a
+// Phase-2 YouTube target whose video is (or, for native-publishAt
+// uploads, will be) public. Steps:
+//
+//  1. Best-effort MarkPublished on the yt_pub row (stamps published_at;
+//     0 rows affected is treated as transient/already-published and we
+//     continue downstream).
+//  2. Mirror the SYNC-PUBLISH branch's full target stamp shape: status
+//     + composite PlatformPostID (channelID:videoID) + PublishedAt — so
+//     the dashboard's "published" filter renders correctly and the
+//     Published Video link points at the Phase-1 reused video_id.
+//  3. Content-package state sync + best-effort post-completion dispatch
+//     (fresh media URL resolution; never re-emit a persisted signed URL).
+//
+// Shared by BOTH Phase-2 completion paths: the videos.update success
+// path and the native-publishAt fast path (migration 126, where YouTube
+// owns the private→public transition and the videos.update is skipped).
+func (w *PublishWorker) markYouTubeTargetPublished(
+	ctx context.Context,
+	target *models.PostTarget,
+	account *models.PlatformAccount,
+	ytPub *models.YouTubeTargetPublication,
+	post *models.Post,
+) (bool, error) {
+	// (1) Stamp published_at on the YT pub row. MarkPublished is an
+	// Upsert-shaped stamped-once helper; 0 rows affected is treated as
+	// transient / already-published and we continue downstream.
+	if err := w.ytPubLookup.MarkPublished(ctx, ytPub.ID); err != nil {
+		w.logger.Warn(
+			"publish worker: yt-pub MarkPublished failed (non-fatal; post_target publish transition continues)",
+			"yt_pub_id", ytPub.ID, "target_id", target.ID, "error", err,
+		)
+	}
+
+	// (2) Full target stamp shape (mirrors publish_worker.go SYNC block).
+	now := time.Now()
+	target.Status = models.PostStatusPublished
+	// Composite-shape fix (Blocco #1 followup — Finding #1): stamp
+	// `channelID:videoID` — the SAME PlatformPostID shape the async-
+	// publish branch stamps via services.EncodeYouTubePublishID, which
+	// decodeYouTubePublishID (ReconcileWorker) requires.
+	target.PlatformPostID = services.EncodeYouTubePublishID(account.PlatformUserID, *ytPub.YouTubeVideoID)
+	target.PublishedAt = &now
+	if err := w.updateTargetStatus(ctx, target); err != nil {
+		return false, fmt.Errorf("publish worker: update target after YouTube reuse: %w", err)
+	}
+
+	// (3) Content package sync + best-effort completion dispatch.
+	w.syncContentPackageState(ctx, post)
+	if w.resolver != nil {
+		deliveryURL, resolveErr := w.resolver.ResolveForUpload(ctx, post, time.Hour)
+		if resolveErr != nil {
+			w.logger.Warn("publish worker: skipping Phase-2 completion delivery because fresh media URL resolution failed",
+				"target_id", target.ID, "post_id", target.PostID, "error", resolveErr)
+		} else {
+			w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
+				ID: mediaReferenceValue(post.MediaAssetID), UploadKey: mediaReferenceValue(post.StorageObjectKey),
+				Bucket: mediaReferenceValue(post.Bucket), ContentType: "video/mp4",
+			}, deliveryURL)
+		}
+	}
+	return true, nil
 }
 
 // canonicalCanaryUploader (Task 7/10) is the YouTube canary pre-flight
