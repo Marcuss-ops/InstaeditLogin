@@ -251,6 +251,41 @@ func (r *YouTubeTargetPublicationRepository) MarkDeliveryFailed(
 	return r.checkRowsAffected(res, id)
 }
 
+// MarkDeliveryQuotaWait parks a claimed delivery in 'quota_wait' when
+// the YouTubeQuotaManager pre-call gate refused the videos.insert
+// (video_uploads bucket exhausted for the Pacific day). Unlike
+// MarkDeliveryFailed this is NOT a delivery failure: the attempt budget
+// is NOT consumed, the backoff cursor is set to the quota reset
+// (retry-after hint from the gate), and resume_state='ready_to_upload'
+// records where the row returns once next_attempt_at elapses (the
+// claim query re-derives the state on claim). One atomic UPDATE so a
+// crash cannot leave the row half-parked.
+func (r *YouTubeTargetPublicationRepository) MarkDeliveryQuotaWait(
+	ctx context.Context,
+	id int64,
+	workerID string,
+	nextAttemptAt time.Time,
+) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE youtube_target_publications
+		 SET state = 'quota_wait',
+		     resume_state = 'ready_to_upload',
+		     next_attempt_at = $3,
+		     last_error_code = 'quota_exceeded',
+		     last_error = 'youtube quota bucket video_uploads exhausted; delivery parked until daily reset',
+		     lease_owner = NULL,
+		     lease_expires_at = NULL,
+		     heartbeat_at = NULL,
+		     last_transition_at = NOW()
+		 WHERE id = $1 AND lease_owner = $2`,
+		id, workerID, nextAttemptAt,
+	)
+	if err != nil {
+		return fmt.Errorf("youtube target publication MarkDeliveryQuotaWait: %w", err)
+	}
+	return r.checkRowsAffected(res, id)
+}
+
 // ReclaimExpiredDeliveryLeases recovers rows stuck in 'uploading' whose
 // lease expired (worker crash / network partition without a heartbeat).
 // It returns them to 'ready_to_upload' so the next claim re-runs the

@@ -324,6 +324,22 @@ func (a *App) uploadWorkerSpec() worker.WorkerSpec {
 			// these columns). Best-effort by design: a missing ffprobe
 			// binary or a probe error never fails the ingest.
 			uw.SetMediaProber(worker.NewFFprobeProberWithRegistry(a.RenderRegistry))
+			// Google 2026 quota gate — wire the pre-call videos.insert
+			// reserve into the delivery pool: ReserveOperation charges
+			// the video_uploads bucket BEFORE the API call (fail-closed
+			// on gate errors), exhausted buckets park the delivery in
+			// 'quota_wait' until the Pacific daily reset instead of
+			// burning a retry, and real API failures are recorded via
+			// RecordError. The repo owns the Postgres row locking that
+			// keeps the counter strict across pods.
+			uw.SetYouTubeQuotaGate(services.NewYouTubeQuotaManager(
+				repository.NewYouTubeDailyQuotaRepository(a.DB),
+				services.YouTubeQuotaLimits{
+					VideoUploads: a.Cfg.Worker.YouTubeUploadQuotaLimit,
+					Searches:     a.Cfg.Worker.YouTubeSearchQuotaLimit,
+					General:      a.Cfg.Worker.YouTubeGeneralQuotaLimit,
+				},
+			))
 			return uw.Run(ctx)
 		},
 	}

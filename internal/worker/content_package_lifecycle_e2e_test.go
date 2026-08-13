@@ -34,6 +34,10 @@ type lifecycleYouTubeProvider struct {
 	mu                 sync.Mutex
 	privateUploadCalls int
 	privateVideoIDs    []string
+	// uploadErr — when non-nil, UploadVideoAsPrivate fails with this
+	// error AFTER incrementing the call counter (a real API failure
+	// that already burned the reserved quota charge).
+	uploadErr error
 }
 
 func (p *lifecycleYouTubeProvider) RefreshOAuthToken(_ context.Context, _ string) (*models.TokenData, error) {
@@ -44,6 +48,9 @@ func (p *lifecycleYouTubeProvider) UploadVideoAsPrivate(_ context.Context, _ str
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.privateUploadCalls++
+	if p.uploadErr != nil {
+		return "", p.uploadErr
+	}
 	videoID := fmt.Sprintf("private-video-%d", p.privateUploadCalls)
 	p.privateVideoIDs = append(p.privateVideoIDs, videoID)
 	return videoID, nil
@@ -250,19 +257,41 @@ func (s *lifecycleYouTubePublicationStore) MarkDeliveryUploaded(_ context.Contex
 	return fmt.Errorf("publication id %d not found", id)
 }
 
-func (s *lifecycleYouTubePublicationStore) MarkDeliveryFailed(_ context.Context, id int64, _ string, _ string, message string, nextAttemptAt time.Time) error {
+func (s *lifecycleYouTubePublicationStore) MarkDeliveryFailed(_ context.Context, id int64, _ string, errorCode string, message string, nextAttemptAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, row := range s.rows {
 		if row.ID == id {
 			row.AttemptCount++
 			row.LastError = message
+			code := errorCode
+			row.LastErrorCode = &code
 			row.NextAttemptAt = &nextAttemptAt
 			if row.AttemptCount >= row.MaxAttempts {
 				row.State = "dead_letter"
 			} else {
 				row.State = "retry_wait"
 			}
+			row.LeaseOwner = nil
+			row.LeaseExpiresAt = nil
+			row.HeartbeatAt = nil
+			return nil
+		}
+	}
+	return fmt.Errorf("publication id %d not found", id)
+}
+
+func (s *lifecycleYouTubePublicationStore) MarkDeliveryQuotaWait(_ context.Context, id int64, _ string, nextAttemptAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range s.rows {
+		if row.ID == id {
+			row.State = "quota_wait"
+			resume := "ready_to_upload"
+			row.ResumeState = &resume
+			row.NextAttemptAt = &nextAttemptAt
+			code := "quota_exceeded"
+			row.LastErrorCode = &code
 			row.LeaseOwner = nil
 			row.LeaseExpiresAt = nil
 			row.HeartbeatAt = nil

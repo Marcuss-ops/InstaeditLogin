@@ -505,12 +505,49 @@ func (w *UploadWorker) uploadVideoAsPrivateForDelivery(
 		}
 		return fmt.Errorf("resolve media asset for private YouTube upload: %w", err)
 	}
+	// Google 2026 quota gate — reserve the videos.insert charge BEFORE
+	// the API call. Fail-closed: when the gate cannot decide (DB down
+	// etc.) we do NOT call YouTube, we bubble the error up to the
+	// retry path. When the video_uploads bucket is exhausted for the
+	// Pacific day, the delivery is parked in 'quota_wait' with
+	// next_attempt_at = daily reset (NOT a failed attempt: the retry
+	// budget is untouched and the row resumes after the reset).
+	if w.quotaGate != nil {
+		allowed, retryAfter, qErr := w.quotaGate.ReserveOperation(ctx, services.YouTubeOpVideoInsert)
+		if qErr != nil {
+			return fmt.Errorf("youtube quota reserve videos.insert delivery=%d: %w", delivery.ID, qErr)
+		}
+		if !allowed {
+			if retryAfter <= 0 {
+				retryAfter = 3600
+			}
+			w.logger.Warn("upload worker: video_uploads bucket exhausted; parking delivery in quota_wait",
+				"delivery_id", delivery.ID, "retry_after_seconds", retryAfter)
+			if qErr := w.ytPubStore.MarkDeliveryQuotaWait(ctx, delivery.ID, workerID,
+				time.Now().Add(time.Duration(retryAfter)*time.Second)); qErr != nil {
+				w.logger.Warn("upload worker: MarkDeliveryQuotaWait failed (delivery left claimed)",
+					"delivery_id", delivery.ID, "error", qErr)
+			}
+			return nil
+		}
+	}
+
 	videoID, err := uploader.UploadVideoAsPrivate(ctx, oauthToken.AccessToken, post, mediaURL, nativePublishAt)
 	if err != nil {
-		// Bubble up so processYouTubeDelivery routes the row to
-		// retry_wait / dead_letter via MarkDeliveryFailed (attempt++ +
-		// last_error + backoff in ONE atomic UPDATE — the split-tx
-		// rationale of MarkYouTubeUploadedAtomic applies here too).
+		// A real API failure (5xx / transport / validation): record it
+		// against the video_uploads bucket (informational counter — the
+		// reserved charge already stands, Google counts the call even
+		// when it fails), then bubble up so processYouTubeDelivery
+		// routes the row to retry_wait / dead_letter via
+		// MarkDeliveryFailed (attempt++ + last_error + backoff in ONE
+		// atomic UPDATE — the split-tx rationale of
+		// MarkYouTubeUploadedAtomic applies here too).
+		if w.quotaGate != nil {
+			if rErr := w.quotaGate.RecordError(ctx, services.YouTubeQuotaBucketVideoUploads); rErr != nil {
+				w.logger.Warn("upload worker: RecordError(video_uploads) failed",
+					"delivery_id", delivery.ID, "error", rErr)
+			}
+		}
 		return fmt.Errorf("UploadVideoAsPrivate delivery=%d target=%d: %w", delivery.ID, target.ID, err)
 	}
 	if videoID == "" {

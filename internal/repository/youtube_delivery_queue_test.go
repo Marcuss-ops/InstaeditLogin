@@ -316,6 +316,81 @@ func TestMarkDeliveryFailed_RetryThenDeadLetter(t *testing.T) {
 	}
 }
 
+// TestMarkDeliveryQuotaWait_ParksUntilReset verifies the capacity
+// parking path: when the pre-call quota gate refuses the videos.insert
+// (video_uploads bucket exhausted), the row goes to 'quota_wait' with
+// resume_state='ready_to_upload', a next_attempt_at = daily reset, a
+// quota_exceeded error stamp, cleared lease, and — crucially — the
+// retry budget UNTOUCHED (attempt_count stays 0: this is capacity, not
+// a failure). The row becomes claimable again once next_attempt_at
+// elapses.
+func TestMarkDeliveryQuotaWait_ParksUntilReset(t *testing.T) {
+	db, cleanup := postgres.StartTestPostgres(t, postgres.WithDatabase("instaedit_delivery_queue_quota_wait"))
+	defer cleanup()
+	if err := database.RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	seedDeliveryFixture(t, db, 1, 1)
+	ctx := context.Background()
+	repo := NewYouTubeTargetPublicationRepository(db)
+
+	rows, err := repo.ClaimReadyDeliveries(ctx, "quota-worker", 1, time.Minute)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("claim: rows=%d err=%v", len(rows), err)
+	}
+	delivery := rows[0]
+
+	reset := time.Now().Add(6 * time.Hour)
+	if err := repo.MarkDeliveryQuotaWait(ctx, delivery.ID, "quota-worker", reset); err != nil {
+		t.Fatalf("MarkDeliveryQuotaWait: %v", err)
+	}
+	got, err := repo.FindByID(ctx, delivery.ID)
+	if err != nil || got == nil {
+		t.Fatalf("FindByID: %+v err=%v", got, err)
+	}
+	if got.State != "quota_wait" {
+		t.Errorf("state=%q, want quota_wait", got.State)
+	}
+	if got.ResumeState == nil || *got.ResumeState != "ready_to_upload" {
+		t.Errorf("resume_state=%v, want ready_to_upload", got.ResumeState)
+	}
+	if got.NextAttemptAt == nil || got.NextAttemptAt.Sub(reset) > time.Microsecond {
+		t.Errorf("next_attempt_at=%v, want reset=%v (postgres timestamptz stores microseconds)", got.NextAttemptAt, reset)
+	}
+	if got.LastErrorCode == nil || *got.LastErrorCode != "quota_exceeded" {
+		t.Errorf("last_error_code=%v, want quota_exceeded", got.LastErrorCode)
+	}
+	if got.AttemptCount != 0 {
+		t.Errorf("attempt_count=%d, want 0 (quota parking must not burn the retry budget)", got.AttemptCount)
+	}
+	if got.LeaseOwner != nil || got.LeaseExpiresAt != nil {
+		t.Errorf("lease not cleared after quota_wait: owner=%v expires=%v", got.LeaseOwner, got.LeaseExpiresAt)
+	}
+
+	// Unclaimable while next_attempt_at is in the future.
+	again, err := repo.ClaimReadyDeliveries(ctx, "quota-worker-2", 1, time.Minute)
+	if err != nil {
+		t.Fatalf("claim while parked: %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("claimed %d rows while quota_wait is parked, want 0", len(again))
+	}
+
+	// Once the reset elapses the row is claimable again and resumes as
+	// ready_to_upload (the claim query re-derives the state).
+	if _, err := db.Exec(`UPDATE youtube_target_publications SET next_attempt_at = NOW() - INTERVAL '1 second' WHERE id = $1`, delivery.ID); err != nil {
+		t.Fatalf("expire reset cursor: %v", err)
+	}
+	resumed, err := repo.ClaimReadyDeliveries(ctx, "quota-worker-3", 1, time.Minute)
+	if err != nil || len(resumed) != 1 {
+		t.Fatalf("re-claim after reset: rows=%d err=%v", len(resumed), err)
+	}
+	if resumed[0].ID != delivery.ID {
+		t.Errorf("re-claimed row id=%d, want %d", resumed[0].ID, delivery.ID)
+	}
+}
+
 // TestReclaimExpiredDeliveryLeases_ReturnsStuckRows verifies the crash
 // recovery path: a delivery stuck in 'uploading' with an expired lease
 // is returned to 'ready_to_upload' so a peer worker re-claims it.

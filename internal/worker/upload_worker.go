@@ -147,7 +147,31 @@ type UploadYouTubeTargetPubStore interface {
 	MarkDeliveryUploaded(ctx context.Context, id int64, workerID, videoID string) error
 	MarkDeliveryFailed(ctx context.Context, id int64, workerID, errorCode, errMessage string, nextAttemptAt time.Time) error
 	MarkDeliveryBlockedAuth(ctx context.Context, id int64, workerID, reason string) error
+	// MarkDeliveryQuotaWait parks a claimed delivery in 'quota_wait'
+	// (resume_state='ready_to_upload', next_attempt_at set to the daily
+	// reset) when the YouTubeQuotaManager gate refused the videos.insert
+	// because the video_uploads bucket is exhausted. Distinct from
+	// MarkDeliveryFailed: the attempt budget is NOT consumed, so the
+	// row resumes normally after the Pacific-time daily reset.
+	MarkDeliveryQuotaWait(ctx context.Context, id int64, workerID string, nextAttemptAt time.Time) error
 	ReclaimExpiredDeliveryLeases(ctx context.Context, maxRows int) (int64, error)
+}
+
+// YouTubeQuotaGate is the narrow pre-call gate the delivery pool needs
+// on the YouTube Data API under the Google 2026 quota model (three
+// independent daily buckets). *services.YouTubeQuotaManager implements
+// it; tests inject a stub to exercise the gate without a Postgres
+// backend. The contract is fail-closed: when the gate cannot decide
+// (err != nil) the caller must NOT make the API call.
+type YouTubeQuotaGate interface {
+	// ReserveOperation resolves an operation name (e.g.
+	// services.YouTubeOpVideoInsert) to its (bucket, cost) spec and
+	// charges it atomically. allowed=false + retryAfterSeconds>0 means
+	// the bucket is exhausted for the day.
+	ReserveOperation(ctx context.Context, operation string) (allowed bool, retryAfterSeconds int, err error)
+	// RecordError bumps the informational errors counter for a bucket
+	// after a real API failure (5xx / transport / validation).
+	RecordError(ctx context.Context, bucket string) error
 }
 
 // UploadDeliveryPostStore resolves the post + post_target rows a
@@ -214,6 +238,17 @@ type UploadWorkerOptions struct {
 	VideoRetentionBufferDays int
 }
 
+// SetYouTubeQuotaGate wires the Google 2026 quota pre-call gate into
+// the delivery pool. When set, uploadVideoAsPrivateForDelivery reserves
+// the videos.insert charge BEFORE the API call (fail-closed on gate
+// errors) and parks the delivery in 'quota_wait' when the video_uploads
+// bucket is exhausted; after a real API failure it records the error
+// against the bucket. When nil (legacy / test fixtures), the upload
+// proceeds ungated exactly as before.
+func (w *UploadWorker) SetYouTubeQuotaGate(gate YouTubeQuotaGate) {
+	w.quotaGate = gate
+}
+
 // UploadWorker processes upload_jobs in the background. It downloads
 // videos from public or authenticated Google Drive, uploads them to S3,
 // creates posts + targets, and triggers publishing. Jobs survive server
@@ -244,6 +279,7 @@ type UploadWorker struct {
 	deliveryVerifier  ExternalDeliveryVerifier
 	ytPubStore        UploadYouTubeTargetPubStore
 	deliveryPostStore UploadDeliveryPostStore
+	quotaGate         YouTubeQuotaGate
 	resolver          services.MediaDownloadResolver
 	prober            MediaProber
 	interval          time.Duration
