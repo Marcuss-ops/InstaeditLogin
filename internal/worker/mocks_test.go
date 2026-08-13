@@ -167,10 +167,33 @@ type mockProvider struct {
 	capturedUpdatePrivacyTitle       string
 	capturedUpdatePrivacyDescription string
 	capturedUpdatePrivacyAccessToken string
+	// getYouTubeVideoFn (native-publishAt settlement, migration 126
+	// followup) — when non-nil, GetYouTubeVideo delegates to this fn.
+	// When nil (default), GetYouTubeVideo returns a video whose Privacy
+	// is "public" (the settled state) so existing tests that don't
+	// exercise the verify path keep their prior assertion surface.
+	getYouTubeVideoFn func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
+	// getYouTubeVideoCalls — mu-protected counter so tests can assert
+	// the native-publish settlement verified the video exactly once.
+	getYouTubeVideoCalls int
 }
 
 func (m *mockProvider) GetLoginURL(state string) string {
 	panic("GetLoginURL not used in worker tests")
+}
+
+// GetYouTubeVideo implements YouTubeVideoStatusChecker for the
+// native-publishAt settlement path (videos.list, 1 unit). Default
+// (nil fn) returns a public video — the settled state — so tests
+// that don't configure verification keep working.
+func (m *mockProvider) GetYouTubeVideo(ctx context.Context, _ string, videoID string) (*models.YouTubeVideoDetails, error) {
+	m.mu.Lock()
+	m.getYouTubeVideoCalls++
+	m.mu.Unlock()
+	if m.getYouTubeVideoFn == nil {
+		return &models.YouTubeVideoDetails{ID: videoID, Privacy: "public"}, nil
+	}
+	return m.getYouTubeVideoFn(ctx, "ignored", videoID)
 }
 func (m *mockProvider) GetLoginURLWithOptions(state string, _ services.OAuthLoginOptions) string {
 	panic("GetLoginURLWithOptions not used in worker tests")

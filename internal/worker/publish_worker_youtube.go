@@ -12,6 +12,26 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
+// nativePublishGraceWindow is how long after the scheduled publishAt we
+// wait for YouTube's OWN private→public transition before we treat the
+// delivery as missed and force it via videos.update (recovery). Inside
+// the window the target is requeued with backoff and re-verified on the
+// next tick — the worker is control/recovery, NOT the publish clock:
+// YouTube owns the scheduled transition, the worker only settles the
+// bookkeeping once YouTube has actually made the video public.
+const nativePublishGraceWindow = 10 * time.Minute
+
+// YouTubeVideoStatusChecker is the narrow capability the native-
+// publishAt settlement path needs: ONE videos.list call returning the
+// video's CURRENT privacy status (1 unit from the 2026 general quota
+// bucket) so the publish worker can verify that YouTube really
+// performed the scheduled private→public transition instead of trusting
+// the DB stamp blindly. Implemented by
+// *services.YouTubeOAuthService.GetYouTubeVideo.
+type YouTubeVideoStatusChecker interface {
+	GetYouTubeVideo(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
+}
+
 func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models.PostTarget, account *models.PlatformAccount, post *models.Post, oauthToken *models.OAuthToken, payload models.PublishPayload) (handled bool, err error) {
 	// PHASE 2 BYPASS (Blocco #1 followup — Migration 077 contract):
 	// When Phase 1 (upload_worker.MarkYouTubeUploaded) has stamped a
@@ -83,13 +103,15 @@ func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models
 			// Native scheduled publishing (migration 126): the Phase-1
 			// videos.insert carried status.publishAt (recorded on
 			// native_publish_at), so YouTube itself owns the private→public
-			// transition at that time. Skip the videos.update entirely —
-			// the worker stays a control/recovery layer, not the publish
-			// clock — and stamp the target published. This saves one
-			// ~50-unit call from the 2026 general quota bucket per
-			// scheduled public video.
+			// transition at that time. The videos.update is skipped — the
+			// worker stays a control/recovery layer, not the publish clock
+			// — but the target is NOT stamped blindly: settleNativePublish
+			// VERIFIES the video's actual privacy via videos.list (1 unit)
+			// before marking published, requeues while YouTube is still
+			// transitioning (grace window), and forces the transition via
+			// videos.update ONLY as recovery when YouTube missed it.
 			if ytPub.NativePublishAt != nil {
-				return w.markYouTubeTargetPublished(ctx, target, account, ytPub, post)
+				return w.settleNativePublish(ctx, target, account, ytPub, post, oauthToken)
 			}
 			raw, hasRaw := w.router.Get(account.Platform)
 			if hasRaw {
@@ -228,6 +250,125 @@ func (w *PublishWorker) markYouTubeTargetPublished(
 		}
 	}
 	return true, nil
+}
+
+// settleNativePublish is the control/recovery settlement for a delivery
+// whose Phase-1 videos.insert carried status.publishAt (migration 126).
+// YouTube owns the private→public transition — the worker is NOT the
+// clock. Instead of stamping published blindly, it VERIFIES the video's
+// actual privacy via videos.list (1 unit from the general bucket):
+//
+//   - privacy == "public"          → markYouTubeTargetPublished (normal
+//     settlement, NO videos.update — the ~50-unit saving of native
+//     scheduling).
+//   - still private inside the    → requeue with backoff and return an
+//     grace window (publishAt +   → error so the next tick re-verifies;
+//     10m)                          → YouTube is likely still processing
+//                                     its own transition — we never force
+//                                     it during the window.
+//   - still private PAST the      → RECOVERY: force public via
+//     grace window                  → videos.update (one ~50-unit call;
+//                                     the exception path, not the clock).
+//   - videos.list 404 (orphan)    → ClearYouTubeUpload + fall through to
+//     (user deleted / takedown)     a fresh publisher.Publish (re-upload).
+//
+// Transient videos.list errors roll the claim back to queued so the
+// next tick retries the verification. When the provider does not
+// implement YouTubeVideoStatusChecker (older fixtures), the legacy
+// blind-stamp behaviour is preserved with a warn log.
+func (w *PublishWorker) settleNativePublish(
+	ctx context.Context,
+	target *models.PostTarget,
+	account *models.PlatformAccount,
+	ytPub *models.YouTubeTargetPublication,
+	post *models.Post,
+	oauthToken *models.OAuthToken,
+) (bool, error) {
+	videoID := *ytPub.YouTubeVideoID
+
+	raw, hasRaw := w.router.Get(account.Platform)
+	checker, checkerOK := raw.(YouTubeVideoStatusChecker)
+	if !hasRaw || !checkerOK {
+		// No status-check capability wired (older fixtures / a future
+		// non-YouTube provider registered under the youtube name):
+		// preserve the pre-verification blind stamp with a warn — the
+		// worker shouldn't block a delivery on a missing read capability.
+		w.logger.Warn("publish worker: YouTube provider missing video-status-check capability; stamping native-publish target without verification",
+			"target_id", target.ID, "yt_pub_id", ytPub.ID, "video_id", videoID)
+		return w.markYouTubeTargetPublished(ctx, target, account, ytPub, post)
+	}
+
+	details, err := checker.GetYouTubeVideo(ctx, oauthToken.AccessToken, videoID)
+	if err != nil {
+		if errors.Is(err, services.ErrYouTubeVideoNotFound) {
+			// Orphan (user deleted via YouTube Studio / moderator
+			// takedown): clear the stale yt_pub row and fall through to
+			// a fresh publisher.Publish (same recovery as the videos.update
+			// path's isOrphanedYouTubeVideo branch).
+			w.logger.Warn("publish worker: native-publish video orphaned (videos.list 404); clearing yt-pub row + falling through to fresh publisher.Publish",
+				"yt_pub_id", ytPub.ID, "target_id", target.ID, "stale_video_id", videoID, "error", err)
+			if clearErr := w.ytPubLookup.ClearYouTubeUpload(ctx, ytPub.ID); clearErr != nil {
+				w.logger.Warn("publish worker: yt-pub ClearYouTubeUpload failed (non-fatal; fresh publisher.Publish will overwrite on success)",
+					"yt_pub_id", ytPub.ID, "target_id", target.ID, "error", clearErr)
+			}
+			return false, nil
+		}
+		// Transient (5xx, network, decode): roll the claim back to queued
+		// so the next tick re-verifies; count the attempt as failed.
+		target.Status = models.PostStatusQueued
+		if rbErr := w.updateTargetStatus(ctx, target); rbErr != nil {
+			w.logger.Warn("publish worker: native-publish status check transient — could not roll back claim to queued",
+				"target_id", target.ID, "error", rbErr)
+		}
+		return false, fmt.Errorf("native publish status check video=%s: %w", videoID, err)
+	}
+
+	if details.Privacy == "public" {
+		// YouTube performed the scheduled transition — settle the
+		// bookkeeping only. No videos.update (quota saved).
+		return w.markYouTubeTargetPublished(ctx, target, account, ytPub, post)
+	}
+
+	// Still private. Inside the grace window YouTube is likely still
+	// processing its own transition: requeue with backoff and let the
+	// next tick re-verify — do NOT spend a 50-unit videos.update racing
+	// YouTube's clock.
+	if ytPub.NativePublishAt != nil && time.Now().Before(ytPub.NativePublishAt.Add(nativePublishGraceWindow)) {
+		w.logger.Info("publish worker: native-publish video still private within grace window; requeueing for re-verification",
+			"target_id", target.ID, "yt_pub_id", ytPub.ID, "video_id", videoID,
+			"privacy", details.Privacy, "publish_at", ytPub.NativePublishAt.Format(time.RFC3339))
+		if rErr := w.retryTarget(ctx, target, "native publish still private; waiting for YouTube transition"); rErr != nil {
+			w.logger.Warn("publish worker: native-publish grace requeue failed", "target_id", target.ID, "error", rErr)
+		}
+		return false, fmt.Errorf("native publish: video %s still %s within grace window (publish_at %s)",
+			videoID, details.Privacy, ytPub.NativePublishAt.Format(time.RFC3339))
+	}
+
+	// Past the grace window: YouTube missed the scheduled transition —
+	// RECOVERY. Force public via videos.update (one ~50-unit call from
+	// the general bucket; this is the exception path, not the clock).
+	updater, updaterOK := raw.(services.YouTubePrivacyUpdater)
+	if !updaterOK {
+		return false, w.markFailed(target, fmt.Sprintf(
+			"native publish recovery: YouTube provider missing YouTubePrivacyUpdater (video %s still %s past grace window)",
+			videoID, details.Privacy))
+	}
+	w.logger.Warn("publish worker: native-publish grace window elapsed with video still private; forcing public via videos.update (recovery)",
+		"target_id", target.ID, "yt_pub_id", ytPub.ID, "video_id", videoID,
+		"privacy", details.Privacy, "publish_at", ytPub.NativePublishAt.Format(time.RFC3339))
+	if err := updater.UpdateVideoPrivacy(ctx, oauthToken.AccessToken, videoID, "public", nil, post.Title, post.Caption); err != nil {
+		if isOrphanedYouTubeVideo(err, videoID) {
+			w.logger.Warn("publish worker: native-publish recovery videos.update hit orphaned video (404); clearing yt-pub row + falling through to fresh publisher.Publish",
+				"yt_pub_id", ytPub.ID, "target_id", target.ID, "stale_video_id", videoID, "error", err)
+			if clearErr := w.ytPubLookup.ClearYouTubeUpload(ctx, ytPub.ID); clearErr != nil {
+				w.logger.Warn("publish worker: yt-pub ClearYouTubeUpload failed (non-fatal; fresh publisher.Publish will overwrite on success)",
+					"yt_pub_id", ytPub.ID, "target_id", target.ID, "error", clearErr)
+			}
+			return false, nil
+		}
+		return false, w.markFailed(target, "native publish recovery videos.update: "+err.Error())
+	}
+	return w.markYouTubeTargetPublished(ctx, target, account, ytPub, post)
 }
 
 // canonicalCanaryUploader (Task 7/10) is the YouTube canary pre-flight

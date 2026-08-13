@@ -202,6 +202,22 @@ The reconcile worker (`internal/worker/reconcile_worker.go::Run`) ticks every `i
 
 `tickReconcile` does NOT claim the row before reading it. That's safe because the only thing the reconciler MUTATES on a `publishing` target is `status` (terminal transitions) and `provider_state` (terminal-state log). The terminal updates are idempotent — if two reconcilers (from replica-A and replica-B) racing the same target land on it the same tick, both write the same terminal value and the second UPDATE is a no-op. No row-level lock needed at this layer.
 
+### YouTube scheduled publishing: YouTube is the clock, the workers are control/recovery
+
+For **scheduled public YouTube videos** the publish worker is deliberately NOT the publish clock. Since migration 126 (commit `88c2495d`) the Phase-1 `videos.insert` bakes `status.publishAt` (recorded on `youtube_target_publications.native_publish_at`) into the private upload: **YouTube itself performs the private→public transition at the scheduled time** — even when our servers are down, Postgres is down, or a deployment is in flight. This is what saves the ~50-unit `videos.update` per scheduled video (see `docs/oauth-google-limits.md` §budget).
+
+`PublishWorker` and `ReconcileWorker` therefore play a **control/recovery** role for those rows, not a clock role:
+
+1. **Verify before stamp** (`settleNativePublish`, `internal/worker/publish_worker_youtube.go`): when the publish worker picks up a native-publishAt target at `publish_at <= now`, it does NOT stamp `published` blindly. It first verifies the video's ACTUAL privacy via `videos.list` (`YouTubeVideoStatusChecker`, 1 unit from the 2026 general bucket):
+   - `privacy == public` → stamp `published` (no `videos.update` — the quota saving).
+   - still `private` **inside the 10-minute grace window** (`nativePublishGraceWindow`) → requeue the target with backoff and re-verify next tick; YouTube is likely still processing its own transition, and the worker never races it with a 50-unit update.
+   - still `private` **past the grace window** → **recovery**: force the transition via `videos.update` (one ~50-unit call — the exception path, not the clock).
+   - `videos.list` 404 (orphan: user deleted / takedown) → `ClearYouTubeUpload` + fall through to a fresh `publisher.Publish` (re-upload), same orphan recovery as the `videos.update` path.
+2. **Graceful drain**: a transient `videos.list` error rolls the claim back to `queued` so the next tick re-verifies — the worker never marks a target terminal on a transient read failure.
+3. **ReconcileWorker** stays recovery-only for YouTube: it only settles rows stuck in `publishing` by polling the platform status; scheduled YouTube rows that settled via `settleNativePublish` never enter that window. The parallel `tick()` worker pool (`PUBLISH_CONCURRENCY`, see the burst section) means N videos scheduled at the same minute are verified/settled concurrently.
+
+For **immediate / non-public YouTube publishes** (no `native_publish_at`: immediate `public`, `unlisted`, `private`, or an upload that missed its window) the worker keeps the classic `videos.update` path — those cannot use YouTube's scheduler.
+
 ### State-machine ownership
 
 `post_targets.status` is the canonical lifecycle counter; each goroutine owns a non-overlapping subset of transitions. The transitions are deliberately scoped so that no two goroutines can concurrently contest the same row at the same transition:

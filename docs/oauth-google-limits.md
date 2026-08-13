@@ -200,10 +200,29 @@ sicuro.**
 
 Dal commit `88c2495d` i video **programmati** (publish_at futuro +
 privacy desiderata `public`) passano `status.publishAt` direttamente
-nel `videos.insert` privato: YouTube pubblica da solo alla scadenza e
-**il `videos.update` post-publish_at non viene più emesso** (il publish
+nel `videos.insert` privato: **YouTube è l'orologio** — pubblica da
+solo alla scadenza, anche se i nostri server sono giù — e **il
+`videos.update` post-publish_at non viene più emesso** (il publish
 worker salta la `videos.update` quando il flag `native_publish_at` è
 presente sulla riga `youtube_target_publications`).
+
+**Controllo e recovery, non orologio**: il publish worker non marca
+più `published` alla cieca — prima verifica lo stato reale del video
+via `videos.list` (1 unità dal bucket general, `settleNativePublish`
+in `internal/worker/publish_worker_youtube.go`): se pubblico, stampa
+il target senza `videos.update`; se ancora privato **entro la finestra
+di grazia di 10 minuti** dal publish_at, ri-accoda il target con
+backoff e riverifica al tick successivo (YouTube sta ancora
+transitando — mai gareggiare con 50 unità); se ancora privato **oltre
+i 10 minuti** (YouTube ha mancato la transizione programmata),
+**recovery**: forza il pubblico con un singolo `videos.update`. Costo
+aggiuntivo: 1 `videos.list` (1 unità) per video programmato — già
+incluso nella voce `N_videos_list` della formula di budget sotto.
+
+Il `ReconcileWorker` resta recovery-only: sistema solo le righe bloccate
+in `publishing` interrogando lo stato della piattaforma; i video
+programmati che si stabilizzano via `settleNativePublish` non entrano
+mai in quella finestra.
 
 Risultato per lo scenario **100 upload + 100 copertine, tutti
 programmati**:
