@@ -425,6 +425,7 @@ func (s *YouTubeOAuthService) GetYouTubeVideo(ctx context.Context, accessToken, 
 		Description:  v.Snippet.Description,
 		ChannelID:    v.Snippet.ChannelID,
 		ThumbnailURL: youtubeBestThumbnail(v.Snippet.Thumbnails),
+		CategoryID:   v.Snippet.CategoryID,
 		Privacy:      v.Status.PrivacyStatus,
 		UploadStatus: v.Status.UploadStatus,
 	}, nil

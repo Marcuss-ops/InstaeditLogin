@@ -83,7 +83,7 @@ func TestCreateEditorSession_EnsuresEditorProjectBridge(t *testing.T) {
 		WithThumbnailProjectStore(tps),
 	)
 
-	got, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+	got, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 		WorkspaceID:       workspaceID,
 		PlatformAccountID: accountID,
 		YouTubeVideoID:    videoID,
@@ -145,7 +145,7 @@ func TestCreateEditorSession_BridgeSkippedForBackgroundCaller(t *testing.T) {
 		WithThumbnailProjectStore(tps),
 	)
 
-	got, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+	got, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 		WorkspaceID:       workspaceID,
 		PlatformAccountID: accountID,
 		YouTubeVideoID:    videoID,
@@ -188,7 +188,7 @@ func TestCreateEditorSession_BridgeProjectEnsureFailureFailsClick(t *testing.T) 
 		WithThumbnailProjectStore(tps),
 	)
 
-	_, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+	_, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 		WorkspaceID:       workspaceID,
 		PlatformAccountID: accountID,
 		YouTubeVideoID:    videoID,
@@ -228,7 +228,7 @@ func TestCreateEditorSession_BridgeFailurePropagates(t *testing.T) {
 		WithEditorService(editorSvc),
 	)
 
-	_, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+	_, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 		WorkspaceID:       workspaceID,
 		PlatformAccountID: accountID,
 		YouTubeVideoID:    videoID,
@@ -269,7 +269,7 @@ func TestCreateEditorSession_BridgeMismatchRejected(t *testing.T) {
 		WithEditorService(editorSvc),
 	)
 
-	_, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+	_, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 		WorkspaceID:       workspaceID,
 		PlatformAccountID: accountID,
 		YouTubeVideoID:    videoID,

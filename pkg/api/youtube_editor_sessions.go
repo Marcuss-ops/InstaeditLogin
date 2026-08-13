@@ -69,46 +69,46 @@ import (
 // (whether the row was newly created or already existed).
 // A typed sentinel error (above) is returned on each failure mode so
 // the HTTP handler can map to 4xx via errors.Is.
-func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSessionInput) (*models.YouTubeVideoEdit, error) {
+func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSessionInput) (*models.YouTubeVideoEdit, *models.YouTubeVideoDetails, error) {
 	if in.WorkspaceID <= 0 {
-		return nil, ErrEditorSessionWorkspaceNotFound
+		return nil, nil, ErrEditorSessionWorkspaceNotFound
 	}
 	if in.PlatformAccountID <= 0 {
-		return nil, ErrEditorSessionAccountNotFound
+		return nil, nil, ErrEditorSessionAccountNotFound
 	}
 	if in.YouTubeVideoID == "" {
-		return nil, fmt.Errorf("youtube_video_id is required")
+		return nil, nil, fmt.Errorf("youtube_video_id is required")
 	}
 	if r.workspaceStore == nil {
-		return nil, ErrEditorSessionWorkspaceNotFound
+		return nil, nil, ErrEditorSessionWorkspaceNotFound
 	}
 	workspace, err := r.workspaceStore.FindByID(in.WorkspaceID)
 	if err != nil || workspace == nil {
-		return nil, ErrEditorSessionWorkspaceNotFound
+		return nil, nil, ErrEditorSessionWorkspaceNotFound
 	}
 	// Authenticated creation is intentionally owner-only. Background
 	// workers leave UserID at zero and are allowed to validate/create the
 	// technical session; HTTP callers must not bypass this gate by invoking
 	// the shared helper through a future route.
 	if in.UserID > 0 && !r.userOwnsWorkspace(in.UserID, workspace) {
-		return nil, ErrEditorSessionWorkspaceNotFound
+		return nil, nil, ErrEditorSessionWorkspaceNotFound
 	}
 	if r.userRepo == nil {
-		return nil, ErrEditorSessionAccountNotFound
+		return nil, nil, ErrEditorSessionAccountNotFound
 	}
 	account, err := r.userRepo.FindPlatformAccountByID(in.PlatformAccountID)
 	if err != nil || account == nil || account.Platform != models.PlatformYouTube {
-		return nil, ErrEditorSessionAccountNotFound
+		return nil, nil, ErrEditorSessionAccountNotFound
 	}
 	if r.workspaceStore == nil {
-		return nil, ErrEditorSessionChannelUnlinked
+		return nil, nil, ErrEditorSessionChannelUnlinked
 	}
 	channel, err := r.workspaceStore.FindChannel(ctx, in.WorkspaceID, in.PlatformAccountID)
 	if err != nil || channel == nil {
-		return nil, ErrEditorSessionChannelUnlinked
+		return nil, nil, ErrEditorSessionChannelUnlinked
 	}
 	if r.vault == nil {
-		return nil, ErrEditorSessionNoValidToken
+		return nil, nil, ErrEditorSessionNoValidToken
 	}
 	// Renew first (P0): CreateEditorSession is the FIRST step of the
 	// thumbnail-batch chain and makes a remote GetYouTubeVideo call, so
@@ -131,26 +131,26 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 		}
 	}
 	if err != nil {
-		return nil, ErrEditorSessionNoValidToken
+		return nil, nil, ErrEditorSessionNoValidToken
 	}
 	if r.youTubeSvc == nil {
-		return nil, ErrEditorSessionYTServiceUnconfigured
+		return nil, nil, ErrEditorSessionYTServiceUnconfigured
 	}
 	video, err := r.youTubeSvc.GetYouTubeVideo(ctx, token.AccessToken, in.YouTubeVideoID)
 	if err != nil {
-		return nil, fmt.Errorf("youtube video: %w", err)
+		return nil, nil, fmt.Errorf("youtube video: %w", err)
 	}
 	if video.ChannelID != account.PlatformUserID {
-		return nil, ErrEditorSessionVideoWrongChannel
+		return nil, nil, ErrEditorSessionVideoWrongChannel
 	}
 	if video.UploadStatus != "processed" {
-		return nil, ErrEditorSessionVideoNotReady
+		return nil, nil, ErrEditorSessionVideoNotReady
 	}
 	if video.Privacy == "public" {
-		return nil, ErrEditorSessionVideoAlreadyPub
+		return nil, nil, ErrEditorSessionVideoAlreadyPub
 	}
 	if r.youtubeVideoEditStore == nil {
-		return nil, ErrEditorSessionEditStoreUnconfigured
+		return nil, nil, ErrEditorSessionEditStoreUnconfigured
 	}
 	// Pre-generate UUID hints for the (rare) INSERT path. The FindOrCreate
 	// repository method mints fresh UUIDs internally if these hints are
@@ -168,7 +168,7 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 		projectID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("find or create editor session: %w", err)
+		return nil, nil, fmt.Errorf("find or create editor session: %w", err)
 	}
 	// Action 6 "Modifica" flow: the session row carries the opaque
 	// velox_project_id (created or reused by FindOrCreateEditableSession
@@ -188,9 +188,9 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 		persisted.Status = "failed"
 		persisted.LastError = err.Error()
 		if compensateErr := r.youtubeVideoEditStore.Update(ctx, persisted); compensateErr != nil {
-			return nil, fmt.Errorf("%w (failed to mark editor session failed: %v)", err, compensateErr)
+			return nil, nil, fmt.Errorf("%w (failed to mark editor session failed: %v)", err, compensateErr)
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	// YouTube's videos.list response is authoritative for the source
 	// thumbnail. This matters for an existing session: older rows can
@@ -217,10 +217,10 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 		persisted.SourceThumbnailURL = sourceThumbnailURL
 		persisted.UpdatedAt = time.Now().UTC()
 		if updateErr := r.youtubeVideoEditStore.Update(ctx, persisted); updateErr != nil {
-			return nil, fmt.Errorf("repair editor session source thumbnail: %w", updateErr)
+			return nil, nil, fmt.Errorf("repair editor session source thumbnail: %w", updateErr)
 		}
 	}
-	return persisted, nil
+	return persisted, video, nil
 }
 
 // ensureEditorProjectBridge resolves the provider project mapping for a
@@ -332,7 +332,7 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		return
 	}
 
-	edit, err := r.CreateEditorSession(req.Context(), CreateEditorSessionInput{
+	edit, video, err := r.CreateEditorSession(req.Context(), CreateEditorSessionInput{
 		WorkspaceID:        payload.WorkspaceID,
 		PlatformAccountID:  payload.PlatformAccountID,
 		YouTubeVideoID:     payload.YouTubeVideoID,
@@ -347,11 +347,14 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 	// The gate above guarantees a non-empty editorURL, so the launcher
 	// URL is always available here (the session handle is never empty).
 	editorURL := r.editorURLForProject(edit.VeloxProjectID)
-	writeJSON(w, http.StatusCreated, createYouTubeEditorSessionResponse{
-		SessionID:      edit.ID,
-		VeloxProjectID: edit.VeloxProjectID,
-		EditorURL:      editorURL,
-	})
+	// The video projection is the authoritative videos.list response the
+	// helper fetched during validation — the initial document InstaEditor
+	// needs (title/description/thumbnail/category/privacy/source).
+	videoProjection := createYouTubeVideoSessionProjection(video)
+	videoProjection.SessionID = edit.ID
+	videoProjection.VeloxProjectID = edit.VeloxProjectID
+	videoProjection.EditorURL = editorURL
+	writeJSON(w, http.StatusCreated, videoProjection)
 }
 
 // handleUpdateYouTubeEditorSession updates a thumbnail editor session.

@@ -271,7 +271,7 @@ func (r *Router) processYouTubeThumbnailBatch(ctx context.Context, batchID strin
 		if claimErr != nil || !itemClaimed {
 			continue
 		}
-		edit, processErr := r.CreateEditorSession(ctx, CreateEditorSessionInput{
+		edit, _, processErr := r.CreateEditorSession(ctx, CreateEditorSessionInput{
 			WorkspaceID:       batch.WorkspaceID,
 			PlatformAccountID: item.PlatformAccountID,
 			YouTubeVideoID:    item.YouTubeVideoID,

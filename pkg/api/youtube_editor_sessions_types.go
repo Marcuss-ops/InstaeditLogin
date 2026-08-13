@@ -1,6 +1,10 @@
 package api
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+)
 
 // Sentinel errors for CreateEditorSession. The HTTP handler maps them
 // to status codes via errors.Is below; the reconciler worker reads
@@ -52,8 +56,44 @@ type createYouTubeEditorSessionRequest struct {
 }
 
 // createYouTubeEditorSessionResponse is returned on a successful creation.
+//
+// Besides the session identity, it carries the authoritative video
+// projection fetched from YouTube during creation (videos.list) — the
+// initial document InstaEditor needs: video id, title, description,
+// thumbnail URL (the editing canvas), category id, privacy status and
+// the source marker. The editor session contract deliberately carries
+// these server-derived fields instead of trusting client-supplied
+// values: title/description/thumbnail/category/privacy come from the
+// channel's own videos.list response.
 type createYouTubeEditorSessionResponse struct {
 	SessionID      string `json:"session_id"`
 	VeloxProjectID string `json:"velox_project_id"`
 	EditorURL      string `json:"editor_url"`
+	// Video projection handed to InstaEditor as its initial document.
+	YouTubeVideoID string `json:"youtube_video_id"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	ThumbnailURL   string `json:"thumbnail_url,omitempty"`
+	CategoryID     string `json:"category_id,omitempty"`
+	PrivacyStatus  string `json:"privacy_status"`
+	Source         string `json:"source"` // always "youtube"
+}
+
+// createYouTubeVideoSessionProjection maps the authoritative videos.list
+// projection (fetched by CreateEditorSession during validation) onto the
+// session response so InstaEditor receives its initial document without
+// any client-supplied values. The video is never nil on the success path
+// (the helper validated it), but the mapping stays defensive.
+func createYouTubeVideoSessionProjection(video *models.YouTubeVideoDetails) createYouTubeEditorSessionResponse {
+	resp := createYouTubeEditorSessionResponse{Source: "youtube"}
+	if video == nil {
+		return resp
+	}
+	resp.YouTubeVideoID = video.ID
+	resp.Title = video.Title
+	resp.Description = video.Description
+	resp.ThumbnailURL = video.ThumbnailURL
+	resp.CategoryID = video.CategoryID
+	resp.PrivacyStatus = video.Privacy
+	return resp
 }

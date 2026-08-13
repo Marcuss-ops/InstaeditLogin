@@ -103,6 +103,7 @@ type YouTubeVideoDetails struct {
 	Description  string     `json:"description,omitempty"`
 	ChannelID    string     `json:"channel_id"`
 	ThumbnailURL string     `json:"thumbnail_url,omitempty"`
+	CategoryID   string     `json:"category_id,omitempty"`
 	Privacy      string     `json:"privacy"`
 	UploadStatus string     `json:"upload_status"`
 	PublishedAt  *time.Time `json:"published_at,omitempty"`

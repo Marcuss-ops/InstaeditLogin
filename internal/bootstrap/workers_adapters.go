@@ -57,10 +57,11 @@ type routerEditorSessionAdapter struct {
 // on errors.Is for retry/skip decisions (see writeEditorSessionError
 // for the HTTP-side mapping).
 func (a *routerEditorSessionAdapter) CreateEditorSession(ctx context.Context, in worker.EditorSessionCreatorInput) (*models.YouTubeVideoEdit, error) {
-	return a.router.CreateEditorSession(ctx, api.CreateEditorSessionInput{
+	edit, _, err := a.router.CreateEditorSession(ctx, api.CreateEditorSessionInput{
 		WorkspaceID:        in.WorkspaceID,
 		PlatformAccountID:  in.PlatformAccountID,
 		YouTubeVideoID:     in.YouTubeVideoID,
 		SourceThumbnailURL: in.SourceThumbnailURL,
 	})
+	return edit, err
 }

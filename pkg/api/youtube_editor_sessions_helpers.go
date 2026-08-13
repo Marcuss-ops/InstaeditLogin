@@ -56,7 +56,7 @@ func (r *Router) writeEditorSessionError(w http.ResponseWriter, err error) {
 // Without this assertion, a future signature drift on Router.CreateEditorSession
 // would surface at runtime in production rather than at go vet time.
 var _ interface {
-	CreateEditorSession(context.Context, CreateEditorSessionInput) (*models.YouTubeVideoEdit, error)
+	CreateEditorSession(context.Context, CreateEditorSessionInput) (*models.YouTubeVideoEdit, *models.YouTubeVideoDetails, error)
 } = (*Router)(nil)
 
 const (

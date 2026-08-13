@@ -61,6 +61,15 @@ const OK_SESSION = {
   session_id: "ytedit_test_42",
   velox_project_id: "ve_test_99",
   editor_url: "https://editor.instaedit.test/editor/ve_test_99",
+  // The session contract carries the authoritative video projection
+  // fetched from YouTube (videos.list) — InstaEditor's initial document.
+  youtube_video_id: "dQw4w9WgXcQ",
+  title: "Rick Astley - Never Gonna Give You Up",
+  description: "The official video…",
+  thumbnail_url: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+  category_id: "10",
+  privacy_status: "private",
+  source: "youtube",
 };
 
 const FULL_SESSION = {

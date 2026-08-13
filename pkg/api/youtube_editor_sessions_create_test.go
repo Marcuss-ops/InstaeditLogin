@@ -117,6 +117,23 @@ func TestCreateYouTubeEditorSession_HappyPath(t *testing.T) {
 	if resp.EditorURL == "" {
 		t.Errorf("editor_url should be present")
 	}
+	// The session contract carries the authoritative video projection
+	// (videos.list) — InstaEditor's initial document.
+	if resp.YouTubeVideoID != "abc123" {
+		t.Errorf("youtube_video_id: want abc123, got %q", resp.YouTubeVideoID)
+	}
+	if resp.Title != "Test Video" {
+		t.Errorf("title: want Test Video, got %q", resp.Title)
+	}
+	if resp.ThumbnailURL != "https://i.ytimg.com/default.jpg" {
+		t.Errorf("thumbnail_url: got %q", resp.ThumbnailURL)
+	}
+	if resp.PrivacyStatus != "private" {
+		t.Errorf("privacy_status: want private, got %q", resp.PrivacyStatus)
+	}
+	if resp.Source != "youtube" {
+		t.Errorf("source: want youtube, got %q", resp.Source)
+	}
 	if len(editStore.created) != 1 {
 		t.Fatalf("expected one edit session to be created, got %d", len(editStore.created))
 	}

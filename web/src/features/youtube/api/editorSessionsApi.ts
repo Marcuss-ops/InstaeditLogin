@@ -80,12 +80,30 @@ export interface CreateYouTubeEditorSessionRequest {
  * Response from POST /api/v1/youtube/editor-sessions.
  *
  * Server returns this exact shape, including the resolved project and
- * session identifiers needed by downstream editor flows.
+ * session identifiers needed by downstream editor flows. Beyond the
+ * identity it carries the AUTHORITATIVE video projection fetched from
+ * YouTube during creation (videos.list) — the initial document
+ * InstaEditor needs: video id, title, description, thumbnail URL (the
+ * editing canvas), category id, privacy status and the source marker.
+ * These are server-derived on purpose: the client never supplies
+ * title/description/category/privacy for an existing video.
  */
 export interface CreateYouTubeEditorSessionResponse {
   session_id: string;
   velox_project_id: string;
   editor_url: string;
+  /** The video the session edits (mirrors youtube_video_id in the request). */
+  youtube_video_id: string;
+  title: string;
+  description: string;
+  /** Authoritative YouTube thumbnail (editing canvas). */
+  thumbnail_url?: string;
+  /** YouTube snippet categoryId, e.g. "24". */
+  category_id?: string;
+  /** YouTube privacy read-back: "private" | "unlisted" (public is rejected at create). */
+  privacy_status: string;
+  /** Always "youtube" — the platform source of the session. */
+  source: "youtube";
 }
 
 export interface GeneratedYouTubeMetadata {

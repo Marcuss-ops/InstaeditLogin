@@ -121,7 +121,7 @@ func TestCreateEditorSession_FindOrCreate_Idempotent(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	first, err := router.CreateEditorSession(ctx, CreateEditorSessionInput{
+	first, _, err := router.CreateEditorSession(ctx, CreateEditorSessionInput{
 		WorkspaceID:       workspaceID,
 		PlatformAccountID: accountID,
 		YouTubeVideoID:    videoID,
@@ -133,7 +133,7 @@ func TestCreateEditorSession_FindOrCreate_Idempotent(t *testing.T) {
 		t.Fatalf("first call returned wrong identity: id=%s project=%s", first.ID, first.VeloxProjectID)
 	}
 
-	second, err := router.CreateEditorSession(ctx, CreateEditorSessionInput{
+	second, _, err := router.CreateEditorSession(ctx, CreateEditorSessionInput{
 		WorkspaceID:       workspaceID,
 		PlatformAccountID: accountID,
 		YouTubeVideoID:    videoID,
@@ -175,7 +175,7 @@ func TestCreateEditorSession_FindOrCreate_StampsSourceThumbnailOnCreateOnly(t *t
 	)
 
 	ctx := context.Background()
-	got, err := router.CreateEditorSession(ctx, CreateEditorSessionInput{
+	got, _, err := router.CreateEditorSession(ctx, CreateEditorSessionInput{
 		WorkspaceID:        workspaceID,
 		PlatformAccountID:  accountID,
 		YouTubeVideoID:     videoID,
@@ -215,7 +215,7 @@ func TestCreateEditorSession_FindOrCreate_RepairsStaleSourceThumbnailFromYouTube
 		}, nil
 	}
 
-	got, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+	got, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 		WorkspaceID:        workspaceID,
 		PlatformAccountID:  accountID,
 		YouTubeVideoID:     videoID,
@@ -249,7 +249,7 @@ func TestCreateEditorSession_FindOrCreate_ClearsLocalSourceThumbnail(t *testing.
 		return nil
 	}
 
-	got, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+	got, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 		WorkspaceID:        workspaceID,
 		PlatformAccountID:  accountID,
 		YouTubeVideoID:     videoID,
@@ -297,7 +297,7 @@ func TestCreateEditorSession_FindOrCreate_ConcurrentRaceModelsPartialUnique(t *t
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			row, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+			row, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 				WorkspaceID:       workspaceID,
 				PlatformAccountID: accountID,
 				YouTubeVideoID:    videoID,
@@ -356,7 +356,7 @@ func TestCreateEditorSession_FindOrCreate_NewProjectOnTerminalStatus(t *testing.
 		},
 	)
 
-	row, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+	row, _, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
 		WorkspaceID:       workspaceID,
 		PlatformAccountID: accountID,
 		YouTubeVideoID:    videoID,
