@@ -1,4 +1,31 @@
-import type { GroupYouTubeVideo } from "./groupYouTubeVideosTypes";
+import type { GroupYouTubeVideo, VideoAvailability } from "./groupYouTubeVideosTypes";
+
+// Derive the availability projection from the raw wire fields. The API
+// does not emit an availability object yet, so the hook stamps one per
+// row; this fallback keeps consumers robust against unnormalized rows
+// (fixtures, tests, cached responses).
+export function videoAvailability(video: GroupYouTubeVideo): VideoAvailability {
+  if (video.availability) return video.availability;
+  if (video.phantom === true) {
+    return {
+      status: "deleted_or_missing",
+      reason: "Il video non è più presente tra i video modificabili del canale.",
+    };
+  }
+  if (video.youtube_sync_status === "drift") {
+    return {
+      status: "privacy_changed",
+      reason: "La privacy rilevata su YouTube diverge da quella richiesta.",
+    };
+  }
+  if (video.youtube_sync_status === "failed") {
+    return {
+      status: "unavailable",
+      reason: "La pubblicazione non è stata confermata da YouTube.",
+    };
+  }
+  return { status: "available" };
+}
 
 export function safeAssetUrl(value?: string): string | undefined {
   const candidate = value?.trim();

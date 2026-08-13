@@ -40,9 +40,10 @@ export function generateCoverName(groupName?: string): string {
   const adjective = COVER_NAME_ADJECTIVES[Math.floor(Math.random() * COVER_NAME_ADJECTIVES.length)];
   return `${adjective}-${noun}-${number}`;
 }
-import { safeAssetUrl } from "./groupYouTubeVideosVisual";
+import { safeAssetUrl, videoAvailability } from "./groupYouTubeVideosVisual";
 import {
   DEFAULT_PAGE_SIZE,
+  isYouTubePrivacyStatus,
   type GroupYouTubeVideo,
   type LoadState,
   type VideoPreview,
@@ -260,10 +261,21 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
           has_more?: boolean;
           next_offset?: number;
         };
-        const videos = (data.videos ?? []).filter((video) => {
-          const privacy = String(video.actual_privacy ?? video.privacy_status ?? "").toLowerCase();
-          return privacy === "private" && video.phantom !== true;
-        });
+        // Normalize each row once: coerce privacy_status to the strict
+        // union (unknown values become undefined) and stamp the derived
+        // availability projection. privacy_status and availability stay
+        // separate concepts — the filter below keeps the current
+        // private-only behaviour until the visibility tabs land.
+        const videos = (data.videos ?? [])
+          .map((video) => ({
+            ...video,
+            privacy_status: isYouTubePrivacyStatus(video.privacy_status) ? video.privacy_status : undefined,
+            availability: videoAvailability(video),
+          }))
+          .filter((video) => {
+            const privacy = String(video.actual_privacy ?? video.privacy_status ?? "").toLowerCase();
+            return privacy === "private" && video.phantom !== true;
+          });
         setState((previous) => {
           const previousVideos = append && previous.kind === "ready" ? previous.videos : [];
           return {
