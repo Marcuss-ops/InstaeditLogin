@@ -144,6 +144,9 @@ func (s *stubYouTubeOAuthService) UpsertLocalizations(ctx context.Context, acces
 func (s *stubYouTubeOAuthService) UpdateVideoMetadata(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error) {
 	return nil, nil
 }
+func (s *stubYouTubeOAuthService) ListVideoCategories(ctx context.Context, accessToken, regionCode string) ([]services.YouTubeVideoCategory, error) {
+	return nil, nil
+}
 
 // stubCredentialVault — minimal implementation of credentials.VaultAPI
 // (the interface pkg/api satisfies via WithCredentialVault). Renew

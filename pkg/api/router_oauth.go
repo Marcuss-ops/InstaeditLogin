@@ -115,4 +115,9 @@ type YouTubeOAuthService interface {
 	// expectedChannelID, when non-empty, gates the update to videos
 	// owned by that channel. Returns the merged snippet projection.
 	UpdateVideoMetadata(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error)
+	// ListVideoCategories returns the YouTube videoCategories.list
+	// projection for a region (empty regionCode = global default). The
+	// endpoint is NOT channel-scoped, so any valid OAuth token of a
+	// connected account serves the list.
+	ListVideoCategories(ctx context.Context, accessToken, regionCode string) ([]services.YouTubeVideoCategory, error)
 }

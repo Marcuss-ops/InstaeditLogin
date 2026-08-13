@@ -303,6 +303,10 @@ type mockYouTubeOAuthServiceForEditor struct {
 	// the thumbnails.set call; the default is fail-loud so a test
 	// that reaches the endpoint without opting in surfaces.
 	setThumbnailFn func(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error
+	// listVideoCategoriesFn (GET video-categories) lets tests simulate
+	// the videoCategories.list projection; the default is fail-loud so
+	// a test that reaches the endpoint without opting in surfaces.
+	listVideoCategoriesFn func(ctx context.Context, accessToken, regionCode string) ([]services.YouTubeVideoCategory, error)
 }
 
 func (m *mockYouTubeOAuthServiceForEditor) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
@@ -382,6 +386,13 @@ func (m *mockYouTubeOAuthServiceForEditor) UpsertLocalizations(ctx context.Conte
 func (m *mockYouTubeOAuthServiceForEditor) UpdateVideoMetadata(ctx context.Context, accessToken, videoID, expectedChannelID string, patch models.YouTubeMetadataPatch) (*models.YouTubeMetadataResult, error) {
 	if m.updateVideoMetadataFn != nil {
 		return m.updateVideoMetadataFn(ctx, accessToken, videoID, expectedChannelID, patch)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockYouTubeOAuthServiceForEditor) ListVideoCategories(ctx context.Context, accessToken, regionCode string) ([]services.YouTubeVideoCategory, error) {
+	if m.listVideoCategoriesFn != nil {
+		return m.listVideoCategoriesFn(ctx, accessToken, regionCode)
 	}
 	return nil, errors.New("not implemented")
 }

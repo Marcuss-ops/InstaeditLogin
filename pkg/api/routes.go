@@ -445,6 +445,15 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/groups/{group_id}/youtube/videos/{video_id}/thumbnail", r.protected(publishGroupVideoThumbnailHandler.ServeHTTP))
 
+	// GET /api/v1/youtube/video-categories — centralized YouTube video
+	// categories resource (videoCategories.list proxy) shared by every
+	// category select (group-video metadata drawer, livestreams wizard).
+	// Read-only, no CSRF (GET exempt). Resolves the first active YouTube
+	// account of the caller's workspaces and mints its token from the
+	// vault; ?region_code is an optional ISO 3166-1 alpha-2 code.
+	var listYouTubeVideoCategoriesHandler http.Handler = http.HandlerFunc(r.handleListYouTubeVideoCategories)
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/video-categories", r.protected(listYouTubeVideoCategoriesHandler.ServeHTTP))
+
 	// GET /api/v1/groups/{group_id}/covers — Copertine hub covers
 	// grid. Read-only, no CSRF (GET exempt). Returns the cover
 	// projects (thumbnail projects) linked to the group's accounts —
