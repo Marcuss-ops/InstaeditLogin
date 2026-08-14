@@ -73,6 +73,8 @@ func testGroupCover(t *testing.T, projectID, veloxProjectID string, status model
 		PlatformAccountID: 42,
 		YouTubeVideoID:    "fwFGQglE9c0",
 		VeloxProjectID:    veloxProjectID,
+		CategoryID:        "24",
+		DesiredPrivacy:    "private",
 		EditStatus:        "editing",
 		DraftTitle:        &title,
 		SessionCreatedAt:  now.Add(-time.Hour),
@@ -127,10 +129,51 @@ func TestHandleListGroupCovers_HappyPath(t *testing.T) {
 	if first.DraftTitle == nil || *first.DraftTitle != "Cover per video test" {
 		t.Errorf("draft_title: want seeded title, got %v", first.DraftTitle)
 	}
+	if first.CategoryID != "24" {
+		t.Errorf("category_id: want 24, got %q", first.CategoryID)
+	}
+	// No actual read-back yet → privacy_status falls back to desired.
+	if first.PrivacyStatus != "private" {
+		t.Errorf("privacy_status: want private (desired fallback), got %q", first.PrivacyStatus)
+	}
 	// Archived covers must stay visible (the hub shows full history).
 	second := resp.Covers[1]
 	if second.ProjectStatus != string(models.ThumbnailProjectStatusArchived) {
 		t.Errorf("second project_status: want archived, got %q", second.ProjectStatus)
+	}
+}
+
+func TestHandleListGroupCovers_PrivacyStatusPrefersActualReadBack(t *testing.T) {
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "ws"}
+	group := &models.Group{ID: 3, WorkspaceID: 7, Name: "Amish"}
+	cover := testGroupCover(t, "ytes_cover_1", "ve_cover_1", models.ThumbnailProjectStatusReady)
+	// Operator scheduled private, YouTube read back public after the
+	// schedule fired — actual must win over desired in the projection.
+	cover.DesiredPrivacy = "private"
+	actual := "public"
+	cover.ActualPrivacy = &actual
+	editStore := &mockYouTubeVideoEditStore{
+		listCoversFn: func(_ context.Context, _ int64, _ []int64) ([]*models.GroupCover, error) {
+			return []*models.GroupCover{cover}, nil
+		},
+	}
+	r := newGroupCoversRouter(t, workspace, group, []int64{42}, editStore, &mockUserStore{})
+
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, coversRequest(t, "3"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp groupCoversResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Covers) != 1 {
+		t.Fatalf("covers: want 1, got %d", len(resp.Covers))
+	}
+	if resp.Covers[0].PrivacyStatus != "public" {
+		t.Errorf("privacy_status: want public (actual read-back wins), got %q", resp.Covers[0].PrivacyStatus)
 	}
 }
 

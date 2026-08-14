@@ -37,13 +37,7 @@ export function videoAvailability(video: GroupYouTubeVideo): VideoAvailability {
  */
 export function categoryLabel(video: GroupYouTubeVideo): string | undefined {
   if (video.category_title) return video.category_title;
-  if (video.category_id) {
-    return (
-      YOUTUBE_CATEGORIES.find((category) => category.id === video.category_id)?.label
-      ?? video.category_id
-    );
-  }
-  return undefined;
+  return categoryLabelForId(video.category_id);
 }
 
 /** Distinct category options derived from a video list, sorted by label. */
@@ -129,6 +123,29 @@ export function publicationState(video: GroupYouTubeVideo): {
 }
 
 /**
+ * Privacy badge for a raw privacy status string (already resolved to
+ * its authoritative value by the caller — e.g. the covers hub DTO
+ * prefers the actual read-back over the desired one). Unknown/missing
+ * values render neutrally.
+ */
+export function privacyBadgeForStatus(privacy?: string): {
+  label: string;
+  emoji: string;
+  tone: keyof typeof toneClasses;
+} {
+  switch (String(privacy ?? "").toLowerCase()) {
+    case "public":
+      return { label: "Pubblico", emoji: "🌍", tone: "success" };
+    case "unlisted":
+      return { label: "Non in elenco", emoji: "🔗", tone: "info" };
+    case "private":
+      return { label: "Privato", emoji: "🔒", tone: "neutral" };
+    default:
+      return { label: "Sconosciuta", emoji: "❔", tone: "neutral" };
+  }
+}
+
+/**
  * Current YouTube visibility of the video (actual read-back first, then
  * the listing status). Independent from the publish lifecycle: a video
  * can be "Privato su YouTube" (lifecycle) AND still be visible only to
@@ -139,17 +156,20 @@ export function privacyBadge(video: GroupYouTubeVideo): {
   emoji: string;
   tone: keyof typeof toneClasses;
 } {
-  const privacy = String(video.actual_privacy ?? video.privacy_status ?? "").toLowerCase();
-  switch (privacy) {
-    case "public":
-      return { label: "Pubblico", emoji: "🌍", tone: "success" };
-    case "unlisted":
-      return { label: "Non in elenco", emoji: "🔗", tone: "info" };
-    case "private":
-      return { label: "Privato", emoji: "🔒", tone: "neutral" };
-    default:
-      return { label: "Sconosciuta", emoji: "❔", tone: "neutral" };
-  }
+  return privacyBadgeForStatus(String(video.actual_privacy ?? video.privacy_status ?? ""));
+}
+
+/**
+ * Human label for a raw YouTube category id ("24" → "Intrattenimento"),
+ * falling back to the raw id. Used by the covers hub cards, which only
+ * carry category_id (no category_title).
+ */
+export function categoryLabelForId(categoryId?: string): string | undefined {
+  if (!categoryId) return undefined;
+  return (
+    YOUTUBE_CATEGORIES.find((category) => category.id === categoryId)?.label
+    ?? categoryId
+  );
 }
 
 export function formatPublishAt(value?: string): string | null {

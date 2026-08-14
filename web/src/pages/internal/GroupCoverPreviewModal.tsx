@@ -1,4 +1,5 @@
 import { Edit3, Loader2, Save, X } from "lucide-react";
+import { categoryLabelForId, privacyBadgeForStatus } from "./groupYouTubeVideosVisual";
 import type { GroupCover } from "./groupCoversTypes";
 
 export function GroupCoverPreviewModal({
@@ -27,6 +28,8 @@ export function GroupCoverPreviewModal({
   onOpenEditor: () => void;
 }) {
   const preview = previewUrl;
+  const privacy = privacyBadgeForStatus(cover.privacy_status);
+  const category = categoryLabelForId(cover.category_id);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
@@ -64,6 +67,8 @@ export function GroupCoverPreviewModal({
             <p className="mt-2">Canale: <span className="text-white">{cover.channel_name || `Account #${cover.platform_account_id}`}</span></p>
             <p className="mt-1">Stato: <span className="text-white">{cover.project_status}</span></p>
             <p className="mt-1">Video: <span className="font-mono text-white">{cover.youtube_video_id}</span></p>
+            <p className="mt-1">Visibilità: <span className="text-white">{privacy.label}</span></p>
+            <p className="mt-1">Categoria: <span className="text-white">{category ?? "Non impostata"}</span></p>
           </div>
           <label className="grid gap-1.5 text-xs font-semibold text-[#cdd2da] md:col-span-2">
             Descrizione

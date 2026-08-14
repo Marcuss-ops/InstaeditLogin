@@ -373,6 +373,61 @@ describe("GroupCovers", () => {
     });
   });
 
+  it("exposes category_id and privacy_status on cover cards", async () => {
+    routeFetch({
+      covers: [
+        coverFixture({ category_id: "24", privacy_status: "public" }),
+        coverFixture({
+          project_id: "ytes_cover_2",
+          category_id: "20",
+          privacy_status: "unlisted",
+        }),
+        coverFixture({ project_id: "ytes_cover_3", privacy_status: "private" }),
+        // No privacy_status/category on purpose: the card renders the
+        // neutral "Sconosciuta" badge and no category chip.
+        coverFixture({ project_id: "ytes_cover_4" }),
+      ],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(4);
+    });
+    // Privacy badges resolved from the DTO's privacy_status.
+    expect(screen.getByTitle("Visibilità video: Pubblico")).toBeInTheDocument();
+    expect(screen.getByTitle("Visibilità video: Non in elenco")).toBeInTheDocument();
+    expect(screen.getByTitle("Visibilità video: Privato")).toBeInTheDocument();
+    // Category chips resolved from category_id via the canonical snapshot.
+    expect(screen.getByTitle("Categoria: Intrattenimento")).toBeInTheDocument();
+    expect(screen.getByTitle("Categoria: Gaming")).toBeInTheDocument();
+    // Unknown privacy renders neutrally; only the two covers with a
+    // category_id get a category chip.
+    expect(screen.getByTitle("Visibilità video: Sconosciuta")).toBeInTheDocument();
+    expect(screen.getAllByTitle(/^Categoria:/)).toHaveLength(2);
+  });
+
+  it("shows privacy and category in the cover preview modal details", async () => {
+    routeFetch({
+      covers: [coverFixture({ category_id: "17", privacy_status: "private" })],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
+    });
+    // The preview opens on click of the card media area.
+    fireEvent.click(screen.getByTitle(/clicca per ingrandire/i));
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText("Privato")).toBeInTheDocument();
+    expect(dialog.getByText("Sport")).toBeInTheDocument();
+    expect(dialog.queryByText("Non impostata")).toBeNull();
+  });
+
   it("renames a cover inline: clicking the title PUTs the partial {title} to the draft endpoint and updates the card", async () => {
     routeFetch({
       covers: [coverFixture({ draft_title: "Rap-Vortex-15" })],

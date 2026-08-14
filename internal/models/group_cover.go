@@ -32,9 +32,20 @@ type GroupCover struct {
 	VeloxProjectID     string
 	ThumbnailMediaID   *string
 	SourceThumbnailURL string
-	EditStatus         string
-	DraftTitle         *string
-	DraftDescription   *string
-	SessionCreatedAt   time.Time
-	SessionUpdatedAt   time.Time
+	// CategoryID is the YouTube video category stamped at session
+	// creation from videos.list (migration 127). Empty when the video
+	// had none or the row predates the column.
+	CategoryID string
+	// DesiredPrivacy is the operator's intended visibility
+	// (public|unlisted|private) on the session row.
+	DesiredPrivacy string
+	// ActualPrivacy is YouTube's read-back visibility; nil until the
+	// publish orchestrator stamps it (actual wins over desired when
+	// projecting privacy_status).
+	ActualPrivacy    *string
+	EditStatus       string
+	DraftTitle       *string
+	DraftDescription *string
+	SessionCreatedAt time.Time
+	SessionUpdatedAt time.Time
 }

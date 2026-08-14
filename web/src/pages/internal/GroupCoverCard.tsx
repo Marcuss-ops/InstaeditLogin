@@ -2,6 +2,7 @@ import { memo, useRef, useState } from "react";
 import { Calendar, Check, Edit3, ExternalLink, Image as ImageIcon, Loader2, MoreHorizontal, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { LanguageFlag } from "../../components/brand/LanguageFlag";
+import { categoryLabelForId, privacyBadgeForStatus, toneClasses } from "./groupYouTubeVideosVisual";
 import type { GroupCover } from "./groupCoversTypes";
 
 function projectStatusLabel(status: string): { label: string; tone: string } {
@@ -55,6 +56,8 @@ export const GroupCoverCard = memo(function GroupCoverCard({
 }) {
   const status = projectStatusLabel(cover.project_status);
   const editLabel = editStatusLabel(cover.edit_status);
+  const privacy = privacyBadgeForStatus(cover.privacy_status);
+  const category = categoryLabelForId(cover.category_id);
   const preview = previewUrl;
 
   // Inline title editing: click the title to turn it into an input;
@@ -212,6 +215,24 @@ export const GroupCoverCard = memo(function GroupCoverCard({
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span
+            title={`Visibilità video: ${privacy.label}`}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold",
+              toneClasses[privacy.tone],
+            )}
+          >
+            <span aria-hidden="true">{privacy.emoji}</span>
+            {privacy.label}
+          </span>
+          {category && (
+            <span
+              title={`Categoria: ${category}`}
+              className="inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[10px] text-[#9aa0aa]"
+            >
+              {category}
+            </span>
+          )}
           <span
             title="Stato della sessione editor"
             className={cn(

@@ -33,17 +33,20 @@ func TestYouTubeVideoEditRepository_ListCoversByGroupAccounts(t *testing.T) {
 			"yve.velox_project_id", "yve.thumbnail_media_id",
 			"yve.source_thumbnail_url", "yve.status", "yve.draft_title",
 			"yve.draft_description",
+			"yve.category_id", "yve.desired_privacy", "yve.actual_privacy",
 			"yve.created_at", "yve.updated_at",
 		}).
 			AddRow("ytes_cover_1", 7, "YouTube cover", "ready",
 				media, nil, 2, now.Add(-time.Hour), now,
 				"ytes_cover_1", 42, "fwFGQglE9c0", "ve_cover_1", nil,
 				"", "editing", title, "Descrizione test",
+				"24", "private", "public",
 				now.Add(-time.Hour), now).
 			AddRow("ytes_cover_2", 7, "YouTube cover", "archived",
 				nil, nil, 5, now.Add(-2*time.Hour), now.Add(-time.Hour),
 				"ytes_cover_2", 43, "PlradxPxWy0", "ve_cover_2", nil,
 				"", "published", nil, nil,
+				"20", "unlisted", nil,
 				now.Add(-2*time.Hour), now.Add(-time.Hour)))
 
 	covers, err := repo.ListCoversByGroupAccounts(context.Background(), 7, []int64{42, 43})
@@ -66,12 +69,24 @@ func TestYouTubeVideoEditRepository_ListCoversByGroupAccounts(t *testing.T) {
 	if first.DraftTitle == nil || *first.DraftTitle != title {
 		t.Errorf("first draft_title: want %q, got %v", title, first.DraftTitle)
 	}
+	if first.CategoryID != "24" {
+		t.Errorf("first category_id: want 24, got %q", first.CategoryID)
+	}
+	if first.DesiredPrivacy != "private" {
+		t.Errorf("first desired_privacy: want private, got %q", first.DesiredPrivacy)
+	}
+	if first.ActualPrivacy == nil || *first.ActualPrivacy != "public" {
+		t.Errorf("first actual_privacy: want public, got %v", first.ActualPrivacy)
+	}
 	second := covers[1]
 	if second.ProjectStatus != models.ThumbnailProjectStatusArchived || second.EditStatus != "published" {
 		t.Errorf("second status: want archived/published, got %q/%q", second.ProjectStatus, second.EditStatus)
 	}
 	if second.DraftTitle != nil {
 		t.Errorf("second draft_title: want nil, got %v", second.DraftTitle)
+	}
+	if second.CategoryID != "20" || second.DesiredPrivacy != "unlisted" || second.ActualPrivacy != nil {
+		t.Errorf("second session projection wrong: category=%q desired=%q actual=%v", second.CategoryID, second.DesiredPrivacy, second.ActualPrivacy)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

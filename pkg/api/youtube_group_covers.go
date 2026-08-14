@@ -30,26 +30,35 @@ import (
 // contract as the editor-sessions list) so the SPA never bundles the
 // editor base URL.
 type groupCoverEntry struct {
-	ProjectID          string    `json:"project_id"`
-	WorkspaceID        int64     `json:"workspace_id"`
-	SessionID          string    `json:"session_id"`
-	VeloxProjectID     string    `json:"velox_project_id"`
-	EditorURL          string    `json:"editor_url"`
-	Name               string    `json:"name"`
-	ProjectStatus      string    `json:"project_status"`
-	EditStatus         string    `json:"edit_status"`
-	PreviewMediaID     *string   `json:"preview_media_id,omitempty"`
-	ThumbnailMediaID   *string   `json:"thumbnail_media_id,omitempty"`
-	SourceThumbnailURL string    `json:"source_thumbnail_url,omitempty"`
-	YouTubeVideoID     string    `json:"youtube_video_id"`
-	PlatformAccountID  int64     `json:"platform_account_id"`
-	ChannelName        string    `json:"channel_name,omitempty"`
-	Language           string    `json:"language,omitempty"`
-	DraftTitle         *string   `json:"draft_title,omitempty"`
-	DraftDescription   *string   `json:"draft_description,omitempty"`
-	ProjectVersion     int64     `json:"project_version"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ProjectID          string  `json:"project_id"`
+	WorkspaceID        int64   `json:"workspace_id"`
+	SessionID          string  `json:"session_id"`
+	VeloxProjectID     string  `json:"velox_project_id"`
+	EditorURL          string  `json:"editor_url"`
+	Name               string  `json:"name"`
+	ProjectStatus      string  `json:"project_status"`
+	EditStatus         string  `json:"edit_status"`
+	PreviewMediaID     *string `json:"preview_media_id,omitempty"`
+	ThumbnailMediaID   *string `json:"thumbnail_media_id,omitempty"`
+	SourceThumbnailURL string  `json:"source_thumbnail_url,omitempty"`
+	YouTubeVideoID     string  `json:"youtube_video_id"`
+	PlatformAccountID  int64   `json:"platform_account_id"`
+	ChannelName        string  `json:"channel_name,omitempty"`
+	Language           string  `json:"language,omitempty"`
+	DraftTitle         *string `json:"draft_title,omitempty"`
+	DraftDescription   *string `json:"draft_description,omitempty"`
+	// CategoryID mirrors youtube_video_edits.category_id (the YouTube
+	// video category stamped at session creation) so the covers hub
+	// card can show it alongside the video manager.
+	CategoryID string `json:"category_id,omitempty"`
+	// PrivacyStatus is the live YouTube visibility of the underlying
+	// video: actual_privacy when the publish orchestrator read it
+	// back, desired_privacy otherwise (same resolution as the editor
+	// session detail DTO).
+	PrivacyStatus  string    `json:"privacy_status"`
+	ProjectVersion int64     `json:"project_version"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // groupCoversResponse is the envelope. `covers: []` is returned (NOT
@@ -57,6 +66,20 @@ type groupCoverEntry struct {
 // empty-state banner rather than treating "nothing here" as an error.
 type groupCoversResponse struct {
 	Covers []groupCoverEntry `json:"covers"`
+}
+
+// privacyStatusForCover resolves the cover's privacy_status the same
+// way the editor session detail DTO does: the live read-back
+// (actual_privacy) wins when the publish orchestrator stamped it,
+// otherwise the operator's intended desired_privacy.
+func privacyStatusForCover(c *models.GroupCover) string {
+	if c == nil {
+		return ""
+	}
+	if c.ActualPrivacy != nil && strings.TrimSpace(*c.ActualPrivacy) != "" {
+		return *c.ActualPrivacy
+	}
+	return c.DesiredPrivacy
 }
 
 // handleListGroupCovers is the HTTP entry point for
@@ -175,6 +198,8 @@ func (r *Router) handleListGroupCovers(w http.ResponseWriter, req *http.Request)
 			PlatformAccountID:  c.PlatformAccountID,
 			DraftTitle:         c.DraftTitle,
 			DraftDescription:   c.DraftDescription,
+			CategoryID:         c.CategoryID,
+			PrivacyStatus:      privacyStatusForCover(c),
 			ProjectVersion:     c.ProjectVersion,
 			CreatedAt:          c.ProjectCreatedAt,
 			UpdatedAt:          c.ProjectUpdatedAt,
