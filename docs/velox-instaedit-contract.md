@@ -491,19 +491,80 @@ the session handle. OAuth tokens never reach the browser.
 
 ### 9.1 Session payload (returned to the Thumbnail Maker)
 
+The auto-provisioner (`POST /internal/v1/thumbnail-sessions`) hands the
+Thumbnail Maker the session **handle** (`editor_session_id`,
+`velox_project_id`, `editor_url`). The editor then loads the full
+session document from `GET
+/api/v1/youtube/editor-sessions/by-project/{velox_project_id}`
+(by-id variant: `GET /api/v1/youtube/editor-sessions/{id}`). That
+document is the payload below — the **extended session contract**:
+besides the session identity it carries the authoritative YouTube
+projection (`thumbnail_url`, `category_id`, `privacy_status`) that
+InstaEditor renders as its initial canvas, so the editor never needs
+its own YouTube/OAuth access.
+
 ```json
 {
-  "editor_session_id": "ytedit_123",
-  "delivery_id": "delivery_789",
-  "youtube_video_id": "AbCd1234",
-  "platform_account_id": 381,
+  "id": "ytedit_123",
   "workspace_id": 12,
-  "video_title": "Titolo del video",
-  "video_status": "private",
-  "thumbnail_status": "pending",
-  "final_privacy": "public"
+  "platform_account_id": 381,
+  "channel_id": "UCxxxxxxxx",
+  "youtube_video_id": "AbCd1234",
+  "velox_project_id": "ve_123",
+  "editor_url": "https://editor.example.com/editor/ve_123",
+  "source_thumbnail_url": "https://i.ytimg.com/vi/AbCd1234/hqdefault.jpg",
+  "thumbnail_url": "https://i.ytimg.com/vi/AbCd1234/hqdefault.jpg",
+  "category_id": "24",
+  "privacy_status": "private",
+  "thumbnail_media_id": null,
+  "desired_privacy": "private",
+  "publish_at": null,
+  "status": "editing",
+  "last_error": "",
+  "actual_privacy": null,
+  "youtube_sync_status": null,
+  "draft_title": "Titolo del video",
+  "draft_description": "",
+  "created_at": "2026-07-29T08:58:00Z",
+  "updated_at": "2026-07-29T08:58:00Z"
 }
 ```
+
+Field reference (extended-contract fields first):
+
+| Field                  | Type            | Notes                                                                                                      |
+| ---------------------- | --------------- | ---------------------------------------------------------------------------------------------------------- |
+| `thumbnail_url`        | string          | Extended contract wire name — mirrors `source_thumbnail_url`; the editor's initial canvas.                  |
+| `category_id`          | string          | YouTube video category stamped at session creation from `videos.list`; omitted when unset.                   |
+| `privacy_status`       | `"public"` \| `"unlisted"` \| `"private"` | The **single** visibility value the editor renders: `actual_privacy` read-back when the publish orchestrator stamped it, `desired_privacy` fallback otherwise. |
+| `id`                   | string          | Session id: `ytedit_<uuid>` auto-provisioned, bare uuid when manually created.                              |
+| `workspace_id`         | int64           | Owning workspace.                                                                                          |
+| `platform_account_id`  | int64           | Owning YouTube account.                                                                                    |
+| `channel_id`           | string          | YouTube channel id bound to the account (diagnostic).                                                      |
+| `youtube_video_id`     | string          | The uploaded video the session edits.                                                                      |
+| `velox_project_id`     | string          | InstaEditor project handle — the `/editor/{velox_project_id}` URL segment.                                 |
+| `editor_url`           | string          | Launcher URL; empty when the editor base is unconfigured.                                                  |
+| `source_thumbnail_url` | string          | Persisted original YouTube thumbnail (fallback for un-rendered covers).                                    |
+| `thumbnail_media_id`   | string \| null  | Attached thumbnail asset after apply; null before the editor exports.                                      |
+| `desired_privacy`      | `"public"` \| `"unlisted"` \| `"private"` | Operator's intended visibility on the session row (from `final_privacy` / editor panel).                   |
+| `actual_privacy`       | string \| null  | YouTube read-back after publish; null = not published / read-back not done yet.                             |
+| `youtube_sync_status`  | string \| null  | `pending` \| `confirmed` \| `drift` \| `failed` lifecycle marker (colours the privacy badge).             |
+| `publish_at`           | RFC3339 \| null | Scheduled publish instant (video stays `private` until then).                                              |
+| `status`               | string          | Session lifecycle: `editing` \| `failed` \| `publishing` \| `published`.                                  |
+| `draft_title` / `draft_description` | string \| null | Auto-save draft; NULL = no draft yet, empty string = intentionally cleared.             |
+| `last_error`           | string          | Operator hint for the dashboard's failure copy (internal diagnostics).                                     |
+| `created_at` / `updated_at` | RFC3339    | Server-side commit timestamps.                                                                             |
+
+Semantics:
+
+- The extended fields are **server-derived** — `thumbnail_url` and
+  `category_id` come from the channel's own `videos.list` response,
+  `privacy_status` from the publish read-back — never from
+  client-supplied values.
+- `privacy_status` is the resolved projection, distinct from both
+  `desired_privacy` (intent) and `actual_privacy` (raw read-back).
+- OAuth tokens never reach the browser: the Thumbnail Maker only ever
+  sees this document.
 
 ### 9.2 `POST /api/v1/youtube/editor-sessions/{id}/thumbnail`
 
@@ -703,6 +764,18 @@ This contract is internal-only. The reverse proxy (Caddy / Cloudflare
 
 ## 15. Changelog
 
+- **2026-08-14** — §9.1 aligned to the extended editor-session
+  contract (`b317f3ef`): the session payload is now the full
+  `youTubeEditorSessionDetail` document served by
+  `GET /editor-sessions/by-project/{velox_project_id}` and
+  `GET /editor-sessions/{id}`, carrying `thumbnail_url`,
+  `category_id` and `privacy_status` (server-derived from
+  `videos.list` / the publish read-back; `privacy_status` resolves
+  actual-over-desired). The legacy flattened example
+  (`video_title`/`video_status`/`thumbnail_status`/`final_privacy`)
+  is removed — those fields live on the auto-provisioner request
+  (`POST /internal/v1/thumbnail-sessions`), not on the document the
+  editor loads.
 - **2026-07-29** — Initial version. Bound the wire-level contract
   for the Velox → InstaEdit publish handoff; locked state machine,
   safety invariant, idempotency format, security baseline.
