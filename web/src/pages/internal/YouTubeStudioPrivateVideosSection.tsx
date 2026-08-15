@@ -1,7 +1,32 @@
-import { Loader2, Video } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, Video } from "lucide-react";
 import { EmptyState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
-import type { ContentItem } from "./youtubeStudioTypes";
+import { isCopyrightProblem, type YouTubeCopyrightCheck } from "../../features/youtube/api/copyrightApi";
+import type { ContentItem, CopyrightByVideoId } from "./youtubeStudioTypes";
+
+function CopyrightSection({ check }: { check?: YouTubeCopyrightCheck }) {
+  const status = check?.status ?? "clear";
+  const problem = isCopyrightProblem(status);
+  const checking = status === "pending" || status === "processing";
+
+  return (
+    <div
+      className={cn(
+        "mt-2 flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-semibold",
+        problem
+          ? "border-red-500/30 bg-red-500/10 text-red-300"
+          : checking
+            ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+            : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300",
+      )}
+      data-testid="private-video-copyright"
+      title={problem ? check?.message || "Problema copyright" : undefined}
+    >
+      {problem ? <AlertCircle size={12} aria-hidden="true" /> : checking ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />}
+      <span>Copyright: {problem ? "Problema" : checking ? "In verifica" : "None"}</span>
+    </div>
+  );
+}
 
 /**
  * YouTubeStudioPrivateVideosSection renders the "Video privati sul
@@ -14,6 +39,7 @@ export function YouTubeStudioPrivateVideosSection({
   selectedChannelId,
   privateVideos,
   loadingVideos,
+  copyrightByVideoId,
   manualVideoId,
   onSelectVideo,
   privateVideosEnabled,
@@ -22,6 +48,7 @@ export function YouTubeStudioPrivateVideosSection({
   selectedChannelId: number | "";
   privateVideos: ContentItem[];
   loadingVideos: boolean;
+  copyrightByVideoId: CopyrightByVideoId;
   manualVideoId: string;
   onSelectVideo: (videoId: string) => void;
   privateVideosEnabled: boolean;
@@ -102,6 +129,7 @@ export function YouTubeStudioPrivateVideosSection({
                     {new Date(v.published_at).toLocaleDateString("it-IT")}
                   </p>
                 )}
+                <CopyrightSection check={copyrightByVideoId[v.external_id]} />
               </div>
             </button>
           ))}

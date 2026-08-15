@@ -1,4 +1,5 @@
 import type { EditorSession, PlatformAccount, Workspace } from "../../types/uploads";
+import type { YouTubeCopyrightCheck } from "../../features/youtube/api/copyrightApi";
 
 export type LoadState =
   | { kind: "loading" }
@@ -27,5 +28,7 @@ export type ContentItem = {
   published_at?: string;
   duration?: string;
 };
+
+export type CopyrightByVideoId = Record<string, YouTubeCopyrightCheck>;
 
 export type { EditorSession, PlatformAccount, Workspace } from "../../types/uploads";

@@ -166,6 +166,28 @@ func (r *Router) executePublishYouTubeEditorSession(
 		return
 	}
 
+	// A public transition is gated by a fresh copyright preflight when the
+	// configured YouTube provider exposes that optional capability. Private
+	// uploads/schedules remain allowed so YouTube can finish processing them;
+	// the background checker continues to refresh their status.
+	if privacyStatus == "public" {
+		if checker, ok := r.youTubeSvc.(youtubeCopyrightChecker); ok {
+			check, checkErr := checker.CheckCopyright(ctx, token.AccessToken, edit.YouTubeVideoID)
+			if checkErr != nil {
+				writeError(w, http.StatusBadGateway, "youtube copyright preflight failed: "+checkErr.Error())
+				return
+			}
+			if check != nil && copyrightBlocksPublicPublish(check.Status) {
+				message := check.Message
+				if message == "" {
+					message = "YouTube ha rilevato un problema copyright."
+				}
+				writeError(w, http.StatusUnprocessableEntity, message)
+				return
+			}
+		}
+	}
+
 	downloadURL, err := r.storageProvider.GetObject(ctx, asset.UploadKey, 5*time.Minute)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "generate thumbnail download URL: "+err.Error())

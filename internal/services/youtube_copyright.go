@@ -15,14 +15,14 @@ type YouTubeCopyrightChecker interface {
 }
 
 type YouTubeCopyrightCheck struct {
-	Status           string
-	Message          string
-	ProcessingStatus string
-	RejectionReason  string
-	FailureReason    string
-	LicensedContent  bool
-	BlockedRegions   []string
-	AllowedRegions   []string
+	Status           string   `json:"status"`
+	Message          string   `json:"message"`
+	ProcessingStatus string   `json:"processing_status,omitempty"`
+	RejectionReason  string   `json:"rejection_reason,omitempty"`
+	FailureReason    string   `json:"failure_reason,omitempty"`
+	LicensedContent  bool     `json:"licensed_content"`
+	BlockedRegions   []string `json:"blocked_regions,omitempty"`
+	AllowedRegions   []string `json:"allowed_regions,omitempty"`
 }
 
 func (s *YouTubeOAuthService) CheckCopyright(ctx context.Context, accessToken, videoID string) (*YouTubeCopyrightCheck, error) {

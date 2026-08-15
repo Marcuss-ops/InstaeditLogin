@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { AccountSwitcher } from "./AccountSwitcher";
 import { maybeRefreshSession } from "../../lib/session-refresh";
+import { NotificationCenter } from "../../features/notifications/NotificationCenter";
 
 /**
  * Keeps the session alive while the app is open: the access JWT in the
@@ -32,7 +33,8 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
     <div className="h-screen w-full flex bg-[#030308] text-[#e8e8ef] overflow-hidden">
       <Sidebar collapsed={collapsed} onToggle={handleToggle} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#030308]">
-        <header className="h-16 flex-none flex items-center justify-end px-6 border-b border-white/[0.08] bg-[#030308]/80 backdrop-blur-sm">
+        <header className="h-16 flex-none flex items-center justify-end gap-3 px-6 border-b border-white/[0.08] bg-[#030308]/80 backdrop-blur-sm">
+          <NotificationCenter />
           <AccountSwitcher />
         </header>
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain bg-[#030308]">

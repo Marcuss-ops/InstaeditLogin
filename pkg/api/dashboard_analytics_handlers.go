@@ -25,10 +25,23 @@ import (
 type dashboardAnalyticsResponse struct {
 	PeriodDays    int                   `json:"period_days"`
 	Aggregates    dashboardAggregates   `json:"aggregates"`
+	Operations    dashboardOperations   `json:"operations"`
 	Channels      []dashboardChannelRow `json:"channels"`
 	TopVideos     []dashboardTopVideo   `json:"top_videos"`
 	GeneratedAt   time.Time             `json:"generated_at"`
 	DataUpdatedAt *time.Time            `json:"data_updated_at,omitempty"`
+}
+
+// dashboardOperations is deliberately kept separate from YouTube's channel
+// metrics: it describes the health of the user's own publishing pipeline.
+// AverageProcessingSeconds is measured from post creation to its terminal
+// state, so older rows without target timestamps still contribute a useful
+// approximation to the base analytics view.
+type dashboardOperations struct {
+	Published                int      `json:"published"`
+	Failed                   int      `json:"failed"`
+	CopyrightClaims          int      `json:"copyright_claims"`
+	AverageProcessingSeconds *float64 `json:"average_processing_seconds,omitempty"`
 }
 
 type dashboardAggregates struct {
@@ -193,6 +206,7 @@ func (r *Router) handleGetDashboardAnalytics(w http.ResponseWriter, req *http.Re
 		TopVideos:   []dashboardTopVideo{},
 		GeneratedAt: to,
 	}
+	resp.Operations = r.dashboardOperations(req.Context(), identity.UserID(), from, to)
 	resp.DataUpdatedAt = latestMetricUpdatedAt(histories)
 
 	var totalRevenue int64
@@ -325,6 +339,73 @@ func (r *Router) dashboardTopVideosRanking(
 		all = all[:dashboardTopVideosMaxTotal]
 	}
 	return all, degraded
+}
+
+// dashboardOperations builds the lightweight publishing-health read model.
+// It intentionally degrades to zero values when the optional post/copyright
+// stores are not wired (some deployments only expose channel analytics).
+func (r *Router) dashboardOperations(
+	ctx context.Context,
+	userID int64,
+	from, to time.Time,
+) dashboardOperations {
+	var out dashboardOperations
+	if r.workspaceStore == nil || r.postStore == nil {
+		return out
+	}
+
+	workspaces, err := r.workspaceStore.ListByOwner(userID)
+	if err != nil {
+		return out
+	}
+
+	var processingTotal time.Duration
+	var processingCount int
+	for _, workspace := range workspaces {
+		posts, listErr := r.postStore.ListByWorkspace(workspace.ID)
+		if listErr != nil {
+			continue
+		}
+		for _, post := range posts {
+			terminalAt := post.UpdatedAt
+			if terminalAt.IsZero() || terminalAt.Before(from) || terminalAt.After(to) {
+				continue
+			}
+			switch post.Status {
+			case models.PostStatusPublished:
+				out.Published++
+			case models.PostStatusFailed, models.PostStatusDLQ, models.PostStatusBlockedAuth, models.PostStatus("dead_letter"):
+				out.Failed++
+			default:
+				continue
+			}
+			if !post.CreatedAt.IsZero() && terminalAt.After(post.CreatedAt) {
+				processingTotal += terminalAt.Sub(post.CreatedAt)
+				processingCount++
+			}
+		}
+	}
+
+	if processingCount > 0 {
+		average := processingTotal.Seconds() / float64(processingCount)
+		out.AverageProcessingSeconds = &average
+	}
+
+	if r.youtubeCopyrightAlertStore != nil {
+		workspaceIDs := make([]int64, 0, len(workspaces))
+		for _, workspace := range workspaces {
+			workspaceIDs = append(workspaceIDs, workspace.ID)
+		}
+		if alerts, alertErr := r.youtubeCopyrightAlertStore.ListCopyrightAlertsByWorkspace(ctx, workspaceIDs); alertErr == nil {
+			for _, alert := range alerts {
+				if alert.CheckedAt != nil && !alert.CheckedAt.Before(from) && !alert.CheckedAt.After(to) {
+					out.CopyrightClaims++
+				}
+			}
+		}
+	}
+
+	return out
 }
 
 // metricValueByKey extracts a metric value by key (e.g. "views") from

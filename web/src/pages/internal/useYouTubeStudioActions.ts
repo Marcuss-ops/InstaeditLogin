@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import {
+  checkYouTubeCopyright,
+  isCopyrightProblem,
+  type YouTubeCopyrightCheck,
+} from "../../features/youtube/api/copyrightApi";
+import {
   createYouTubeEditorSession,
   attachYouTubeEditorSessionThumbnail,
   publishYouTubeEditorSession,
@@ -31,11 +36,13 @@ export function useYouTubeStudioActions({
   selectedChannelId,
   refresh,
   patchSession,
+  onCopyrightResult,
 }: {
   selectedWorkspaceId: number | "";
   selectedChannelId: number | "";
   refresh: () => Promise<void>;
   patchSession: (sessionId: string, patch: Partial<EditorSession>) => void;
+  onCopyrightResult?: (videoId: string, result: YouTubeCopyrightCheck) => void;
 }) {
   const toast = useToast();
   const [manualVideoId, setManualVideoId] = useState("");
@@ -187,19 +194,39 @@ export function useYouTubeStudioActions({
     async (sessionId: string) => {
       setAction({ kind: "publishing", sessionId });
       try {
+        if (selectedChannelId === "") {
+          toast.error("Seleziona un canale YouTube prima di pubblicare.");
+          return;
+        }
+        const session = await getYouTubeEditorSession(sessionId);
+        const copyright = await checkYouTubeCopyright(
+          selectedChannelId,
+          session.youtube_video_id,
+        );
+        onCopyrightResult?.(session.youtube_video_id, copyright);
+        if (isCopyrightProblem(copyright.status)) {
+          toast.error(copyright.message || "Pubblicazione bloccata: problema copyright.");
+          return;
+        }
         const result = await publishYouTubeEditorSession(sessionId, {
           privacy_status: "public",
         });
+        const previewResult: YouTubePublishResult = {
+          ...result,
+          title: session.draft_title ?? undefined,
+          description: session.draft_description ?? undefined,
+          thumbnail_url: session.thumbnail_url,
+        };
         toast.success("Video published — verifying YouTube status…");
         void refresh();
-        void verifyPublishedSession(sessionId, result);
+        void verifyPublishedSession(sessionId, previewResult);
       } catch {
         // toast surfaced by authedFetch
       } finally {
         setAction({ kind: "idle" });
       }
     },
-    [refresh, toast, verifyPublishedSession],
+    [onCopyrightResult, refresh, selectedChannelId, toast, verifyPublishedSession],
   );
 
   const handleSchedule = useCallback(

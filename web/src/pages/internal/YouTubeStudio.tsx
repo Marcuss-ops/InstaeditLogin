@@ -23,7 +23,7 @@ export function InternalYouTubeStudio() {
   } = useYouTubeStudioData();
 
   const [privateVideosEnabled, setPrivateVideosEnabled] = useState(false);
-  const { privateVideos, loadingVideos } = useYouTubeStudioPrivateVideos(
+  const { privateVideos, loadingVideos, copyrightByVideoId, recordCopyrightCheck } = useYouTubeStudioPrivateVideos(
     selectedChannelId,
     privateVideosEnabled,
   );
@@ -50,6 +50,7 @@ export function InternalYouTubeStudio() {
     selectedChannelId,
     refresh: handleRefresh,
     patchSession,
+    onCopyrightResult: recordCopyrightCheck,
   });
 
   const handleSelectVideo = useCallback(
@@ -93,6 +94,9 @@ export function InternalYouTubeStudio() {
   const publishSession = publishResult
     ? sessions.find((session) => session.id === publishResult.sessionId)
     : undefined;
+  const publishPreview = publishResult
+    ? privateVideos.find((video) => video.external_id === publishResult.result.video_id)
+    : undefined;
 
   return (
     <StudioShell>
@@ -114,6 +118,7 @@ export function InternalYouTubeStudio() {
         selectedChannelId={selectedChannelId}
         privateVideos={privateVideos}
         loadingVideos={loadingVideos}
+        copyrightByVideoId={copyrightByVideoId}
         manualVideoId={manualVideoId}
         onSelectVideo={handleSelectVideo}
         privateVideosEnabled={privateVideosEnabled}
@@ -124,6 +129,7 @@ export function InternalYouTubeStudio() {
         <YouTubePublishCard
           result={publishResult.result}
           session={publishSession}
+          preview={publishPreview}
           checking={publishResult.checking}
           onDismiss={() => setPublishResult(null)}
         />

@@ -120,6 +120,10 @@ export type YouTubePublishResult = {
   actual_privacy?: YouTubePrivacy;
   youtube_sync_status?: YouTubeSyncStatus;
   published_at?: string | null;
+  /** Optional metadata snapshot used by the post-publish YouTube preview. */
+  title?: string;
+  description?: string;
+  thumbnail_url?: string;
 };
 
 export type SubmitState =

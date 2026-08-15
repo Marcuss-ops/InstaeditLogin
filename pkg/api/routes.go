@@ -478,6 +478,7 @@ func (r *Router) Setup() http.Handler {
 	// — GET requests are exempt by spec.
 	r.mux.Method(http.MethodGet, "/api/v1/content/{content_id}/pipeline", r.protected(http.HandlerFunc(r.handleGetContentPipeline).ServeHTTP))
 	r.mux.Method(http.MethodGet, "/api/v1/youtube/copyright-alerts", r.protected(http.HandlerFunc(r.handleListYouTubeCopyrightAlerts).ServeHTTP))
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/copyright-check", r.protected(http.HandlerFunc(r.handleCheckYouTubeCopyright).ServeHTTP))
 
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
 

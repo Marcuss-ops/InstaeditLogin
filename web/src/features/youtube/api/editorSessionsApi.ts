@@ -184,6 +184,7 @@ export interface YouTubeEditorSessionDetail
   privacy_status?: string;
   last_error?: string;
   draft_title?: string;
+  draft_description?: string;
   created_at: string;
   updated_at: string;
 }

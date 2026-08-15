@@ -30,6 +30,12 @@ export type DashboardAnalyticsData = {
     videos: number;
     revenue_cents?: number | null;
   };
+  operations?: {
+    published: number;
+    failed: number;
+    copyright_claims: number;
+    average_processing_seconds?: number | null;
+  };
   channels: DashboardChannelRow[];
   top_videos: DashboardTopVideo[];
 	generated_at: string;

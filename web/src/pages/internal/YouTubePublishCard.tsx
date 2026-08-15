@@ -30,11 +30,17 @@ const SYNC_LABEL: Record<string, string> = {
 export function YouTubePublishCard({
   result,
   session,
+  preview,
   checking,
   onDismiss,
 }: {
   result: YouTubePublishResult;
   session?: EditorSession;
+  preview?: {
+    title?: string;
+    description?: string;
+    thumbnail_url?: string;
+  };
   checking: boolean;
   onDismiss: () => void;
 }) {
@@ -49,6 +55,12 @@ export function YouTubePublishCard({
     result.privacy_status === "private" &&
     !!result.published_at &&
     new Date(result.published_at).getTime() > Date.now();
+  const thumbnailURL =
+    preview?.thumbnail_url ||
+    result.thumbnail_url ||
+    (result.video_id
+      ? `https://i.ytimg.com/vi/${encodeURIComponent(result.video_id)}/hqdefault.jpg`
+      : "");
 
   const handleOpenEditor = () => {
     if (!session?.editor_url || !session.velox_project_id) return;
@@ -128,6 +140,42 @@ export function YouTubePublishCard({
             <span className="rounded-md border border-white/10 bg-white/[0.05] px-2 py-1 text-[#e8e8ef]">
               Stato: {SYNC_LABEL[syncStatus ?? ""] ?? "pubblicato"}
             </span>
+          </div>
+
+          <div
+            className="mt-4 overflow-hidden rounded-xl border border-white/[0.10] bg-black/20"
+            data-testid="youtube-publish-preview"
+          >
+            <div className="flex flex-col sm:flex-row">
+              <div className="aspect-video w-full shrink-0 bg-white/[0.05] sm:w-48">
+                {thumbnailURL ? (
+                  <img
+                    src={thumbnailURL}
+                    alt="Thumbnail anteprima YouTube"
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-[11px] text-white/40">
+                    Nessuna thumbnail
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45">
+                  Anteprima YouTube
+                </p>
+                <h3 className="mt-1 line-clamp-2 text-[14px] font-bold text-white">
+                  {preview?.title || result.title || "Video YouTube"}
+                </h3>
+                <p className="mt-2 whitespace-pre-line line-clamp-4 text-[12px] leading-5 text-[#b7bdc8]">
+                  {preview?.description || result.description || "Nessuna descrizione disponibile."}
+                </p>
+                <p className="mt-2 text-[11px] text-white/50">
+                  Visibilità: {PRIVACY_LABEL[actualPrivacy ?? result.privacy_status] ?? actualPrivacy ?? result.privacy_status}
+                </p>
+              </div>
+            </div>
           </div>
 
           {isScheduled && (

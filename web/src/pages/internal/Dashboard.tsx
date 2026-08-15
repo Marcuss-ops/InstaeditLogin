@@ -1,12 +1,16 @@
 import { useState } from "react";
 import {
   BarChart3,
+  CheckCircle2,
+  Clock3,
+  Copyright,
   DollarSign,
   Eye,
   RefreshCw,
   TrendingUp,
   Users,
   Video,
+  XCircle,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { Skeleton, ErrorState } from "../../components/feedback";
@@ -28,6 +32,16 @@ function formatNumber(value: number): string {
 function formatCents(cents: number | null | undefined): string {
   if (cents == null) return "—";
   return `$${(cents / 100).toFixed(2)}`;
+}
+
+function formatProcessingTime(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remaining = minutes % 60;
+  return remaining > 0 ? `${hours}h ${remaining}m` : `${hours}h`;
 }
 
 function formatGrowth(value: { absolute: number; percent: number } | null | undefined) {
@@ -323,6 +337,38 @@ export function InternalDashboard() {
                 icon={Video}
               />
             </div>
+
+            <section className="mb-8" aria-labelledby="publishing-analytics-title">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h2 id="publishing-analytics-title" className="text-[16px] font-bold text-white">Content operations</h2>
+                  <p className="text-[12px] text-[#9aa0aa] mt-0.5">Stato delle pubblicazioni negli ultimi {periodDays} giorni.</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <KpiCard
+                  label="Pubblicati"
+                  value={state.data.operations ? formatNumber(state.data.operations.published) : "—"}
+                  icon={CheckCircle2}
+                  variant="success"
+                />
+                <KpiCard
+                  label="Falliti"
+                  value={state.data.operations ? formatNumber(state.data.operations.failed) : "—"}
+                  icon={XCircle}
+                />
+                <KpiCard
+                  label="Claim copyright"
+                  value={state.data.operations ? formatNumber(state.data.operations.copyright_claims) : "—"}
+                  icon={Copyright}
+                />
+                <KpiCard
+                  label="Tempo medio elaborazione"
+                  value={formatProcessingTime(state.data.operations?.average_processing_seconds)}
+                  icon={Clock3}
+                />
+              </div>
+            </section>
 
             <Section title="Migliori video">
               <TopVideosTable videos={state.data.top_videos} />
