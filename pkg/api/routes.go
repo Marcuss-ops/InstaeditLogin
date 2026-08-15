@@ -296,19 +296,6 @@ func (r *Router) Setup() http.Handler {
 		r.mux.Method(http.MethodPost, "/api/v1/content-packages/{id}/cancel", contentMutation(http.HandlerFunc(r.handleCancelContentPackage)))
 		r.mux.Method(http.MethodGet, "/api/v1/content-packages/{id}/activity", contentRead(http.HandlerFunc(r.handleContentActivity)))
 	}
-	if r.driveInboxStore != nil {
-		inboxMutation := func(handler http.Handler) http.Handler {
-			if r.csrfMiddleware != nil {
-				handler = r.csrfMiddleware(handler)
-			}
-			return r.protected(handler.ServeHTTP)
-		}
-		inboxRead := func(handler http.Handler) http.Handler { return r.protected(handler.ServeHTTP) }
-		r.mux.Method(http.MethodPost, "/api/v1/drive-inboxes", inboxMutation(http.HandlerFunc(r.handleCreateDriveInbox)))
-		r.mux.Method(http.MethodGet, "/api/v1/drive-inboxes", inboxRead(http.HandlerFunc(r.handleListDriveInboxes)))
-		r.mux.Method(http.MethodGet, "/api/v1/drive-inboxes/{inbox_id}/items", inboxRead(http.HandlerFunc(r.handleListDriveInboxItems)))
-		r.mux.Method(http.MethodPost, "/api/v1/drive-inboxes/{inbox_id}/items/{item_id}/claim", inboxMutation(http.HandlerFunc(r.handleClaimDriveInboxItem)))
-	}
 	reg.Register(NewBillingModule(BillingModuleDeps{
 		BillingSvc:     r.billingSvc,
 		AuthMiddleware: r.auth.Middleware,

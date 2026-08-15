@@ -39,40 +39,25 @@ func TestContentPackageIntegration_DomainWorkflowAndRecoveryInvariants(t *testin
 			t.Fatal(err)
 		}
 	}
+	// ReplaceTargets validates target ownership through workspace_channels,
+	// so each publish target account must be bound to the workspace.
+	for _, targetAccountID := range []int64{98102, 98103, 98104} {
+		if _, err := db.Exec(`INSERT INTO workspace_channels (workspace_id, platform_account_id, enabled) VALUES ($1,$2,true)`, workspaceID, targetAccountID); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	ctx := context.Background()
 	store := repository.NewContentPackageRepository(db)
-	inboxStore := repository.NewDriveInboxRepository(db)
-	inbox := &models.DriveInbox{WorkspaceID: workspaceID, DriveAccountID: driveAccountID, FolderID: "folder-functional", Enabled: true}
-	if err := inboxStore.CreateInbox(ctx, inbox); err != nil {
-		t.Fatalf("create inbox: %v", err)
-	}
-	item := &models.DriveInboxItem{InboxID: inbox.ID, DriveFileID: "drive-functional-1", Filename: "boxing.mp4", MimeType: "video/mp4", Fingerprint: "sha-1"}
-	if err := inboxStore.UpsertInboxItem(ctx, item); err != nil {
-		t.Fatalf("first inbox discovery: %v", err)
-	}
-	for i := 0; i < 4; i++ {
-		if err := inboxStore.UpsertInboxItem(ctx, &models.DriveInboxItem{InboxID: inbox.ID, DriveFileID: "drive-functional-1", Filename: "boxing.mp4", MimeType: "video/mp4", Fingerprint: "sha-1"}); err != nil {
-			t.Fatalf("repeat inbox discovery %d: %v", i, err)
-		}
-	}
-	items, err := inboxStore.ListInboxItems(ctx, inbox.ID, "ready_for_review")
-	if err != nil || len(items) != 1 {
-		t.Fatalf("inbox dedupe: items=%d err=%v", len(items), err)
-	}
 
 	cover := "cover-functional"
-	pkg := &models.ContentPackage{SourceType: "google_drive", DriveAccountID: &driveAccountID, DriveFileID: item.DriveFileID, SourceFilename: item.Filename, SourceFingerprint: item.Fingerprint, SourceLanguage: "it", CurrentCoverMediaID: &cover}
+	pkg := &models.ContentPackage{WorkspaceID: workspaceID, CreatedBy: userID, SourceType: "google_drive", DriveAccountID: &driveAccountID, DriveFileID: "drive-functional-1", SourceFilename: "boxing.mp4", SourceFingerprint: "sha-1", SourceLanguage: "it", CurrentCoverMediaID: &cover}
 	revision := &models.ContentMetadataRevision{SourceLanguage: "it", Title: "Come iniziare", Description: "Descrizione italiana", Tags: json.RawMessage(`["boxe"]`), CreatedBy: userID}
-	claimed, err := inboxStore.ClaimInboxItem(ctx, inbox.ID, item.ID, userID, pkg, revision)
-	if err != nil {
-		t.Fatalf("claim inbox item: %v", err)
+	if err := store.CreatePackage(ctx, pkg, revision); err != nil {
+		t.Fatalf("create package: %v", err)
 	}
-	if claimed.ID == 0 || claimed.DriveFileID != item.DriveFileID {
-		t.Fatalf("unexpected claimed package: %+v", claimed)
-	}
-	if _, err := inboxStore.ClaimInboxItem(ctx, inbox.ID, item.ID, userID, &models.ContentPackage{}, &models.ContentMetadataRevision{}); !errors.Is(err, repository.ErrDriveInboxItemNotFound) {
-		t.Fatalf("second claim: want not found/idempotent rejection, got %v", err)
+	if pkg.ID == 0 || pkg.DriveFileID != "drive-functional-1" {
+		t.Fatalf("unexpected created package: %+v", pkg)
 	}
 
 	targets := []*models.ContentPackageTarget{

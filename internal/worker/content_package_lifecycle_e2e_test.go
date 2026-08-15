@@ -437,30 +437,19 @@ func TestContentPackageLifecycleE2E_DriveSchedulePreparationPublish_Idempotent(t
 	}
 
 	ctx := context.Background()
-	inboxRepo := repository.NewDriveInboxRepository(db)
 	packageRepo := repository.NewContentPackageRepository(db)
 	uploadRepo := repository.NewUploadJobRepository(db)
-	inbox := &models.DriveInbox{WorkspaceID: workspaceID, DriveAccountID: driveAccountID, FolderID: "lifecycle-folder", Enabled: true}
-	if err := inboxRepo.CreateInbox(ctx, inbox); err != nil {
-		t.Fatalf("create inbox: %v", err)
-	}
-	item := &models.DriveInboxItem{InboxID: inbox.ID, DriveFileID: "drive-lifecycle-1", Filename: "lifecycle.mp4", MimeType: "video/mp4", Fingerprint: "lifecycle-sha"}
-	if err := inboxRepo.UpsertInboxItem(ctx, item); err != nil {
-		t.Fatalf("upsert inbox item: %v", err)
-	}
 
 	cover := "cover-lifecycle"
 	driveAccountIDPtr := driveAccountID
 	revision := &models.ContentMetadataRevision{SourceLanguage: "it", Title: "Titolo lifecycle", Description: "Descrizione lifecycle", Tags: json.RawMessage(`[]`), CreatedBy: userID}
-	pkg := &models.ContentPackage{WorkspaceID: workspaceID, CreatedBy: userID, SourceType: "google_drive", DriveAccountID: &driveAccountIDPtr, DriveFileID: item.DriveFileID, SourceFilename: item.Filename, SourceFingerprint: item.Fingerprint, SourceLanguage: "it", CurrentCoverMediaID: &cover}
-	claimed, err := inboxRepo.ClaimInboxItem(ctx, inbox.ID, item.ID, userID, pkg, revision)
-	if err != nil {
-		t.Fatalf("claim inbox item: %v", err)
+	pkg := &models.ContentPackage{WorkspaceID: workspaceID, CreatedBy: userID, SourceType: "google_drive", DriveAccountID: &driveAccountIDPtr, DriveFileID: "drive-lifecycle-1", SourceFilename: "lifecycle.mp4", SourceFingerprint: "lifecycle-sha", SourceLanguage: "it", CurrentCoverMediaID: &cover}
+	if err := packageRepo.CreatePackage(ctx, pkg, revision); err != nil {
+		t.Fatalf("create package: %v", err)
 	}
-	if claimed.ID == 0 {
-		t.Fatal("claim did not create a content package")
+	if pkg.ID == 0 {
+		t.Fatal("create did not create a content package")
 	}
-	pkg = claimed
 
 	targets := []*models.ContentPackageTarget{
 		{ContentPackageID: pkg.ID, PlatformAccountID: youtubeAccountIT, Language: "it", PrivacyStatus: "public", Enabled: true},
@@ -518,7 +507,7 @@ func TestContentPackageLifecycleE2E_DriveSchedulePreparationPublish_Idempotent(t
 
 	payload := []byte("fake-drive-video-lifecycle")
 	driveImporter := &fakeImporter{
-		metadataResp: &services.GoogleDriveFile{ID: item.DriveFileID, Name: item.Filename, Size: strconv.Itoa(len(payload)), MimeType: "video/mp4", SHA256Checksum: lifecycleSHA(payload)},
+		metadataResp: &services.GoogleDriveFile{ID: pkg.DriveFileID, Name: pkg.SourceFilename, Size: strconv.Itoa(len(payload)), MimeType: "video/mp4", SHA256Checksum: lifecycleSHA(payload)},
 		downloadResp: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytesReader(payload)), Header: http.Header{"Content-Type": []string{"video/mp4"}}},
 	}
 	driveSource, err := NewAuthenticatedDriveSource(driveImporter, vault)

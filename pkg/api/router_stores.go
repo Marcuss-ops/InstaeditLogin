@@ -398,8 +398,6 @@ type ContentPipelineStore interface {
 // the router's dependency surface.
 type ContentPackageStore = repository.ContentPackageStore
 
-type DriveInboxStore = repository.DriveInboxStore
-
 // ConnectLinkNonceStore is the persistence contract for connect-link
 // jti values. Production wiring passes *repository.ConnectLinkNonceRepository.
 // The stored value is the JWT's RegisteredClaims.ID (jti), which

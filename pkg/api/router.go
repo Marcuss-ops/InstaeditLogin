@@ -148,7 +148,6 @@ type Router struct {
 	// package never creates an execution job.
 	contentPackageStore ContentPackageStore
 	publicationResolver *services.PublicationResolver
-	driveInboxStore     DriveInboxStore
 
 	// snapshotStore caches remote resource data (channel stats,
 	// profile, branding) so the frontend doesn't trigger a provider

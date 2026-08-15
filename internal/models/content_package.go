@@ -173,29 +173,3 @@ type PublicationEvent struct {
 	OccurredAt          time.Time `json:"occurred_at"`
 }
 
-type DriveInbox struct {
-	ID             int64      `json:"id"`
-	WorkspaceID    int64      `json:"workspace_id"`
-	DriveAccountID int64      `json:"drive_account_id"`
-	FolderID       string     `json:"folder_id"`
-	Enabled        bool       `json:"enabled"`
-	LastScanAt     *time.Time `json:"last_scan_at,omitempty"`
-	Cursor         *string    `json:"cursor,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-}
-
-type DriveInboxItem struct {
-	ID               int64      `json:"id"`
-	InboxID          int64      `json:"inbox_id"`
-	DriveFileID      string     `json:"drive_file_id"`
-	Filename         string     `json:"filename"`
-	MimeType         string     `json:"mime_type"`
-	SizeBytes        *int64     `json:"size_bytes,omitempty"`
-	ModifiedTime     *time.Time `json:"modified_time,omitempty"`
-	Fingerprint      string     `json:"fingerprint,omitempty"`
-	Status           string     `json:"status"`
-	ContentPackageID *int64     `json:"content_package_id,omitempty"`
-	FirstSeenAt      time.Time  `json:"first_seen_at"`
-	LastSeenAt       time.Time  `json:"last_seen_at"`
-}

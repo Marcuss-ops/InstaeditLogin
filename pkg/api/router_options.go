@@ -309,10 +309,6 @@ func WithContentPackageStore(s ContentPackageStore) RouterOption {
 	}
 }
 
-func WithDriveInboxStore(s DriveInboxStore) RouterOption {
-	return func(r *Router) { r.driveInboxStore = s }
-}
-
 // WithSnapshotStore wires the account resource snapshot cache. When
 // nil, GET /accounts/{id} returns the base 6-field shape and
 // /accounts/{id}/sync returns 501.

@@ -397,22 +397,6 @@ func (a *App) contentPreparationWorkerSpec() worker.WorkerSpec {
 	}
 }
 
-func (a *App) driveInboxScannerWorkerSpec() worker.WorkerSpec {
-	return worker.WorkerSpec{
-		Name:     "drive_inbox_scanner",
-		Critical: false,
-		Run: func(ctx context.Context) error {
-			scanner := worker.NewDriveInboxScanner(
-				repository.NewDriveInboxRepository(a.DB),
-				worker.NewDriveFolderDiscovery(a.Vault, a.CapRouter),
-				worker.DriveInboxScannerOptions{Interval: 5 * time.Minute},
-				slog.Default(),
-			)
-			return scanner.Run(ctx)
-		},
-	}
-}
-
 func (a *App) tokenRefreshSweepWorkerSpec() worker.WorkerSpec {
 	return worker.WorkerSpec{
 		Name:     "token_refresh_sweep",

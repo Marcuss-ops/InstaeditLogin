@@ -22,7 +22,6 @@ func TestWorkerSpecs_PreserveLifecycleContract(t *testing.T) {
 		"upload",
 		"content_preparation",
 		"drive_batch_crawler",
-		"drive_inbox_scanner",
 		"youtube_processing_reconciler",
 		"youtube_copyright_checker",
 		"metadata_generation",
@@ -41,7 +40,7 @@ func TestWorkerSpecs_PreserveLifecycleContract(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"asset_cleanup", "metadata_generation", "token_refresh_sweep", "snapshot_refresh_sweep", "youtube_copyright_checker", "drive_inbox_scanner"} {
+	for _, name := range []string{"asset_cleanup", "metadata_generation", "token_refresh_sweep", "snapshot_refresh_sweep", "youtube_copyright_checker"} {
 		for _, spec := range specs {
 			if spec.Name == name && spec.Critical {
 				t.Errorf("maintenance worker %q must remain non-critical", name)
@@ -49,7 +48,7 @@ func TestWorkerSpecs_PreserveLifecycleContract(t *testing.T) {
 		}
 	}
 	for _, spec := range specs {
-		if spec.Name != "asset_cleanup" && spec.Name != "metadata_generation" && spec.Name != "token_refresh_sweep" && spec.Name != "snapshot_refresh_sweep" && spec.Name != "youtube_copyright_checker" && spec.Name != "drive_inbox_scanner" && !spec.Critical {
+		if spec.Name != "asset_cleanup" && spec.Name != "metadata_generation" && spec.Name != "token_refresh_sweep" && spec.Name != "snapshot_refresh_sweep" && spec.Name != "youtube_copyright_checker" && !spec.Critical {
 			t.Errorf("pipeline worker %q unexpectedly became non-critical", spec.Name)
 		}
 	}

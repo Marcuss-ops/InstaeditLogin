@@ -103,7 +103,6 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		// declared in internal/worker/drive_batch_crawler.go.
 		api.WithImportBatchStore(s.importBatchRepo),
 		api.WithContentPackageStore(repository.NewContentPackageRepository(s.db)),
-		api.WithDriveInboxStore(repository.NewDriveInboxRepository(s.db)),
 		// P1#7 — exporter for the crawler goroutine spawned in
 		// RunWorkers. Same instance as ImportBatchStore above; the
 		// split into two interfaces lets each consumer request only
