@@ -76,28 +76,6 @@ export type ContentPreview = {
   schedule?: ContentPackageResponse["schedule"];
 };
 
-export type DriveInbox = {
-  id: number;
-  workspace_id: number;
-  drive_account_id: number;
-  folder_id: string;
-  enabled: boolean;
-  last_scan_at?: string;
-};
-
-export type DriveInboxItem = {
-  id: number;
-  inbox_id: number;
-  drive_file_id: string;
-  filename: string;
-  mime_type: string;
-  size_bytes?: number;
-  modified_time?: string;
-  fingerprint?: string;
-  status: string;
-  content_package_id?: number;
-};
-
 export type PublicationEvent = {
   id: number;
   stage: string;
@@ -117,35 +95,6 @@ export function getContentPackagePreview(id: string) {
 export function getContentPackageActivity(id: string) {
   return apiClient<{ events: PublicationEvent[] }>(
     `/api/v1/content-packages/${id}/activity`,
-  );
-}
-
-export function createDriveInbox(input: { drive_account_id: number; folder_id: string }) {
-  return apiClient<DriveInbox>("/api/v1/drive-inboxes", {
-    method: "POST",
-    body: input,
-  });
-}
-
-export function listDriveInboxes() {
-  return apiClient<{ items: DriveInbox[] }>("/api/v1/drive-inboxes");
-}
-
-export function listDriveInboxItems(inboxId: number, status = "") {
-  const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
-  return apiClient<{ inbox: DriveInbox; items: DriveInboxItem[] }>(
-    `/api/v1/drive-inboxes/${inboxId}/items${suffix}`,
-  );
-}
-
-export function claimDriveInboxItem(
-  inboxId: number,
-  itemId: number,
-  input: { source_language: string; title: string; description: string },
-) {
-  return apiClient<{ package: ContentPackage }>(
-    `/api/v1/drive-inboxes/${inboxId}/items/${itemId}/claim`,
-    { method: "POST", body: input },
   );
 }
 
