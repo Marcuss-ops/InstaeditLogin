@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, Film, Loader2 } from "lucide-react";
+import { useParams } from "react-router-dom";
+import { AlertTriangle, CalendarClock, CheckCircle2, Film, Loader2 } from "lucide-react";
 import { CoverOverridesPanel } from "./CoverOverridesPanel";
 import {
   getContentPackage,
@@ -95,9 +95,6 @@ export function ContentPackageDetail() {
   return (
     <div className="min-h-full bg-[#030308] px-4 py-8 text-[#e8e8ef] md:px-8">
       <div className="mx-auto max-w-6xl">
-        <Link to="/app/content/inbox" className="mb-6 inline-flex items-center gap-2 text-sm text-[#9aa0aa] no-underline hover:text-white">
-          <ArrowLeft size={16} /> Torna a Drive Inbox
-        </Link>
         <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-[#858b99]"><Film size={15} /> Content package</p>
