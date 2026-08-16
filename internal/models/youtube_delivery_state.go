@@ -145,9 +145,9 @@ func (s YouTubeDeliveryState) IsSideState() bool {
 var youtubeDeliveryTransitionMap = map[YouTubeDeliveryState]map[YouTubeDeliveryState]bool{
 	YouTubeDeliveryPreflight: {
 		YouTubeDeliveryReadyToUpload: true, // preflight passed
-		YouTubeDeliveryQuotaWait:      true, // capacity unavailable (resume → ready_to_upload)
-		YouTubeDeliveryBlockedAuth:    true, // OAuth invalid (resume → preflight)
-		YouTubeDeliveryFailed:         true, // validation / permanent preflight failure
+		YouTubeDeliveryQuotaWait:     true, // capacity unavailable (resume → ready_to_upload)
+		YouTubeDeliveryBlockedAuth:   true, // OAuth invalid (resume → preflight)
+		YouTubeDeliveryFailed:        true, // validation / permanent preflight failure
 	},
 	YouTubeDeliveryReadyToUpload: {
 		YouTubeDeliveryUploading:   true, // claim before the network call

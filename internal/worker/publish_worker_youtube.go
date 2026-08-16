@@ -264,11 +264,11 @@ func (w *PublishWorker) markYouTubeTargetPublished(
 //   - still private inside the    → requeue with backoff and return an
 //     grace window (publishAt +   → error so the next tick re-verifies;
 //     10m)                          → YouTube is likely still processing
-//                                     its own transition — we never force
-//                                     it during the window.
+//     its own transition — we never force
+//     it during the window.
 //   - still private PAST the      → RECOVERY: force public via
 //     grace window                  → videos.update (one ~50-unit call;
-//                                     the exception path, not the clock).
+//     the exception path, not the clock).
 //   - videos.list 404 (orphan)    → ClearYouTubeUpload + fall through to
 //     (user deleted / takedown)     a fresh publisher.Publish (re-upload).
 //

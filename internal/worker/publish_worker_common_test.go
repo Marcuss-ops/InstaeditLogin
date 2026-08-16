@@ -38,7 +38,7 @@ type mockPostStore struct {
 	// pending batches through a parallel worker pool, so the mock can be
 	// touched by several goroutines at once (assertions after runOnce
 	// remain race-free).
-	mu               sync.Mutex
+	mu sync.Mutex
 	// Call counters — one per method, incremented on every invocation.
 	// Tests assert on the relative ordering (e.g. claimCalls > 0 before
 	// findByIDCalls is allowed) and the final counts.

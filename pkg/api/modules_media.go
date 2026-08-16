@@ -11,21 +11,21 @@ import (
 // MediaModuleDeps is the narrow set of dependencies the media module
 // needs to mount its routes.
 type MediaModuleDeps struct {
-	RateLimitSvc       *services.RateLimitService
-	Protected          func(http.HandlerFunc) http.HandlerFunc
+	RateLimitSvc *services.RateLimitService
+	Protected    func(http.HandlerFunc) http.HandlerFunc
 	// EditorSessionProtected guards presign/complete with the editor
 	// session bearer too (in addition to the normal session), so the
 	// InstaEditor SPA can persist rendered previews as durable media
 	// assets without holding a cookie-based InstaEdit session.
 	EditorSessionProtected func(http.HandlerFunc) http.HandlerFunc
-	PresignMedia       http.HandlerFunc
-	DriveImport        http.HandlerFunc
-	DriveImportAsync   http.HandlerFunc
-	DriveBatchImport   http.HandlerFunc
-	DriveBatchImportV2 http.HandlerFunc
-	DriveBatchV2Status http.HandlerFunc
-	DriveBatchStatus   http.HandlerFunc
-	CompleteMedia      http.HandlerFunc
+	PresignMedia           http.HandlerFunc
+	DriveImport            http.HandlerFunc
+	DriveImportAsync       http.HandlerFunc
+	DriveBatchImport       http.HandlerFunc
+	DriveBatchImportV2     http.HandlerFunc
+	DriveBatchV2Status     http.HandlerFunc
+	DriveBatchStatus       http.HandlerFunc
+	CompleteMedia          http.HandlerFunc
 	// ListMedia backs GET /api/v1/media — the reduced Media Library list.
 	ListMedia http.HandlerFunc
 	// GetMedia backs GET /api/v1/media/{id} — detail + on-demand preview.

@@ -14,11 +14,11 @@ import (
 // quota_wait) so the claim query can use the index without a filter
 // mismatch:
 //   - preflight      — row created without an explicit state (legacy /
-//                      materializer race); the worker re-derives on claim.
+//     materializer race); the worker re-derives on claim.
 //   - ready_to_upload — the normal enqueue state the materializer stamps.
 //   - retry_wait     — failed; re-claimable once next_attempt_at elapses.
 //   - quota_wait     — capacity-blocked; re-claimable once next_attempt_at
-//                      elapses (resume_state records where to return).
+//     elapses (resume_state records where to return).
 const youtubeDeliveryClaimStates = `('preflight', 'ready_to_upload', 'retry_wait', 'quota_wait')`
 
 // ytTargetPubsSelectColumnsQualified is ytTargetPubsSelectColumns with
@@ -47,15 +47,15 @@ const ytTargetPubsSelectColumnsQualified = `
 // Claim shape (same CTE + FOR UPDATE SKIP LOCKED + lease-CAS pattern as
 // upload_jobs / webhook_deliveries):
 //
-//	1. SELECT the eligible ids (claimable state + due + unlocked),
-//	   ordered by priority (lower first), then publish_at, then id, and
-//	   lock them with FOR UPDATE SKIP LOCKED so concurrent replicas
-//	   never block on each other.
-//	2. UPDATE those ids to state='uploading' with lease_owner /
-//	   lease_expires_at / heartbeat_at stamps.
-//	3. RETURN the full rows so the worker has everything (video_id
-//	   cursor, channel, publish_at, native_publish_at) without a second
-//	   round-trip.
+//  1. SELECT the eligible ids (claimable state + due + unlocked),
+//     ordered by priority (lower first), then publish_at, then id, and
+//     lock them with FOR UPDATE SKIP LOCKED so concurrent replicas
+//     never block on each other.
+//  2. UPDATE those ids to state='uploading' with lease_owner /
+//     lease_expires_at / heartbeat_at stamps.
+//  3. RETURN the full rows so the worker has everything (video_id
+//     cursor, channel, publish_at, native_publish_at) without a second
+//     round-trip.
 //
 // Returns the claimed rows. A worker holds each row for at least
 // `lease`; the caller MUST run HeartbeatDelivery on a cadence below

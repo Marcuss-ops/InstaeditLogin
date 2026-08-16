@@ -124,11 +124,11 @@ type youtubeVideo struct {
 }
 
 type youtubeVideoSnippet struct {
-	Title                string             `json:"title"`
-	Description          string             `json:"description"`
-	PublishedAt          string             `json:"publishedAt"`
-	ChannelID            string             `json:"channelId"`
-	Thumbnails           *youtubeThumbnails `json:"thumbnails"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	PublishedAt string             `json:"publishedAt"`
+	ChannelID   string             `json:"channelId"`
+	Thumbnails  *youtubeThumbnails `json:"thumbnails"`
 	// Editable snippet properties carried by videos.list part=snippet.
 	// UpdateVideoMetadata reads these back so a videos.update merge can
 	// preserve everything the patch omits (tags, category, languages).

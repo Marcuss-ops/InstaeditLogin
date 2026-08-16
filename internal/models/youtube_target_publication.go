@@ -102,8 +102,8 @@ type YouTubeTargetPublication struct {
 	// native schedule (immediate publish, or desired privacy != public).
 	NativePublishAt *time.Time `json:"native_publish_at,omitempty"`
 	PublishedAt     *time.Time `json:"published_at,omitempty"`
-	LastError          string     `json:"last_error,omitempty"`
-	AttemptCount       int        `json:"attempt_count"`
+	LastError       string     `json:"last_error,omitempty"`
+	AttemptCount    int        `json:"attempt_count"`
 	// Delivery-queue operational fields (migration 125). `state` is the
 	// canonical lifecycle cursor for the WHOLE delivery — the legacy
 	// youtube_upload_status / youtube_processing_status / thumbnail_status
@@ -121,10 +121,10 @@ type YouTubeTargetPublication struct {
 	// rows are unclaimable until it elapses.
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 	// MaxAttempts is the retry cap before dead_letter.
-	MaxAttempts int `json:"max_attempts"`
-	LeaseOwner      *string    `json:"lease_owner,omitempty"`
-	LeaseExpiresAt  *time.Time `json:"lease_expires_at,omitempty"`
-	HeartbeatAt     *time.Time `json:"heartbeat_at,omitempty"`
+	MaxAttempts    int        `json:"max_attempts"`
+	LeaseOwner     *string    `json:"lease_owner,omitempty"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	HeartbeatAt    *time.Time `json:"heartbeat_at,omitempty"`
 	// ResumeState is where a side state (quota_wait / blocked_auth /
 	// retry_wait) returns once its condition clears.
 	ResumeState *string `json:"resume_state,omitempty"`
@@ -141,7 +141,7 @@ type YouTubeTargetPublication struct {
 	OriginalPublishAt *time.Time `json:"original_publish_at,omitempty"`
 	// SpilloverCount is how many days capacity planning moved this
 	// delivery forward (audit of the planner).
-	SpilloverCount int `json:"spillover_count"`
+	SpilloverCount int       `json:"spillover_count"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

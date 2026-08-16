@@ -211,21 +211,21 @@ func (r *Router) Setup() http.Handler {
 		r.mux.Method(http.MethodPost, "/api/v1/template-library/{template_id}/archive", coverLibraryMutation(http.HandlerFunc(r.handleArchiveCoverTemplate)))
 	}
 	reg.Register(NewMediaModule(MediaModuleDeps{
-		RateLimitSvc:            r.rateLimitSvc,
-		Protected:               r.protected,
-		EditorSessionProtected:  r.editorSessionProtectedUnscoped,
-		PresignMedia:            r.handlePresignMedia,
-		DriveImport:        r.handleDriveImport,
-		DriveImportAsync:   r.handleDriveImportAsync,
-		DriveBatchImport:   r.handleDriveBatchImport,
-		DriveBatchImportV2: r.handleDriveBatchImportV2,
-		DriveBatchV2Status: r.handleDriveBatchV2Status,
-		DriveBatchStatus:   r.handleDriveBatchStatus,
-		CompleteMedia:      r.handleCompleteMedia,
-		ListMedia:          r.handleListMediaAssets,
-		GetMedia:           r.handleGetMediaAsset,
-		ListDriveAssets:    r.handleListDriveAssets,
-		GetDriveAsset:      r.handleGetDriveAsset,
+		RateLimitSvc:           r.rateLimitSvc,
+		Protected:              r.protected,
+		EditorSessionProtected: r.editorSessionProtectedUnscoped,
+		PresignMedia:           r.handlePresignMedia,
+		DriveImport:            r.handleDriveImport,
+		DriveImportAsync:       r.handleDriveImportAsync,
+		DriveBatchImport:       r.handleDriveBatchImport,
+		DriveBatchImportV2:     r.handleDriveBatchImportV2,
+		DriveBatchV2Status:     r.handleDriveBatchV2Status,
+		DriveBatchStatus:       r.handleDriveBatchStatus,
+		CompleteMedia:          r.handleCompleteMedia,
+		ListMedia:              r.handleListMediaAssets,
+		GetMedia:               r.handleGetMediaAsset,
+		ListDriveAssets:        r.handleListDriveAssets,
+		GetDriveAsset:          r.handleGetDriveAsset,
 	}))
 	// Livestream configuration CRUD base. The state machine
 	// (desired_state/actual_state) is worker-owned; the control

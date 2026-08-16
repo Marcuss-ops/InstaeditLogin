@@ -172,4 +172,3 @@ type PublicationEvent struct {
 	Message             *string   `json:"message,omitempty"`
 	OccurredAt          time.Time `json:"occurred_at"`
 }
-

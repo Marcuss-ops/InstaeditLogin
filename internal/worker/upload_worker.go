@@ -268,13 +268,13 @@ func (w *UploadWorker) SetYouTubeQuotaGate(gate YouTubeQuotaGate) {
 // flow remains intact for non-YouTube platforms and for environments
 // where the YT pub store isn't wired.
 type UploadWorker struct {
-	jobRepo          UploadJobStore
-	mediaStore       UploadMediaStore
-	postStore        UploadPostStore
-	userRepo         UploadUserStore
-	storage          services.StorageProvider
-	capRouter        *services.CapabilityRouter
-	vault            credentials.VaultAPI
+	jobRepo           UploadJobStore
+	mediaStore        UploadMediaStore
+	postStore         UploadPostStore
+	userRepo          UploadUserStore
+	storage           services.StorageProvider
+	capRouter         *services.CapabilityRouter
+	vault             credentials.VaultAPI
 	sourceRegistry    *ArtifactSourceRegistry
 	deliveryVerifier  ExternalDeliveryVerifier
 	ytPubStore        UploadYouTubeTargetPubStore

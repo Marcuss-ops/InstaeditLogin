@@ -248,7 +248,7 @@ func TestPublishTarget_YouTube_ReusesPhase1VideoID_VideosUpdate(t *testing.T) {
 //  4. The youtube_target_publications row got MarkPublished exactly once.
 func TestPublishTarget_YouTube_NativePublishAt_SkipsVideosUpdate(t *testing.T) {
 	const (
-		phase1VideoID  = "PHASE1_VID_NATIVE"
+		phase1VideoID          = "PHASE1_VID_NATIVE"
 		phase1YTPubRowID int64 = 8888
 	)
 

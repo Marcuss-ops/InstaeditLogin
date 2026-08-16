@@ -33,9 +33,9 @@ var allYouTubeDeliveryStates = []YouTubeDeliveryState{
 // verified (success), failed (permanent), dead_letter (retry exhausted).
 func TestYouTubeDeliveryState_IsTerminal(t *testing.T) {
 	terminal := map[YouTubeDeliveryState]bool{
-		YouTubeDeliveryVerified:    true,
-		YouTubeDeliveryFailed:      true,
-		YouTubeDeliveryDeadLetter:  true,
+		YouTubeDeliveryVerified:   true,
+		YouTubeDeliveryFailed:     true,
+		YouTubeDeliveryDeadLetter: true,
 	}
 	for _, s := range allYouTubeDeliveryStates {
 		if got := s.IsTerminal(); got != terminal[s] {

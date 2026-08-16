@@ -317,11 +317,11 @@ var (
 	// one of three canonical values:
 	//
 	//	"ok"             — successful 2xx response from YouTube.
-//	"quota_exceeded" — either the YouTubeQuotaManager pre-call gate
-//	                   (2026 three-bucket model, internal/services/
-//	                   youtube_quota_manager.go) refused the call, OR the
-//	                   call was made and YouTube returned a quotaExceeded
-//	                   error envelope. Both paths roll up here.
+	//	"quota_exceeded" — either the YouTubeQuotaManager pre-call gate
+	//	                   (2026 three-bucket model, internal/services/
+	//	                   youtube_quota_manager.go) refused the call, OR the
+	//	                   call was made and YouTube returned a quotaExceeded
+	//	                   error envelope. Both paths roll up here.
 	//	"error"          — all other failure modes (5xx, transport, validation).
 	//
 	// Cardinality: result has 3 labels, so the time-series count is bounded

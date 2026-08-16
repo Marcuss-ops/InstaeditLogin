@@ -55,7 +55,7 @@ func (w *PublishWorker) runOnce(ctx context.Context) {
 		w.logger.Info("publish worker tick done",
 			"processed", processed, "succeeded", ok, "failed", ko)
 	}
-}// tick processes a bounded, fair batch of independent child targets exactly
+} // tick processes a bounded, fair batch of independent child targets exactly
 // once. Each target owns its own claim, lease, retry budget, error state and
 // idempotency key; no parent can hold a worker slot while its siblings run.
 // Returns (processed, succeeded, failed, err).
@@ -120,17 +120,17 @@ func (w *PublishWorker) tick(ctx context.Context) (processed, succeeded, failed 
 		go func() {
 			defer done.Done()
 			for t := range targets {
-			if err := w.publishTarget(ctx, t); err != nil {
-				w.logger.Warn("publish target failed",
-					"target_id", t.ID,
-					"post_id", t.PostID,
-					"error", err)
-				failedCount.Add(1)
-			} else {
-				succeededCount.Add(1)
+				if err := w.publishTarget(ctx, t); err != nil {
+					w.logger.Warn("publish target failed",
+						"target_id", t.ID,
+						"post_id", t.PostID,
+						"error", err)
+					failedCount.Add(1)
+				} else {
+					succeededCount.Add(1)
+				}
+				processedCount.Add(1)
 			}
-			processedCount.Add(1)
-		}
 		}()
 	}
 	for i := range pending {

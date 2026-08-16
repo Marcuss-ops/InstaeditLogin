@@ -6,9 +6,9 @@ package models
 // clear a field). This mirrors how the JSON PATCH body distinguishes
 // "omitted" from "explicitly cleared".
 type YouTubeMetadataPatch struct {
-	Title         *string
-	Description   *string
-	CategoryID    *string
+	Title       *string
+	Description *string
+	CategoryID  *string
 	// PrivacyStatus is the optional visibility change ("public" |
 	// "private" | "unlisted"). nil = leave the current status
 	// untouched; non-nil = fold a status.privacyStatus write into the

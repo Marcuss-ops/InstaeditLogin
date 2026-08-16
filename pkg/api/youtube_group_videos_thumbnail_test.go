@@ -188,10 +188,10 @@ func TestPublishGroupVideoThumbnail_InvalidatesAccountCache(t *testing.T) {
 
 func TestPublishGroupVideoThumbnail_Validation(t *testing.T) {
 	cases := []struct {
-		name  string
-		body  string
-		url   string
-		want  string
+		name string
+		body string
+		url  string
+		want string
 	}{
 		{"invalid group id", `{"platform_account_id": 42, "thumbnail_media_id": "a"}`, "/api/v1/groups/abc/youtube/videos/VID123/thumbnail", "group_id path parameter"},
 		{"missing video id", `{"platform_account_id": 42, "thumbnail_media_id": "a"}`, "/api/v1/groups/3/youtube/videos//thumbnail", "video_id"},

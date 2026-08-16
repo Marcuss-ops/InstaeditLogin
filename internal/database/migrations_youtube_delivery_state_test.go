@@ -32,7 +32,10 @@ func TestYouTubeDeliveryState_FreshDatabase(t *testing.T) {
 // nullability so a future migration drift fails loudly here.
 func assertDeliveryColumns(t *testing.T, db *sql.DB) {
 	t.Helper()
-	expected := map[string]struct{ nullable bool; def string }{
+	expected := map[string]struct {
+		nullable bool
+		def      string
+	}{
 		"state":               {nullable: false, def: "'preflight'::text"},
 		"priority":            {nullable: false, def: "100"},
 		"prepare_at":          {nullable: true},
@@ -60,14 +63,20 @@ func assertDeliveryColumns(t *testing.T, db *sql.DB) {
 	}
 	defer rows.Close()
 
-	got := map[string]struct{ nullable bool; def string }{}
+	got := map[string]struct {
+		nullable bool
+		def      string
+	}{}
 	for rows.Next() {
 		var name, nullable string
 		var def sql.NullString
 		if err := rows.Scan(&name, &nullable, &def); err != nil {
 			t.Fatalf("scan columns: %v", err)
 		}
-		got[name] = struct{ nullable bool; def string }{nullable: nullable == "YES", def: def.String}
+		got[name] = struct {
+			nullable bool
+			def      string
+		}{nullable: nullable == "YES", def: def.String}
 	}
 
 	for col, want := range expected {

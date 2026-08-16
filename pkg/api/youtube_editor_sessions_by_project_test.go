@@ -188,15 +188,15 @@ func TestGetYouTubeEditorSessionByProject_200_HappyPath(t *testing.T) {
 	t.Parallel()
 	workspace := &models.Workspace{ID: 7, OwnerID: 1}
 	edit := &models.YouTubeVideoEdit{
-		ID:                "sess-1",
-		WorkspaceID:       workspace.ID,
-		PlatformAccountID: 42,
-		YouTubeVideoID:    "yt-1",
-		VeloxProjectID:    "vp-1",
+		ID:                 "sess-1",
+		WorkspaceID:        workspace.ID,
+		PlatformAccountID:  42,
+		YouTubeVideoID:     "yt-1",
+		VeloxProjectID:     "vp-1",
 		SourceThumbnailURL: "https://i.ytimg.com/vi/yt-1/hqdefault.jpg",
 		CategoryID:         "24",
-		DesiredPrivacy:    "private",
-		Status:            "editing",
+		DesiredPrivacy:     "private",
+		Status:             "editing",
 	}
 	router := newByProjectRouter(t, workspace, edit)
 
