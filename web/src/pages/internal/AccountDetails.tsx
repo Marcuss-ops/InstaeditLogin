@@ -145,11 +145,14 @@ export function AccountDetailsPage() {
     account.platform === "youtube" && account.platform_user_id
       ? `&expected_channel_id=${encodeURIComponent(account.platform_user_id)}`
       : ""
-  }`;
+  }&redirect=${encodeURIComponent("/app/linking")}`;
+  const isGoogleDrive = canonicalPlatform === "google-drive";
 
   const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
     { id: "overview", label: "Overview", icon: <Settings size={14} /> },
-    { id: "videos", label: "Videos", icon: <Video size={14} /> },
+    ...(!isGoogleDrive
+      ? [{ id: "videos" as const, label: "Videos", icon: <Video size={14} /> }]
+      : []),
     { id: "connection", label: "Connection", icon: <AlertCircle size={14} /> },
   ];
 
@@ -233,12 +236,14 @@ export function AccountDetailsPage() {
                   </a>
                 )}
               </div>
-              <Link
-                to={`/app/accounts/${accountId}/performance`}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.06] border border-white/[0.08] text-[12px] font-semibold text-[#9aa0aa] hover:bg-white/[0.10] hover:text-white transition-colors no-underline"
-              >
-                <TrendingUp size={12} /> Performance
-              </Link>
+              {!isGoogleDrive && (
+                <Link
+                  to={`/app/accounts/${accountId}/performance`}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.06] border border-white/[0.08] text-[12px] font-semibold text-[#9aa0aa] hover:bg-white/[0.10] hover:text-white transition-colors no-underline"
+                >
+                  <TrendingUp size={12} /> Performance
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => void handleSync()}
@@ -265,12 +270,16 @@ export function AccountDetailsPage() {
           </div>
         </div>
 
-        {account.account_state === "reconnect_required" && account.platform === "youtube" && (
+        {account.account_state === "reconnect_required" && (
           <div className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-amber-400/20 bg-amber-400/[0.08] px-5 py-4">
             <div>
-              <p className="text-[13px] font-semibold text-amber-200">Autorizzazione YouTube richiesta</p>
+              <p className="text-[13px] font-semibold text-amber-200">
+                Autorizzazione {isGoogleDrive ? "Google Drive" : "YouTube"} richiesta
+              </p>
               <p className="mt-1 text-[12px] text-amber-100/70">
-                {account.last_error_code === "SHARED_GRANT_REAUTH_REQUIRED"
+                {isGoogleDrive
+                  ? "Il collegamento Google Drive non è più valido. Accedi di nuovo per aggiornare il token e riprendere gli upload."
+                  : account.last_error_code === "SHARED_GRANT_REAUTH_REQUIRED"
                   ? "Il collegamento Google condiviso non è più valido per i canali collegati. Ricollega YouTube per riattivare le pubblicazioni."
                   : "Il collegamento Google non è più valido. Ricollega YouTube per riattivare le pubblicazioni."}
               </p>
@@ -279,7 +288,7 @@ export function AccountDetailsPage() {
               href={reconnectHref}
               className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-amber-300 px-4 py-2 text-[13px] font-semibold text-black transition-colors hover:bg-amber-200"
             >
-              <RefreshCw size={14} /> Ricollega YouTube
+              <RefreshCw size={14} /> Ricollega {isGoogleDrive ? "Google Drive" : "YouTube"}
             </a>
           </div>
         )}

@@ -1,5 +1,5 @@
 /**
- * ChannelHeader — top banner for the single-channel page
+ * ChannelHeader — top banner for the single-account page
  * (/app/dashboard-channels/:accountId).
  *
  * Extracted from the inline JSX in AccountDetailsPage to be the
@@ -10,7 +10,7 @@
  *   │                                                              │
  *   │  [avatar]   Channel Name                [STATUS chip]        │
  *   │             @handle                                         │
- *   │              ▸ Open on YouTube                               │
+ *   │              ▸ Open on provider                              │
  *   │                                            [Refresh btn]     │
  *   └─────────────────────────────────────────────────────────────┘
  *
@@ -26,7 +26,10 @@ import { ArrowLeft, ExternalLink, RefreshCw, Loader2, Video } from "lucide-react
 import { cn } from "../../../lib/utils";
 import type { ChannelAccount } from "../types";
 import { getStatusTone } from "../types";
-import { ProviderBadge } from "../../../components/brand/PlatformLogos";
+import {
+  normalizeProviderIdentifier,
+  ProviderBadge,
+} from "../../../components/brand/PlatformLogos";
 
 export interface ChannelHeaderProps {
   /** Undefined while the parent page is loading the channel. */
@@ -51,6 +54,8 @@ export function ChannelHeader({
 }: ChannelHeaderProps) {
   const isLoaded = account != null;
   const resource = account?.resource;
+  const isGoogleDrive =
+    normalizeProviderIdentifier(account?.platform ?? "") === "google-drive";
   const statusTone = getStatusTone(account?.status);
   const statusLabel = account
     ? account.account_state === "valid"
@@ -152,7 +157,7 @@ export function ChannelHeader({
               </p>
             )}
 
-            {(resource?.public_url || account?.username) && (
+            {(resource?.public_url || (account?.username && !isGoogleDrive)) && (
               <a
                 href={
                   resource?.public_url ??
@@ -165,7 +170,8 @@ export function ChannelHeader({
                 className="inline-flex items-center gap-1 text-[13px] text-blue-400 hover:text-blue-300 mt-2 no-underline"
                 data-testid="channel-header-public-link"
               >
-                Apri su YouTube <ExternalLink size={12} aria-hidden="true" />
+                {isGoogleDrive ? "Apri su Google Drive" : "Apri su YouTube"}{" "}
+                <ExternalLink size={12} aria-hidden="true" />
               </a>
             )}
           </div>

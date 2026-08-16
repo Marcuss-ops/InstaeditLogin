@@ -187,6 +187,23 @@ describe("ChannelHeader", () => {
     );
   });
 
+  it("does not invent a YouTube link for a Google Drive account", () => {
+    const account: ChannelAccount = {
+      ...ACCOUNT_LOADED,
+      platform: "google-drive",
+      username: "drive-account",
+      resource: { display_name: "Google Drive" },
+    };
+    render(
+      <ChannelHeader
+        account={account}
+        onRefresh={() => {}}
+        onBack={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("channel-header-public-link")).toBeNull();
+  });
+
   it("hides the whole metadata block when banner and resource are absent", () => {
     const account: ChannelAccount = {
       ...ACCOUNT_LOADED,

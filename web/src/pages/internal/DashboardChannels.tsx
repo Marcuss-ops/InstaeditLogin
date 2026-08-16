@@ -1,17 +1,18 @@
 
 /**
- * DashboardChannelsPage — single-channel page at /app/dashboard-channels/:accountId.
+ * DashboardChannelsPage — single-account page at /app/dashboard-channels/:accountId.
  *
  * Composes the channel header, filters, content list, and editor
  * entrypoint into the single-account channel page:
  *
  *   • <ChannelHeader>       — avatar/banner/handle/status/refresh/back
- *   • <ChannelVideoFilters> — Tutti/Privati/Non in elenco/Pubblici
+ *   • <ChannelVideoFilters> — YouTube privacy filters (YouTube only)
  *   • <ChannelVideoCard>    — thumbnail + chips + Apri su YouTube +
  *                              Modifica copertina + ?video= highlight
  *   • useChannelAccount     — GET /accounts/{id} ⇒ state machine
  *   • useChannelContent     — GET /accounts/{id}/content(privacy…)
  *                              ⇒ state machine + loadMore
+ *   • Google Drive accounts — connection/reconnect card; no video API
  *   • createEditorSessionAndOpen — canonical "Modifica copertina"
  *                                 entrypoint (opens Velox in a
  *                                 new tab)
@@ -50,6 +51,7 @@ import { ErrorState } from "../../components/feedback";
 import { EmptyState } from "../../components/feedback/EmptyState";
 import { Skeleton } from "../../components/feedback/Skeleton";
 import { ChannelHeader } from "../../features/channels/components/ChannelHeader";
+import { DriveConnectionCard } from "../../features/channels/components/DriveConnectionCard";
 import { ChannelVideoFilters } from "../../features/channels/components/ChannelVideoFilters";
 import { ChannelVideoCard } from "../../features/channels/components/ChannelVideoCard";
 import { useChannelAccount } from "../../features/channels/hooks/useChannelAccount";
@@ -57,6 +59,7 @@ import { useChannelContent } from "../../features/channels/hooks/useChannelConte
 import { useChannelContentLiveUpdate } from "../../features/channels/hooks/useYouTubePublishLiveUpdate";
 import type { ChannelVideo, PrivacyFilter } from "../../features/channels/types";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
+import { normalizeProviderIdentifier } from "../../components/brand/PlatformLogos";
 
 const DEFAULT_LIMIT = 20;
 
@@ -93,6 +96,10 @@ export function DashboardChannelsPage() {
   const inflightEditRef = useRef(false);
 
   const accountState = useChannelAccount({ accountId });
+  const loadedAccount =
+    accountState.state.kind === "ready" ? accountState.state.account : undefined;
+  const isGoogleDrive =
+    normalizeProviderIdentifier(loadedAccount?.platform ?? "") === "google-drive";
   const contentState = useChannelContent({
     accountId,
     privacy,
@@ -137,16 +144,18 @@ export function DashboardChannelsPage() {
 
   const handleRefreshBoth = useCallback(async (): Promise<void> => {
     setRefreshing(true);
-    setContentEnabled(true);
+    if (!isGoogleDrive) {
+      setContentEnabled(true);
+    }
     try {
-      await Promise.all([
-        accountState.refetch(),
-        contentState.refetch(),
-      ]);
+      await accountState.refetch();
+      if (!isGoogleDrive) {
+        await contentState.refetch();
+      }
     } finally {
       setRefreshing(false);
     }
-  }, [accountState, contentState]);
+  }, [accountState, contentState, isGoogleDrive]);
 
   // Chip clicks use replace:true so users hitting Back from the
   // channel page go to the previous page (e.g. /app/linking) rather
@@ -235,38 +244,43 @@ export function DashboardChannelsPage() {
     <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
       <div className="max-w-5xl mx-auto">
         <ChannelHeader
-          account={
-            accountState.state.kind === "ready"
-              ? accountState.state.account
-              : undefined
-          }
+          account={loadedAccount}
           refreshing={refreshing}
           onRefresh={() => void handleRefreshBoth()}
           onBack={() => navigate("/app/linking")}
         />
 
-        {/* Filters — initial = "all" per spec */}
-        <ChannelVideoFilters
-          value={privacy}
-          onChange={handlePrivacyChange}
-          disabled={
-            contentState.state.kind === "loading" ||
-            contentState.state.kind === "error" ||
-            contentState.state.kind === "idle"
-          }
-        />
+        {isGoogleDrive ? (
+          <DriveConnectionCard
+            accountState={loadedAccount?.account_state}
+            reconnectHref="/api/v1/auth/google-drive/login?mode=reconnect&redirect=%2Fapp%2Flinking"
+          />
+        ) : (
+          <>
+            {/* Filters — initial = "all" per spec */}
+            <ChannelVideoFilters
+              value={privacy}
+              onChange={handlePrivacyChange}
+              disabled={
+                contentState.state.kind === "loading" ||
+                contentState.state.kind === "error" ||
+                contentState.state.kind === "idle"
+              }
+            />
 
-        <ContentGrid
-          state={contentState.state}
-          cacheBust={contentState.cacheBust}
-          highlightVideoId={highlightVideoId}
-          onEditThumbnail={handleEditThumbnail}
-          onLoadMore={() => contentState.loadMore()}
-          onRetry={async () => {
-            setContentEnabled(true);
-            await contentState.refetch();
-          }}
-        />
+            <ContentGrid
+              state={contentState.state}
+              cacheBust={contentState.cacheBust}
+              highlightVideoId={highlightVideoId}
+              onEditThumbnail={handleEditThumbnail}
+              onLoadMore={() => contentState.loadMore()}
+              onRetry={async () => {
+                setContentEnabled(true);
+                await contentState.refetch();
+              }}
+            />
+          </>
+        )}
       </div>
     </div>
   );
