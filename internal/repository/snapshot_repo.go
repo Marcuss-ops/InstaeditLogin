@@ -72,10 +72,11 @@ func (r *SnapshotRepository) GetSnapshot(platformAccountID int64) (*AccountResou
 
 	snap := &AccountResourceSnapshot{}
 	var profileJSON, statsJSON, statusJSON, contentJSON []byte
+	var providerETag sql.NullString
 	err := row.Scan(
 		&snap.PlatformAccountID, &snap.ResourceType,
 		&profileJSON, &statsJSON, &statusJSON, &contentJSON,
-		&snap.ProviderETag, &snap.FetchedAt, &snap.UpdatedAt,
+		&providerETag, &snap.FetchedAt, &snap.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -83,6 +84,7 @@ func (r *SnapshotRepository) GetSnapshot(platformAccountID int64) (*AccountResou
 	if err != nil {
 		return nil, fmt.Errorf("get snapshot: %w", err)
 	}
+	snap.ProviderETag = providerETag.String
 	if err := decodeSnapshotJSON(snap, profileJSON, statsJSON, statusJSON, contentJSON); err != nil {
 		return nil, err
 	}
