@@ -27,12 +27,25 @@
 # dependency for api + worker (depends_on with service_completed_successfully).
 # This is the canonical self-hosted migration contract. The migrate service
 # completes before api and worker are allowed to start.
+#
+# Log retention: every service bounds its json-file log so a chatty
+# process (api request log, postgres, minio access log) cannot grow the
+# disk unboundedly. 20 MB × 5 files = 100 MB ceiling per container;
+# applies on container (re)creation — existing containers keep their
+# current log until recreated (docker compose up -d). The daemon-level
+# default lives in ops/docker/daemon.json for non-compose containers.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
 
 services:
   db:
     image: postgres:15-alpine
     container_name: instaedit-db
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
@@ -52,6 +65,7 @@ services:
       context: .
       target: migrate
     container_name: instaedit-migrate
+    logging: *default-logging
     env_file:
       - ${INSTAEDIT_ENV_FILE:-.env.production}
     environment:
@@ -70,6 +84,7 @@ services:
       target: api
     container_name: instaedit-api
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - ${INSTAEDIT_ENV_FILE:-.env.production}
       # Keep the worker's provider registry aligned with the host API.
@@ -138,6 +153,7 @@ services:
       target: worker
     container_name: instaedit-worker
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - ${INSTAEDIT_ENV_FILE:-.env.production}
       # Keep the worker's provider registry aligned with the host API.
@@ -201,6 +217,7 @@ services:
     image: minio/minio:latest
     container_name: instaedit-minio
     restart: unless-stopped
+    logging: *default-logging
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
@@ -240,6 +257,7 @@ services:
     # production/mirrored registries.
     image: minio/mc:latest
     container_name: instaedit-minio-init
+    logging: *default-logging
     env_file:
       - ${INSTAEDIT_ENV_FILE:-.env.production}
     environment:

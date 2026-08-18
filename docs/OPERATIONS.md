@@ -261,6 +261,41 @@ curl -fsS https://api.instaedit.org/api/v1/health
 curl -fsS https://api.instaedit.org/ready
 ```
 
+### §14 Log retention (automatic cleanup)
+
+Every log source on this VPS is bounded so nothing can grow the disk
+unboundedly (applied 2026-08-18):
+
+| Source | Cap | Enforcement |
+|--------|-----|-------------|
+| Container logs (api, worker, db, minio, one-shots) | **20 MB × 5 files** = 100 MB/container | `logging:` block in `docker-compose.yml` (`x-logging` anchor) — applies on container (re)creation: `docker compose up -d` |
+| Non-compose containers (velox, courserpierone, any future one) | 20 MB × 5 files | `/etc/docker/daemon.json` (source `ops/docker/daemon.json`) — global default, takes effect at next **docker daemon restart** (this host reboots most mornings, so it lands automatically; until then recreated containers use the compose-level config) |
+| systemd journal | **500 MB** hard cap, 14 days, compressed, 2 GB free kept | `/etc/systemd/journald.conf.d/zz-retention.conf` (source `ops/systemd/journald-retention.conf`) — active after `systemctl restart systemd-journald`; freed **3.1 GB** on first application |
+| Health-check log | 14 compressed copies, `maxsize 1M` | logrotate `/etc/logrotate.d/instaedit-health` (see §13) |
+
+Operational commands:
+
+```bash
+# free journal space immediately if it ever hits the cap
+sudo journalctl --vacuum-size=500M
+
+# check current usage (must stay ≤ 500M)
+journalctl --disk-usage
+
+# current container log ceiling (docker rotates at 20 MB, keeps 5 files)
+sudo du -sh /var/lib/docker/containers/*/*-json.log | sort -rh | head
+
+# re-apply container logging config after editing the compose anchor
+INSTAEDIT_ENV_FILE=.env.dev docker compose --env-file .env.dev \
+  -f docker-compose.yml -f docker-compose.production.yml up -d
+```
+
+Note: rotating a container's log does NOT reset it — the running
+container keeps writing to the current file until it hits 20 MB, then
+rotates. After the docker daemon restarts (next boot), the
+`daemon.json` defaults also govern any container that lacks an
+explicit compose-level `logging:` block.
+
 ---
 
 ## 8. Cross-references
@@ -287,3 +322,4 @@ curl -fsS https://api.instaedit.org/ready
 | Platform cutover origin (deleted hosted-platform config, dropped hosted-platform Makefile targets, deleted hosted-platform secrets scripts) | commits `7e8beec`, `615314b`, `5ac159c` |
 | YouTube read-side quota verification + "YouTube non risponde temporaneamente" (502) troubleshooting | §12 in this file |
 | Boot resilience: ensure-up unit + health cron + production invocation discipline (incident 2026-08-18) | §13 in this file + [`ops/systemd/instaedit-compose.service`](../ops/systemd/instaedit-compose.service) + [`scripts/ops/instaedit-health-check.sh`](../scripts/ops/instaedit-health-check.sh) |
+| Log retention: container + daemon + journald caps | §14 in this file + [`ops/docker/daemon.json`](../ops/docker/daemon.json) + [`ops/systemd/journald-retention.conf`](../ops/systemd/journald-retention.conf) + `x-logging` anchor in `docker-compose.yml` |
