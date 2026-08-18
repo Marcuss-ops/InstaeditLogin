@@ -8,8 +8,14 @@ services:
   db:
     ports: []
 
-  # The base stack already binds API to 127.0.0.1 only. Worker and MinIO
-  # have no host ports in the canonical stack.
+  # The base stack already binds API to 127.0.0.1 only. The worker has
+  # no host ports. MinIO is published on loopback :19000 so Caddy can
+  # serve the public media paths (/instaedit-media/* and
+  # /instaedit-local/* — see ops/vps/Caddyfile); without this the
+  # presigned cover/media URLs return 502.
+  minio:
+    ports:
+      - "127.0.0.1:19000:9000"
 
 # Pin the data volumes to the canonical project-scoped names (mirrors the
 # base docker-compose.yml). If this overlay is ever loaded with a different
