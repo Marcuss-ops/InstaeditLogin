@@ -109,21 +109,37 @@ instaedit-login/
 | GET    | `/api/v1/health`                       | Health check + piattaforme attive  |
 | GET    | `/api/v1/auth/{provider}/login`        | Redirect OAuth (meta, tiktok, ...) |
 | GET    | `/api/v1/auth/{provider}/callback`     | Callback OAuth                     |
-| POST   | `/api/v1/posts/publish`                | Pubblica contenuto su piattaforma  |
+| POST   | `/api/v1/posts`                        | Crea un post (bozza o programmato) con i suoi target |
+| POST   | `/api/v1/posts/{id}/publish`           | Pubblica immediatamente il post sui target collegati |
 | GET    | `/api/v1/accounts?user_id=X&platform=Y`| Lista account collegati            |
 
-### Publish Request Body
+### Create Post Request Body
+
+Il publishing è un flusso **in due passi**: `POST /api/v1/posts` crea il post
+con i suoi target (risposta `201` async con `post.id` e gli id per-target),
+poi `POST /api/v1/posts/{id}/publish` lo pubblica subito — oppure imposta
+`publish_at` in fase di creazione per programmarlo. Lo stato di pubblicazione
+di ogni target si interroga con `GET /api/v1/post-targets/{id}`
+(`status`, `attempt_count`, `error_message`, `published_at`).
 
 ```json
 {
-  "user_id": 1,
-  "platform": "tiktok",
-  "media_url": "https://example.com/video.mp4",
-  "caption": "Check this out!",
-  "content_type": "video",
-  "title": "My Video"
+  "workspace_id": 1,
+  "content": {
+    "title": "My Video",
+    "caption": "Check this out!"
+  },
+  "status": "draft",
+  "targets": [
+    { "platform_account_id": 42 }
+  ]
 }
 ```
+
+I media si riferiscono ad asset già caricati (presigned upload via
+`POST /api/v1/storage/upload-url`) con `content.media: [{ "asset_id": "..." }]`;
+`publish_at` (ISO 8601) programma il post, `status` può essere `draft`,
+`queued` o `scheduled`.
 
 ## Piattaforme indipendenti (Taglio 2.4)
 
@@ -351,8 +367,9 @@ in [`docs/DEPLOY.md`](docs/DEPLOY.md) e [`docs/OPERATIONS.md`](docs/OPERATIONS.m
   X_CLIENT_SECRET + YOUTUBE_CLIENT_SECRET + LINKEDIN_CLIENT_SECRET)
   con almeno **32 caratteri** quando l'env var è settata (validato allo
   startup; un valore vuoto = piattaforma disabilitata, Taglio 2.4)
-- Auth JWT (Taglio 1.1): blocca ogni richiesta a `/api/v1/posts/publish`
-  e `/api/v1/accounts` senza `Authorization: Bearer <jwt>` valido; nessun
+- Auth JWT (Taglio 1.1): blocca ogni richiesta a `/api/v1/posts*` (create,
+  publish, schedule, cancel, retry, targets), `/api/v1/post-targets/*` e
+  `/api/v1/accounts` senza `Authorization: Bearer <jwt>` valido; nessun
   fallback a `user_id` body/query, nessun ID sintetico (default userID=1 rimosso)
 - **X / Twitter OAuth 2.0 PKCE (Taglio 1.3)**: ogni publish usa esclusivamente il Bearer
   token utente OAuth 2.0 (PKCE) ottenuto via `/api/v1/auth/twitter/callback`.

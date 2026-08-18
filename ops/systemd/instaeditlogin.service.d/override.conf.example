@@ -1,3 +1,0 @@
-[Service]
-# The populated file exists only on the host and is never committed.
-EnvironmentFile=/etc/instaeditlogin-youtube.env

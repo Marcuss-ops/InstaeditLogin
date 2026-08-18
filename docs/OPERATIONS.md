@@ -165,6 +165,102 @@ outage.
 > read by any Go code — the only supported rotation mechanism is
 > `ENCRYPTION_KEYS`.
 
+### §13 Boot resilience: api/worker ensure-up + health monitoring
+
+> **Incident log — 2026-08-18**: `app.instaedit.org` users could not log
+> in — the SPA showed `No 'Access-Control-Allow-Origin' header` on the
+> login preflight. NOT a CORS bug: `api.instaedit.org` answered **502**
+> on every route because **no API listened on `127.0.0.1:8080`**
+> (Caddy proxies `api.instaedit.org` → `127.0.0.1:8080`; the 502 body
+> carries no CORS headers, which the browser reports as a CORS error).
+> Root cause chain: the operator ran `sudo reboot` at 06:01 UTC; after
+> boot, `db`/`minio` (running at shutdown) restarted automatically via
+> `restart: unless-stopped`, but **`api`/`worker` were in a stopped
+> state at shutdown** (they had been stopped earlier without a sudo
+> record) and `unless-stopped` does NOT resurrect previously-stopped
+> containers across a daemon restart. Production was down for hours
+> with no alert. This host reboots most mornings (~06:00-07:30 UTC,
+> manual `sudo reboot`) — every reboot is a recurrence opportunity.
+
+**Canonical production invocation on this VPS** (the ONLY one to use):
+
+```bash
+cd /home/pierone/Projects/company/InstaeditLogin
+INSTAEDIT_ENV_FILE=.env.dev docker compose \
+  --env-file .env.dev \
+  -f docker-compose.yml \
+  -f docker-compose.production.yml \
+  up -d api worker
+```
+
+- `.env.dev` is the canonical operational env file on this host (the
+  only complete one: DB, S3, MinIO, OAuth, JWT — verified 2026-08-18;
+  `/opt/instaedit/secrets/.env.production` does NOT exist here).
+- **NEVER run `make dev` (or the local overlay
+  `docker-compose.local.yml`) on this VPS**: it uses the SAME compose
+  project (`instaeditlogin`) and rebinds the API to `:8081`, silently
+  taking production down (Caddy still proxies `:8080`).
+
+**Ensure-up unit** (`ops/systemd/instaedit-compose.service`, enabled):
+
+```bash
+sudo systemctl status instaedit-compose.service   # active (exited) = ok
+sudo systemctl start instaedit-compose.service    # re-run manually
+```
+
+Runs `docker compose up -d api worker` (production overlay) at every
+boot: starts the containers if stopped and **recreates them if their
+config drifted** (e.g. after a stray local-overlay run), restoring the
+canonical `127.0.0.1:8080` binding. Idempotent no-op on a healthy
+stack. Reinstall after edits:
+
+```bash
+sudo install -m 0644 ops/systemd/instaedit-compose.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now instaedit-compose.service
+```
+
+**Health monitoring** (root cron, every 5 min):
+
+```
+*/5 * * * * /home/pierone/Projects/company/InstaeditLogin/scripts/ops/instaedit-health-check.sh
+```
+
+`scripts/ops/instaedit-health-check.sh` curls
+`https://api.instaedit.org/api/v1/health`; on failure it appends a
+**diagnostic line** to `/var/log/instaedit-health.log` and exits 1
+(visible to cron):
+
+```
+2026-08-18T07:46:52Z DOWN http=502 time=14ms url=https://api.instaedit.org/api/v1/health hint=Caddy upstream down — no listener on 127.0.0.1:8080 (docker ps; systemctl status instaedit-compose.service)
+```
+
+`http=` distinguishes the failure classes at a glance: `502` (Caddy
+upstream down — the 2026-08-18 incident), `5xx` (API error),
+`4xx` (route/auth), `000` (Caddy/DNS/network — host down). `time=` is
+the probe duration in ms (a slow-but-200 response is a leading
+indicator). **Log-only by design** (operator preference 2026-08-18):
+no external notification channel; the file's mtime is the tripwire,
+and the `hint=` column is the on-call starting point. The log is
+rotated daily by logrotate (`/etc/logrotate.d/instaedit-health`, source
+`ops/logrotate/instaedit-health` — 14 compressed copies kept,
+`maxsize 1M`). Success is silent (exit 0). Check it manually:
+
+```bash
+sudo /home/pierone/Projects/company/InstaeditLogin/scripts/ops/instaedit-health-check.sh; echo $?
+sudo tail -5 /var/log/instaedit-health.log   # empty file = no outages
+
+# simulate a failure without touching production (override the URL):
+# INSTAEDIT_HEALTH_URL=https://httpstat.us/502 sudo \
+#   /home/pierone/Projects/company/InstaeditLogin/scripts/ops/instaedit-health-check.sh
+```
+
+**Post-recovery verification** (run after any manual restart):
+
+```bash
+curl -fsS https://api.instaedit.org/api/v1/health
+curl -fsS https://api.instaedit.org/ready
+```
+
 ---
 
 ## 8. Cross-references
@@ -190,3 +286,4 @@ outage.
 | Free-tier provider matrix (TikTok/X/YouTube/LinkedIn/Stripe disabled in beta) | [`docs/PROVIDER_MATRIX.md`](./PROVIDER_MATRIX.md) |
 | Platform cutover origin (deleted hosted-platform config, dropped hosted-platform Makefile targets, deleted hosted-platform secrets scripts) | commits `7e8beec`, `615314b`, `5ac159c` |
 | YouTube read-side quota verification + "YouTube non risponde temporaneamente" (502) troubleshooting | §12 in this file |
+| Boot resilience: ensure-up unit + health cron + production invocation discipline (incident 2026-08-18) | §13 in this file + [`ops/systemd/instaedit-compose.service`](../ops/systemd/instaedit-compose.service) + [`scripts/ops/instaedit-health-check.sh`](../scripts/ops/instaedit-health-check.sh) |

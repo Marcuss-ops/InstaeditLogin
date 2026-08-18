@@ -274,7 +274,7 @@ starting services. The command must receive the production environment file:
 ```bash
 cd /opt/instaedit/InstaeditLogin
 export INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production
-export INSTAEDIT_YOUTUBE_ENV_FILE=/etc/instaeditlogin-youtube.env
+export INSTAEDIT_YOUTUBE_ENV_FILE=/opt/instaedit/secrets/.env.youtube.local
 
 docker compose \
   --env-file "$INSTAEDIT_ENV_FILE" \
@@ -353,19 +353,20 @@ truth.
 >
 > This live exception must be converged to the canonical production shape;
 > do not copy its `.env.dev` or local Compose settings into new production
-> hosts. **Orphaned-binary pitfall (incident 2026-08-05):** Caddy only ever talks to
-> `127.0.0.1:8080`. If `API_HOST_PORT` drifts from `8080` (it was `8082`), the
-> rebuilt container publishes elsewhere while Caddy keeps proxying to the old
-> port — where an orphaned single-process dev binary
+> hosts. **Port-ownership pitfall (incident 2026-08-05, legacy binary retired
+> 2026-08-18):** Caddy only ever talks to `127.0.0.1:8080`. If `API_HOST_PORT`
+> drifts from `8080` (it was `8082`), the rebuilt container publishes
+> elsewhere while Caddy keeps proxying to the old port, so **new API routes
+> return 404**. The historical orphaned single-process dev binary
 > (`/usr/local/bin/instaeditlogin-dev`, launched by the deprecated
-> `instaeditlogin.service` systemd unit) shadows the stack and serves stale
-> code, so **new API routes return 404**. Before deploying, verify the port
-> owner and remove the stale unit:
+> `instaeditlogin.service` systemd unit) was removed on 2026-08-18; the
+> Compose ensure-up unit `instaedit-compose.service` now restores the
+> canonical `127.0.0.1:8080` binding at every boot. Before deploying, verify
+> the port owner:
 >
 > ```bash
 > ss -ltnp | grep ':8080'                   # must be the Compose api container
-> pgrep -af instaeditlogin-dev              # must be empty; else:
-> sudo systemctl disable --now instaeditlogin.service
+> systemctl status instaedit-compose.service # active (exited) = ensure-up OK
 > ```
 
 ### 5.1 First deployment
@@ -718,7 +719,7 @@ state, migration completion, Caddy routing, and the frontend API base URL.
 | API is unreachable | DNS, firewall, `systemctl status caddy`, Caddy validation | Fix DNS/firewall/Caddy before changing application containers |
 | Uploads fail | MinIO health/logs, S3 env names, bucket initialization | Correct MinIO credentials/endpoint and recreate `api`/`worker` |
 | Frontend calls the wrong host | Vercel production `VITE_API_BASE_URL`, published asset | Correct the Vercel variable and redeploy the frontend |
-| New API routes return 404 after a deploy | `ss -ltnp \| grep :8080` (who owns the port), `pgrep -af instaeditlogin-dev`, `docker port api`, `API_HOST_PORT` in `.env.dev` | Kill the orphaned dev binary, `sudo systemctl disable --now instaeditlogin.service`, recreate `api` with `API_HOST_PORT=8080` (see §5 note) |
+| New API routes return 404 after a deploy | `ss -ltnp \| grep :8080` (who owns the port), `docker port api`, `API_HOST_PORT` in `.env.dev`, `systemctl status instaedit-compose.service` | Recreate `api` with `API_HOST_PORT=8080` (see §5 note); the legacy `instaeditlogin.service` dev binary was retired 2026-08-18 |
 | Worker is idle | worker logs, database connectivity, pending job state | Recreate `worker` only after confirming API and migrations are healthy |
 
 Do not solve a deployment failure by publishing private service ports or by

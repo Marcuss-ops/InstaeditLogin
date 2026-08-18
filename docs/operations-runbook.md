@@ -359,13 +359,13 @@ sudo cat "$D" | docker exec -i instaedit-db pg_restore --list | head -8  # TOC l
 sudo sh -c "cd $BD && sha256sum -c $(basename "$M")"                      # OK x2
 ```
 
-**Files covered by the secrets snapshot:** `/etc/instaeditlogin-youtube.env`
-(OAuth clients + pool + `ENCRYPTION_KEY_HISTORY`),
-`/etc/instaeditlogin-overrides.env` (DATABASE_URL + S3),
-`~/.env.dev` (ENCRYPTION_KEY, JWT_SECRET, S3/MinIO, Velox) and
-`~/.env.youtube.local` (pool A + `YOUTUBE_CLIENT_JSON`). The rotation
-invariant: add the new `ENCRYPTION_KEYS` entry and keep the old key active
-until every token is re-encrypted — never replace the keyring brutally.
+**Files covered by the secrets snapshot:** `~/.env.dev` (ENCRYPTION_KEY,
+JWT_SECRET, S3/MinIO, Velox) and `~/.env.youtube.local` (pool A +
+`YOUTUBE_CLIENT_JSON`). The legacy host files `/etc/instaeditlogin-*.env`
+were retired with the pre-compose `instaeditlogin.service` unit on
+2026-08-18 (see docs/OPERATIONS.md §13). The rotation invariant: add the
+new `ENCRYPTION_KEYS` entry and keep the old key active until every token
+is re-encrypted — never replace the keyring brutally.
 
 ---
 

@@ -8,7 +8,7 @@
 #
 # Production usage:
 #   INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production \
-#   INSTAEDIT_YOUTUBE_ENV_FILE=/etc/instaeditlogin-youtube.env \
+#   INSTAEDIT_YOUTUBE_ENV_FILE=/opt/instaedit/secrets/.env.youtube.local \
 #     docker compose --env-file /opt/instaedit/secrets/.env.production up -d --build
 #
 # Local usage is kept in docker-compose.local.yml:
@@ -73,9 +73,9 @@ services:
     env_file:
       - ${INSTAEDIT_ENV_FILE:-.env.production}
       # Keep the worker's provider registry aligned with the host API.
-      # The host-only file is loaded by systemd in the VPS deployment. It is
-      # optional for local Compose because it is intentionally root-readable
-      # only and may not exist on a developer machine.
+      # The optional file is selected via INSTAEDIT_YOUTUBE_ENV_FILE
+      # (default ./.env.youtube.local); required: false so local Compose
+      # renders even when the root-only secret file is absent.
       - path: ${INSTAEDIT_YOUTUBE_ENV_FILE:-./.env.youtube.local}
         required: false
     environment:
@@ -141,8 +141,8 @@ services:
     env_file:
       - ${INSTAEDIT_ENV_FILE:-.env.production}
       # Keep the worker's provider registry aligned with the host API.
-      # See the matching API entry above: local Compose must not require the
-      # root-only systemd secret file just to render or start the stack.
+      # See the matching API entry above: the optional root-only secret
+      # file must never be required just to render or start the stack.
       - path: ${INSTAEDIT_YOUTUBE_ENV_FILE:-./.env.youtube.local}
         required: false
     environment:

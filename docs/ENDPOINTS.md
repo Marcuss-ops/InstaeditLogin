@@ -51,13 +51,32 @@ Providers: `meta`, `tiktok`, `twitter`, `youtube`, `linkedin`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/posts` | Create post |
+| POST | `/api/v1/posts` | Create post + targets (201). Body: `workspace_id`, `content.{title,caption,media[],language}`, `status` (`draft`/`queued`), `publish_at` (ISO 8601, cap `PUBLISH_HORIZON_DAYS`), `targets[{platform_account_id}]`; media are `asset_id` refs to presigned-uploaded assets; optional `Idempotency-Key` header |
+| GET | `/api/v1/posts` | List posts (paginated) |
+| GET | `/api/v1/posts/workspace/{wid}` | List posts by workspace (paginated, cursor) |
 | GET | `/api/v1/posts/{id}` | Get post |
-| GET | `/api/v1/posts/workspace/{wid}` | List posts by workspace |
-| POST | `/api/v1/posts/{id}/targets` | Add target to post |
-| POST | `/api/v1/posts/{id}/schedule` | Schedule post |
-| POST | `/api/v1/posts/publish` | Publish to single platform |
-| POST | `/api/v1/posts/publish-all` | Publish to all connected accounts |
+| PATCH | `/api/v1/posts/{id}` | Patch post |
+| DELETE | `/api/v1/posts/{id}` | Delete post |
+| POST | `/api/v1/posts/{id}/publish` | Publish immediately: transitions post + targets to `publishing` (200 `{"status":"publishing"}`) |
+| POST | `/api/v1/posts/{id}/schedule` | Schedule post via `publish_at` (legacy alias `scheduled_at` still accepted) → `queued` |
+| POST | `/api/v1/posts/{id}/cancel` | Cancel a queued post → back to `draft` |
+| POST | `/api/v1/posts/{id}/retry` | Retry a failed post → `queued` |
+| GET | `/api/v1/posts/{id}/targets` | List targets of a post |
+| POST | `/api/v1/posts/{id}/targets` | Add a target to a post (`platform_account_id`), 201 |
+
+### Post targets (status polling)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/post-targets/{id}` | Get single target status: `status`, `attempt_count`, `next_retry_at`, `error_message`, `published_at`, `platform_post_id`, `privacy`, `made_for_kids` |
+| POST | `/api/v1/post-targets/{id}/retry` | Retry a failed target → `queued` |
+
+Publishing is a two-step flow: `POST /api/v1/posts` creates the post with its
+targets (201, async — the publish worker claims the queued targets), then
+`POST /api/v1/posts/{id}/publish` triggers immediate publishing (or set
+`publish_at` at create-time to schedule). Poll `GET /api/v1/post-targets/{id}`
+for per-target progress. All of these routes require JWT auth and enforce
+workspace isolation (cross-owner access → 404).
 
 ## Storage
 

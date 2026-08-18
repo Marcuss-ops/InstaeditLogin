@@ -1,0 +1,22 @@
+# InstaEdit API health-check log — written by
+# scripts/ops/instaedit-health-check.sh (root cron, every 5 min).
+#
+# The log grows only on outages (one line per failed probe), but a
+# long outage at 5-minute cadence adds ~288 lines/day — rotate daily,
+# keep 14 compressed copies, and rotate early if the file outgrows 1M
+# (maxsize, logrotate >= 3.8.5).
+#
+# Install:
+#   sudo install -m 0644 ops/logrotate/instaedit-health /etc/logrotate.d/instaedit-health
+
+/var/log/instaedit-health.log {
+    daily
+    maxsize 1M
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+    su root root
+}

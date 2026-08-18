@@ -1,0 +1,51 @@
+# InstaEditLogin — ensure api+worker are up after every host boot.
+#
+# Background (incident 2026-08-18): this VPS reboots most mornings
+# (~06:00-07:30 UTC, manual `sudo reboot` by the operator). The compose
+# services use `restart: unless-stopped`, which does NOT resurrect
+# containers that were in a stopped state when the daemon went down —
+# so if api/worker are ever stopped before a reboot (e.g. a manual
+# `docker compose stop api worker`), production stays down until
+# someone notices: api.instaedit.org → Caddy → 127.0.0.1:8080 (nothing
+# listening) → 502 → the SPA surfaces a CORS error on the login page.
+#
+# This oneshot runs `docker compose up -d api worker` with the
+# production overlay at every boot:
+#   - starts api/worker if they are stopped;
+#   - recreates them if their config drifted (e.g. after a `make dev`
+#     run bound the API to :8081 instead of :8080), restoring the
+#     canonical 127.0.0.1:8080 binding Caddy proxies to.
+# It is idempotent: on a healthy stack it is a no-op that exits 0.
+#
+# Install (see docs/OPERATIONS.md §13):
+#   sudo install -m 0644 ops/systemd/instaedit-compose.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now instaedit-compose.service
+
+[Unit]
+Description=InstaEditLogin compose ensure-up (api + worker on :8080)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# Guard against a pathological loop (compose hanging at boot): 10
+# starts within 120s puts the unit in failed state instead of retrying.
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+WorkingDirectory=/home/pierone/Projects/company/InstaeditLogin
+# INSTAEDIT_ENV_FILE selects the compose env_file (docker-compose.yml
+# defaults to .env.production, which does NOT exist on this host); the
+# --env-file supplies the ${VAR:?} interpolations (POSTGRES_*, S3_*,
+# MINIO_*). .env.dev is the canonical operational env file on this VPS
+# (only complete env file present; verified 2026-08-18).
+Environment=INSTAEDIT_ENV_FILE=/home/pierone/Projects/company/InstaeditLogin/.env.dev
+ExecStart=/usr/bin/docker compose --env-file /home/pierone/Projects/company/InstaeditLogin/.env.dev -f docker-compose.yml -f docker-compose.production.yml up -d api worker
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
