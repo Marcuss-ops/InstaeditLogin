@@ -269,8 +269,17 @@ func (r *YouTubeVideoEditRepository) Update(ctx context.Context, edit *models.Yo
 // projections (migration 072). Every read method returns them so the
 // publish-by-project GET, the dashboard list, and the groups videos
 // endpoint all surface them without per-call SQL edits.
+//
+// source_thumbnail_url, category_id and last_error are nullable
+// columns scanned into plain Go strings (models.YouTubeVideoEdit),
+// so each is COALESCEd to the empty string — a NULL cell would
+// otherwise abort the whole row scan with "converting NULL to string
+// is unsupported" (incident 2026-08-18: 11/11 rows had category_id
+// NULL). Empty string is the model's existing "unset" convention
+// (omitempty on the JSON layer; the SPA treats it as "no category").
 const youtubeVideoEditSelectColumns = `id, workspace_id, platform_account_id, youtube_video_id,
-	        velox_project_id, source_thumbnail_url, category_id, thumbnail_media_id,
-	        desired_privacy, publish_at, status, last_error,
+	        velox_project_id, COALESCE(source_thumbnail_url, '') AS source_thumbnail_url,
+	        COALESCE(category_id, '') AS category_id, thumbnail_media_id,
+	        desired_privacy, publish_at, status, COALESCE(last_error, '') AS last_error,
 	        actual_privacy, youtube_sync_status,
 	        created_at, updated_at`

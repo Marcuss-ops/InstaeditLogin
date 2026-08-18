@@ -56,9 +56,9 @@ func (r *YouTubeVideoEditRepository) ListCoversByGroupAccounts(ctx context.Conte
 		        tp.created_at, tp.updated_at,
 		        yve.id, yve.platform_account_id, yve.youtube_video_id,
 		        yve.velox_project_id, yve.thumbnail_media_id,
-		        yve.source_thumbnail_url, yve.status, yve.draft_title,
+		        COALESCE(yve.source_thumbnail_url, '') AS yve_source_thumbnail_url, yve.status, yve.draft_title,
 		        yve.draft_description,
-		        yve.category_id, yve.desired_privacy, yve.actual_privacy,
+		        COALESCE(yve.category_id, '') AS yve_category_id, yve.desired_privacy, yve.actual_privacy,
 		        yve.created_at, yve.updated_at
 		   FROM thumbnail_projects tp
 		   JOIN velox_project_bridges vpb
