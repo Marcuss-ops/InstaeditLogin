@@ -32,6 +32,11 @@ type CreatePostContent struct {
 
 type CreatePostTarget struct {
 	PlatformAccountID int64 `json:"platform_account_id"`
+	// GroupID is an optional logical target. The HTTP layer expands it to
+	// the group's current account membership before persisting post_targets.
+	// Keeping the expansion server-side prevents callers from posting to a
+	// group outside their workspace and keeps the worker contract unchanged.
+	GroupID int64 `json:"group_id,omitempty"`
 }
 
 type CreatePostRequest struct {

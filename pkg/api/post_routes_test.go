@@ -78,6 +78,51 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 	}
 }
 
+func TestHandleCreatePost_GroupTargetExpandsToCurrentChannels(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: id, Name: "Mine", OwnerID: 1}, nil
+		},
+	}
+	var createdTargets []*models.PostTarget
+	postStore := &mockPostStore{
+		createFn: func(p *models.Post, targets []*models.PostTarget) error {
+			p.ID = 101
+			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			createdTargets = targets
+			return nil
+		},
+	}
+	groupStore := &mockGroupStore{
+		findByIDFn: func(id int64) (*models.Group, error) {
+			return &models.Group{ID: id, WorkspaceID: 1, Name: "Social IT"}, nil
+		},
+		listAccountsInGroupFn: func(int64) ([]int64, error) {
+			return []int64{10, 11, 10}, nil
+		},
+	}
+	r := newTestRouter(svc, store, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+		WithGroupStore(groupStore),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(
+		`{"workspace_id":1,"content":{"title":"group post"},"targets":[{"group_id":7}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(createdTargets) != 2 || createdTargets[0].PlatformAccountID != 10 || createdTargets[1].PlatformAccountID != 11 {
+		t.Fatalf("group target was not expanded/deduplicated: %+v", createdTargets)
+	}
+}
+
 func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}

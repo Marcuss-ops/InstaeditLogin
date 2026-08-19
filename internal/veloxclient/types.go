@@ -71,6 +71,7 @@ type jobDetailResponse struct {
 // delivery associated with a job. Velox retains the relationship with
 // social_delivery_id; InstaEdit retains the social state.
 type deliveryResponse struct {
+	PublicationID         string `json:"publication_id,omitempty"`
 	ExternalDestinationID string `json:"external_destination_id" validate:"required,min=1"`
 	SocialDeliveryID      string `json:"social_delivery_id" validate:"omitempty,min=1"`
 	Status                string `json:"status" validate:"required,min=1"`
@@ -135,10 +136,13 @@ type createJobRequest struct {
 	Spec            json.RawMessage     `json:"spec,omitempty"`
 	Output          *veloxapi.JobOutput `json:"output,omitempty"`
 
-	ProjectID    string          `json:"project_id,omitempty"`
-	RenderSpec   json.RawMessage `json:"render_spec,omitempty"`
-	DeliveryPlan deliveryPlanReq `json:"delivery_plan" validate:"required"`
-	RenderOnly   bool            `json:"render_only,omitempty"`
+	ProjectID    string                      `json:"project_id,omitempty"`
+	RenderSpec   json.RawMessage             `json:"render_spec,omitempty"`
+	DeliveryPlan deliveryPlanReq             `json:"delivery_plan" validate:"required"`
+	PublishAt    string                      `json:"publish_at,omitempty"`
+	Target       *veloxapi.PublicationTarget `json:"target,omitempty"`
+	Publications json.RawMessage             `json:"publications,omitempty"`
+	RenderOnly   bool                        `json:"render_only,omitempty"`
 }
 
 // deliveryPlanReq mirrors veloxapi.DeliveryPlan for the outbound body.

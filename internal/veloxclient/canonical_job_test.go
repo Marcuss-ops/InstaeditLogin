@@ -19,7 +19,7 @@ func TestCreateJobForwardsCanonicalFields(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		for _, field := range []string{"contract_version", "idempotency_key", "job_type", "template_id", "template_version", "video_name", "spec", "output", "delivery_plan"} {
+		for _, field := range []string{"contract_version", "idempotency_key", "job_type", "template_id", "template_version", "video_name", "spec", "output", "delivery_plan", "publications"} {
 			if _, ok := body[field]; !ok {
 				t.Errorf("canonical field %q missing from upstream body", field)
 			}
@@ -46,6 +46,7 @@ func TestCreateJobForwardsCanonicalFields(t *testing.T) {
 		Spec:            json.RawMessage(`{"scenes":[]}`),
 		Output:          &veloxapi.JobOutput{Width: 1920, Height: 1080, FPS: 30, Format: "mp4"},
 		DeliveryPlan:    veloxapi.DeliveryPlan{Destinations: []veloxapi.DeliveryDestination{{ExternalDestinationID: "extdst_01J"}}},
+		Publications:    json.RawMessage(`[{"publication_id":"boxe-it","output_ref":{"variant_id":"it"},"destinations":[{"destination_id":"extdst_01J"}],"provider_options":{"voiceover":{"asset_id":"vo-it","language":"it"}}}]`),
 	})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)

@@ -59,9 +59,14 @@ func decodeCreatePostRequest(w http.ResponseWriter, req *http.Request) (CreatePo
 		return CreatePostRequest{}, nil, true
 	}
 	for i, t := range body.Targets {
-		if t.PlatformAccountID == 0 {
+		if t.PlatformAccountID <= 0 && t.GroupID <= 0 {
 			writeError(w, http.StatusUnprocessableEntity,
 				fmt.Sprintf("targets[%d].platform_account_id is required", i))
+			return CreatePostRequest{}, nil, true
+		}
+		if t.PlatformAccountID > 0 && t.GroupID > 0 {
+			writeError(w, http.StatusUnprocessableEntity,
+				fmt.Sprintf("targets[%d] cannot contain both platform_account_id and group_id", i))
 			return CreatePostRequest{}, nil, true
 		}
 	}
@@ -181,6 +186,11 @@ func (r *Router) createPostPersist(
 	idemKey string,
 	hash []byte,
 ) {
+	resolvedTargets, targetErr := r.expandCreatePostTargets(body.WorkspaceID, body.Targets)
+	if targetErr != nil {
+		writeError(w, http.StatusUnprocessableEntity, targetErr.Error())
+		return
+	}
 	// Taglio 3.2: resolve media asset_id(s) → trusted internal S3 URL.
 	// The first asset's URL is stored in post.MediaURL; the publish
 	// worker continues to read post.MediaURL so the per-platform
@@ -213,10 +223,10 @@ func (r *Router) createPostPersist(
 	if lang := strings.TrimSpace(body.Content.Language); lang != "" {
 		post.Metadata = json.RawMessage(fmt.Sprintf(`{"source_language":%q}`, lang))
 	}
-	targets := make([]*models.PostTarget, 0, len(body.Targets))
-	for _, t := range body.Targets {
+	targets := make([]*models.PostTarget, 0, len(resolvedTargets))
+	for _, t := range resolvedTargets {
 		targets = append(targets, &models.PostTarget{
-			PlatformAccountID: t.PlatformAccountID,
+			PlatformAccountID: t,
 			Status:            models.PostStatusQueued,
 		})
 	}
@@ -232,6 +242,56 @@ func (r *Router) createPostPersist(
 	// the cache is operator UX, not part of the API contract.
 	insertIdempotentRecord(r, ws.ID, idemKey, "post", post.ID, hash, http.StatusCreated)
 	writeJSON(w, http.StatusCreated, createPostResponse{post: post, targets: targets})
+}
+
+// expandCreatePostTargets resolves logical group targets into the concrete
+// platform accounts that the existing post worker already understands.
+// Expansion is deliberately performed at submission time: the post is a
+// snapshot of the user's intent and later group membership changes must not
+// silently add or remove destinations from an already-created post.
+func (r *Router) expandCreatePostTargets(workspaceID int64, inputs []CreatePostTarget) ([]int64, error) {
+	resolved := make([]int64, 0, len(inputs))
+	seen := make(map[int64]struct{}, len(inputs))
+	for i, input := range inputs {
+		if input.PlatformAccountID > 0 {
+			if _, ok := seen[input.PlatformAccountID]; !ok {
+				seen[input.PlatformAccountID] = struct{}{}
+				resolved = append(resolved, input.PlatformAccountID)
+			}
+			continue
+		}
+		if r.groupStore == nil {
+			return nil, fmt.Errorf("targets[%d].group_id cannot be resolved: groups are not configured", i)
+		}
+		group, err := r.groupStore.FindByID(input.GroupID)
+		if err != nil {
+			return nil, fmt.Errorf("targets[%d].group_id lookup failed: %w", i, err)
+		}
+		if group == nil || group.WorkspaceID != workspaceID {
+			return nil, fmt.Errorf("targets[%d].group_id is not available in this workspace", i)
+		}
+		accountIDs, err := r.groupStore.ListAccountsInGroup(group.ID)
+		if err != nil {
+			return nil, fmt.Errorf("targets[%d].group_id members lookup failed: %w", i, err)
+		}
+		if len(accountIDs) == 0 {
+			return nil, fmt.Errorf("targets[%d].group_id has no channels", i)
+		}
+		for _, accountID := range accountIDs {
+			if accountID <= 0 {
+				continue
+			}
+			if _, ok := seen[accountID]; ok {
+				continue
+			}
+			seen[accountID] = struct{}{}
+			resolved = append(resolved, accountID)
+		}
+	}
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("target group expansion produced no channels")
+	}
+	return resolved, nil
 }
 
 type createPostResponse struct {

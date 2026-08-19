@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 // JobOutput describes the requested render output for a canonical job.
@@ -20,15 +21,18 @@ type JobOutput struct {
 // by POST /api/v1/jobs. It deliberately has no project_id or render_spec
 // compatibility fields.
 type JobSubmissionRequest struct {
-	ContractVersion string          `json:"contract_version"`
-	IdempotencyKey  string          `json:"idempotency_key"`
-	JobType         string          `json:"job_type"`
-	TemplateID      string          `json:"template_id"`
-	TemplateVersion int             `json:"template_version"`
-	VideoName       string          `json:"video_name"`
-	Spec            json.RawMessage `json:"spec"`
-	Output          *JobOutput      `json:"output"`
-	DeliveryPlan    DeliveryPlan    `json:"delivery_plan"`
+	ContractVersion string             `json:"contract_version"`
+	IdempotencyKey  string             `json:"idempotency_key"`
+	JobType         string             `json:"job_type"`
+	TemplateID      string             `json:"template_id"`
+	TemplateVersion int                `json:"template_version"`
+	VideoName       string             `json:"video_name"`
+	Spec            json.RawMessage    `json:"spec"`
+	Output          *JobOutput         `json:"output"`
+	DeliveryPlan    DeliveryPlan       `json:"delivery_plan"`
+	PublishAt       string             `json:"publish_at,omitempty"`
+	Target          *PublicationTarget `json:"target,omitempty"`
+	Publications    json.RawMessage    `json:"publications,omitempty"`
 }
 
 // UnmarshalJSON keeps strictness at the canonical boundary. The outer
@@ -135,6 +139,9 @@ func (r JobSubmissionRequest) AsCreateJobRequest() CreateJobRequest {
 		Spec:            r.Spec,
 		Output:          r.Output,
 		DeliveryPlan:    r.DeliveryPlan,
+		PublishAt:       r.PublishAt,
+		Target:          r.Target,
+		Publications:    append(json.RawMessage(nil), r.Publications...),
 	}
 }
 
@@ -189,6 +196,45 @@ func (r JobSubmissionRequest) ValidateCanonical() error {
 		if strings.TrimSpace(destination.ExternalDestinationID) == "" {
 			return fmt.Errorf("delivery_plan.destinations[%d].external_destination_id is required", i)
 		}
+	}
+	if r.PublishAt != "" {
+		publishAt, err := time.Parse(time.RFC3339, r.PublishAt)
+		if err != nil || !publishAt.After(time.Now().UTC()) {
+			return fmt.Errorf("publish_at must be a future RFC3339 timestamp")
+		}
+	}
+	if r.Target != nil {
+		if err := validatePublicationTarget(*r.Target); err != nil {
+			return err
+		}
+	}
+	if len(r.Publications) > 0 {
+		var publications []json.RawMessage
+		if err := json.Unmarshal(r.Publications, &publications); err != nil || len(publications) == 0 {
+			return fmt.Errorf("publications must be a non-empty JSON array")
+		}
+	}
+	return nil
+}
+
+func validatePublicationTarget(target PublicationTarget) error {
+	switch strings.TrimSpace(target.Type) {
+	case "channel":
+		if strings.TrimSpace(target.ChannelID) == "" && strings.TrimSpace(target.ChannelName) == "" {
+			return fmt.Errorf("target channel requires channel_id or channel_name")
+		}
+		if target.GroupID != 0 || strings.TrimSpace(target.GroupName) != "" {
+			return fmt.Errorf("channel target cannot include group fields")
+		}
+	case "group":
+		if target.GroupID <= 0 && strings.TrimSpace(target.GroupName) == "" {
+			return fmt.Errorf("target group requires group_id or group_name")
+		}
+		if strings.TrimSpace(target.ChannelID) != "" || strings.TrimSpace(target.ChannelName) != "" {
+			return fmt.Errorf("group target cannot include channel fields")
+		}
+	default:
+		return fmt.Errorf("target.type must be channel or group")
 	}
 	return nil
 }

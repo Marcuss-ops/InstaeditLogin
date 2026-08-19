@@ -86,7 +86,10 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 		DeliveryPlan: deliveryPlanReq{
 			Destinations: make([]deliveryDestinationReq, 0, len(req.DeliveryPlan.Destinations)),
 		},
-		RenderOnly: req.RenderOnly,
+		PublishAt:    req.PublishAt,
+		Target:       req.Target,
+		Publications: json.RawMessage(req.Publications),
+		RenderOnly:   req.RenderOnly,
 	}
 	for _, d := range req.DeliveryPlan.Destinations {
 		body.DeliveryPlan.Destinations = append(body.DeliveryPlan.Destinations, deliveryDestinationReq{
@@ -138,6 +141,7 @@ func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID st
 	for _, d := range resp.Deliveries {
 		detail.Deliveries = append(detail.Deliveries, veloxapi.Delivery{
 			ExternalDestinationID: d.ExternalDestinationID,
+			PublicationID:         d.PublicationID,
 			SocialDeliveryID:      d.SocialDeliveryID,
 			Status:                d.Status,
 			PlatformMediaID:       d.PlatformMediaID,
@@ -169,6 +173,7 @@ func (c *Client) ListJobDeliveries(ctx context.Context, workspaceID, userID int6
 	for _, d := range resp.Deliveries {
 		deliveries = append(deliveries, veloxapi.Delivery{
 			ExternalDestinationID: d.ExternalDestinationID,
+			PublicationID:         d.PublicationID,
 			SocialDeliveryID:      d.SocialDeliveryID,
 			Status:                d.Status,
 			PlatformMediaID:       d.PlatformMediaID,

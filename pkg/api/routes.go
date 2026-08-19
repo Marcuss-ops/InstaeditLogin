@@ -247,19 +247,20 @@ func (r *Router) Setup() http.Handler {
 		},
 	}))
 	reg.Register(NewPublishingModule(PublishingModuleDeps{
-		RateLimitSvc:         r.rateLimitSvc,
-		Protected:            r.protected,
-		CreatePost:           r.handleCreatePost,
-		ListPosts:            r.handleListPosts,
-		ListPostsByWorkspace: r.handleListByWorkspace,
-		GetPost:              r.handleGetPost,
-		PatchPost:            r.handlePatchPost,
-		DeletePost:           r.handleDeletePost,
-		PublishPost:          r.handlePublishPostID,
-		SchedulePost:         r.handleSchedulePost,
-		CancelPost:           r.handleCancelPost,
-		RetryPost:            r.handleRetryPost,
-		GetPostTargets:       r.handleGetPostTargets,
+		RateLimitSvc:          r.rateLimitSvc,
+		Protected:             r.protected,
+		ListPublishingTargets: r.handleListPublishingTargets,
+		CreatePost:            r.handleCreatePost,
+		ListPosts:             r.handleListPosts,
+		ListPostsByWorkspace:  r.handleListByWorkspace,
+		GetPost:               r.handleGetPost,
+		PatchPost:             r.handlePatchPost,
+		DeletePost:            r.handleDeletePost,
+		PublishPost:           r.handlePublishPostID,
+		SchedulePost:          r.handleSchedulePost,
+		CancelPost:            r.handleCancelPost,
+		RetryPost:             r.handleRetryPost,
+		GetPostTargets:        r.handleGetPostTargets,
 		// Taglio 5.1 step 2 — wires the polling single-target
 		// GET /api/v1/post-targets/{id}. Mirrors the existing
 		// handleGetPostTargets handler resolution.

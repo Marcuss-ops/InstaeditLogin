@@ -60,6 +60,9 @@ type (
 	JobOutput = veloxcontract.JobOutput
 	// JobSubmissionRequest names the canonical velox.job.v1 envelope.
 	JobSubmissionRequest = veloxcontract.JobSubmissionRequest
+	// PublicationTarget identifies the logical channel or group selected by
+	// the caller; actual delivery still uses opaque destination IDs.
+	PublicationTarget = veloxcontract.PublicationTarget
 	// DeliveryPlan is the nested delivery_plan block of CreateJobRequest.
 	DeliveryPlan = veloxcontract.DeliveryPlan
 	// DeliveryDestination references an InstaEdit-managed destination.

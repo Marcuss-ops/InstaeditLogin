@@ -11,19 +11,20 @@ import (
 // PublishingModuleDeps is the narrow set of dependencies the
 // publishing module needs to mount its routes.
 type PublishingModuleDeps struct {
-	RateLimitSvc         *services.RateLimitService
-	Protected            func(http.HandlerFunc) http.HandlerFunc
-	CreatePost           http.HandlerFunc
-	ListPosts            http.HandlerFunc
-	ListPostsByWorkspace http.HandlerFunc
-	GetPost              http.HandlerFunc
-	PatchPost            http.HandlerFunc
-	DeletePost           http.HandlerFunc
-	PublishPost          http.HandlerFunc
-	SchedulePost         http.HandlerFunc
-	CancelPost           http.HandlerFunc
-	RetryPost            http.HandlerFunc
-	GetPostTargets       http.HandlerFunc
+	RateLimitSvc          *services.RateLimitService
+	Protected             func(http.HandlerFunc) http.HandlerFunc
+	ListPublishingTargets http.HandlerFunc
+	CreatePost            http.HandlerFunc
+	ListPosts             http.HandlerFunc
+	ListPostsByWorkspace  http.HandlerFunc
+	GetPost               http.HandlerFunc
+	PatchPost             http.HandlerFunc
+	DeletePost            http.HandlerFunc
+	PublishPost           http.HandlerFunc
+	SchedulePost          http.HandlerFunc
+	CancelPost            http.HandlerFunc
+	RetryPost             http.HandlerFunc
+	GetPostTargets        http.HandlerFunc
 	// GetPostTarget (Taglio 5.1 step 2) serves the polling
 	// single-target GET /api/v1/post-targets/{id}. Same handler
 	// path resolution, same workspace isolation, distinct URL
@@ -53,6 +54,7 @@ func NewPublishingModule(deps PublishingModuleDeps) RouteModule {
 var _ RouteModule = (*PublishingModule)(nil)
 
 func (m *PublishingModule) Register(mux chi.Router) {
+	mux.Get("/api/v1/publishing/targets", m.deps.Protected(m.deps.ListPublishingTargets))
 	mux.Route("/api/v1/posts", func(sr chi.Router) {
 		if m.deps.RateLimitSvc != nil {
 			sr.Use(WorkspacePostLimit(m.deps.RateLimitSvc))

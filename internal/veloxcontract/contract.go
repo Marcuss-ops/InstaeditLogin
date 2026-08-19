@@ -47,6 +47,7 @@ type Job struct {
 // It merges Velox's delivery row with the InstaEdit social_delivery
 // state so the frontend renders one unified status.
 type Delivery struct {
+	PublicationID         string `json:"publication_id,omitempty"`
 	ExternalDestinationID string `json:"external_destination_id"`
 	SocialDeliveryID      string `json:"social_delivery_id"`
 	Status                string `json:"status"`
@@ -110,10 +111,24 @@ type CreateJobRequest struct {
 	// Downstream response-compatible fields retained by the shared client
 	// DTO until the Velox InstaEdit handler consumes the canonical envelope
 	// directly.
-	ProjectID    string          `json:"project_id,omitempty"`
-	RenderSpec   json.RawMessage `json:"render_spec,omitempty"`
-	DeliveryPlan DeliveryPlan    `json:"delivery_plan"`
-	RenderOnly   bool            `json:"render_only,omitempty"`
+	ProjectID    string             `json:"project_id,omitempty"`
+	RenderSpec   json.RawMessage    `json:"render_spec,omitempty"`
+	DeliveryPlan DeliveryPlan       `json:"delivery_plan"`
+	PublishAt    string             `json:"publish_at,omitempty"`
+	Target       *PublicationTarget `json:"target,omitempty"`
+	Publications json.RawMessage    `json:"publications,omitempty"`
+	RenderOnly   bool               `json:"render_only,omitempty"`
+}
+
+// PublicationTarget identifies the logical destination selected in
+// InstaEdit Social. It never replaces opaque external destination IDs.
+type PublicationTarget struct {
+	Type        string   `json:"type"`
+	ChannelID   string   `json:"channel_id,omitempty"`
+	ChannelName string   `json:"channel_name,omitempty"`
+	GroupID     int64    `json:"group_id,omitempty"`
+	GroupName   string   `json:"group_name,omitempty"`
+	ChannelIDs  []string `json:"channel_ids,omitempty"`
 }
 
 // UnmarshalJSON keeps the canonical client DTO strict and prevents
