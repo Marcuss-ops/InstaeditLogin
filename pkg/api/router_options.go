@@ -535,3 +535,12 @@ func WithYouTubeGroupVideosConfig(cfg YouTubeGroupVideosConfig) RouterOption {
 		r.youtubeGroupVideosConfig = cfg.normalized()
 	}
 }
+
+// WithAgentRunStore wires the agent_runs / agent_run_steps persistence
+// used by the /api/v1/agent/runs* endpoints (Agent Gateway run
+// bookkeeping). When nil, the module registers no routes (matches the
+// other feature-flag nil-guard patterns). Production wiring passes
+// repository.NewAgentRunRepository(app.DB).
+func WithAgentRunStore(store AgentRunStore) RouterOption {
+	return func(r *Router) { r.agentRunStore = store }
+}

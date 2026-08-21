@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -91,9 +93,27 @@ func (r *Router) handlePublishPostID(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
 		return
 	}
+	if r.workspaceStore == nil {
+		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
+		return
+	}
+	userID, ok := requireUserID(w, req, r)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
+		return
+	}
+	post, err := r.postStore.FindByID(id)
+	if err != nil || post == nil {
+		writeError(w, http.StatusNotFound, "post not found")
+		return
+	}
+	workspace, err := r.workspaceStore.FindByID(post.WorkspaceID)
+	if err != nil || workspace == nil || workspace.OwnerID != userID || !apiKeyCanAccessWorkspace(auth.IdentityFromContext(req.Context()), post.WorkspaceID) {
+		writeError(w, http.StatusNotFound, "post not found")
 		return
 	}
 	if err := r.postStore.PublishPost(id); err != nil {

@@ -4,10 +4,12 @@ import { listAllAccounts } from "../../features/channels/api/channelsApi";
 import { useToast } from "../../components/toast";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
 import type { ContentItem, ContentPage, VideoState } from "./calendarTypes";
+import { publishAccountThumbnail, uploadThumbnailFile } from "../../features/youtube/api/thumbnailApi";
 
 export function usePrivateVideos(accountId: string | null, enabled: boolean) {
   const toast = useToast();
   const [videoState, setVideoState] = useState<VideoState>({ kind: "idle" });
+  const [thumbnailVideoID, setThumbnailVideoID] = useState<string | null>(null);
 
   const loadVideos = useCallback(
     async (cursor?: string) => {
@@ -97,5 +99,23 @@ export function usePrivateVideos(accountId: string | null, enabled: boolean) {
     [accountId, toast],
   );
 
-  return { videoState, loadVideos, handleEditThumbnail };
+  const applyThumbnailFile = useCallback(async (item: ContentItem, file: File): Promise<void> => {
+    const targetAccountId = item.account_id ?? (accountId ? Number(accountId) : null);
+    if (!targetAccountId || thumbnailVideoID) return;
+    if (!window.confirm("Sostituire la copertina di questo video privato? L'immagine verrà pubblicata su YouTube.")) return;
+    setThumbnailVideoID(item.external_id);
+    try {
+      const asset = await uploadThumbnailFile(file);
+      await publishAccountThumbnail(targetAccountId, item.external_id, asset.id);
+      toast.success("Copertina del video privato salvata.");
+      await loadVideos();
+    } catch (err) {
+      if (err instanceof AuthError) return;
+      toast.error(err instanceof Error ? err.message : "Impossibile salvare la copertina.");
+    } finally {
+      setThumbnailVideoID(null);
+    }
+  }, [accountId, loadVideos, thumbnailVideoID, toast]);
+
+  return { videoState, loadVideos, handleEditThumbnail, applyThumbnailFile, thumbnailVideoID };
 }

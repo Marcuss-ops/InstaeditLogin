@@ -424,6 +424,12 @@ type Router struct {
 	// Defaulted inside the helper functions to 30 / 7 so dev
 	// fixtures that bypass the setter still get a sane TTL.
 	scheduleLimits ScheduleLimits
+
+	// agentRunStore persists agent_runs / agent_run_steps (migration
+	// 129) for the Agent Gateway. Wired via WithAgentRunStore; when
+	// nil, the /api/v1/agent/runs* routes are not registered (matches
+	// the other feature-flag nil-guard patterns).
+	agentRunStore AgentRunStore
 }
 
 // ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
@@ -442,6 +448,7 @@ type Router struct {
 var _ WorkspaceStore = (*repository.WorkspaceRepository)(nil)
 var _ ThumbnailProjectStore = (*repository.ThumbnailProjectRepository)(nil)
 var _ CoverLibraryStore = (*repository.CoverLibraryRepository)(nil)
+var _ AgentRunStore = (*repository.AgentRunRepository)(nil)
 
 func NewRouter(
 	capRouter *services.CapabilityRouter,

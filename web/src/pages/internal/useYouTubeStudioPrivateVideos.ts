@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authedFetch } from "../../lib/auth";
+import { authedFetch, AuthError } from "../../lib/auth";
+import { useNavigate } from "react-router-dom";
+import { useToast } from "../../components/toast";
+import { publishAccountThumbnail, uploadThumbnailFile } from "../../features/youtube/api/thumbnailApi";
 import {
   checkYouTubeCopyright,
   listYouTubeCopyrightAlerts,
@@ -17,7 +20,10 @@ export function useYouTubeStudioPrivateVideos(selectedChannelId: number | "", en
   const [privateVideos, setPrivateVideos] = useState<ContentItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
   const [copyrightByVideoId, setCopyrightByVideoId] = useState<CopyrightByVideoId>({});
+  const [thumbnailVideoID, setThumbnailVideoID] = useState<string | null>(null);
   const privateVideosAbortRef = useRef<AbortController | null>(null);
+  const navigate = useNavigate();
+  const toast = useToast();
 
   const fetchPrivateVideos = useCallback(
     async (accountId: number, signal?: AbortSignal) => {
@@ -93,11 +99,31 @@ export function useYouTubeStudioPrivateVideos(selectedChannelId: number | "", en
     [recordCopyrightCheck, selectedChannelId],
   );
 
+  const applyThumbnailFile = useCallback(async (video: ContentItem, file: File) => {
+    if (selectedChannelId === "" || thumbnailVideoID) return;
+    if (!window.confirm("Sostituire la copertina di questo video privato? L'immagine verrà pubblicata su YouTube.")) return;
+    setThumbnailVideoID(video.external_id);
+    try {
+      const asset = await uploadThumbnailFile(file);
+      await publishAccountThumbnail(selectedChannelId, video.external_id, asset.id);
+      toast.success("Copertina del video privato salvata.");
+      const ctrl = new AbortController();
+      await fetchPrivateVideos(selectedChannelId, ctrl.signal);
+    } catch (error) {
+      if (error instanceof AuthError) navigate("/login", { replace: true });
+      else toast.error(error instanceof Error ? error.message : "Impossibile salvare la copertina.");
+    } finally {
+      setThumbnailVideoID(null);
+    }
+  }, [fetchPrivateVideos, navigate, selectedChannelId, thumbnailVideoID, toast]);
+
   return {
     privateVideos,
     loadingVideos,
     copyrightByVideoId,
     recordCopyrightCheck,
     checkVideoCopyright,
+    applyThumbnailFile,
+    thumbnailVideoID,
   };
 }

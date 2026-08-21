@@ -40,11 +40,34 @@ func parsePathIDAsInt64(w http.ResponseWriter, req *http.Request, paramName stri
 
 func requireUserID(w http.ResponseWriter, req *http.Request, r *Router) (int64, bool) {
 	uid, ok := auth.UserIDFromContext(req.Context())
-	if !ok || uid <= 0 {
-		writeError(w, http.StatusUnauthorized, "missing user identity")
-		return 0, false
+	if ok && uid > 0 {
+		return uid, true
 	}
-	return uid, true
+
+	// Fallback for ApiKeyIdentity: the JWT middleware only deposits
+	// the user_id context key on the session path, while the API-key
+	// middleware deposits an Identity whose UserID() is the key's
+	// created_by (the human who minted it). This lets machine-
+	// accessible endpoints resolve the owner without a session.
+	if identity := auth.IdentityFromContext(req.Context()); identity != nil {
+		if uid := identity.UserID(); uid > 0 {
+			return uid, true
+		}
+	}
+
+	writeError(w, http.StatusUnauthorized, "missing user identity")
+	return 0, false
+}
+
+// apiKeyCanAccessWorkspace enforces the workspace scope of machine
+// credentials. Browser identities retain the existing ownership and
+// membership checks in their handlers; an API key must additionally
+// stay inside the workspace that minted it.
+func apiKeyCanAccessWorkspace(identity auth.Identity, workspaceID int64) bool {
+	if identity == nil || workspaceID <= 0 {
+		return false
+	}
+	return !identity.IsAPIKey() || identity.WorkspaceID() == workspaceID
 }
 
 type requestIDCtxKey struct{}

@@ -43,11 +43,26 @@ type ApiKeyLookup interface {
 type Authenticator struct {
 	Repo ApiKeyLookup
 	Now  func() time.Time // injectable for tests; default = time.Now
+	// ExpectedEnvironment optionally binds the authenticator to the
+	// deployment environment. Empty preserves test/legacy wiring;
+	// production wiring sets live for APP_ENV=production and test
+	// otherwise, preventing cross-environment key replay.
+	ExpectedEnvironment string
 }
 
 // NewApiKeyAuthenticator constructs an Authenticator against the given lookup.
 func NewApiKeyAuthenticator(repo ApiKeyLookup) *Authenticator {
 	return &Authenticator{Repo: repo, Now: time.Now}
+}
+
+// NewApiKeyAuthenticatorForEnvironment constructs an authenticator bound
+// to one deployment environment (test or live).
+func NewApiKeyAuthenticatorForEnvironment(repo ApiKeyLookup, environment string) *Authenticator {
+	return &Authenticator{
+		Repo:               repo,
+		Now:                time.Now,
+		ExpectedEnvironment: environment,
+	}
 }
 
 // Middleware returns the http.Handler that performs API-key authentication.
@@ -72,8 +87,8 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		_, secret, err := ParseFullKey(raw)
-		if err != nil {
+		environment, secret, err := ParseFullKey(raw)
+		if err != nil || (a.ExpectedEnvironment != "" && environment != a.ExpectedEnvironment) {
 			http.Error(w, "invalid api key", http.StatusUnauthorized)
 			return
 		}

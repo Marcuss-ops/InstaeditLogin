@@ -189,6 +189,11 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		api.WithCoverLibraryStore(repository.NewCoverLibraryRepository(s.db)),
 		api.WithContentPipelineStore(s.contentPipelineRepo),
 		api.WithYouTubeCopyrightAlertStore(repository.NewYouTubeTargetPublicationRepository(s.db)),
+		// Agent Gateway run bookkeeping (agent_runs / agent_run_steps,
+		// migration 129). The gateway records runs via the
+		// /api/v1/agent/runs* REST surface; it never touches the
+		// database directly.
+		api.WithAgentRunStore(repository.NewAgentRunRepository(s.db)),
 		api.WithEditorURL(s.cfg.HTTP.EditorURL),
 		// Blocco #2 P0 — wire the env-driven publish-horizon +
 		// retention-buffer values into the Router so handleRescheduleUpload,

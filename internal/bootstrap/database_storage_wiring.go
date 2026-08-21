@@ -132,7 +132,10 @@ func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
 	s.groupRepo = repository.NewGroupRepository(s.db)
 	s.workspaceRepo = repository.NewWorkspaceRepository(s.db)
 	s.apiKeyRepo = repository.NewApiKeyRepository(s.db)
-	s.apiKeyAuth = auth.NewApiKeyAuthenticator(s.apiKeyRepo)
+	s.apiKeyAuth = auth.NewApiKeyAuthenticatorForEnvironment(
+		s.apiKeyRepo,
+		auth.ApiKeyEnvironmentForAppEnv(cfg.HTTP.AppEnv),
+	)
 	s.idempotencyRepo = repository.NewIdempotencyRepository(s.db)
 	s.postRepo = repository.NewPostRepository(s.db)
 	s.mediaRepo = repository.NewMediaAssetRepository(s.db)

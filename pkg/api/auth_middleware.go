@@ -70,6 +70,64 @@ func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// protectedWithAPIKeyPermission is a generic variant of `protected` for
+// the small set of machine-accessible endpoints (media presign/complete,
+// YouTube editor sessions, thumbnail, publish). It keeps the full
+// browser chain unchanged — CSRF + JWT/session + session revocation —
+// while also accepting an API-key bearer (sk_test_…/sk_live_…).
+//
+// Flow for the browser:
+//
+//	cookie/JWT → protected → handler
+//
+// Flow for an API key (scripts / cron):
+//
+//	sk_live_… → apiKeyAuth (deposits ApiKeyIdentity) → protected → handler
+//
+// When the identity is an API key and requiredPermission is non-empty,
+// the key must grant that permission ("admin" acts as wildcard, per
+// ApiKeyIdentity.HasPermission). JWT-authenticated users are not
+// permission-gated here — they already have full dashboard access.
+func (r *Router) protectedWithAPIKeyPermission(
+	requiredPermission string,
+	next http.HandlerFunc,
+) http.HandlerFunc {
+	guarded := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		id := auth.IdentityFromContext(req.Context())
+		if id == nil {
+			writeError(w, http.StatusUnauthorized, "missing identity")
+			return
+		}
+
+		if id.IsAPIKey() &&
+			requiredPermission != "" &&
+			!id.HasPermission(requiredPermission) {
+			writeError(
+				w,
+				http.StatusForbidden,
+				"missing required permission: "+requiredPermission,
+			)
+			return
+		}
+
+		next(w, req)
+	})
+
+	return func(w http.ResponseWriter, req *http.Request) {
+		// Reuse the existing protection: CSRF + JWT/session +
+		// session revocation.
+		var handler http.Handler = r.protected(guarded)
+
+		// If an sk_live/sk_test bearer arrives, this middleware deposits
+		// ApiKeyIdentity in the context BEFORE r.protected runs.
+		if r.apiKeyAuth != nil {
+			handler = r.apiKeyAuth.Middleware(handler)
+		}
+
+		handler.ServeHTTP(w, req)
+	}
+}
+
 // editorSessionProtected accepts either the normal InstaEdit session or
 // the short-lived in-memory editor session bearer. The latter is already
 // bound to one project, so it is converted into the same Identity shape
@@ -104,8 +162,10 @@ func (r *Router) editorSessionProtected(next http.HandlerFunc) http.HandlerFunc 
 // the project-scoped routes is used with an empty URL project — the
 // token's own project_id + workspace + user claims become the identity,
 // exactly like the project-scoped variant. Requests without a valid
-// editor bearer fall through to the regular protected chain (cookie /
-// normal JWT session), so the InstaEdit SPA keeps working unchanged.
+// editor bearer fall through to protectedWithAPIKeyPermission("media")
+// so the same endpoints are also machine-accessible to API keys that
+// carry the `media` permission, while the InstaEdit SPA (cookie / normal
+// JWT session) keeps working unchanged.
 func (r *Router) editorSessionProtectedUnscoped(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if r.editorLaunchTokenIssuer != nil {
@@ -122,14 +182,17 @@ func (r *Router) editorSessionProtectedUnscoped(next http.HandlerFunc) http.Hand
 					// context key (set by auth.Manager.putIdentity on the
 					// normal session path); mirror it so presign/complete
 					// work identically for editor-session callers.
-					ctx = auth.WithUserID(ctx, claims.UserID)
-					next(w, req.WithContext(ctx))
-					return
-				}
+				ctx = auth.WithUserID(ctx, claims.UserID)
+				next(w, req.WithContext(ctx))
+				return
 			}
 		}
-		r.protected(next)(w, req)
 	}
+	// Fall through: normal session (cookie/JWT) or an API key with
+	// the `media` permission (sk_test_/sk_live_ bearer). This is the
+	// machine-accessible path for media presign/complete.
+	r.protectedWithAPIKeyPermission("media", next)(w, req)
+}
 }
 
 // oauthSessionRedirect validates the session (Bearer or HttpOnly

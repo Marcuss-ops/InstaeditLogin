@@ -78,6 +78,17 @@ func (r *Router) Setup() http.Handler {
 		AllowedOrigins: r.allowedOrigin,
 	}))
 
+	// Agent Gateway run bookkeeping (/api/v1/agent/runs*). The gateway
+	// records every run + tool step through this REST surface; it never
+	// touches the database directly. Protected via the standard
+	// JWT/API-key chain; workspace_id + actor_key_id are derived from
+	// the authenticated identity. When the store is nil the module
+	// registers no routes.
+	reg.Register(NewAgentRunsModule(AgentRunsModuleDeps{
+		Store:     r.agentRunStore,
+		Protected: r.protected,
+	}))
+
 	// Public / health probes are mounted before the auth module so the
 	// route table stays easy to scan top-down. Their small module owns
 	// only route registration; the existing Router handlers keep the
@@ -247,20 +258,21 @@ func (r *Router) Setup() http.Handler {
 		},
 	}))
 	reg.Register(NewPublishingModule(PublishingModuleDeps{
-		RateLimitSvc:          r.rateLimitSvc,
-		Protected:             r.protected,
-		ListPublishingTargets: r.handleListPublishingTargets,
-		CreatePost:            r.handleCreatePost,
-		ListPosts:             r.handleListPosts,
-		ListPostsByWorkspace:  r.handleListByWorkspace,
-		GetPost:               r.handleGetPost,
-		PatchPost:             r.handlePatchPost,
-		DeletePost:            r.handleDeletePost,
-		PublishPost:           r.handlePublishPostID,
-		SchedulePost:          r.handleSchedulePost,
-		CancelPost:            r.handleCancelPost,
-		RetryPost:             r.handleRetryPost,
-		GetPostTargets:        r.handleGetPostTargets,
+		RateLimitSvc:                  r.rateLimitSvc,
+		Protected:                     r.protected,
+		ProtectedWithAPIKeyPermission: r.protectedWithAPIKeyPermission,
+		ListPublishingTargets:         r.handleListPublishingTargets,
+		CreatePost:                    r.handleCreatePost,
+		ListPosts:                     r.handleListPosts,
+		ListPostsByWorkspace:          r.handleListByWorkspace,
+		GetPost:                       r.handleGetPost,
+		PatchPost:                     r.handlePatchPost,
+		DeletePost:                    r.handleDeletePost,
+		PublishPost:                   r.handlePublishPostID,
+		SchedulePost:                  r.handleSchedulePost,
+		CancelPost:                    r.handleCancelPost,
+		RetryPost:                     r.handleRetryPost,
+		GetPostTargets:                r.handleGetPostTargets,
 		// Taglio 5.1 step 2 — wires the polling single-target
 		// GET /api/v1/post-targets/{id}. Mirrors the existing
 		// handleGetPostTargets handler resolution.
@@ -309,7 +321,7 @@ func (r *Router) Setup() http.Handler {
 	if r.csrfMiddleware != nil {
 		createEditorSessionHandler = r.csrfMiddleware(createEditorSessionHandler)
 	}
-	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions", r.protected(createEditorSessionHandler.ServeHTTP))
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions", r.protectedWithAPIKeyPermission("write", createEditorSessionHandler.ServeHTTP))
 
 	// GET /api/v1/youtube/editor-sessions — dashboard "code da modificare"
 	// list. Returns the non-terminal YouTube video edit sessions in the
@@ -377,7 +389,7 @@ func (r *Router) Setup() http.Handler {
 	if r.csrfMiddleware != nil {
 		publishEditorSessionHandler = r.csrfMiddleware(publishEditorSessionHandler)
 	}
-	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/publish", r.protected(publishEditorSessionHandler.ServeHTTP))
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/publish", r.protectedWithAPIKeyPermission("publish", publishEditorSessionHandler.ServeHTTP))
 
 	// GET /api/v1/youtube/editor-sessions/{id} — session-id-keyed
 	// companion to GET /by-project/{velox_project_id}. Powers the
@@ -386,7 +398,7 @@ func (r *Router) Setup() http.Handler {
 	// ytedit_<uuid> that the SPA reads back through this endpoint.
 	// Read-only; no CSRF (GET exempt by spec).
 	var getEditorSessionByIDHandler http.Handler = http.HandlerFunc(r.handleGetYouTubeEditorSessionByID)
-	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/{id}", r.protected(getEditorSessionByIDHandler.ServeHTTP))
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/{id}", r.protectedWithAPIKeyPermission("write", getEditorSessionByIDHandler.ServeHTTP))
 
 	// Direct handoff endpoint (Blocco #5 P0 #4): callers (typically the
 	// InstaEditor SPA after uploading the rendered thumbnail to
@@ -399,7 +411,7 @@ func (r *Router) Setup() http.Handler {
 	if r.csrfMiddleware != nil {
 		attachThumbnailHandler = r.csrfMiddleware(attachThumbnailHandler)
 	}
-	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/thumbnail", r.editorSessionProtected(attachThumbnailHandler.ServeHTTP))
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/thumbnail", r.protectedWithAPIKeyPermission("write", attachThumbnailHandler.ServeHTTP))
 
 	// GET /api/v1/groups/{group_id}/youtube/videos — dashboard card
 	// grid. Read-only, no CSRF (GET exempt). Aggregates the
@@ -432,6 +444,13 @@ func (r *Router) Setup() http.Handler {
 		publishGroupVideoThumbnailHandler = r.csrfMiddleware(publishGroupVideoThumbnailHandler)
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/groups/{group_id}/youtube/videos/{video_id}/thumbnail", r.protected(publishGroupVideoThumbnailHandler.ServeHTTP))
+	// Same thumbnail-only flow for YouTube Studio private videos, which
+	// may not belong to a selected group.
+	var publishAccountVideoThumbnailHandler http.Handler = http.HandlerFunc(r.handlePublishAccountVideoThumbnail)
+	if r.csrfMiddleware != nil {
+		publishAccountVideoThumbnailHandler = r.csrfMiddleware(publishAccountVideoThumbnailHandler)
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/accounts/{account_id}/youtube/videos/{video_id}/thumbnail", r.protected(publishAccountVideoThumbnailHandler.ServeHTTP))
 
 	// GET /api/v1/youtube/video-categories — centralized YouTube video
 	// categories resource (videoCategories.list proxy) shared by every

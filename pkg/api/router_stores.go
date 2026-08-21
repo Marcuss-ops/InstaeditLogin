@@ -282,6 +282,20 @@ type BookingEventStore interface {
 	Insert(event *models.BookingEvent) error
 }
 
+// AgentRunStore is the persistence contract for the Agent Gateway's
+// run bookkeeping (agent_runs / agent_run_steps, migration 129). The
+// gateway never touches the database directly — it records runs
+// through the /api/v1/agent/runs* REST surface, whose handlers depend
+// on this interface. Production wiring passes
+// *repository.AgentRunRepository; tests supply an in-memory fake.
+// See pkg/api/agent_runs.go for the full contract + security model.
+type AgentRunStore interface {
+	CreateRun(ctx context.Context, run *repository.AgentRun) error
+	AppendStep(ctx context.Context, step *repository.AgentRunStep) error
+	CompleteStep(ctx context.Context, step *repository.AgentRunStep) error
+	UpdateRun(ctx context.Context, runID, status, currentStep string, completedAt *time.Time) error
+}
+
 // P2 — ops dashboard store. AdminStore is the read-side
 // contract for the /admin/* endpoints; the AdminRepository
 // implementation in internal/repository/admin_repo.go owns

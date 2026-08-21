@@ -3,6 +3,7 @@ import { EmptyState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
 import { isCopyrightProblem, type YouTubeCopyrightCheck } from "../../features/youtube/api/copyrightApi";
 import type { ContentItem, CopyrightByVideoId } from "./youtubeStudioTypes";
+import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
 
 function CopyrightSection({ check }: { check?: YouTubeCopyrightCheck }) {
   const status = check?.status ?? "clear";
@@ -44,6 +45,8 @@ export function YouTubeStudioPrivateVideosSection({
   onSelectVideo,
   privateVideosEnabled,
   onLoad,
+  onThumbnailFile,
+  thumbnailVideoID,
 }: {
   selectedChannelId: number | "";
   privateVideos: ContentItem[];
@@ -53,6 +56,8 @@ export function YouTubeStudioPrivateVideosSection({
   onSelectVideo: (videoId: string) => void;
   privateVideosEnabled: boolean;
   onLoad: () => void;
+  onThumbnailFile?: (video: ContentItem, file: File) => void;
+  thumbnailVideoID?: string | null;
 }) {
   if (selectedChannelId === "") return null;
 
@@ -92,6 +97,7 @@ export function YouTubeStudioPrivateVideosSection({
       {privateVideosEnabled && !loadingVideos && privateVideos.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {privateVideos.map((v) => (
+            <ThumbnailDropTarget key={v.external_id} onFile={(file) => onThumbnailFile?.(v, file)} busy={thumbnailVideoID === v.external_id} className="group rounded-xl">
             <button
               key={v.external_id}
               type="button"
@@ -132,6 +138,7 @@ export function YouTubeStudioPrivateVideosSection({
                 <CopyrightSection check={copyrightByVideoId[v.external_id]} />
               </div>
             </button>
+            </ThumbnailDropTarget>
           ))}
         </div>
       )}

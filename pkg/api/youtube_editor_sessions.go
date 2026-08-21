@@ -317,6 +317,10 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		writeError(w, http.StatusBadRequest, "workspace_id, platform_account_id, youtube_video_id are required")
 		return
 	}
+	if !apiKeyCanAccessWorkspace(identity, payload.WorkspaceID) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
 
 	// Workspace ownership check is repeated at the shared helper boundary;
 	// keeping it here fails closed before any editor/session side effect.

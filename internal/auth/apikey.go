@@ -63,6 +63,12 @@ const (
 // model above.
 const KeySecretBytes = 32
 
+// KeySecretChars is the exact unpadded base32 length of a generated
+// secret. ParseFullKey rejects shorter/longer values before they reach
+// the database lookup, limiting malformed-header work and keeping the
+// wire format unambiguous.
+const KeySecretChars = 52
+
 // KeyVisiblePrefixExtraChars is the number of secret characters
 // appended to the env token to form the dashboard-visible key_prefix.
 // 8 chars of a 52-char secret = (52-8) = 44 chars of unrevealed
@@ -157,12 +163,31 @@ func ParseFullKey(raw string) (env string, secret string, err error) {
 	raw = strings.TrimSpace(raw)
 	switch {
 	case strings.HasPrefix(raw, KeyPrefixTest):
-		return models.ApiKeyEnvironmentTest, raw[len(KeyPrefixTest):], nil
+		env, secret = models.ApiKeyEnvironmentTest, raw[len(KeyPrefixTest):]
 	case strings.HasPrefix(raw, KeyPrefixLive):
-		return models.ApiKeyEnvironmentLive, raw[len(KeyPrefixLive):], nil
+		env, secret = models.ApiKeyEnvironmentLive, raw[len(KeyPrefixLive):]
 	default:
 		return "", "", ErrMalformedApiKey
 	}
+	if len(secret) != KeySecretChars {
+		return "", "", ErrMalformedApiKey
+	}
+	for _, ch := range secret {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= '2' && ch <= '7')) {
+			return "", "", ErrMalformedApiKey
+		}
+	}
+	return env, secret, nil
+}
+
+// ApiKeyEnvironmentForAppEnv maps deployment names to API-key
+// environments. Production accepts live keys; dev and staging use
+// test keys so a test credential cannot be replayed against production.
+func ApiKeyEnvironmentForAppEnv(appEnv string) string {
+	if strings.EqualFold(strings.TrimSpace(appEnv), "production") {
+		return models.ApiKeyEnvironmentLive
+	}
+	return models.ApiKeyEnvironmentTest
 }
 
 // IsApiKeyBearer reports whether the raw Authorization header value

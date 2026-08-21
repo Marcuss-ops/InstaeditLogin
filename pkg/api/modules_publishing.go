@@ -11,20 +11,24 @@ import (
 // PublishingModuleDeps is the narrow set of dependencies the
 // publishing module needs to mount its routes.
 type PublishingModuleDeps struct {
-	RateLimitSvc          *services.RateLimitService
-	Protected             func(http.HandlerFunc) http.HandlerFunc
-	ListPublishingTargets http.HandlerFunc
-	CreatePost            http.HandlerFunc
-	ListPosts             http.HandlerFunc
-	ListPostsByWorkspace  http.HandlerFunc
-	GetPost               http.HandlerFunc
-	PatchPost             http.HandlerFunc
-	DeletePost            http.HandlerFunc
-	PublishPost           http.HandlerFunc
-	SchedulePost          http.HandlerFunc
-	CancelPost            http.HandlerFunc
-	RetryPost             http.HandlerFunc
-	GetPostTargets        http.HandlerFunc
+	RateLimitSvc *services.RateLimitService
+	Protected    func(http.HandlerFunc) http.HandlerFunc
+	// ProtectedWithAPIKeyPermission is used by the machine-accessible
+	// post workflow. Nil preserves the legacy protected chain for
+	// fixtures that do not wire API-key auth.
+	ProtectedWithAPIKeyPermission func(string, http.HandlerFunc) http.HandlerFunc
+	ListPublishingTargets         http.HandlerFunc
+	CreatePost                    http.HandlerFunc
+	ListPosts                     http.HandlerFunc
+	ListPostsByWorkspace          http.HandlerFunc
+	GetPost                       http.HandlerFunc
+	PatchPost                     http.HandlerFunc
+	DeletePost                    http.HandlerFunc
+	PublishPost                   http.HandlerFunc
+	SchedulePost                  http.HandlerFunc
+	CancelPost                    http.HandlerFunc
+	RetryPost                     http.HandlerFunc
+	GetPostTargets                http.HandlerFunc
 	// GetPostTarget (Taglio 5.1 step 2) serves the polling
 	// single-target GET /api/v1/post-targets/{id}. Same handler
 	// path resolution, same workspace isolation, distinct URL
@@ -55,17 +59,27 @@ var _ RouteModule = (*PublishingModule)(nil)
 
 func (m *PublishingModule) Register(mux chi.Router) {
 	mux.Get("/api/v1/publishing/targets", m.deps.Protected(m.deps.ListPublishingTargets))
+	getPostTarget := m.deps.Protected(m.deps.GetPostTarget)
+	if m.deps.ProtectedWithAPIKeyPermission != nil {
+		getPostTarget = m.deps.ProtectedWithAPIKeyPermission("write", m.deps.GetPostTarget)
+	}
 	mux.Route("/api/v1/posts", func(sr chi.Router) {
 		if m.deps.RateLimitSvc != nil {
 			sr.Use(WorkspacePostLimit(m.deps.RateLimitSvc))
 		}
-		sr.Post("/", m.deps.Protected(m.deps.CreatePost))
+		createPost := m.deps.Protected(m.deps.CreatePost)
+		publishPost := m.deps.Protected(m.deps.PublishPost)
+		if m.deps.ProtectedWithAPIKeyPermission != nil {
+			createPost = m.deps.ProtectedWithAPIKeyPermission("write", m.deps.CreatePost)
+			publishPost = m.deps.ProtectedWithAPIKeyPermission("publish", m.deps.PublishPost)
+		}
+		sr.Post("/", createPost)
 		sr.Get("/", m.deps.Protected(m.deps.ListPosts))
 		sr.Get("/workspace/{wid}", m.deps.Protected(m.deps.ListPostsByWorkspace))
 		sr.Get("/{id}", m.deps.Protected(m.deps.GetPost))
 		sr.Patch("/{id}", m.deps.Protected(m.deps.PatchPost))
 		sr.Delete("/{id}", m.deps.Protected(m.deps.DeletePost))
-		sr.Post("/{id}/publish", m.deps.Protected(m.deps.PublishPost))
+		sr.Post("/{id}/publish", publishPost)
 		sr.Post("/{id}/schedule", m.deps.Protected(m.deps.SchedulePost))
 		sr.Post("/{id}/cancel", m.deps.Protected(m.deps.CancelPost))
 		sr.Post("/{id}/retry", m.deps.Protected(m.deps.RetryPost))
@@ -78,7 +92,7 @@ func (m *PublishingModule) Register(mux chi.Router) {
 		// existing convention. The handler applies workspace
 		// isolation in Go so we don't depend on a SQL JOIN for the
 		// IDOR guard.
-		sr.Get("/{id}", m.deps.Protected(m.deps.GetPostTarget))
+		sr.Get("/{id}", getPostTarget)
 		sr.Post("/{id}/retry", m.deps.Protected(m.deps.RetryTarget))
 	})
 	mux.Route("/api/v1/uploads", func(sr chi.Router) {

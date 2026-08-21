@@ -31,6 +31,9 @@ var (
 // existence/ownership/readiness, and then atomically links the asset
 // via AttachThumbnail CAS.
 func (r *Router) attachThumbnailToSession(ctx context.Context, identity auth.Identity, edit *models.YouTubeVideoEdit, thumbnailMediaID string) (*models.YouTubeVideoEdit, error) {
+	if !apiKeyCanAccessWorkspace(identity, edit.WorkspaceID) {
+		return nil, errAttachWorkspaceNotAccessible
+	}
 	workspace, err := r.workspaceStore.FindByID(edit.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("find workspace: %w", err)

@@ -7,6 +7,7 @@
         duplicate-token-diagnostic-test oauth-migrations-diagnostic-test \
         refresh-token-eviction-diagnostic-test \
         run-api run-worker run-migrate \
+        instaedit-build instaedit-test instaedit-install instaedit-staging-smoke \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
         web-dev \
@@ -39,6 +40,32 @@ stop:
 # Apply development seed data (requires a running database and .env.dev)
 seed:
 	go run cmd/seed/main.go
+
+# Build the browserless InstaEdit CLI.
+# The output path can be overridden with CLI_BIN, for example:
+# `make instaedit-build CLI_BIN=/tmp/instaedit`.
+CLI_BIN ?= ./bin/instaedit
+instaedit-build:
+	mkdir -p "$$(dirname "$(CLI_BIN)")"
+	go build -o "$(CLI_BIN)" ./cmd/instaedit
+
+# Run the CLI unit tests without the full repository suite.
+instaedit-test:
+	go test ./cmd/instaedit/ -count=1
+
+# Install the CLI with Go's standard bin destination (GOBIN or GOPATH/bin).
+instaedit-install:
+	go install ./cmd/instaedit
+
+# Verify the Go CLI against an HTTPS staging environment. Read-only by default.
+# Required env: INSTAEDIT_URL, INSTAEDIT_API_KEY.
+# Optional read probe: INSTAEDIT_SESSION_ID.
+# Explicit mutation: APPLY_CLI_SMOKE=1 plus disposable media/cover/session inputs.
+instaedit-staging-smoke: instaedit-build
+	INSTAEDIT_URL="$${INSTAEDIT_URL:-}" \
+	INSTAEDIT_API_KEY="$${INSTAEDIT_API_KEY:-}" \
+	CLI_BIN="$(CLI_BIN)" \
+	./scripts/ops/instaedit_cli_staging_smoke.sh
 
 # ──────────────────────────────────────────────────────────────────
 # Blocco #2.1: individual-binary run targets. Useful when iterating

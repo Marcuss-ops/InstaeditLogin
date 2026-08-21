@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -81,6 +82,13 @@ func decodeCreatePostRequest(w http.ResponseWriter, req *http.Request) (CreatePo
 // would leak that tenant's resource. The ownership check makes the
 // (workspace_id, key) cache tuple safe to use.
 func (r *Router) lookupCreatePostWorkspace(w http.ResponseWriter, req *http.Request, userID, workspaceID int64) (*models.Workspace, bool) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity != nil && identity.IsAPIKey() && !apiKeyCanAccessWorkspace(identity, workspaceID) {
+		// Collapse a cross-workspace API-key probe to the same 404
+		// shape as an unknown workspace.
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return nil, true
+	}
 	ws, err := r.workspaceStore.FindByID(workspaceID)
 	if err != nil {
 		code, msg := mapWorkspaceError(err)

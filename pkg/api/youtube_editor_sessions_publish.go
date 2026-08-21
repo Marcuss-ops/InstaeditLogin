@@ -134,6 +134,10 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		writeError(w, http.StatusNotFound, "editor session not found")
 		return
 	}
+	if !apiKeyCanAccessWorkspace(identity, edit.WorkspaceID) {
+		writeError(w, http.StatusNotFound, "editor session not found")
+		return
+	}
 
 	workspace, err := r.workspaceStore.FindByID(edit.WorkspaceID)
 	if err != nil {
