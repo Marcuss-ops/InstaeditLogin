@@ -61,6 +61,16 @@ export function useGroupCovers(groupId: number) {
             const projectsData = (await projectsResponse.json()) as { items?: GroupDraft[] };
             const marker = `[instaedit-group:${groupId}]`;
             groupDrafts = (projectsData.items ?? []).filter((item) => item.status !== "deleted" && (item.description ?? "").includes(marker));
+            await Promise.all(groupDrafts.filter((item) => !item.preview_media_id).map(async (item) => {
+              try {
+                const assetsResponse = await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(item.id)}/assets?workspace_id=${workspaceID}`, { signal });
+                const assets = (await assetsResponse.json()) as { items?: Array<{ media_id?: string }> };
+                const mediaID = assets.items?.find((asset) => asset.media_id)?.media_id;
+                if (mediaID) item.preview_media_id = mediaID;
+              } catch {
+                // A draft without a linked asset remains visible as a draft.
+              }
+            }));
             setDrafts(groupDrafts);
           } catch {
             setDrafts([]);
