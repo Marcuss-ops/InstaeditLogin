@@ -4,6 +4,7 @@ import { authedFetch, AuthError, ApiError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import { coversHubReturnTo, openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
 import { invalidateGroupVideos } from "../../features/youtube/hooks/useGroupVideosInvalidation";
+import { uploadMediaAsset } from "../../features/publishing/api/mediaApi";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { CoversLoadState, GroupCover, GroupDraft } from "./groupCoversTypes";
 
@@ -36,6 +37,7 @@ export function useGroupCovers(groupId: number) {
   const [openingDraftId, setOpeningDraftId] = useState<string | null>(null);
   const [renamingCoverId, setRenamingCoverId] = useState<string | null>(null);
   const [savingCoverId, setSavingCoverId] = useState<string | null>(null);
+  const [uploadingDraftId, setUploadingDraftId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<GroupDraft[]>([]);
   const toast = useToast();
 
@@ -349,6 +351,27 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate, toast]);
 
+  const uploadDraftAsset = useCallback(async (draft: GroupDraft, file: File): Promise<boolean> => {
+    if (uploadingDraftId) return false;
+    setUploadingDraftId(draft.id);
+    try {
+      const asset = await uploadMediaAsset(file, { contentType: file.type as "image/jpeg" | "image/png" | "image/webp" });
+      await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(draft.id)}/assets?workspace_id=${draft.workspace_id}`, {
+        method: "POST",
+        body: JSON.stringify({ media_id: asset.id, role: "background" }),
+      });
+      toast.success("Copertina salvata.");
+      refreshCovers();
+      return true;
+    } catch (error) {
+      if (error instanceof AuthError) navigate("/login", { replace: true });
+      else toast.error(error instanceof Error ? error.message : "Impossibile salvare la copertina.");
+      return false;
+    } finally {
+      setUploadingDraftId(null);
+    }
+  }, [navigate, refreshCovers, toast, uploadingDraftId]);
+
   const saveCoverDraft = useCallback(async (cover: GroupCover, title: string, description: string): Promise<boolean> => {
     if (!cover.velox_project_id) return false;
     setSavingCoverId(cover.project_id);
@@ -380,5 +403,5 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate, toast]);
 
-  return { state, drafts, refreshCovers, createStandaloneDraft, duplicateDraftToGroup, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
+  return { state, drafts, refreshCovers, createStandaloneDraft, duplicateDraftToGroup, uploadDraftAsset, uploadingDraftId, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
 }

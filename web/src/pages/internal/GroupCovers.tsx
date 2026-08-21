@@ -20,7 +20,7 @@ import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
  * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
+  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, uploadDraftAsset, uploadingDraftId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
@@ -126,13 +126,15 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
             </span>
           </button>
           {drafts.map((draft) => (
-            <article key={draft.id} data-testid="group-cover-draft-card" className="group flex min-h-[318px] flex-col overflow-hidden rounded-2xl border border-sky-300/20 bg-[#0d0f15]/90 shadow-[0_14px_34px_rgba(0,0,0,0.12)]">
+            <ThumbnailDropTarget key={draft.id} onFile={(file) => { void uploadDraftAsset(draft, file); }} busy={uploadingDraftId === draft.id} className="group">
+            <article data-testid="group-cover-draft-card" className="flex min-h-[318px] flex-col overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d0f15]/90 shadow-[0_14px_34px_rgba(0,0,0,0.12)] transition-all duration-200 hover:-translate-y-1 hover:border-violet-300/25 hover:shadow-[0_20px_44px_rgba(0,0,0,0.2)]">
               <div className="relative aspect-video w-full overflow-hidden bg-[#07080c]">
                 {draftAssetUrl(draft) ? <img src={draftAssetUrl(draft)} alt={draft.name} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(56,189,248,0.16),transparent_45%)]"><ImageIcon size={28} className="text-white/30" /></div>}
-                <span className="absolute left-3 top-3 rounded-full border border-amber-500/25 bg-amber-500/[0.10] px-2.5 py-1 text-[10px] font-bold text-amber-300">Bozza</span>
+                <span className="absolute left-3 top-3 rounded-full border border-amber-500/25 bg-amber-500/[0.10] px-2.5 py-1 text-[10px] font-bold text-amber-300">{draft.status === "ready" ? "Pronta" : "Bozza"}</span>
               </div>
-              <div className="flex flex-1 flex-col p-4"><h3 className="truncate text-[14px] font-semibold text-white">{draft.name}</h3><p className="mt-1 text-[11px] text-[#8a919d]">Nessun video associato</p><p className="mt-3 text-[11px] text-sky-200/70">Progetto completo: puoi modificarla, salvarla e riutilizzarla dal pannello Pubblica.</p><button type="button" onClick={() => { const tab = window.open("about:blank", "_blank"); void openDraftEditor(draft, tab); }} disabled={openingDraftId === draft.id} className="mt-auto inline-flex items-center justify-center gap-2 rounded-lg border border-violet-300/25 bg-violet-400/10 px-3 py-2 text-[11px] font-bold text-violet-100 transition hover:border-violet-300/50 hover:bg-violet-400/20 disabled:cursor-wait disabled:opacity-60">{openingDraftId === draft.id ? <Loader2 size={13} className="animate-spin" /> : <ArrowUpRight size={13} />}Modifica in InstaEditor</button><span className="pt-4 text-[10px] text-white/40">Aggiornata {new Date(draft.updated_at).toLocaleDateString("it-IT")}</span></div>
+              <div className="flex flex-1 flex-col p-4"><h3 className="truncate text-[14px] font-semibold text-white">{draft.name}</h3><p className="mt-1 truncate text-[11px] text-[#8a919d]">Nessun video associato</p><div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="inline-flex items-center rounded-full border border-blue-500/25 bg-blue-500/[0.08] px-2.5 py-1 text-[10px] font-semibold text-blue-300">In modifica</span><span className="inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[10px] text-[#9aa0aa]">Progetto standalone</span></div><div className="mt-auto flex items-center gap-2 pt-5"><button type="button" onClick={() => { const tab = window.open("about:blank", "_blank"); void openDraftEditor(draft, tab); }} disabled={openingDraftId === draft.id} className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-xl border border-violet-400/25 bg-violet-500/[0.14] px-3 text-[11px] font-bold text-violet-100 transition-colors hover:bg-violet-500/[0.24] hover:text-white disabled:cursor-not-allowed disabled:opacity-60">{openingDraftId === draft.id ? <Loader2 size={12} className="animate-spin" /> : <ArrowUpRight size={12} />}<span className="truncate">Modifica in InstaEditor</span></button></div><span className="pt-4 text-[10px] text-white/40">Aggiornata {new Date(draft.updated_at).toLocaleDateString("it-IT")}</span></div>
             </article>
+            </ThumbnailDropTarget>
           ))}
           {state.covers.map((cover) => (
             <ThumbnailDropTarget key={cover.project_id} onFile={(file) => {
