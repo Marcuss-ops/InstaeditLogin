@@ -20,7 +20,7 @@ import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
  * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, drafts, createStandaloneDraft, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
+  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
@@ -124,20 +124,6 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
             <span className="relative mt-5 inline-flex items-center gap-1.5 text-[11px] font-bold text-violet-200/90">
               Inizia ora <ArrowUpRight size={14} aria-hidden="true" />
             </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const name = window.prompt("Nome della nuova bozza", `Bozza ${new Date().toLocaleDateString("it-IT")}`);
-              if (name !== null) void createStandaloneDraft(name);
-            }}
-            aria-label="Crea bozza senza video"
-            data-testid="group-covers-create-draft-card"
-            className="group relative flex min-h-[318px] flex-col overflow-hidden rounded-2xl border border-sky-300/20 bg-gradient-to-br from-sky-500/[0.16] via-sky-500/[0.06] to-violet-400/[0.06] p-6 text-left text-sky-100 transition-all duration-200 hover:-translate-y-1 hover:border-sky-300/45"
-          >
-            <span className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-sky-200/25 bg-sky-200/10 text-sky-100"><Plus size={25} strokeWidth={2.2} aria-hidden="true" /></span>
-            <span className="relative mt-auto"><span className="block text-[19px] font-bold tracking-[-0.02em]">Nuova bozza</span><span className="mt-2 block max-w-[220px] text-[12px] leading-5 text-sky-100/65">Crea una copertina del gruppo senza associarla a un video.</span></span>
-            <span className="relative mt-5 inline-flex items-center gap-1.5 text-[11px] font-bold text-sky-200/90">Crea ora <ArrowUpRight size={14} aria-hidden="true" /></span>
           </button>
           {drafts.map((draft) => (
             <article key={draft.id} data-testid="group-cover-draft-card" className="group flex min-h-[318px] flex-col overflow-hidden rounded-2xl border border-sky-300/20 bg-[#0d0f15]/90 shadow-[0_14px_34px_rgba(0,0,0,0.12)]">
