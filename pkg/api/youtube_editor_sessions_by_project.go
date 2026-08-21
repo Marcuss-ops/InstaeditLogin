@@ -14,6 +14,10 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
+func stringPointer(value string) *string {
+	return &value
+}
+
 // youTubeEditorSessionDetail is the per-row JSON shape returned by
 // GET /api/v1/youtube/editor-sessions/by-project/{velox_project_id}.
 //
@@ -202,18 +206,48 @@ func (r *Router) handleGetYouTubeEditorSessionByProject(w http.ResponseWriter, r
 			writeError(w, http.StatusNotFound, "editor session not found")
 			return
 		}
+		project, projectErr := r.thumbnailProjectStore.FindByID(req.Context(), bridge.WorkspaceID, bridge.ProjectID)
+		if projectErr != nil {
+			writeError(w, http.StatusInternalServerError, "find thumbnail project: "+projectErr.Error())
+			return
+		}
+		if project == nil {
+			writeError(w, http.StatusNotFound, "editor session not found")
+			return
+		}
+		// A standalone cover has no youtube_video_edits row. Expose its
+		// persisted media asset through the session-shaped compatibility DTO
+		// so the editor's empty-document fallback loads the actual cover,
+		// rather than the original YouTube thumbnail.
+		var coverMediaID *string
+		if project.PreviewMediaID != nil && strings.TrimSpace(*project.PreviewMediaID) != "" {
+			mediaID := strings.TrimSpace(*project.PreviewMediaID)
+			coverMediaID = &mediaID
+		} else if assets, assetsErr := r.thumbnailProjectStore.ListAssets(req.Context(), bridge.WorkspaceID, bridge.ProjectID); assetsErr == nil {
+			for _, asset := range assets {
+				if strings.TrimSpace(asset.MediaID) != "" {
+					mediaID := strings.TrimSpace(asset.MediaID)
+					coverMediaID = &mediaID
+					break
+				}
+			}
+		}
 		now := time.Now()
 		detail, ok := r.editorDetailWithURL(w, youTubeEditorSessionDetail{
-			ID:             bridge.ExternalProjectID,
-			WorkspaceID:    bridge.WorkspaceID,
-			VeloxProjectID: bridge.ExternalProjectID,
-			Status:         "editing",
-			CreatedAt:      now,
-			UpdatedAt:      now,
+			ID:               bridge.ExternalProjectID,
+			WorkspaceID:      bridge.WorkspaceID,
+			VeloxProjectID:   bridge.ExternalProjectID,
+			ThumbnailMediaID: coverMediaID,
+			DraftTitle:       stringPointer(project.Name),
+			DraftDescription: stringPointer(project.Description),
+			Status:           "editing",
+			CreatedAt:        now,
+			UpdatedAt:        now,
 		})
 		if !ok {
 			return
 		}
+		r.hydrateAttachedThumbnailURL(req.Context(), &detail)
 		writeJSON(w, http.StatusOK, detail)
 		return
 	}
