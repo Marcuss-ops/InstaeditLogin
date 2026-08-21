@@ -196,7 +196,7 @@ describe("GroupCovers", () => {
     expect(screen.getByText(/archiviata/i)).toBeInTheDocument();
   });
 
-  it("falls back to the source YouTube thumbnail when no rendered preview is available", async () => {
+  it("does not show the source YouTube thumbnail when no cover asset is available", async () => {
     const sourceThumbnail = "https://i.ytimg.com/vi/video-1/hqdefault.jpg";
     routeFetch({
       covers: [coverFixture({ source_thumbnail_url: sourceThumbnail })],
@@ -207,8 +207,8 @@ describe("GroupCovers", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
     });
-    expect(document.querySelector(`img[src="${sourceThumbnail}"]`)).toBeInTheDocument();
-    expect(screen.queryByText("Copertina non ancora esportata")).not.toBeInTheDocument();
+    expect(document.querySelector(`img[src="${sourceThumbnail}"]`)).not.toBeInTheDocument();
+    expect(screen.getByText("Copertina non ancora esportata")).toBeInTheDocument();
   });
 
   it("shows the Photoshop-style create tile before the full grid", async () => {

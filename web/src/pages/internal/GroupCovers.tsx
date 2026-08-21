@@ -4,7 +4,7 @@ import { GroupCoverCard } from "./GroupCoverCard";
 import { useGroupCovers } from "./useGroupCovers";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { GroupVideoManager } from "./GroupVideoManager";
-import type { GroupCover } from "./groupCoversTypes";
+import type { GroupCover, GroupDraft } from "./groupCoversTypes";
 import { GroupCoverPreviewModal } from "./GroupCoverPreviewModal";
 import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
 
@@ -20,7 +20,7 @@ import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
  * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
+  const { state, drafts, createStandaloneDraft, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
@@ -59,7 +59,13 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
     if (state.kind !== "ready") return undefined;
     return (cover.preview_media_id ? state.previewUrls[cover.preview_media_id] : undefined)
       || (cover.thumbnail_media_id ? state.previewUrls[cover.thumbnail_media_id] : undefined)
-      || cover.source_thumbnail_url;
+      // Never fall back to YouTube's source frame: it is not the cover draft
+      // and made an unrendered/new cover look like the old YouTube thumbnail.
+  };
+
+  const draftAssetUrl = (draft: GroupDraft): string | undefined => {
+    if (state.kind !== "ready" || !draft.preview_media_id) return undefined;
+    return state.previewUrls[draft.preview_media_id];
   };
 
   return (
@@ -119,6 +125,29 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
               Inizia ora <ArrowUpRight size={14} aria-hidden="true" />
             </span>
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              const name = window.prompt("Nome della nuova bozza", `Bozza ${new Date().toLocaleDateString("it-IT")}`);
+              if (name !== null) void createStandaloneDraft(name);
+            }}
+            aria-label="Crea bozza senza video"
+            data-testid="group-covers-create-draft-card"
+            className="group relative flex min-h-[318px] flex-col overflow-hidden rounded-2xl border border-sky-300/20 bg-gradient-to-br from-sky-500/[0.16] via-sky-500/[0.06] to-violet-400/[0.06] p-6 text-left text-sky-100 transition-all duration-200 hover:-translate-y-1 hover:border-sky-300/45"
+          >
+            <span className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-sky-200/25 bg-sky-200/10 text-sky-100"><Plus size={25} strokeWidth={2.2} aria-hidden="true" /></span>
+            <span className="relative mt-auto"><span className="block text-[19px] font-bold tracking-[-0.02em]">Nuova bozza</span><span className="mt-2 block max-w-[220px] text-[12px] leading-5 text-sky-100/65">Crea una copertina del gruppo senza associarla a un video.</span></span>
+            <span className="relative mt-5 inline-flex items-center gap-1.5 text-[11px] font-bold text-sky-200/90">Crea ora <ArrowUpRight size={14} aria-hidden="true" /></span>
+          </button>
+          {drafts.map((draft) => (
+            <article key={draft.id} data-testid="group-cover-draft-card" className="group flex min-h-[318px] flex-col overflow-hidden rounded-2xl border border-sky-300/20 bg-[#0d0f15]/90 shadow-[0_14px_34px_rgba(0,0,0,0.12)]">
+              <div className="relative aspect-video w-full overflow-hidden bg-[#07080c]">
+                {draftAssetUrl(draft) ? <img src={draftAssetUrl(draft)} alt={draft.name} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(56,189,248,0.16),transparent_45%)]"><ImageIcon size={28} className="text-white/30" /></div>}
+                <span className="absolute left-3 top-3 rounded-full border border-amber-500/25 bg-amber-500/[0.10] px-2.5 py-1 text-[10px] font-bold text-amber-300">Bozza</span>
+              </div>
+              <div className="flex flex-1 flex-col p-4"><h3 className="truncate text-[14px] font-semibold text-white">{draft.name}</h3><p className="mt-1 text-[11px] text-[#8a919d]">Nessun video associato</p><p className="mt-3 text-[11px] text-sky-200/70">Modificabile e selezionabile dal pannello Pubblica di InstaEditor.</p><span className="mt-auto pt-5 text-[10px] text-white/40">Aggiornata {new Date(draft.updated_at).toLocaleDateString("it-IT")}</span></div>
+            </article>
+          ))}
           {state.covers.map((cover) => (
             <ThumbnailDropTarget key={cover.project_id} onFile={(file) => {
               if (!window.confirm("Sostituire la copertina di questo video? L'immagine verrà caricata e pubblicata su YouTube.")) return;

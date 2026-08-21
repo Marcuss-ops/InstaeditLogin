@@ -54,12 +54,14 @@ export function useGroupCovers(groupId: number) {
           // The covers list is the primary surface. A temporary failure of
           // the auxiliary group lookup must never hide existing covers.
         }
+        let groupDrafts: GroupDraft[] = [];
         if (workspaceID) {
           try {
             const projectsResponse = await authedFetch(`/api/v1/thumbnail-projects?workspace_id=${workspaceID}`, { signal });
             const projectsData = (await projectsResponse.json()) as { items?: GroupDraft[] };
             const marker = `[instaedit-group:${groupId}]`;
-            setDrafts((projectsData.items ?? []).filter((item) => item.status !== "deleted" && (item.description ?? "").includes(marker)));
+            groupDrafts = (projectsData.items ?? []).filter((item) => item.status !== "deleted" && (item.description ?? "").includes(marker));
+            setDrafts(groupDrafts);
           } catch {
             setDrafts([]);
           }
@@ -68,7 +70,10 @@ export function useGroupCovers(groupId: number) {
         // A cover can be represented by either the rendered project preview
         // or the attached thumbnail media depending on its lifecycle state.
         const previewUrls: Record<string, string | undefined> = {};
-        const mediaIds = Array.from(new Set(covers.flatMap((cover) => [cover.preview_media_id, cover.thumbnail_media_id].filter((id): id is string => Boolean(id)))));
+        const mediaIds = Array.from(new Set([
+          ...covers.flatMap((cover) => [cover.preview_media_id, cover.thumbnail_media_id]),
+          ...groupDrafts.map((draft) => draft.preview_media_id),
+        ].filter((id): id is string => Boolean(id))));
         await Promise.all(
           mediaIds.map(async (mediaId) => {
               const url = await resolveCoverPreview(mediaId, signal);
@@ -229,7 +234,7 @@ export function useGroupCovers(groupId: number) {
       });
       const draft = (await response.json()) as GroupDraft;
       setDrafts((items) => [draft, ...items]);
-      toast.success("Bozza salvata nella galleria del gruppo.");
+      toast.success("Bozza salvata nel gruppo.");
       return true;
     } catch (error) {
       if (error instanceof AuthError) navigate("/login", { replace: true });
