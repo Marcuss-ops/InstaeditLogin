@@ -41,16 +41,22 @@ export function useGroupCovers(groupId: number) {
   const loadCovers = useCallback(
     async (signal: AbortSignal) => {
       try {
-        const groupResponse = await authedFetch(`/api/v1/groups/${groupId}`, { signal });
-        const groupData = (await groupResponse.json()) as { workspace_id?: number };
         const response = await authedFetch(`/api/v1/groups/${groupId}/covers`, { signal });
         if (signal.aborted) return;
         const data = (await response.json()) as { covers?: GroupCover[] };
         if (signal.aborted) return;
         const covers = data.covers ?? [];
-        if (groupData.workspace_id) {
+        let workspaceID: number | undefined;
+        try {
+          const groupResponse = await authedFetch(`/api/v1/groups/${groupId}`, { signal });
+          workspaceID = ((await groupResponse.json()) as { workspace_id?: number }).workspace_id;
+        } catch {
+          // The covers list is the primary surface. A temporary failure of
+          // the auxiliary group lookup must never hide existing covers.
+        }
+        if (workspaceID) {
           try {
-            const projectsResponse = await authedFetch(`/api/v1/thumbnail-projects?workspace_id=${groupData.workspace_id}`, { signal });
+            const projectsResponse = await authedFetch(`/api/v1/thumbnail-projects?workspace_id=${workspaceID}`, { signal });
             const projectsData = (await projectsResponse.json()) as { items?: GroupDraft[] };
             const marker = `[instaedit-group:${groupId}]`;
             setDrafts((projectsData.items ?? []).filter((item) => item.status !== "deleted" && (item.description ?? "").includes(marker)));
