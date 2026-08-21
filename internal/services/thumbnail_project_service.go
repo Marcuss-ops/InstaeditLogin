@@ -43,6 +43,10 @@ type ThumbnailProjectStore interface {
 	EnsureThumbnailProjectForEditorSession(context.Context, int64, string, int64) error
 }
 
+type thumbnailExternalProjectBridgeStore interface {
+	FindVeloxProjectBridgeByExternalProjectID(context.Context, int64, string) (*models.VeloxProjectBridge, error)
+}
+
 var _ ThumbnailProjectStore = (*repository.ThumbnailProjectRepository)(nil)
 
 // ThumbnailProjectService owns domain-level validation and delegates durable
@@ -81,6 +85,19 @@ func (s *ThumbnailProjectService) FindByID(ctx context.Context, workspaceID int6
 		return nil, err
 	}
 	return s.store.FindByID(ctx, workspaceID, strings.TrimSpace(id))
+}
+
+// FindVeloxProjectBridgeByExternalProjectID resolves the opaque editor id
+// used in editor URLs while preserving the service's workspace validation.
+func (s *ThumbnailProjectService) FindVeloxProjectBridgeByExternalProjectID(ctx context.Context, workspaceID int64, externalProjectID string) (*models.VeloxProjectBridge, error) {
+	if err := s.validateWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+	store, ok := s.store.(thumbnailExternalProjectBridgeStore)
+	if !ok {
+		return nil, fmt.Errorf("thumbnail project bridge external lookup is not configured")
+	}
+	return store.FindVeloxProjectBridgeByExternalProjectID(ctx, workspaceID, strings.TrimSpace(externalProjectID))
 }
 
 func (s *ThumbnailProjectService) ListByWorkspace(ctx context.Context, workspaceID int64) ([]models.ThumbnailProject, error) {
