@@ -193,7 +193,7 @@ describe("GroupCovers", () => {
     });
     expect(screen.getByText(/wrestling insider ru/i)).toBeInTheDocument();
     expect(screen.getByText(/wwe insider de/i)).toBeInTheDocument();
-    expect(screen.getByText(/archiviata/i)).toBeInTheDocument();
+    expect(screen.queryByText(/archiviata/i)).not.toBeInTheDocument();
   });
 
   it("does not show the source YouTube thumbnail when no cover asset is available", async () => {
@@ -388,7 +388,7 @@ describe("GroupCovers", () => {
     });
   });
 
-  it("exposes category_id and privacy_status on cover cards", async () => {
+  it("does not render technical status, privacy, or category badges on cover cards", async () => {
     routeFetch({
       covers: [
         coverFixture({ category_id: "24", privacy_status: "public" }),
@@ -409,17 +409,11 @@ describe("GroupCovers", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("group-cover-card")).toHaveLength(4);
     });
-    // Privacy badges resolved from the DTO's privacy_status.
-    expect(screen.getByTitle("Visibilità video: Pubblico")).toBeInTheDocument();
-    expect(screen.getByTitle("Visibilità video: Non in elenco")).toBeInTheDocument();
-    expect(screen.getByTitle("Visibilità video: Privato")).toBeInTheDocument();
-    // Category chips resolved from category_id via the canonical snapshot.
-    expect(screen.getByTitle("Categoria: Intrattenimento")).toBeInTheDocument();
-    expect(screen.getByTitle("Categoria: Gaming")).toBeInTheDocument();
-    // Unknown privacy renders neutrally; only the two covers with a
-    // category_id get a category chip.
-    expect(screen.getByTitle("Visibilità video: Sconosciuta")).toBeInTheDocument();
-    expect(screen.getAllByTitle(/^Categoria:/)).toHaveLength(2);
+    expect(screen.queryByText("In modifica")).not.toBeInTheDocument();
+    expect(screen.queryByText("Applicata")).not.toBeInTheDocument();
+    expect(screen.queryByText("Standalone")).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Visibilità video:/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Categoria:/)).not.toBeInTheDocument();
   });
 
   it("opens InstaEditor when clicking the cover image", async () => {

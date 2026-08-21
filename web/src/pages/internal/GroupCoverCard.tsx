@@ -1,44 +1,6 @@
 import { memo, useRef, useState } from "react";
 import { Calendar, Check, Edit3, Image as ImageIcon, Loader2, Maximize2, X } from "lucide-react";
-import { cn } from "../../lib/utils";
-import { LanguageFlag } from "../../components/brand/LanguageFlag";
-import { categoryLabelForId, privacyBadgeForStatus, toneClasses } from "./groupYouTubeVideosVisual";
 import type { GroupCover } from "./groupCoversTypes";
-
-function projectStatusLabel(status: string): { label: string; tone: string } {
-  switch (status) {
-    case "ready":
-      return { label: "Pronta", tone: "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-300" };
-    case "archived":
-      return { label: "Archiviata", tone: "border-white/[0.10] bg-white/[0.04] text-[#9aa0aa]" };
-    case "draft":
-    default:
-      return { label: "Bozza", tone: "border-amber-500/25 bg-amber-500/[0.08] text-amber-300" };
-  }
-}
-
-function editStatusLabel(status: string): string {
-  switch (status) {
-    case "published":
-      return "Pubblicata";
-    case "publishing":
-      return "Pubblicazione in corso";
-    case "failed":
-      return "Pubblicazione fallita";
-    default:
-      return "In modifica";
-  }
-}
-
-function lifecycleStatusLabel(status?: string): { label: string; tone: string } {
-  switch (status) {
-    case "published": return { label: "Pubblicata", tone: "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-300" };
-    case "applied": return { label: "Applicata", tone: "border-sky-500/25 bg-sky-500/[0.08] text-sky-300" };
-    case "ready": return { label: "Pronta", tone: "border-violet-500/25 bg-violet-500/[0.08] text-violet-300" };
-    case "error": return { label: "Errore", tone: "border-red-500/25 bg-red-500/[0.08] text-red-300" };
-    default: return { label: "Bozza", tone: "border-amber-500/25 bg-amber-500/[0.08] text-amber-300" };
-  }
-}
 
 function formatCoverDate(value: string): string {
   const date = new Date(value);
@@ -64,11 +26,6 @@ export const GroupCoverCard = memo(function GroupCoverCard({
   onOpenPreview: (cover: GroupCover) => void;
   onRenameCover: (cover: GroupCover, newTitle: string) => Promise<boolean> | boolean;
 }) {
-  const status = projectStatusLabel(cover.project_status);
-  const editLabel = editStatusLabel(cover.edit_status);
-  const lifecycle = lifecycleStatusLabel(cover.lifecycle_status);
-  const privacy = privacyBadgeForStatus(cover.privacy_status);
-  const category = categoryLabelForId(cover.category_id);
   const preview = previewUrl;
 
   // Inline title editing: click the title to turn it into an input;
@@ -132,24 +89,6 @@ export const GroupCoverCard = memo(function GroupCoverCard({
         )}
         <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/65 to-transparent opacity-70" />
         {opening && <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11px] font-bold text-white">Apertura…</span>}
-        <span
-          title={`Stato progetto: ${status.label}`}
-          className={cn(
-            "absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold backdrop-blur-md",
-            status.tone,
-          )}
-        >
-          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
-          {status.label}
-        </span>
-        {cover.language && (
-          <span
-            title={`Lingua: ${cover.language.toUpperCase()}`}
-            className="absolute right-3 top-3 inline-flex h-7 items-center rounded-lg border border-white/[0.12] bg-black/45 px-1.5 backdrop-blur-md"
-          >
-            <LanguageFlag code={cover.language} className="h-4 w-6" />
-          </span>
-        )}
         <button
           type="button"
           onClick={(event) => { event.stopPropagation(); onOpenPreview(cover); }}
@@ -235,44 +174,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
           <span className="font-mono text-[10px] text-white/35">{cover.youtube_video_id}</span>
         </p>
 
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <span title="Stato lifecycle della copertina" className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold", lifecycle.tone)}>{lifecycle.label}</span>
-          <span
-            title={`Visibilità video: ${privacy.label}`}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold",
-              toneClasses[privacy.tone],
-            )}
-          >
-            <span aria-hidden="true">{privacy.emoji}</span>
-            {privacy.label}
-          </span>
-          {category && (
-            <span
-              title={`Categoria: ${category}`}
-              className="inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[10px] text-[#9aa0aa]"
-            >
-              {category}
-            </span>
-          )}
-          <span
-            title="Stato della sessione editor"
-            className={cn(
-              "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold",
-              cover.edit_status === "published"
-                ? "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-300"
-                : cover.edit_status === "failed"
-                  ? "border-red-500/25 bg-red-500/[0.08] text-red-300"
-                  : "border-blue-500/25 bg-blue-500/[0.08] text-blue-300",
-            )}
-          >
-            {editLabel}
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[10px] text-[#9aa0aa]">
-            <Calendar size={10} aria-hidden="true" />
-            {formatCoverDate(cover.updated_at) || "—"}
-          </span>
-        </div>
+        <div className="mt-3 text-[10px] text-white/40"><Calendar size={10} className="mr-1 inline" aria-hidden="true" />Aggiornata {formatCoverDate(cover.updated_at) || "—"}</div>
 
       </div>
     </article>
