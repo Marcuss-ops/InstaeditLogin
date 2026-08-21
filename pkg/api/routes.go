@@ -54,6 +54,7 @@ func (r *Router) Setup() http.Handler {
 		AuthMiddleware:        r.editorBFFAuthMiddleware,
 		CSRFMiddleware:        r.editorBFFCSRFMiddleware,
 		YouTubeVideoEditStore: r.youtubeVideoEditStore,
+		ThumbnailProjectStore: r.thumbnailProjectStore,
 		WorkspaceStore:        r.workspaceStore,
 		TeamStore:             r.teamStore,
 		LaunchTokenIssuer:     r.editorLaunchTokenIssuer,

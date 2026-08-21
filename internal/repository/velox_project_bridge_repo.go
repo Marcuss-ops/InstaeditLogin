@@ -110,6 +110,27 @@ func (r *ThumbnailProjectRepository) FindVeloxProjectBridge(ctx context.Context,
 	return bridge, nil
 }
 
+// FindVeloxProjectBridgeByExternalProjectID resolves the opaque editor id
+// back to its workspace-scoped InstaEdit bridge. Editor launch requests carry
+// this external id because it is the id embedded in the editor URL.
+func (r *ThumbnailProjectRepository) FindVeloxProjectBridgeByExternalProjectID(ctx context.Context, workspaceID int64, externalProjectID string) (*models.VeloxProjectBridge, error) {
+	externalProjectID = strings.TrimSpace(externalProjectID)
+	if workspaceID <= 0 || externalProjectID == "" {
+		return nil, fmt.Errorf("%w: workspace and external project are required", ErrVeloxProjectBridgeInvalid)
+	}
+	bridge, err := scanVeloxProjectBridge(r.db.QueryRowContext(ctx,
+		`SELECT `+veloxProjectBridgeColumns+`
+		   FROM velox_project_bridges
+		  WHERE workspace_id = $1 AND external_project_id = $2`, workspaceID, externalProjectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find velox project bridge by external project: %w", err)
+	}
+	return bridge, nil
+}
+
 // DeleteVeloxProjectBridge removes only InstaEdit's relation. It never
 // deletes editor data in Velox.
 func (r *ThumbnailProjectRepository) DeleteVeloxProjectBridge(ctx context.Context, workspaceID int64, projectID string) error {

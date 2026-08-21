@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/editor"
 )
 
@@ -16,13 +17,20 @@ type EditorBFFModuleDeps struct {
 	AuthMiddleware        func(http.Handler) http.Handler
 	CSRFMiddleware        func(http.Handler) http.Handler
 	YouTubeVideoEditStore YouTubeVideoEditStore
-	WorkspaceStore        WorkspaceStore
-	TeamStore             TeamStore
-	LaunchTokenIssuer     editor.LaunchTokenIssuer
+	ThumbnailProjectStore interface {
+		FindVeloxProjectBridge(context.Context, int64, string) (*models.VeloxProjectBridge, error)
+	}
+	WorkspaceStore    WorkspaceStore
+	TeamStore         TeamStore
+	LaunchTokenIssuer editor.LaunchTokenIssuer
 }
 
 type editorBFFModule struct {
 	deps EditorBFFModuleDeps
+}
+
+type thumbnailExternalProjectBridgeStore interface {
+	FindVeloxProjectBridgeByExternalProjectID(context.Context, int64, string) (*models.VeloxProjectBridge, error)
 }
 
 func NewEditorBFFModule(deps EditorBFFModuleDeps) RouteModule {
@@ -39,14 +47,37 @@ func (m *editorBFFModule) Register(mux chi.Router) {
 		CSRFMiddleware:    m.deps.CSRFMiddleware,
 		LaunchTokenIssuer: m.deps.LaunchTokenIssuer,
 		AuthorizeProject: func(ctx context.Context, userID, workspaceID int64, projectID string, write bool) error {
-			if m.deps.YouTubeVideoEditStore == nil || m.deps.WorkspaceStore == nil {
+			if m.deps.WorkspaceStore == nil {
 				return errors.New("editor project authorization stores are not configured")
 			}
-			edit, err := m.deps.YouTubeVideoEditStore.FindByVeloxProjectID(ctx, projectID)
-			if err != nil || edit == nil || edit.WorkspaceID != workspaceID {
+
+			// YouTube editor sessions use the external project id directly.
+			projectWorkspaceID := int64(0)
+			if m.deps.YouTubeVideoEditStore != nil {
+				edit, err := m.deps.YouTubeVideoEditStore.FindByVeloxProjectID(ctx, projectID)
+				if err == nil && edit != nil {
+					projectWorkspaceID = edit.WorkspaceID
+				}
+			}
+
+			// Standalone thumbnail drafts use an application project id plus a
+			// persisted bridge to the opaque Velox external project id. Resolve
+			// those ids here as well so the launcher and editor proxy enforce the
+			// same workspace boundary for both project types.
+			if projectWorkspaceID == 0 {
+				bridgeStore, ok := m.deps.ThumbnailProjectStore.(thumbnailExternalProjectBridgeStore)
+				if !ok {
+					return errors.New("editor project not found")
+				}
+				bridge, err := bridgeStore.FindVeloxProjectBridgeByExternalProjectID(ctx, workspaceID, projectID)
+				if err == nil && bridge != nil && bridge.ExternalProjectID == projectID {
+					projectWorkspaceID = bridge.WorkspaceID
+				}
+			}
+			if projectWorkspaceID == 0 || projectWorkspaceID != workspaceID {
 				return errors.New("editor project not found")
 			}
-			workspace, err := m.deps.WorkspaceStore.FindByID(edit.WorkspaceID)
+			workspace, err := m.deps.WorkspaceStore.FindByID(projectWorkspaceID)
 			if err != nil || workspace == nil {
 				return errors.New("editor project not found")
 			}
