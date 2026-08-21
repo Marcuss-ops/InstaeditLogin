@@ -11,6 +11,7 @@ import {
 } from "../../features/youtube/api/editorSessionsApi";
 import { patchGroupVideoMetadata } from "../../features/youtube/api/videosApi";
 import { useGroupVideosInvalidation } from "../../features/youtube/hooks/useGroupVideosInvalidation";
+import { publishGroupThumbnail, uploadThumbnailFile } from "../../features/youtube/api/thumbnailApi";
 
 // Same naming style as the InstaEditor's own generateRandomName, so a
 // freshly created cover reads as a proper project name (not the video's
@@ -92,6 +93,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
   const [editCategoryID, setEditCategoryID] = useState("");
   const [editPrivacyStatus, setEditPrivacyStatus] = useState<YouTubePrivacyStatus>("private");
   const [savingMetadata, setSavingMetadata] = useState(false);
+  const [thumbnailVideoID, setThumbnailVideoID] = useState<string | null>(null);
   const toast = useToast();
 
   // Resolves to true only when the editor was actually opened (or the
@@ -334,6 +336,37 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     [loadVideos],
   );
 
+  const applyThumbnailFile = useCallback(async (videoId: string, platformAccountId: number, file: File) => {
+    if (thumbnailVideoID) return;
+    setThumbnailVideoID(videoId);
+    try {
+      const asset = await uploadThumbnailFile(file);
+      await publishGroupThumbnail(groupId, videoId, platformAccountId, asset.id);
+      toast.success("Copertina salvata e pubblicata su YouTube.");
+      await refreshVideos(false, true);
+    } catch (error) {
+      if (error instanceof AuthError) navigate("/login", { replace: true });
+      else toast.error(error instanceof Error ? error.message : "Impossibile salvare la copertina.");
+    } finally {
+      setThumbnailVideoID(null);
+    }
+  }, [groupId, navigate, refreshVideos, thumbnailVideoID, toast]);
+
+  const applyThumbnailMedia = useCallback(async (videoId: string, platformAccountId: number, mediaId: string) => {
+    if (thumbnailVideoID) return;
+    setThumbnailVideoID(videoId);
+    try {
+      await publishGroupThumbnail(groupId, videoId, platformAccountId, mediaId);
+      toast.success("Copertina bozza applicata e pubblicata su YouTube.");
+      await refreshVideos(false, true);
+    } catch (error) {
+      if (error instanceof AuthError) navigate("/login", { replace: true });
+      else toast.error(error instanceof Error ? error.message : "Impossibile applicare la bozza.");
+    } finally {
+      setThumbnailVideoID(null);
+    }
+  }, [groupId, navigate, refreshVideos, thumbnailVideoID, toast]);
+
   const loadMoreVideos = useCallback((): void => {
     if (state.kind !== "ready" || !state.hasMore || state.nextOffset == null || state.isLoadingMore) {
       return;
@@ -427,6 +460,9 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     quickCreateCover,
     openVideoPreview,
     saveVideoMetadata,
+    applyThumbnailFile,
+    applyThumbnailMedia,
+    thumbnailVideoID,
     refreshVideos,
     loadMoreVideos,
   };

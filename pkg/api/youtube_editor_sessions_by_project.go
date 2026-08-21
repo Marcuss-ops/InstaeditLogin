@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -113,6 +114,25 @@ func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSe
 	}
 }
 
+// hydrateAttachedThumbnailURL makes the editor consume the same image that
+// was attached to the session/video. The persisted source_thumbnail_url is
+// intentionally kept as the fallback, but must never win over the current
+// thumbnail_media_id: otherwise the editor can reopen an older cover while
+// YouTube and the Covers preview already show the new one.
+func (r *Router) hydrateAttachedThumbnailURL(ctx context.Context, detail *youTubeEditorSessionDetail) {
+	if detail == nil || detail.ThumbnailMediaID == nil || strings.TrimSpace(*detail.ThumbnailMediaID) == "" || r.mediaStore == nil || r.storageProvider == nil {
+		return
+	}
+	asset, err := r.mediaStore.FindByID(strings.TrimSpace(*detail.ThumbnailMediaID))
+	if err != nil || asset == nil || asset.Status != models.MediaAssetStatusReady || time.Now().After(asset.ExpiresAt) {
+		return
+	}
+	url, err := r.storageProvider.GetObject(ctx, asset.UploadKey, 15*time.Minute)
+	if err == nil && strings.TrimSpace(url) != "" {
+		detail.ThumbnailURL = url
+	}
+}
+
 // handleGetYouTubeEditorSessionByProject is the HTTP entry point for
 // GET /api/v1/youtube/editor-sessions/by-project/{velox_project_id}.
 //
@@ -178,6 +198,7 @@ func (r *Router) handleGetYouTubeEditorSessionByProject(w http.ResponseWriter, r
 	if !ok {
 		return
 	}
+	r.hydrateAttachedThumbnailURL(req.Context(), &detail)
 	if r.userRepo != nil {
 		if account, accountErr := r.userRepo.FindPlatformAccountByID(edit.PlatformAccountID); accountErr == nil && account != nil {
 			if channelID, ok := account.Metadata["channel_id"].(string); ok && channelID != "" {

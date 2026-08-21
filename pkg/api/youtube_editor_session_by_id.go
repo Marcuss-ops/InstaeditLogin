@@ -67,6 +67,10 @@ func (r *Router) handleGetYouTubeEditorSessionByID(w http.ResponseWriter, req *h
 		writeError(w, http.StatusNotFound, "editor session not found")
 		return
 	}
+	if !apiKeyCanAccessWorkspace(identity, edit.WorkspaceID) {
+		writeError(w, http.StatusNotFound, "editor session not found")
+		return
+	}
 
 	workspace, err := r.workspaceStore.FindByID(edit.WorkspaceID)
 	if err != nil {
@@ -84,5 +88,6 @@ func (r *Router) handleGetYouTubeEditorSessionByID(w http.ResponseWriter, req *h
 	if !ok {
 		return
 	}
+	r.hydrateAttachedThumbnailURL(req.Context(), &detail)
 	writeJSON(w, http.StatusOK, detail)
 }

@@ -5,7 +5,7 @@ import { useToast } from "../../components/toast";
 import { coversHubReturnTo, openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
 import { invalidateGroupVideos } from "../../features/youtube/hooks/useGroupVideosInvalidation";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
-import type { CoversLoadState, GroupCover } from "./groupCoversTypes";
+import type { CoversLoadState, GroupCover, GroupDraft } from "./groupCoversTypes";
 
 /**
  * Resolve the signed preview URL for a cover's rendered preview media
@@ -35,16 +35,29 @@ export function useGroupCovers(groupId: number) {
   const [openingCoverId, setOpeningCoverId] = useState<string | null>(null);
   const [renamingCoverId, setRenamingCoverId] = useState<string | null>(null);
   const [savingCoverId, setSavingCoverId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<GroupDraft[]>([]);
   const toast = useToast();
 
   const loadCovers = useCallback(
     async (signal: AbortSignal) => {
       try {
+        const groupResponse = await authedFetch(`/api/v1/groups/${groupId}`, { signal });
+        const groupData = (await groupResponse.json()) as { workspace_id?: number };
         const response = await authedFetch(`/api/v1/groups/${groupId}/covers`, { signal });
         if (signal.aborted) return;
         const data = (await response.json()) as { covers?: GroupCover[] };
         if (signal.aborted) return;
         const covers = data.covers ?? [];
+        if (groupData.workspace_id) {
+          try {
+            const projectsResponse = await authedFetch(`/api/v1/thumbnail-projects?workspace_id=${groupData.workspace_id}`, { signal });
+            const projectsData = (await projectsResponse.json()) as { items?: GroupDraft[] };
+            const marker = `[instaedit-group:${groupId}]`;
+            setDrafts((projectsData.items ?? []).filter((item) => item.status !== "deleted" && (item.description ?? "").includes(marker)));
+          } catch {
+            setDrafts([]);
+          }
+        }
         // Resolve every real cover asset, not the original YouTube thumbnail.
         // A cover can be represented by either the rendered project preview
         // or the attached thumbnail media depending on its lifecycle state.
@@ -193,6 +206,32 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate]);
 
+  const createStandaloneDraft = useCallback(async (name: string): Promise<boolean> => {
+    try {
+      const groupResponse = await authedFetch(`/api/v1/groups/${groupId}`);
+      const group = (await groupResponse.json()) as { workspace_id?: number };
+      if (!group.workspace_id) throw new Error("Workspace del gruppo non disponibile.");
+      const response = await authedFetch("/api/v1/thumbnail-projects", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: group.workspace_id,
+          name: name.trim() || `Bozza ${new Date().toLocaleDateString("it-IT")}`,
+          description: `[instaedit-group:${groupId}] Bozza creata senza video`,
+          canvas_width: 1280,
+          canvas_height: 720,
+        }),
+      });
+      const draft = (await response.json()) as GroupDraft;
+      setDrafts((items) => [draft, ...items]);
+      toast.success("Bozza salvata nella galleria del gruppo.");
+      return true;
+    } catch (error) {
+      if (error instanceof AuthError) navigate("/login", { replace: true });
+      else toast.error(error instanceof Error ? error.message : "Impossibile creare la bozza.");
+      return false;
+    }
+  }, [groupId, navigate, toast]);
+
   const saveCoverDraft = useCallback(async (cover: GroupCover, title: string, description: string): Promise<boolean> => {
     if (!cover.velox_project_id) return false;
     setSavingCoverId(cover.project_id);
@@ -222,5 +261,5 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate, toast]);
 
-  return { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
+  return { state, drafts, refreshCovers, createStandaloneDraft, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
 }

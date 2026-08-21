@@ -45,6 +45,17 @@ export interface GroupCoversResponse {
   covers?: GroupCover[];
 }
 
+export interface GroupDraft {
+  id: string;
+  workspace_id: number;
+  name: string;
+  description?: string;
+  status: string;
+  preview_media_id?: string | null;
+  latest_export_id?: string | null;
+  updated_at: string;
+}
+
 export type CoversLoadState =
   | { kind: "loading" }
   | {
