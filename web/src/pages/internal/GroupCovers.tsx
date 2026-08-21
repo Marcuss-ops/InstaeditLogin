@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowUpRight, Image as ImageIcon, Loader2, Plus, Sparkles } from "lucide-react";
+import { ArrowUpRight, Image as ImageIcon, Loader2, Maximize2, Plus, Sparkles } from "lucide-react";
 import { GroupCoverCard } from "./GroupCoverCard";
 import { useGroupCovers } from "./useGroupCovers";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
@@ -7,6 +7,7 @@ import { GroupVideoManager } from "./GroupVideoManager";
 import type { GroupCover, GroupDraft } from "./groupCoversTypes";
 import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
 import { GroupCoverPreviewModal } from "./GroupCoverPreviewModal";
+import { GroupDraftPreviewModal } from "./GroupDraftPreviewModal";
 
 /**
  * Video/Cover Manager for one group (the Copertine hub body). The
@@ -24,6 +25,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
   const [previewCover, setPreviewCover] = useState<GroupCover | null>(null);
   const [previewTitle, setPreviewTitle] = useState("");
   const [previewDescription, setPreviewDescription] = useState("");
+  const [previewDraft, setPreviewDraft] = useState<GroupDraft | null>(null);
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
@@ -133,6 +135,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
                 {draftAssetUrl(draft) ? <img src={draftAssetUrl(draft)} alt={draft.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" /> : <div className="flex h-full items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,0.16),transparent_45%)]"><ImageIcon size={28} className="text-white/30" /></div>}
                 <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/65 to-transparent opacity-70" />
                 <span className="absolute left-3 top-3 rounded-full border border-amber-500/25 bg-amber-500/[0.10] px-2.5 py-1 text-[10px] font-bold text-amber-300">{draft.status === "ready" ? "Pronta" : "Bozza"}</span>
+                <button type="button" onClick={(event) => { event.stopPropagation(); setPreviewDraft(draft); }} aria-label="Ingrandisci anteprima copertina" title="Ingrandisci anteprima" className="absolute bottom-3 right-3 z-10 inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.16] bg-black/60 px-2.5 text-[10px] font-bold text-white backdrop-blur-md transition-colors hover:bg-violet-500/80"><Maximize2 size={13} aria-hidden="true" /> Zoom</button>
                 {openingDraftId === draft.id && <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11px] font-bold text-white"><Loader2 size={13} className="mr-1 animate-spin" />Apertura…</span>}
                 </div>
               </div>
@@ -180,6 +183,20 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
         onOpenEditor={() => {
           setPreviewCover(null);
           handleOpenCoverEditor(previewCover);
+        }}
+      />
+    )}
+
+    {previewDraft && state.kind === "ready" && (
+      <GroupDraftPreviewModal
+        draft={previewDraft}
+        previewUrl={draftAssetUrl(previewDraft)}
+        opening={openingDraftId === previewDraft.id}
+        onClose={() => setPreviewDraft(null)}
+        onOpenEditor={() => {
+          setPreviewDraft(null);
+          const tab = window.open("about:blank", "_blank");
+          void openDraftEditor(previewDraft, tab);
         }}
       />
     )}
