@@ -57,7 +57,8 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
   const coverAssetUrl = (cover: GroupCover): string | undefined => {
     if (state.kind !== "ready") return undefined;
     return (cover.preview_media_id ? state.previewUrls[cover.preview_media_id] : undefined)
-      || (cover.thumbnail_media_id ? state.previewUrls[cover.thumbnail_media_id] : undefined);
+      || (cover.thumbnail_media_id ? state.previewUrls[cover.thumbnail_media_id] : undefined)
+      || cover.source_thumbnail_url;
   };
 
   return (

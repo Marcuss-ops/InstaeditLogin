@@ -196,6 +196,21 @@ describe("GroupCovers", () => {
     expect(screen.getByText(/archiviata/i)).toBeInTheDocument();
   });
 
+  it("falls back to the source YouTube thumbnail when no rendered preview is available", async () => {
+    const sourceThumbnail = "https://i.ytimg.com/vi/video-1/hqdefault.jpg";
+    routeFetch({
+      covers: [coverFixture({ source_thumbnail_url: sourceThumbnail })],
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
+    });
+    expect(document.querySelector(`img[src="${sourceThumbnail}"]`)).toBeInTheDocument();
+    expect(screen.queryByText("Copertina non ancora esportata")).not.toBeInTheDocument();
+  });
+
   it("shows the Photoshop-style create tile before the full grid", async () => {
     routeFetch({
       covers: [
