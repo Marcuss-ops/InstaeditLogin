@@ -178,7 +178,43 @@ func (r *Router) handleGetYouTubeEditorSessionByProject(w http.ResponseWriter, r
 		return
 	}
 	if edit == nil {
-		writeError(w, http.StatusNotFound, "editor session not found")
+		// Standalone thumbnail projects do not have a YouTube editor-session
+		// row. The editor gate still needs a workspace-scoped session-shaped
+		// response so it can distinguish an editable bridge from a missing
+		// project. The actual canvas remains owned by the project-scoped editor
+		// BFF; this compatibility detail intentionally contains no YouTube data.
+		bridgeStore, bridgeOK := r.thumbnailProjectStore.(thumbnailExternalProjectBridgeStore)
+		if !bridgeOK {
+			writeError(w, http.StatusNotFound, "editor session not found")
+			return
+		}
+		bridge, bridgeErr := bridgeStore.FindVeloxProjectBridgeByExternalProjectID(req.Context(), identity.WorkspaceID(), veloxProjectID)
+		if bridgeErr != nil || bridge == nil {
+			writeError(w, http.StatusNotFound, "editor session not found")
+			return
+		}
+		workspace, workspaceErr := r.workspaceStore.FindByID(bridge.WorkspaceID)
+		if workspaceErr != nil {
+			writeError(w, http.StatusInternalServerError, "find workspace: "+workspaceErr.Error())
+			return
+		}
+		if workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+			writeError(w, http.StatusNotFound, "editor session not found")
+			return
+		}
+		now := time.Now()
+		detail, ok := r.editorDetailWithURL(w, youTubeEditorSessionDetail{
+			ID:             bridge.ExternalProjectID,
+			WorkspaceID:    bridge.WorkspaceID,
+			VeloxProjectID: bridge.ExternalProjectID,
+			Status:         "editing",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		})
+		if !ok {
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
 		return
 	}
 
