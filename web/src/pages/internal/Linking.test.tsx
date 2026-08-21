@@ -155,6 +155,13 @@ describe("InternalLinking", () => {
       expect(screen.getByRole("heading", { name: /Linking/i })).toBeInTheDocument();
     });
 
+    // The provider cards mount only after the shared accounts manifest
+    // resolves. Wait for the card before interacting with it; waiting only
+    // for the static heading is racy on CI.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /YouTube/i })).toBeInTheDocument();
+    });
+
     // Expand the YouTube card so its accounts render.
     fireEvent.click(screen.getByRole("button", { name: /YouTube/i }));
 
@@ -197,6 +204,11 @@ describe("InternalLinking", () => {
       expect(screen.getByRole("heading", { name: /Linking/i })).toBeInTheDocument();
     });
 
+    // The action is rendered only after the accounts manifest resolves.
+    // Wait for it explicitly so the test does not race the async mount on CI.
+    await waitFor(() => {
+      expect(screen.getByTestId("sync-all-accounts")).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByTestId("sync-all-accounts"));
 
     await waitFor(() => {
