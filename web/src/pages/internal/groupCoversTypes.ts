@@ -55,6 +55,9 @@ export interface GroupDraft {
   preview_media_id?: string | null;
   latest_export_id?: string | null;
   updated_at: string;
+  /** Server-created Velox bridge, making a standalone draft a full editor project. */
+  editor_url?: string;
+  external_project_id?: string;
 }
 
 export type CoversLoadState =

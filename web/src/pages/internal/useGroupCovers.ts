@@ -33,6 +33,7 @@ export function useGroupCovers(groupId: number) {
   const abortRef = useRef<AbortController | null>(null);
   const [state, setState] = useState<CoversLoadState>({ kind: "loading" });
   const [openingCoverId, setOpeningCoverId] = useState<string | null>(null);
+  const [openingDraftId, setOpeningDraftId] = useState<string | null>(null);
   const [renamingCoverId, setRenamingCoverId] = useState<string | null>(null);
   const [savingCoverId, setSavingCoverId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<GroupDraft[]>([]);
@@ -69,6 +70,24 @@ export function useGroupCovers(groupId: number) {
                 if (mediaID) item.preview_media_id = mediaID;
               } catch {
                 // A draft without a linked asset remains visible as a draft.
+              }
+            }));
+            // Standalone drafts use the same Velox project bridge as normal
+            // YouTube covers. Creating it here makes every existing draft
+            // editable immediately, including drafts created by the agent.
+            await Promise.all(groupDrafts.map(async (item) => {
+              try {
+                const bridgeResponse = await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(item.id)}/velox-bridge`, {
+                  method: "POST",
+                  body: JSON.stringify({ contract_version: "instaedit.velox.project-bridge.v1", workspace_id: workspaceID }),
+                  signal,
+                });
+                const bridge = (await bridgeResponse.json()) as { editor_url?: string; bridge?: { external_project_id?: string } };
+                item.editor_url = bridge.editor_url;
+                item.external_project_id = bridge.bridge?.external_project_id;
+              } catch {
+                // Keep the draft visible even if the editor provider is
+                // temporarily unavailable; the card can retry on refresh.
               }
             }));
             setDrafts(groupDrafts);
@@ -227,6 +246,37 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate]);
 
+  const openDraftEditor = useCallback(async (draft: GroupDraft, tab?: Window | null): Promise<boolean> => {
+    setOpeningDraftId(draft.id);
+    try {
+      let editorURL = draft.editor_url;
+      let externalProjectID = draft.external_project_id;
+      if (!editorURL || !externalProjectID) {
+        const groupResponse = await authedFetch(`/api/v1/groups/${groupId}`);
+        const group = (await groupResponse.json()) as { workspace_id?: number };
+        if (!group.workspace_id) throw new Error("Workspace del gruppo non disponibile.");
+        const bridgeResponse = await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(draft.id)}/velox-bridge`, {
+          method: "POST",
+          body: JSON.stringify({ contract_version: "instaedit.velox.project-bridge.v1", workspace_id: group.workspace_id }),
+        });
+        const bridge = (await bridgeResponse.json()) as { editor_url?: string; bridge?: { external_project_id?: string } };
+        editorURL = bridge.editor_url;
+        externalProjectID = bridge.bridge?.external_project_id;
+        setDrafts((items) => items.map((item) => item.id === draft.id ? { ...item, editor_url: editorURL, external_project_id: externalProjectID } : item));
+      }
+      if (!editorURL || !externalProjectID) throw new Error("Editor locale non disponibile per questa bozza.");
+      await openInstaEditorWithLaunch(editorURL, externalProjectID, { returnTo: coversHubReturnTo(groupId), tab });
+      return true;
+    } catch (error) {
+      tab?.close();
+      if (error instanceof AuthError) navigate("/login", { replace: true });
+      else toast.error(error instanceof Error ? error.message : "Impossibile aprire la bozza.");
+      return false;
+    } finally {
+      setOpeningDraftId(null);
+    }
+  }, [groupId, navigate, toast]);
+
   const createStandaloneDraft = useCallback(async (name: string): Promise<boolean> => {
     try {
       const groupResponse = await authedFetch(`/api/v1/groups/${groupId}`);
@@ -243,6 +293,19 @@ export function useGroupCovers(groupId: number) {
         }),
       });
       const draft = (await response.json()) as GroupDraft;
+      // Materialize the bridge at creation time as well, so the new card is
+      // immediately equivalent to a normal cover card.
+      try {
+        const bridgeResponse = await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(draft.id)}/velox-bridge`, {
+          method: "POST",
+          body: JSON.stringify({ contract_version: "instaedit.velox.project-bridge.v1", workspace_id: group.workspace_id }),
+        });
+        const bridge = (await bridgeResponse.json()) as { editor_url?: string; bridge?: { external_project_id?: string } };
+        draft.editor_url = bridge.editor_url;
+        draft.external_project_id = bridge.bridge?.external_project_id;
+      } catch {
+        // The draft remains saved and can retry bridge creation when opened.
+      }
       setDrafts((items) => [draft, ...items]);
       toast.success("Bozza salvata nel gruppo.");
       return true;
@@ -317,5 +380,5 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate, toast]);
 
-  return { state, drafts, refreshCovers, createStandaloneDraft, duplicateDraftToGroup, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
+  return { state, drafts, refreshCovers, createStandaloneDraft, duplicateDraftToGroup, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
 }
