@@ -59,8 +59,8 @@ func NewApiKeyAuthenticator(repo ApiKeyLookup) *Authenticator {
 // to one deployment environment (test or live).
 func NewApiKeyAuthenticatorForEnvironment(repo ApiKeyLookup, environment string) *Authenticator {
 	return &Authenticator{
-		Repo:               repo,
-		Now:                time.Now,
+		Repo:                repo,
+		Now:                 time.Now,
 		ExpectedEnvironment: environment,
 	}
 }

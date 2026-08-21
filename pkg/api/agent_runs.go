@@ -16,10 +16,11 @@
 //     project_id, session_id) — never binary assets.
 //
 // Routes:
-//   POST  /api/v1/agent/runs            create a run (idempotent by
-//                                       workspace_id + idempotency_key)
-//   POST  /api/v1/agent/runs/{id}/steps append a step to a run
-//   PATCH /api/v1/agent/runs/{id}       transition run status
+//
+//	POST  /api/v1/agent/runs            create a run (idempotent by
+//	                                    workspace_id + idempotency_key)
+//	POST  /api/v1/agent/runs/{id}/steps append a step to a run
+//	PATCH /api/v1/agent/runs/{id}       transition run status
 package api
 
 import (
@@ -223,9 +224,9 @@ func (m *AgentRunsModule) handleCompleteStep(w http.ResponseWriter, req *http.Re
 
 // updateRunRequest is the body accepted by PATCH /api/v1/agent/runs/{id}.
 type updateRunRequest struct {
-	Status       string `json:"status"`
-	CurrentStep  string `json:"current_step,omitempty"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	Status      string     `json:"status"`
+	CurrentStep string     `json:"current_step,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 // handleUpdateRun transitions a run's status (e.g. completed/failed/

@@ -182,17 +182,17 @@ func (r *Router) editorSessionProtectedUnscoped(next http.HandlerFunc) http.Hand
 					// context key (set by auth.Manager.putIdentity on the
 					// normal session path); mirror it so presign/complete
 					// work identically for editor-session callers.
-				ctx = auth.WithUserID(ctx, claims.UserID)
-				next(w, req.WithContext(ctx))
-				return
+					ctx = auth.WithUserID(ctx, claims.UserID)
+					next(w, req.WithContext(ctx))
+					return
+				}
 			}
 		}
+		// Fall through: normal session (cookie/JWT) or an API key with
+		// the `media` permission (sk_test_/sk_live_ bearer). This is the
+		// machine-accessible path for media presign/complete.
+		r.protectedWithAPIKeyPermission("media", next)(w, req)
 	}
-	// Fall through: normal session (cookie/JWT) or an API key with
-	// the `media` permission (sk_test_/sk_live_ bearer). This is the
-	// machine-accessible path for media presign/complete.
-	r.protectedWithAPIKeyPermission("media", next)(w, req)
-}
 }
 
 // oauthSessionRedirect validates the session (Bearer or HttpOnly
