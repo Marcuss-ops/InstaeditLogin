@@ -29,11 +29,11 @@ export const GroupYouTubeVideoCard = memo(function GroupYouTubeVideoCard({
   return (
     <article
       className="grid min-h-[126px] cursor-pointer grid-cols-[142px_minmax(0,1fr)] gap-4 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 transition-colors hover:border-violet-400/30 hover:bg-white/[0.05] max-[700px]:grid-cols-[112px_minmax(0,1fr)]"
-      onClick={() => onPreview(video)}
+      onClick={() => onThumbnail(video)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onPreview(video);
+          onThumbnail(video);
         }
       }}
       role="button"

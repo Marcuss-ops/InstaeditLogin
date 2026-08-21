@@ -304,7 +304,7 @@ describe("GroupCovers", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
     });
-    fireEvent.click(screen.getByRole("button", { name: /modifica in instaeditor/i }));
+    fireEvent.click(screen.getByTitle("Clicca per modificare in InstaEditor"));
 
     await waitFor(() => {
       expect(openInstaEditorWithLaunchMock).toHaveBeenCalledWith(
@@ -422,7 +422,7 @@ describe("GroupCovers", () => {
     expect(screen.getAllByTitle(/^Categoria:/)).toHaveLength(2);
   });
 
-  it("shows privacy and category in the cover preview modal details", async () => {
+  it("opens InstaEditor when clicking the cover image", async () => {
     routeFetch({
       covers: [coverFixture({ category_id: "17", privacy_status: "private" })],
     });
@@ -432,15 +432,10 @@ describe("GroupCovers", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("group-cover-card")).toHaveLength(1);
     });
-    // The preview opens on click of the card media area.
-    fireEvent.click(screen.getByTitle(/clicca per ingrandire/i));
+    fireEvent.click(screen.getByTitle("Clicca per modificare in InstaEditor"));
     await waitFor(() => {
-      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(openInstaEditorWithLaunchMock).toHaveBeenCalled();
     });
-    const dialog = within(screen.getByRole("dialog"));
-    expect(dialog.getByText("Privato")).toBeInTheDocument();
-    expect(dialog.getByText("Sport")).toBeInTheDocument();
-    expect(dialog.queryByText("Non impostata")).toBeNull();
   });
 
   it("renames a cover inline: clicking the title PUTs the partial {title} to the draft endpoint and updates the card", async () => {

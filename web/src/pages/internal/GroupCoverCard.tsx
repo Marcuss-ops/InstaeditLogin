@@ -1,5 +1,5 @@
 import { memo, useRef, useState } from "react";
-import { Calendar, Check, Edit3, ExternalLink, Image as ImageIcon, Loader2, MoreHorizontal, X } from "lucide-react";
+import { Calendar, Check, Edit3, Image as ImageIcon, Loader2, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { LanguageFlag } from "../../components/brand/LanguageFlag";
 import { categoryLabelForId, privacyBadgeForStatus, toneClasses } from "./groupYouTubeVideosVisual";
@@ -52,7 +52,6 @@ export const GroupCoverCard = memo(function GroupCoverCard({
   opening,
   renaming,
   onOpenEditor,
-  onOpenPreview,
   onRenameCover,
 }: {
   cover: GroupCover;
@@ -61,7 +60,6 @@ export const GroupCoverCard = memo(function GroupCoverCard({
   /** True while a rename PUT for this cover is in flight. */
   renaming?: boolean;
   onOpenEditor: (cover: GroupCover) => void;
-  onOpenPreview: (cover: GroupCover) => void;
   onRenameCover: (cover: GroupCover, newTitle: string) => Promise<boolean> | boolean;
 }) {
   const status = projectStatusLabel(cover.project_status);
@@ -113,10 +111,9 @@ export const GroupCoverCard = memo(function GroupCoverCard({
       data-testid="group-cover-card"
     >
       <div
-        className="relative aspect-video w-full cursor-zoom-in overflow-hidden bg-[#07080c]"
-        onClick={() => onOpenPreview(cover)}
-        onDoubleClick={(event) => { event.preventDefault(); onOpenEditor(cover); }}
-        title="Clicca per ingrandire · doppio click per modificare in InstaEditor"
+        className="relative aspect-video w-full cursor-pointer overflow-hidden bg-[#07080c]"
+        onClick={() => onOpenEditor(cover)}
+        title="Clicca per modificare in InstaEditor"
       >
         {preview ? (
           <img
@@ -132,6 +129,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
           </div>
         )}
         <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/65 to-transparent opacity-70" />
+        {opening && <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11px] font-bold text-white">Apertura…</span>}
         <span
           title={`Stato progetto: ${status.label}`}
           className={cn(
@@ -264,37 +262,6 @@ export const GroupCoverCard = memo(function GroupCoverCard({
           </span>
         </div>
 
-        <div className="mt-auto flex items-center gap-2 pt-5">
-          <a
-            href={`https://www.youtube.com/watch?v=${encodeURIComponent(cover.youtube_video_id)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.10] bg-white/[0.04] text-[#cdd2da] transition-colors hover:bg-white/[0.08] hover:text-white"
-            title="Apri il video su YouTube"
-            aria-label="Apri il video su YouTube"
-          >
-            <ExternalLink size={14} aria-hidden="true" />
-          </a>
-          <button
-            type="button"
-            onClick={() => onOpenEditor(cover)}
-            disabled={opening || !cover.velox_project_id || !cover.editor_url}
-            className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-xl border border-violet-400/25 bg-violet-500/[0.14] px-3 text-[11px] font-bold text-violet-100 transition-colors hover:bg-violet-500/[0.24] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-            title={
-              !cover.velox_project_id
-                ? "Copertina non associata a un progetto editor"
-                : !cover.editor_url
-                  ? "Editor non configurato su questo server"
-                  : "Apri la copertina in InstaEditor"
-            }
-          >
-            {opening ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Edit3 size={12} aria-hidden="true" />}
-            <span className="truncate">{opening ? "Apertura…" : "Modifica in InstaEditor"}</span>
-          </button>
-          <span className="hidden h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] text-white/25 sm:flex" title="Altre azioni disponibili in anteprima">
-            <MoreHorizontal size={15} aria-hidden="true" />
-          </span>
-        </div>
       </div>
     </article>
   );

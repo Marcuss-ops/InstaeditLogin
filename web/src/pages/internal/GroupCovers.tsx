@@ -1,11 +1,9 @@
-import { useState } from "react";
 import { ArrowUpRight, Image as ImageIcon, Loader2, Plus, Sparkles } from "lucide-react";
 import { GroupCoverCard } from "./GroupCoverCard";
 import { useGroupCovers } from "./useGroupCovers";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { GroupVideoManager } from "./GroupVideoManager";
 import type { GroupCover, GroupDraft } from "./groupCoversTypes";
-import { GroupCoverPreviewModal } from "./GroupCoverPreviewModal";
 import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
 
 /**
@@ -20,15 +18,12 @@ import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
  * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, uploadDraftAsset, uploadingDraftId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
+  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, uploadDraftAsset, uploadingDraftId, renameCover, renamingCoverId } = useGroupCovers(groupId);
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
   const videosController = useGroupYouTubeVideos(groupId, true, groupName);
   const { quickCreateCover, openingVideoID } = videosController;
-  const [previewCover, setPreviewCover] = useState<GroupCover | null>(null);
-  const [previewTitle, setPreviewTitle] = useState("");
-  const [previewDescription, setPreviewDescription] = useState("");
 
   // Both editor openings grab the destination tab SYNCHRONOUSLY inside
   // the click gesture: once the async session/draft/launch round-trips
@@ -47,12 +42,6 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
   const handleOpenCoverEditor = (cover: GroupCover) => {
     const tab = window.open("about:blank", "_blank");
     void openCoverEditor(cover, tab);
-  };
-
-  const handleOpenPreview = (cover: GroupCover) => {
-    setPreviewCover(cover);
-    setPreviewTitle(cover.draft_title || cover.name || "");
-    setPreviewDescription(cover.draft_description || "");
   };
 
   const coverAssetUrl = (cover: GroupCover): string | undefined => {
@@ -129,9 +118,12 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
             <ThumbnailDropTarget key={draft.id} onFile={(file) => { void uploadDraftAsset(draft, file); }} busy={uploadingDraftId === draft.id} className="group">
             <article data-testid="group-cover-draft-card" className="flex h-full flex-col overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d0f15]/90 shadow-[0_14px_34px_rgba(0,0,0,0.12)] transition-all duration-200 hover:-translate-y-1 hover:border-violet-300/25 hover:shadow-[0_20px_44px_rgba(0,0,0,0.2)]">
               <div className="relative aspect-video w-full overflow-hidden bg-[#07080c]">
+                <div onClick={() => { const tab = window.open("about:blank", "_blank"); void openDraftEditor(draft, tab); }} title="Clicca per modificare in InstaEditor" className="relative h-full cursor-pointer">
                 {draftAssetUrl(draft) ? <img src={draftAssetUrl(draft)} alt={draft.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" /> : <div className="flex h-full items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,0.16),transparent_45%)]"><ImageIcon size={28} className="text-white/30" /></div>}
                 <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/65 to-transparent opacity-70" />
                 <span className="absolute left-3 top-3 rounded-full border border-amber-500/25 bg-amber-500/[0.10] px-2.5 py-1 text-[10px] font-bold text-amber-300">{draft.status === "ready" ? "Pronta" : "Bozza"}</span>
+                {openingDraftId === draft.id && <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11px] font-bold text-white"><Loader2 size={13} className="mr-1 animate-spin" />Apertura…</span>}
+                </div>
               </div>
               <div className="flex flex-1 flex-col p-4"><h3 className="truncate text-[14px] font-semibold text-white">{draft.name}</h3><p className="mt-1 truncate text-[11px] text-[#8a919d]">Nessun video associato</p><div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="inline-flex items-center rounded-full border border-violet-500/25 bg-violet-500/[0.08] px-2.5 py-1 text-[10px] font-semibold text-violet-300">In modifica</span><span className="inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[10px] text-[#9aa0aa]">Standalone</span></div><div className="mt-auto flex items-center gap-2 pt-5"><button type="button" onClick={() => { const tab = window.open("about:blank", "_blank"); void openDraftEditor(draft, tab); }} disabled={openingDraftId === draft.id} className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-xl border border-violet-400/25 bg-violet-500/[0.14] px-3 text-[11px] font-bold text-violet-100 transition-colors hover:bg-violet-500/[0.24] hover:text-white disabled:cursor-not-allowed disabled:opacity-60">{openingDraftId === draft.id ? <Loader2 size={12} className="animate-spin" /> : <ArrowUpRight size={12} />}<span className="truncate">Modifica in InstaEditor</span></button></div><span className="pt-4 text-[10px] text-white/40">Aggiornata {new Date(draft.updated_at).toLocaleDateString("it-IT")}</span></div>
             </article>
@@ -148,7 +140,6 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
                 opening={openingCoverId === cover.project_id}
                 renaming={renamingCoverId === cover.project_id}
                 onOpenEditor={handleOpenCoverEditor}
-                onOpenPreview={handleOpenPreview}
                 onRenameCover={renameCover}
               />
             </ThumbnailDropTarget>
@@ -156,24 +147,6 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
         </div>
       )}
 
-      {previewCover && state.kind === "ready" ? (
-        <GroupCoverPreviewModal
-          cover={previewCover}
-          previewUrl={coverAssetUrl(previewCover)}
-          saving={savingCoverId === previewCover.project_id}
-          opening={openingCoverId === previewCover.project_id}
-          title={previewTitle}
-          description={previewDescription}
-          onTitleChange={setPreviewTitle}
-          onDescriptionChange={setPreviewDescription}
-          onClose={() => setPreviewCover(null)}
-          onSave={() => void saveCoverDraft(previewCover, previewTitle, previewDescription)}
-          onOpenEditor={() => {
-            setPreviewCover(null);
-            handleOpenCoverEditor(previewCover);
-          }}
-        />
-      ) : null}
     </section>
 
     <div className="border-t border-white/[0.06] pt-6">
