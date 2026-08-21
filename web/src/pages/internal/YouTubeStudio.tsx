@@ -23,7 +23,7 @@ export function InternalYouTubeStudio() {
   } = useYouTubeStudioData();
 
   const [privateVideosEnabled, setPrivateVideosEnabled] = useState(false);
-  const { privateVideos, loadingVideos, copyrightByVideoId, recordCopyrightCheck, applyThumbnailFile, thumbnailVideoID } = useYouTubeStudioPrivateVideos(
+  const { privateVideos, loadingVideos, copyrightByVideoId, recordCopyrightCheck, applyThumbnailFile } = useYouTubeStudioPrivateVideos(
     selectedChannelId,
     privateVideosEnabled,
   );
@@ -124,7 +124,6 @@ export function InternalYouTubeStudio() {
         privateVideosEnabled={privateVideosEnabled}
         onLoad={() => setPrivateVideosEnabled(true)}
         onThumbnailFile={(video, file) => void applyThumbnailFile(video, file)}
-        thumbnailVideoID={thumbnailVideoID}
       />
 
       {publishResult && (

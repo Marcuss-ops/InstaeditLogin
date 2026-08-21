@@ -18,7 +18,7 @@ import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
  * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, uploadDraftAsset, uploadingDraftId, renameCover, renamingCoverId } = useGroupCovers(groupId);
+  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, uploadDraftAsset, renameCover, renamingCoverId } = useGroupCovers(groupId);
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
@@ -115,7 +115,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
             </span>
           </button>
           {drafts.map((draft) => (
-            <ThumbnailDropTarget key={draft.id} onFile={(file) => { void uploadDraftAsset(draft, file); }} busy={uploadingDraftId === draft.id} className="group">
+            <ThumbnailDropTarget key={draft.id} onFile={(file) => { void uploadDraftAsset(draft, file); }} className="group">
             <article data-testid="group-cover-draft-card" className="flex h-full flex-col overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d0f15]/90 shadow-[0_14px_34px_rgba(0,0,0,0.12)] transition-all duration-200 hover:-translate-y-1 hover:border-violet-300/25 hover:shadow-[0_20px_44px_rgba(0,0,0,0.2)]">
               <div className="relative aspect-video w-full overflow-hidden bg-[#07080c]">
                 <div onClick={() => { const tab = window.open("about:blank", "_blank"); void openDraftEditor(draft, tab); }} title="Clicca per modificare in InstaEditor" className="relative h-full cursor-pointer">
@@ -133,7 +133,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
             <ThumbnailDropTarget key={cover.project_id} onFile={(file) => {
               if (!window.confirm("Sostituire la copertina di questo video? L'immagine verrà caricata e pubblicata su YouTube.")) return;
               void videosController.applyThumbnailFile(cover.youtube_video_id, cover.platform_account_id, file);
-            }} busy={videosController.thumbnailVideoID === cover.youtube_video_id} className="group">
+            }} className="group">
               <GroupCoverCard
                 cover={cover}
                 previewUrl={coverAssetUrl(cover)}
