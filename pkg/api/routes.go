@@ -184,6 +184,7 @@ func (r *Router) Setup() http.Handler {
 	}))
 	reg.Register(NewThumbnailProjectsModule(
 		r.protected,
+		r.protectedWithAPIKeyPermission,
 		r.handleCreateThumbnailProject,
 		r.handleListThumbnailProjects,
 		r.handleGetThumbnailProject,
