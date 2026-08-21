@@ -30,6 +30,16 @@ function editStatusLabel(status: string): string {
   }
 }
 
+function lifecycleStatusLabel(status?: string): { label: string; tone: string } {
+  switch (status) {
+    case "published": return { label: "Pubblicata", tone: "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-300" };
+    case "applied": return { label: "Applicata", tone: "border-sky-500/25 bg-sky-500/[0.08] text-sky-300" };
+    case "ready": return { label: "Pronta", tone: "border-violet-500/25 bg-violet-500/[0.08] text-violet-300" };
+    case "error": return { label: "Errore", tone: "border-red-500/25 bg-red-500/[0.08] text-red-300" };
+    default: return { label: "Bozza", tone: "border-amber-500/25 bg-amber-500/[0.08] text-amber-300" };
+  }
+}
+
 function formatCoverDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -56,6 +66,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
 }) {
   const status = projectStatusLabel(cover.project_status);
   const editLabel = editStatusLabel(cover.edit_status);
+  const lifecycle = lifecycleStatusLabel(cover.lifecycle_status);
   const privacy = privacyBadgeForStatus(cover.privacy_status);
   const category = categoryLabelForId(cover.category_id);
   const preview = previewUrl;
@@ -215,6 +226,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span title="Stato lifecycle della copertina" className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold", lifecycle.tone)}>{lifecycle.label}</span>
           <span
             title={`Visibilità video: ${privacy.label}`}
             className={cn(

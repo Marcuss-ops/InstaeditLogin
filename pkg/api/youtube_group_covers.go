@@ -38,6 +38,7 @@ type groupCoverEntry struct {
 	Name               string  `json:"name"`
 	ProjectStatus      string  `json:"project_status"`
 	EditStatus         string  `json:"edit_status"`
+	LifecycleStatus    string  `json:"lifecycle_status"`
 	PreviewMediaID     *string `json:"preview_media_id,omitempty"`
 	ThumbnailMediaID   *string `json:"thumbnail_media_id,omitempty"`
 	SourceThumbnailURL string  `json:"source_thumbnail_url,omitempty"`
@@ -80,6 +81,22 @@ func privacyStatusForCover(c *models.GroupCover) string {
 		return *c.ActualPrivacy
 	}
 	return c.DesiredPrivacy
+}
+
+func lifecycleStatusForCover(c *models.GroupCover) string {
+	if c == nil || c.EditStatus == "failed" {
+		return "error"
+	}
+	if c.EditStatus == "published" {
+		return "published"
+	}
+	if c.ThumbnailMediaID != nil && strings.TrimSpace(*c.ThumbnailMediaID) != "" {
+		return "applied"
+	}
+	if c.ProjectStatus == models.ThumbnailProjectStatusReady {
+		return "ready"
+	}
+	return "draft"
 }
 
 // handleListGroupCovers is the HTTP entry point for
@@ -191,6 +208,7 @@ func (r *Router) handleListGroupCovers(w http.ResponseWriter, req *http.Request)
 			Name:               c.ProjectName,
 			ProjectStatus:      string(c.ProjectStatus),
 			EditStatus:         c.EditStatus,
+			LifecycleStatus:    lifecycleStatusForCover(c),
 			PreviewMediaID:     c.PreviewMediaID,
 			ThumbnailMediaID:   c.ThumbnailMediaID,
 			SourceThumbnailURL: c.SourceThumbnailURL,

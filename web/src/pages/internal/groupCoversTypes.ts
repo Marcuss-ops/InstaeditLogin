@@ -20,6 +20,7 @@ export interface GroupCover {
   project_status: "draft" | "ready" | "archived" | string;
   /** youtube_video_edits.status: editing | failed | publishing | published. */
   edit_status: string;
+  lifecycle_status?: "draft" | "ready" | "applied" | "published" | "error" | string;
   /** Rendered cover preview (media_assets UUID) — resolve via GET /api/v1/media/{id}. */
   preview_media_id?: string | null;
   /** Attached thumbnail asset, when the session linked one. */

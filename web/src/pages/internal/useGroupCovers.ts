@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { authedFetch, AuthError, ApiError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import { coversHubReturnTo, openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
-import { invalidateGroupVideos } from "../../features/youtube/hooks/useGroupVideosInvalidation";
+import { invalidateGroupVideos, useGroupVideosInvalidation } from "../../features/youtube/hooks/useGroupVideosInvalidation";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { CoversLoadState, GroupCover, GroupDraft } from "./groupCoversTypes";
 
@@ -105,6 +105,8 @@ export function useGroupCovers(groupId: number) {
     setState({ kind: "loading" });
     void loadCovers(controller.signal);
   }, [loadCovers]);
+
+  useGroupVideosInvalidation(groupId, () => refreshCovers());
 
   useEffect(() => {
     if (groupId <= 0) {
@@ -238,6 +240,26 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate, toast]);
 
+  const duplicateDraftToGroup = useCallback(async (draft: GroupDraft, targetGroupId: number): Promise<boolean> => {
+    try {
+      const groupResponse = await authedFetch(`/api/v1/groups/${targetGroupId}`);
+      const group = (await groupResponse.json()) as { workspace_id?: number };
+      if (!group.workspace_id) throw new Error("Workspace del gruppo destinatario non disponibile.");
+      const response = await authedFetch("/api/v1/thumbnail-projects", {
+        method: "POST",
+        body: JSON.stringify({ workspace_id: group.workspace_id, name: `${draft.name} · copia`, description: `[instaedit-group:${targetGroupId}] Copia da ${groupId}`, canvas_width: 1280, canvas_height: 720 }),
+      });
+      const copy = (await response.json()) as GroupDraft;
+      if (targetGroupId === groupId) setDrafts((items) => [copy, ...items]);
+      toast.success("Bozza duplicata nel gruppo selezionato.");
+      return true;
+    } catch (error) {
+      if (error instanceof AuthError) navigate("/login", { replace: true });
+      else toast.error(error instanceof Error ? error.message : "Impossibile duplicare la bozza.");
+      return false;
+    }
+  }, [groupId, navigate, toast]);
+
   const saveCoverDraft = useCallback(async (cover: GroupCover, title: string, description: string): Promise<boolean> => {
     if (!cover.velox_project_id) return false;
     setSavingCoverId(cover.project_id);
@@ -267,5 +289,5 @@ export function useGroupCovers(groupId: number) {
     }
   }, [groupId, navigate, toast]);
 
-  return { state, drafts, refreshCovers, createStandaloneDraft, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
+  return { state, drafts, refreshCovers, createStandaloneDraft, duplicateDraftToGroup, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId };
 }

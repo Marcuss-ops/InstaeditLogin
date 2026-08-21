@@ -20,7 +20,7 @@ import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
  * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, drafts, refreshCovers, createStandaloneDraft, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
+  const { state, drafts, refreshCovers, createStandaloneDraft, duplicateDraftToGroup, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
@@ -126,7 +126,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
               const mediaId = draftMediaId(draft);
               const preview = "source_thumbnail_url" in draft ? coverAssetUrl(draft) : undefined;
               const draftKey = "id" in draft ? draft.id : draft.project_id;
-              return <button type="button" key={draftKey} onClick={() => setDraftTarget(draft)} className="group min-w-[190px] overflow-hidden rounded-xl border border-white/[0.08] bg-black/20 text-left hover:border-violet-400/40">
+              return <button type="button" key={draftKey} onClick={() => setDraftTarget(draft)} onDoubleClick={() => { if ("id" in draft) { const raw = window.prompt("ID del gruppo destinatario", ""); const target = Number(raw); if (Number.isInteger(target) && target > 0) void duplicateDraftToGroup(draft, target); } }} title={"id" in draft ? "Doppio click per duplicare in un altro gruppo" : "Seleziona per applicare"} className="group min-w-[190px] overflow-hidden rounded-xl border border-white/[0.08] bg-black/20 text-left hover:border-violet-400/40">
                 <div className="aspect-video bg-white/[0.05]">{preview ? <img src={preview} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-violet-200/60"><ImageIcon size={24} /></div>}</div>
                 <div className="p-3"><p className="truncate text-[12px] font-semibold text-white">{draft.name}</p><p className="mt-1 text-[10px] text-[#858c99]">{mediaId ? "Pronta da applicare" : "Bozza editor"}</p></div>
               </button>;

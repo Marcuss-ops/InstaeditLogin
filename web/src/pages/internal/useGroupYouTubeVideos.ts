@@ -10,7 +10,7 @@ import {
   openInstaEditorWithLaunch,
 } from "../../features/youtube/api/editorSessionsApi";
 import { patchGroupVideoMetadata } from "../../features/youtube/api/videosApi";
-import { useGroupVideosInvalidation } from "../../features/youtube/hooks/useGroupVideosInvalidation";
+import { invalidateGroupVideos, useGroupVideosInvalidation } from "../../features/youtube/hooks/useGroupVideosInvalidation";
 import { publishGroupThumbnail, uploadThumbnailFile } from "../../features/youtube/api/thumbnailApi";
 
 // Same naming style as the InstaEditor's own generateRandomName, so a
@@ -342,6 +342,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     try {
       const asset = await uploadThumbnailFile(file);
       await publishGroupThumbnail(groupId, videoId, platformAccountId, asset.id);
+      invalidateGroupVideos(groupId);
       toast.success("Copertina salvata e pubblicata su YouTube.");
       await refreshVideos(false, true);
     } catch (error) {
@@ -357,6 +358,7 @@ export function useGroupYouTubeVideos(groupId: number, enabled = true, groupName
     setThumbnailVideoID(videoId);
     try {
       await publishGroupThumbnail(groupId, videoId, platformAccountId, mediaId);
+      invalidateGroupVideos(groupId);
       toast.success("Copertina bozza applicata e pubblicata su YouTube.");
       await refreshVideos(false, true);
     } catch (error) {
