@@ -140,6 +140,13 @@ func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, re
 		return
 	}
 	if edit == nil {
+		// Standalone thumbnail projects use the same editor surface but do
+		// not have a youtube_video_edits row. Their opaque Velox id is
+		// resolved through the persisted bridge and title/description are
+		// saved on the thumbnail project itself.
+		if r.saveStandaloneEditorDraft(w, req, identity.UserID(), veloxProjectID) {
+			return
+		}
 		writeError(w, http.StatusNotFound, "editor session not found")
 		return
 	}
@@ -309,6 +316,82 @@ func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, re
 		DraftPublishAt:            publishAt,
 		DraftUpdatedAt:            draftUpdatedAt,
 	})
+}
+
+// saveStandaloneEditorDraft handles the metadata autosave for a standalone
+// thumbnail project bridged into the editor. It returns true when the request
+// was resolved as a standalone project (including errors), and false when no
+// bridge exists so the caller can preserve the normal 404 behaviour.
+func (r *Router) saveStandaloneEditorDraft(w http.ResponseWriter, req *http.Request, userID int64, veloxProjectID string) bool {
+	if r.thumbnailProjectStore == nil {
+		return false
+	}
+	bridgeStore, ok := r.thumbnailProjectStore.(thumbnailExternalProjectBridgeStore)
+	if !ok {
+		return false
+	}
+	bridge, err := bridgeStore.FindVeloxProjectBridgeByExternalProjectID(req.Context(), auth.IdentityFromContext(req.Context()).WorkspaceID(), veloxProjectID)
+	if err != nil || bridge == nil {
+		return false
+	}
+	project, err := r.thumbnailProjectStore.FindByID(req.Context(), bridge.WorkspaceID, bridge.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find thumbnail project: "+err.Error())
+		return true
+	}
+	workspace, workspaceErr := r.workspaceStore.FindByID(bridge.WorkspaceID)
+	if workspaceErr != nil {
+		writeError(w, http.StatusInternalServerError, "find workspace: "+workspaceErr.Error())
+		return true
+	}
+	if project == nil || project.WorkspaceID != bridge.WorkspaceID || workspace == nil || !r.userCanEditWorkspace(userID, workspace) {
+		writeError(w, http.StatusNotFound, "editor session not found")
+		return true
+	}
+
+	var payload youTubeEditorSessionDraftRequest
+	var bodyBytes []byte
+	if req.Body != nil {
+		bodyBytes, err = io.ReadAll(io.LimitReader(req.Body, 5<<20))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+			return true
+		}
+	}
+	if len(bodyBytes) > 0 {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return true
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(bodyBytes, &raw); err == nil {
+			if _, present := raw["title"]; present {
+				project.Name = strings.TrimSpace(payload.Title)
+			}
+			if _, present := raw["description"]; present {
+				project.Description = strings.TrimSpace(payload.Description)
+			}
+		}
+	}
+
+	draftUpdatedAt := time.Now().UTC()
+	if err := r.thumbnailProjectStore.UpdateCAS(req.Context(), project, project.Version); err != nil {
+		if errors.Is(err, repository.ErrThumbnailProjectNotFound) {
+			writeError(w, http.StatusConflict, "thumbnail project changed; reload and retry")
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("save thumbnail draft: %v", err))
+		}
+		return true
+	}
+	writeJSON(w, http.StatusOK, youTubeEditorSessionDraftResponse{
+		VeloxProjectID:    veloxProjectID,
+		DraftTitle:        project.Name,
+		DraftDescription:  project.Description,
+		DraftTags:         []string{},
+		DraftTranslations: map[string]models.YouTubeTranslation{},
+		DraftUpdatedAt:    draftUpdatedAt,
+	})
+	return true
 }
 
 // draftStringValue dereferences an optional draft column value,
