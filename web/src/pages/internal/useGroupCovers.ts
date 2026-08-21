@@ -250,6 +250,19 @@ export function useGroupCovers(groupId: number) {
         body: JSON.stringify({ workspace_id: group.workspace_id, name: `${draft.name} · copia`, description: `[instaedit-group:${targetGroupId}] Copia da ${groupId}`, canvas_width: 1280, canvas_height: 720 }),
       });
       const copy = (await response.json()) as GroupDraft;
+      try {
+        const assetsResponse = await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(draft.id)}/assets?workspace_id=${draft.workspace_id}`);
+        const assets = (await assetsResponse.json()) as { items?: Array<{ media_id: string; role: string; object_id?: string }> };
+        for (const asset of assets.items ?? []) {
+          await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(copy.id)}/assets?workspace_id=${group.workspace_id}`, {
+            method: "POST",
+            body: JSON.stringify({ media_id: asset.media_id, role: asset.role, object_id: asset.object_id }),
+          });
+        }
+      } catch {
+        // The project copy remains useful even when an old asset link cannot
+        // be duplicated; the user can attach a new image in the editor.
+      }
       if (targetGroupId === groupId) setDrafts((items) => [copy, ...items]);
       toast.success("Bozza duplicata nel gruppo selezionato.");
       return true;
