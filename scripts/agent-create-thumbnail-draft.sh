@@ -22,16 +22,16 @@ size_bytes=$(wc -c < "$image_path")
 sha256=$(sha256sum "$image_path" | awk '{print $1}')
 auth=( -H "Authorization: Bearer $api_key" -H "Content-Type: application/json" )
 
-presign=$(curl --fail-with-body -sS "${auth[@]}" -X POST "$base_url/api/v1/media/presign" \
-  --data "$(jq -cn --arg f "$(basename "$image_path")" --arg c "$content_type" --argjson s "$size_bytes" --arg h "$sha256" '{filename:$f,content_type:$c,size_bytes:$s,sha256:$h}')")")
-upload_url=$(jq -r '.upload_url' <<<"$presign")
-asset_id=$(jq -r '.asset_id' <<<"$presign")
+presign_payload=$(jq -cn --arg f "$(basename "$image_path")" --arg c "$content_type" --argjson s "$size_bytes" --arg h "$sha256" '{filename:$f,content_type:$c,size_bytes:$s,sha256:$h}')
+presign=$(curl --fail-with-body -sS "${auth[@]}" -X POST "$base_url/api/v1/media/presign" --data "$presign_payload")
+upload_url=$(printf '%s' "$presign" | jq -er '.upload_url | strings | select(length > 0)') || { echo "presign response missing upload_url" >&2; exit 1; }
+asset_id=$(printf '%s' "$presign" | jq -er '.asset_id | strings | select(length > 0)') || { echo "presign response missing asset_id" >&2; exit 1; }
 curl --fail-with-body -sS -X PUT -H "Content-Type: $content_type" --data-binary "@$image_path" "$upload_url" >/dev/null
 curl --fail-with-body -sS "${auth[@]}" -X POST "$base_url/api/v1/media/$asset_id/complete" >/dev/null
 
-project=$(curl --fail-with-body -sS "${auth[@]}" -X POST "$base_url/api/v1/thumbnail-projects" \
-  --data "$(jq -cn --argjson w "$workspace_id" --arg n "$name" --arg d "[instaedit-group:$group_id] Bozza Codex senza video" '{workspace_id:$w,name:$n,description:$d,canvas_width:1280,canvas_height:720}')")")
-project_id=$(jq -r '.id' <<<"$project")
+project_payload=$(jq -cn --argjson w "$workspace_id" --arg n "$name" --arg d "[instaedit-group:$group_id] Bozza Codex senza video" '{workspace_id:$w,name:$n,description:$d,canvas_width:1280,canvas_height:720}')
+project=$(curl --fail-with-body -sS "${auth[@]}" -X POST "$base_url/api/v1/thumbnail-projects" --data "$project_payload")
+project_id=$(printf '%s' "$project" | jq -er '.id | strings | select(length > 0)') || { echo "thumbnail project response missing id" >&2; exit 1; }
 curl --fail-with-body -sS "${auth[@]}" -X POST "$base_url/api/v1/thumbnail-projects/$project_id/assets?workspace_id=$workspace_id" \
-  --data "$(jq -cn --arg m "$asset_id" '{media_id:$m,role:"preview"}')" >/dev/null
+  --data "$(jq -cn --arg m "$asset_id" '{media_id:$m,role:"background"}')" >/dev/null
 printf '%s\n' "$project"

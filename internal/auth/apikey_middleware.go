@@ -87,12 +87,16 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		environment, secret, err := ParseFullKey(raw)
+		environment, _, err := ParseFullKey(raw)
 		if err != nil || (a.ExpectedEnvironment != "" && environment != a.ExpectedEnvironment) {
 			http.Error(w, "invalid api key", http.StatusUnauthorized)
 			return
 		}
-		hash := Hash(secret)
+		// ApiKey creation persists the hash of the complete plaintext key
+		// (including sk_test_/sk_live_). Hash the same canonical value at
+		// lookup time; hashing only the suffix would make every valid key
+		// fail authentication.
+		hash := Hash(raw)
 		if hash == nil {
 			http.Error(w, "invalid api key", http.StatusUnauthorized)
 			return

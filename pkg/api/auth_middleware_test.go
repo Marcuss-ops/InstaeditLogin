@@ -44,11 +44,10 @@ func mintAPIKey(t *testing.T, repo *fakeAPIKeyRepo, createdBy, wsID int64, perms
 	if err != nil {
 		t.Fatalf("generate api key: %v", err)
 	}
-	_, secret, err := auth.ParseFullKey(full)
-	if err != nil {
+	if _, _, err := auth.ParseFullKey(full); err != nil {
 		t.Fatalf("parse api key: %v", err)
 	}
-	repo.keys[string(auth.Hash(secret))] = &models.ApiKey{
+	repo.keys[string(auth.Hash(full))] = &models.ApiKey{
 		ID:          1,
 		WorkspaceID: wsID,
 		CreatedBy:   createdBy,

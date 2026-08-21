@@ -317,7 +317,7 @@ type rowScanner interface {
 func scanApiKeyRow(r rowScanner) (*models.ApiKey, error) {
 	key := &models.ApiKey{}
 	if err := r.Scan(&key.ID, &key.WorkspaceID, &key.CreatedBy,
-		&key.Name, &key.Environment, &key.KeyPrefix, &key.Permissions,
+		&key.Name, &key.Environment, &key.KeyPrefix, pq.Array(&key.Permissions),
 		&key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt,
 		&key.CreatedAt, &key.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("failed to scan api key: %w", err)
