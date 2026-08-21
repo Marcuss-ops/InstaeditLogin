@@ -1,5 +1,5 @@
 import { memo, useRef, useState } from "react";
-import { Calendar, Check, Edit3, Image as ImageIcon, Loader2, X } from "lucide-react";
+import { Calendar, Check, Edit3, Image as ImageIcon, Loader2, Maximize2, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { LanguageFlag } from "../../components/brand/LanguageFlag";
 import { categoryLabelForId, privacyBadgeForStatus, toneClasses } from "./groupYouTubeVideosVisual";
@@ -52,6 +52,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
   opening,
   renaming,
   onOpenEditor,
+  onOpenPreview,
   onRenameCover,
 }: {
   cover: GroupCover;
@@ -60,6 +61,7 @@ export const GroupCoverCard = memo(function GroupCoverCard({
   /** True while a rename PUT for this cover is in flight. */
   renaming?: boolean;
   onOpenEditor: (cover: GroupCover) => void;
+  onOpenPreview: (cover: GroupCover) => void;
   onRenameCover: (cover: GroupCover, newTitle: string) => Promise<boolean> | boolean;
 }) {
   const status = projectStatusLabel(cover.project_status);
@@ -148,6 +150,16 @@ export const GroupCoverCard = memo(function GroupCoverCard({
             <LanguageFlag code={cover.language} className="h-4 w-6" />
           </span>
         )}
+        <button
+          type="button"
+          onClick={(event) => { event.stopPropagation(); onOpenPreview(cover); }}
+          aria-label="Ingrandisci anteprima copertina"
+          title="Ingrandisci anteprima"
+          className="absolute bottom-3 right-3 z-10 inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.16] bg-black/60 px-2.5 text-[10px] font-bold text-white backdrop-blur-md transition-colors hover:bg-violet-500/80"
+        >
+          <Maximize2 size={13} aria-hidden="true" />
+          Zoom
+        </button>
       </div>
 
       <div className="flex flex-1 flex-col p-4">

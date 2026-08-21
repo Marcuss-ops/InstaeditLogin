@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ArrowUpRight, Image as ImageIcon, Loader2, Plus, Sparkles } from "lucide-react";
 import { GroupCoverCard } from "./GroupCoverCard";
 import { useGroupCovers } from "./useGroupCovers";
@@ -5,6 +6,7 @@ import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { GroupVideoManager } from "./GroupVideoManager";
 import type { GroupCover, GroupDraft } from "./groupCoversTypes";
 import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
+import { GroupCoverPreviewModal } from "./GroupCoverPreviewModal";
 
 /**
  * Video/Cover Manager for one group (the Copertine hub body). The
@@ -18,7 +20,10 @@ import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
  * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, uploadDraftAsset, renameCover, renamingCoverId } = useGroupCovers(groupId);
+  const { state, drafts, refreshCovers, openCoverEditor, openingCoverId, openDraftEditor, openingDraftId, uploadDraftAsset, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
+  const [previewCover, setPreviewCover] = useState<GroupCover | null>(null);
+  const [previewTitle, setPreviewTitle] = useState("");
+  const [previewDescription, setPreviewDescription] = useState("");
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
@@ -42,6 +47,12 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
   const handleOpenCoverEditor = (cover: GroupCover) => {
     const tab = window.open("about:blank", "_blank");
     void openCoverEditor(cover, tab);
+  };
+
+  const handleOpenCoverPreview = (cover: GroupCover) => {
+    setPreviewCover(cover);
+    setPreviewTitle(cover.draft_title || cover.name || "");
+    setPreviewDescription(cover.draft_description || "");
   };
 
   const coverAssetUrl = (cover: GroupCover): string | undefined => {
@@ -140,6 +151,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
                 opening={openingCoverId === cover.project_id}
                 renaming={renamingCoverId === cover.project_id}
                 onOpenEditor={handleOpenCoverEditor}
+                onOpenPreview={handleOpenCoverPreview}
                 onRenameCover={renameCover}
               />
             </ThumbnailDropTarget>
@@ -148,6 +160,29 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
       )}
 
     </section>
+
+    {previewCover && state.kind === "ready" && (
+      <GroupCoverPreviewModal
+        cover={previewCover}
+        previewUrl={coverAssetUrl(previewCover)}
+        saving={savingCoverId === previewCover.project_id}
+        opening={openingCoverId === previewCover.project_id}
+        title={previewTitle}
+        description={previewDescription}
+        onTitleChange={setPreviewTitle}
+        onDescriptionChange={setPreviewDescription}
+        onClose={() => setPreviewCover(null)}
+        onSave={() => {
+          void saveCoverDraft(previewCover, previewTitle, previewDescription).then((saved) => {
+            if (saved) setPreviewCover(null);
+          });
+        }}
+        onOpenEditor={() => {
+          setPreviewCover(null);
+          handleOpenCoverEditor(previewCover);
+        }}
+      />
+    )}
 
     <div className="border-t border-white/[0.06] pt-6">
       <GroupVideoManager controller={videosController} />
