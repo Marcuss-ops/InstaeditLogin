@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { ArrowUpRight, Image as ImageIcon, Loader2, Plus, Sparkles, WandSparkles, X } from "lucide-react";
+import { ArrowUpRight, Image as ImageIcon, Loader2, Plus, Sparkles } from "lucide-react";
 import { GroupCoverCard } from "./GroupCoverCard";
 import { useGroupCovers } from "./useGroupCovers";
 import { useGroupYouTubeVideos } from "./useGroupYouTubeVideos";
 import { GroupVideoManager } from "./GroupVideoManager";
-import type { GroupCover, GroupDraft } from "./groupCoversTypes";
+import type { GroupCover } from "./groupCoversTypes";
 import { GroupCoverPreviewModal } from "./GroupCoverPreviewModal";
 import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
 
@@ -20,7 +20,7 @@ import { ThumbnailDropTarget } from "./ThumbnailDropTarget";
  * instance so the group list is fetched once.
  */
 export function GroupCovers({ groupId, groupName }: { groupId: number; groupName?: string }) {
-  const { state, drafts, refreshCovers, createStandaloneDraft, duplicateDraftToGroup, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
+  const { state, refreshCovers, openCoverEditor, openingCoverId, renameCover, renamingCoverId, saveCoverDraft, savingCoverId } = useGroupCovers(groupId);
   // ONE canonical video-list hook for the whole page: the one-click
   // quick-create AND the Video/Cover manager below share the same list
   // state instead of firing two parallel fetches.
@@ -29,7 +29,6 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
   const [previewCover, setPreviewCover] = useState<GroupCover | null>(null);
   const [previewTitle, setPreviewTitle] = useState("");
   const [previewDescription, setPreviewDescription] = useState("");
-  const [draftTarget, setDraftTarget] = useState<GroupDraft | GroupCover | null>(null);
 
   // Both editor openings grab the destination tab SYNCHRONOUSLY inside
   // the click gesture: once the async session/draft/launch round-trips
@@ -63,22 +62,6 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
       || cover.source_thumbnail_url;
   };
 
-  const draftMediaId = (draft: GroupDraft | GroupCover): string | undefined =>
-    "thumbnail_media_id" in draft ? (draft.thumbnail_media_id || draft.preview_media_id || undefined) : (draft.preview_media_id || undefined);
-
-  const applyDraft = async (videoId: string, accountId: number) => {
-    if (!draftTarget) return;
-    const mediaId = draftMediaId(draftTarget);
-    if (!mediaId) {
-      window.alert("Questa bozza non ha ancora un'immagine esportata. Aprila nell'editor e salvala prima di applicarla.");
-      return;
-    }
-    if (!window.confirm("Impostare questa bozza come copertina del video? L'immagine verrà pubblicata su YouTube.")) return;
-    await videosController.applyThumbnailMedia(videoId, accountId, mediaId);
-    setDraftTarget(null);
-    refreshCovers();
-  };
-
   return (
     <>
     <section className="mb-6" data-testid="group-covers">
@@ -93,8 +76,8 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
         </div>
         <div className="flex shrink-0 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2">
           <ImageIcon size={15} className="text-violet-300" aria-hidden="true" />
-          <span className="text-[12px] font-semibold text-[#cbd0d8]">{state.kind === "ready" ? state.covers.length + drafts.length : "—"}</span>
-          <span className="text-[11px] text-[#777e8b]">{state.kind === "ready" && state.covers.length + drafts.length === 1 ? "copertina" : "copertine"}</span>
+          <span className="text-[12px] font-semibold text-[#cbd0d8]">{state.kind === "ready" ? state.covers.length : "—"}</span>
+          <span className="text-[11px] text-[#777e8b]">{state.kind === "ready" && state.covers.length === 1 ? "copertina" : "copertine"}</span>
         </div>
       </div>
 
@@ -115,24 +98,6 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
       )}
 
       {state.kind === "ready" && (
-        <>
-        <div className="mb-5 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4" data-testid="group-draft-gallery">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div><h3 className="text-[14px] font-bold text-white">Galleria bozze del gruppo</h3><p className="mt-1 text-[11px] text-[#858c99]">Crea una copertina anche senza scegliere subito un video.</p></div>
-            <button type="button" onClick={() => { const name = window.prompt("Nome della nuova bozza", "Thumbnail Codex"); if (name !== null) void createStandaloneDraft(name); }} className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/25 bg-violet-500/[0.12] px-3 py-2 text-[11px] font-bold text-violet-100 hover:bg-violet-500/[0.22]"><WandSparkles size={13} /> Nuova bozza</button>
-          </div>
-          {drafts.length === 0 && state.covers.length === 0 ? <p className="rounded-xl border border-dashed border-white/[0.1] px-4 py-5 text-center text-[12px] text-[#858c99]">Nessuna bozza ancora. Creane una per iniziare.</p> : <div className="flex gap-3 overflow-x-auto pb-1">
-            {[...drafts, ...state.covers.filter((cover) => cover.project_status === "draft")].map((draft) => {
-              const mediaId = draftMediaId(draft);
-              const preview = "source_thumbnail_url" in draft ? coverAssetUrl(draft) : undefined;
-              const draftKey = "id" in draft ? draft.id : draft.project_id;
-              return <button type="button" key={draftKey} onClick={() => setDraftTarget(draft)} onDoubleClick={() => { if ("id" in draft) { const raw = window.prompt("ID del gruppo destinatario", ""); const target = Number(raw); if (Number.isInteger(target) && target > 0) void duplicateDraftToGroup(draft, target); } }} title={"id" in draft ? "Doppio click per duplicare in un altro gruppo" : "Seleziona per applicare"} className="group min-w-[190px] overflow-hidden rounded-xl border border-white/[0.08] bg-black/20 text-left hover:border-violet-400/40">
-                <div className="aspect-video bg-white/[0.05]">{preview ? <img src={preview} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-violet-200/60"><ImageIcon size={24} /></div>}</div>
-                <div className="p-3"><p className="truncate text-[12px] font-semibold text-white">{draft.name}</p><p className="mt-1 text-[10px] text-[#858c99]">{mediaId ? "Pronta da applicare" : "Bozza editor"}</p></div>
-              </button>;
-            })}
-          </div>}
-        </div>
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
           <button
             type="button"
@@ -171,12 +136,7 @@ export function GroupCovers({ groupId, groupName }: { groupId: number; groupName
             </ThumbnailDropTarget>
           ))}
         </div>
-        </>
       )}
-
-      {draftTarget && state.kind === "ready" ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
-        <div className="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-[#11141c] p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h3 className="text-[16px] font-bold text-white">Applica bozza</h3><p className="mt-1 text-[11px] text-[#858c99]">Scegli il video di destinazione.</p></div><button type="button" onClick={() => setDraftTarget(null)} className="rounded-lg p-2 text-[#9aa0aa] hover:bg-white/[0.08]"><X size={16} /></button></div><div className="max-h-[55vh] space-y-2 overflow-y-auto">{videosController.state.kind === "ready" ? videosController.state.videos.map((video) => <button type="button" key={video.youtube_video_id} onClick={() => void applyDraft(video.youtube_video_id, video.platform_account_id)} className="flex w-full items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 text-left hover:border-violet-400/40"><span className="min-w-0"><span className="block truncate text-[12px] font-semibold text-white">{video.title}</span><span className="mt-1 block font-mono text-[10px] text-[#858c99]">{video.youtube_video_id}</span></span><span className="ml-3 shrink-0 text-[11px] font-bold text-violet-200">Imposta</span></button>) : <p className="text-[12px] text-[#858c99]">Caricamento video…</p>}</div></div>
-      </div> : null}
 
       {previewCover && state.kind === "ready" ? (
         <GroupCoverPreviewModal

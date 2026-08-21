@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { authedFetch, AuthError, ApiError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import { coversHubReturnTo, openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
-import { invalidateGroupVideos, useGroupVideosInvalidation } from "../../features/youtube/hooks/useGroupVideosInvalidation";
+import { invalidateGroupVideos } from "../../features/youtube/hooks/useGroupVideosInvalidation";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { CoversLoadState, GroupCover, GroupDraft } from "./groupCoversTypes";
 
@@ -105,8 +105,6 @@ export function useGroupCovers(groupId: number) {
     setState({ kind: "loading" });
     void loadCovers(controller.signal);
   }, [loadCovers]);
-
-  useGroupVideosInvalidation(groupId, () => refreshCovers());
 
   useEffect(() => {
     if (groupId <= 0) {
@@ -291,6 +289,8 @@ export function useGroupCovers(groupId: number) {
       // Targeted invalidation: only the group video-list cache
       // (`['groups', groupId, 'youtube', 'videos']`) is refreshed, so
       // the cards reflect the new draft without reloading InstaEdit.
+      // The optimistic cover title remains local; the video manager still
+      // receives the targeted invalidation without reloading this grid.
       invalidateGroupVideos(groupId);
       return true;
     } catch (error) {
