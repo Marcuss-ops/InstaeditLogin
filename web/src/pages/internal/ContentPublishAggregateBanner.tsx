@@ -61,8 +61,8 @@ export function AggregateBanner({
             Pubblicazione non riuscita
           </div>
           <p className="text-xs text-[#9aa0aa] mt-0.5">
-            Una o più fasi hanno avuto esito negativo. Puoi riprovare
-            la pubblicazione dal pannello qui sotto.
+            Una o più destinazioni non sono riuscite. Le destinazioni già
+            pubblicate restano intatte: puoi riprovare solo quelle fallite.
           </p>
         </div>
       </div>
@@ -80,10 +80,10 @@ export function AggregateBanner({
       />
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-blue-100">
-          In coda → Pubblicazione su YouTube
+          In coda → Pubblicazione in corso
         </div>
         <p className="text-xs text-[#9aa0aa] mt-0.5">
-          Il worker sta processando i target. La pagina si
+          Il worker sta processando le destinazioni. La pagina si
           aggiorna automaticamente.
         </p>
       </div>

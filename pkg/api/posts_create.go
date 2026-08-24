@@ -228,8 +228,20 @@ func (r *Router) createPostPersist(
 	// The upload_worker path (Drive batches) flows its own
 	// job.Metadata through unchanged — operators can set
 	// source_language there too.
+	metadata := map[string]any{}
 	if lang := strings.TrimSpace(body.Content.Language); lang != "" {
-		post.Metadata = json.RawMessage(fmt.Sprintf(`{"source_language":%q}`, lang))
+		metadata["source_language"] = lang
+	}
+	if body.Content.TranslationEnabled != nil {
+		metadata["translation_enabled"] = *body.Content.TranslationEnabled
+	}
+	if len(metadata) > 0 {
+		encoded, encodeErr := json.Marshal(metadata)
+		if encodeErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to encode post metadata")
+			return
+		}
+		post.Metadata = encoded
 	}
 	targets := make([]*models.PostTarget, 0, len(resolvedTargets))
 	for _, t := range resolvedTargets {

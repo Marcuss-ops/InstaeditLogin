@@ -78,6 +78,11 @@ export function TargetRow({
             Tentativi: {target.attempt_count}
           </p>
         )}
+        {target.next_attempt_at && (target.status === "queued" || target.status === "waiting_provider") && (
+          <p className="mt-0.5 text-xs text-[#7f8795]">
+            Prossimo tentativo: {formatRetryDate(target.next_attempt_at)}
+          </p>
+        )}
         {retryError && (
           <p
             className="mt-1 text-xs text-red-300"
@@ -106,4 +111,10 @@ export function TargetRow({
       )}
     </div>
   );
+}
+
+function formatRetryDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "a breve";
+  return date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
 }

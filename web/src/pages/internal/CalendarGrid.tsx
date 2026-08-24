@@ -112,6 +112,7 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
   const navigate = useNavigate();
   const calendarRef = useRef<FullCalendar>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
 
   const events: EventInput[] = useMemo(() => {
     return posts
@@ -156,6 +157,14 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
       const separator = eventKey.indexOf("-");
       const source = separator > 0 ? eventKey.slice(0, separator) : "post";
       const id = separator > 0 ? eventKey.slice(separator + 1) : eventKey;
+      const movedPost = arg.event.extendedProps as CalendarPost;
+      const conflict = findSchedulingConflict(posts, movedPost, newDate);
+      if (conflict) {
+        arg.revert();
+        setConflictMessage(conflict);
+        return;
+      }
+      setConflictMessage(null);
       setBusyId(eventKey);
       try {
         const endpoint = source === "upload" ? `/api/v1/uploads/${id}/reschedule` : `/api/v1/posts/${id}`;
@@ -186,6 +195,19 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
 
   return (
     <div className="fc-dark-theme flex-1 min-h-0 min-w-0">
+      {conflictMessage && (
+        <div
+          className="mb-3 flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/[0.08] px-4 py-3 text-sm text-amber-100"
+          role="alert"
+          data-testid="calendar-conflict-warning"
+        >
+          <AlertCircle size={17} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
+          <div className="flex-1">{conflictMessage}</div>
+          <button type="button" onClick={() => setConflictMessage(null)} className="text-xs text-amber-200 underline hover:text-white">
+            Chiudi
+          </button>
+        </div>
+      )}
       <FullCalendar
         ref={calendarRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
@@ -219,6 +241,25 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
       />
     </div>
   );
+}
+
+function findSchedulingConflict(
+  posts: CalendarPost[],
+  movedPost: CalendarPost,
+  newDate: Date,
+): string | null {
+  const movedTargets = new Set(movedPost.targets ?? []);
+  if (movedTargets.size === 0) return null;
+  const movedTime = newDate.getTime();
+  const conflict = posts.find((post) => {
+    if (post.id === movedPost.id && post.source === movedPost.source) return false;
+    if (!post.scheduled_at || post.status === "published") return false;
+    const scheduledTime = new Date(post.scheduled_at).getTime();
+    if (!Number.isFinite(scheduledTime) || Math.abs(scheduledTime - movedTime) >= 30 * 60 * 1000) return false;
+    return (post.targets ?? []).some((targetId) => movedTargets.has(targetId));
+  });
+  if (!conflict) return null;
+  return `Conflitto di programmazione: “${conflict.title || "Senza titolo"}” usa già lo stesso canale in questa fascia oraria. Scegli un altro orario.`;
 }
 
 export type { CalendarPost };

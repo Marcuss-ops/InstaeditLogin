@@ -36,7 +36,7 @@ export function SessionLossRedirect() {
       const isProtected = pathname.startsWith("/app") || pathname.startsWith("/admin");
       if (!isProtected || pathname.startsWith("/login")) return;
       const next = encodeURIComponent(`${pathname}${search}`);
-      navigate(`/login?next=${next}`, { replace: true });
+      navigate(`/login?next=${next}&reason=session_expired`, { replace: true });
     };
     window.addEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);

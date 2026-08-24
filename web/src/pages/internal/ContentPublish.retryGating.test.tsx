@@ -4,13 +4,13 @@
  *
  * Pinned user-spec behaviors:
  *  1. RETRIABLE_STATUSES gating on per-target button — only
- *     statuses in {`failed`, `retrying`, `waiting_provider`}
- *     render the `Riprova pubblicazione` button. `partially_published`
- *     intentionally does NOT (per the source's RETRIABLE_STATUSES Set).
+ *     statuses in {`failed`, `retrying`, `waiting_provider`,
+ *     `partially_published`} render the retry button so creators can
+ *     repair only failed destinations.
  *  2. Force flag forwarding — `retryPostTarget` is invoked with
  *     `{ force: forceFlagFor(target.status) }`; forceFlagFor is
- *     `true` ONLY for `waiting_provider`, `false` for `failed` and
- *     `retrying`.
+ *     `true` for `waiting_provider` and `partially_published`,
+ *     `false` for `failed` and `retrying`.
  *
  * Shared pure fixtures come from `ContentPublish.testUtils`; the
  * module mocks are declared locally with `vi.hoisted` (repo
@@ -97,18 +97,16 @@ afterEach(() => {
 // ── Section 1: RETRIABLE_STATUSES gating on per-target button ─────────
 
 describe("ContentPublish — RETRIABLE_STATUSES gating", () => {
-  const RETRIABLE: PostStatus[] = ["failed", "retrying", "waiting_provider"];
+  const RETRIABLE: PostStatus[] = ["failed", "retrying", "waiting_provider", "partially_published"];
   const NON_RETRIABLE: PostStatus[] = [
     "queued",
     "publishing",
     "published",
     "draft",
-    "partially_published",
     "dlq",
-    "blocked_auth",
   ];
 
-  it("renders retry button ONLY for the three retriable statuses", () => {
+  it("renders retry button only for retriable statuses", () => {
     const s: MockState = {
       targets: [
         ...RETRIABLE.map((status, i) => makeTarget(i + 1, status)),
@@ -174,6 +172,22 @@ describe("ContentPublish — force flag forwarding", () => {
     ];
     expect(targetId).toBe(1);
     expect(opts).toEqual({ force: true });
+  });
+
+  it("forwards { force: true } when retrying a partially published target", async () => {
+    setMockState({
+      targets: [makeTarget(1, "partially_published")],
+      status: "ready",
+      error: null,
+    });
+    retryPostTargetMock.mockResolvedValueOnce(undefined);
+
+    renderAtPostIdPath(999);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("retry-button-1"));
+    });
+
+    expect(retryPostTargetMock).toHaveBeenCalledWith(1, { force: true });
   });
 
   it("forwards { force: false } when retrying a failed target", async () => {

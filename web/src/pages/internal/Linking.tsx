@@ -59,6 +59,17 @@ function AccountAvatar({ account }: { account: PlatformAccount }) {
   );
 }
 
+function reconnectHref(account: PlatformAccount): string {
+  const params = new URLSearchParams({
+    mode: "reconnect",
+    redirect: "/app/linking",
+  });
+  if (account.platform === "youtube" && account.platform_user_id) {
+    params.set("expected_channel_id", account.platform_user_id);
+  }
+  return `${API_BASE_URL}/api/v1/auth/${account.platform}/login?${params.toString()}`;
+}
+
 const LINKABLE_IDS: ProviderId[] = [
   "youtube",
   "tiktok",
@@ -323,29 +334,53 @@ export function InternalLinking() {
                       <div className="border-t border-white/[0.08] pt-4 mt-0">
                         {isConnected ? (
                           <div className="space-y-2">
-                            {accounts.map((account) => (
-                              <Link
-                                key={account.id}
-                                to={`/app/dashboard-channels/${account.id}`}
-                                className={`flex items-center justify-between gap-3 p-3 rounded-xl border transition-colors no-underline ${account.is_publishable === false ? "bg-amber-500/[0.05] border-amber-400/[0.18]" : "bg-white/[0.04] border-white/[0.08] hover:bg-white/[0.08]"}`}
-                              >
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <AccountAvatar account={account} />
-                                  <div className="min-w-0">
-                                    <p className="text-[13px] font-semibold text-white truncate">
-                                      @{account.username}
-                                    </p>
-                                    <p className="text-[11px] text-[#9aa0aa]">
-                                      {accountStateLabel(account)} · Linked on {new Date(account.created_at).toLocaleDateString()}
-                                    </p>
-                                  </div>
+                            {accounts.map((account) => {
+                              const needsReconnect =
+                                account.account_state === "reconnect_required" ||
+                                account.account_state === "suspended" ||
+                                account.account_state === "deleted" ||
+                                !isPublishableAccount(account);
+                              return (
+                                <div
+                                  key={account.id}
+                                  className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${needsReconnect ? "bg-amber-500/[0.05] border-amber-400/[0.18]" : "bg-white/[0.04] border-white/[0.08]"}`}
+                                >
+                                  <Link
+                                    to={`/app/dashboard-channels/${account.id}`}
+                                    className="flex items-center gap-3 min-w-0 flex-1 no-underline"
+                                  >
+                                    <AccountAvatar account={account} />
+                                    <div className="min-w-0">
+                                      <p className="text-[13px] font-semibold text-white truncate">
+                                        @{account.username}
+                                      </p>
+                                      <p className={cn("text-[11px]", needsReconnect ? "text-amber-300" : "text-[#9aa0aa]")}>
+                                        {accountStateLabel(account)} · Linked on {new Date(account.created_at).toLocaleDateString()}
+                                      </p>
+                                    </div>
+                                  </Link>
+                                  {needsReconnect ? (
+                                    <a
+                                      href={reconnectHref(account)}
+                                      onClick={(event) => event.stopPropagation()}
+                                      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-400 px-2.5 py-1.5 text-[11px] font-bold text-black no-underline hover:bg-amber-300 transition-colors"
+                                      aria-label={`Reconnect @${account.username}`}
+                                      data-testid={`reconnect-account-${account.id}`}
+                                    >
+                                      <RefreshCw size={12} /> Reconnect
+                                    </a>
+                                  ) : (
+                                    <Link
+                                      to={`/app/dashboard-channels/${account.id}`}
+                                      aria-label={`Open @${account.username}`}
+                                      className="text-[#9aa0aa] hover:text-white"
+                                    >
+                                      <RefreshCw size={14} />
+                                    </Link>
+                                  )}
                                 </div>
-                                <RefreshCw
-                                  size={14}
-                                  className="text-[#9aa0aa] shrink-0"
-                                />
-                              </Link>
-                            ))}
+                              );
+                            })}
                             <a
                               href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login?mode=add`}
                               onClick={(e) => e.stopPropagation()}

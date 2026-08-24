@@ -41,7 +41,7 @@ describe("SessionLossRedirect", () => {
     const { container } = renderWith("/app/covers?group=7");
     fireAuthExpired();
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe(
-      "/login?next=%2Fapp%2Fcovers%3Fgroup%3D7",
+      "/login?next=%2Fapp%2Fcovers%3Fgroup%3D7&reason=session_expired",
     );
   });
 
@@ -49,7 +49,7 @@ describe("SessionLossRedirect", () => {
     const { container } = renderWith("/admin/dashboard");
     fireAuthExpired();
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe(
-      "/login?next=%2Fadmin%2Fdashboard",
+      "/login?next=%2Fadmin%2Fdashboard&reason=session_expired",
     );
   });
 

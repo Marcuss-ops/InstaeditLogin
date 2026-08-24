@@ -151,6 +151,11 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 	if err != nil {
 		return fmt.Errorf("failed to create post: %w", err)
 	}
+	if len(post.Metadata) > 0 {
+		if _, err = tx.Exec(`UPDATE posts SET metadata = $1::jsonb WHERE id = $2`, post.Metadata, post.ID); err != nil {
+			return fmt.Errorf("failed to persist post metadata: %w", err)
+		}
+	}
 
 	// Insert each PostTarget, filling in target.PostID from the new post id.
 	for _, t := range targets {

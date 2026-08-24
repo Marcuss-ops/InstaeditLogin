@@ -21,6 +21,7 @@ export function Login() {
   // Keep the internal destination when the API sends an anonymous visitor
   // back here, but never allow an external redirect.
   const requestedNext = searchParams.get("next");
+  const sessionExpired = searchParams.get("reason") === "session_expired";
   const nextPath =
     requestedNext && requestedNext.startsWith("/") && !requestedNext.startsWith("//")
       ? requestedNext
@@ -93,6 +94,17 @@ export function Login() {
           <p className="text-sm text-[#9aa0aa] mb-10">
             Log in to manage your channel
           </p>
+
+          {sessionExpired && (
+            <div
+              className="mb-5 rounded-lg border border-amber-400/25 bg-amber-400/[0.08] px-4 py-3 text-sm text-amber-200"
+              role="status"
+              data-testid="session-expired-message"
+            >
+              La sessione è scaduta. Accedi di nuovo per continuare da dove
+              eri rimasto.
+            </div>
+          )}
 
           <form onSubmit={submit} className="space-y-5">
             <div>

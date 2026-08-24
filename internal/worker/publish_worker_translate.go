@@ -69,6 +69,9 @@ func (w *PublishWorker) SetArgosDescriptionTranslator(t services.DescriptionTran
 // several channels of the same language performs a single NVIDIA call
 // (each call costs 30-180s+ on NVIDIA's hosted tier).
 func (w *PublishWorker) localizeForChannel(ctx context.Context, target *models.PostTarget, account *models.PlatformAccount, post *models.Post) (*models.Post, bool, error) {
+	if !postTranslationEnabled(post) {
+		return post, false, nil
+	}
 	if account != nil {
 		if snapshot, ok := snapshotForAccount(post.Metadata, account.ID); ok {
 			localized := *post
@@ -165,6 +168,21 @@ func (w *PublishWorker) localizeForChannel(ctx context.Context, target *models.P
 		"description_provider", map[bool]string{true: "argos", false: "nvidia"}[w.argosDescriptionTranslator != nil],
 		"duration_ms", time.Since(start).Milliseconds())
 	return &localized, true, nil
+}
+
+// postTranslationEnabled reads the explicit per-post switch. Missing or
+// malformed metadata keeps the historical behavior: translation enabled.
+func postTranslationEnabled(post *models.Post) bool {
+	if post == nil || len(post.Metadata) == 0 {
+		return true
+	}
+	var meta struct {
+		TranslationEnabled *bool `json:"translation_enabled"`
+	}
+	if json.Unmarshal(post.Metadata, &meta) != nil || meta.TranslationEnabled == nil {
+		return true
+	}
+	return *meta.TranslationEnabled
 }
 
 // accountLanguage returns the channel language declared in the

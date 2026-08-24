@@ -48,7 +48,7 @@ export const STATUS_VISUAL: Record<PostStatus, StatusVisual> = {
     inMotion: false,
   },
   publishing: {
-    label: "Pubblicazione su YouTube",
+    label: "Pubblicazione in corso",
     bg: "bg-blue-500/[0.08]",
     text: "text-blue-200",
     border: "border-blue-500/30",
@@ -116,9 +116,9 @@ export const STATUS_VISUAL: Record<PostStatus, StatusVisual> = {
 /**
  * Targets in these states can be re-armed via the retry endpoint.
  * Strict `{ failed, retrying, waiting_provider }` per user spec.
- * `partially_published` is intentionally NOT retriable here: it
- * surfaces as its own badge in `STATUS_VISUAL` without a recovery
- * button — the user spec doesn't list it in the retryable states.
+ * A partially published post is retriable too: creators should be able
+ * to repair only the failed target without republishing targets that
+ * already succeeded.
  *
  * `force: true` required by the server for `waiting_provider` only;
  * `failed` / `retrying` accept an unforced retry per openapi.yaml
@@ -128,4 +128,5 @@ export const RETRIABLE_STATUSES = new Set<PostStatus>([
   "failed",
   "retrying",
   "waiting_provider",
+  "partially_published",
 ]);

@@ -28,6 +28,9 @@ type CreatePostContent struct {
 	// Persisted in post.Metadata under "source_language"; empty means
 	// "unknown — the translator infers it from the text".
 	Language string `json:"language,omitempty"`
+	// TranslationEnabled controls per-channel translation. Nil preserves the
+	// legacy default (enabled); false publishes the original text unchanged.
+	TranslationEnabled *bool `json:"translation_enabled,omitempty"`
 }
 
 type CreatePostTarget struct {

@@ -16,8 +16,8 @@ import type { PostTarget } from "../../features/publishing/api/types";
  *     ApiError / generic failure.
  *
  * The `force` flag is passed automatically when status is
- * `waiting_provider` (server requires `?force=true` for non-failed
- * states per openapi.yaml).
+ * `waiting_provider` or `partially_published` (the server requires
+ * `?force=true` for non-failed states per openapi.yaml).
  */
 export function useContentPublishRetry(onRetried: () => Promise<void>) {
   const navigate = useNavigate();
@@ -35,7 +35,9 @@ export function useContentPublishRetry(onRetried: () => Promise<void>) {
       });
       try {
         await retryPostTarget(target.id, {
-          force: target.status === "waiting_provider",
+          force:
+            target.status === "waiting_provider" ||
+            target.status === "partially_published",
         });
         await onRetried();
       } catch (err) {
