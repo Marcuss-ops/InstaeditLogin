@@ -86,18 +86,18 @@ func (w *PublishWorker) dispatchPostCompletion(
 	asset *models.MediaAsset,
 	sourceURL string,
 	extraConfig ...map[string]string,
-) {
+) (*models.DeliveryResult, error) {
 	if w == nil || w.deliveryRegistry == nil {
-		return
+		return nil, nil
 	}
 	if target == nil {
 		slog.Warn("publish worker: dispatchPostCompletion skipped (nil target)")
-		return
+		return nil, errors.New("delivery dispatch: nil target")
 	}
 	if account == nil || account.Platform == "" {
 		slog.Warn("publish worker: dispatchPostCompletion skipped (nil/empty account platform)",
 			"target_id", target.ID)
-		return
+		return nil, errors.New("delivery dispatch: empty account platform")
 	}
 
 	provider, err := w.deliveryRegistry.Get(account.Platform)
@@ -115,7 +115,7 @@ func (w *PublishWorker) dispatchPostCompletion(
 				"known_providers", w.deliveryRegistry.Names(),
 				"error", err,
 			)
-			return
+			return nil, err
 		}
 		// Other registry errors (nil registry, empty name): same
 		// fail-soft path.
@@ -125,7 +125,7 @@ func (w *PublishWorker) dispatchPostCompletion(
 			"platform", account.Platform,
 			"error", err,
 		)
-		return
+		return nil, err
 	}
 
 	dest := &models.DeliveryDestination{
@@ -215,7 +215,7 @@ func (w *PublishWorker) dispatchPostCompletion(
 			"delivery_class", deliveryErrorCode(deliverErr),
 			"error", deliverErr,
 		)
-		return
+		return nil, deliverErr
 	}
 
 	// drive_required policy gate (Task 8/10 acceptance
@@ -255,7 +255,7 @@ func (w *PublishWorker) dispatchPostCompletion(
 		// TODO(Task 8/10.1): postRepo.UpdateStatus(target.ID, "drive_required_failed")
 		// so a future Task 9 followup can surface this in the admin
 		// queue. Today log-only keeps the publish_worker DB-free.
-		return
+		return res, nil
 	}
 
 	slog.Info(
@@ -266,6 +266,7 @@ func (w *PublishWorker) dispatchPostCompletion(
 		"status", res.Status,
 		"remote_id", res.RemoteID,
 	)
+	return res, nil
 }
 
 // deliveryErrorCode keeps delivery diagnostics useful after the global

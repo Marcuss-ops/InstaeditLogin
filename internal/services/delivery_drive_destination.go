@@ -242,12 +242,16 @@ func (d *GoogleDriveDestination) Deliver(
 	// 3. Resolve the Drive access token (vault + refresh).
 	accessToken, err := d.tokenProvider.GetAccessToken(ctx, driveAccountID)
 	if err != nil {
+		errorCode := "drive_token_unavailable"
+		if errors.Is(err, ErrDriveNoRefreshToken) {
+			errorCode = "drive_auth_required"
+		}
 		return &models.DeliveryResult{
 			ProviderName: d.Name(),
 			Status:       "retrying",
 			Metadata: map[string]string{
 				"idempotency_key": idempotencyKey,
-				"error_code":      "drive_token_unavailable",
+				"error_code":      errorCode,
 				"error":           err.Error(),
 			},
 		}, nil

@@ -151,8 +151,8 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 
 // publishDriveExport is the Google Drive branch of publishTarget: Drive
 // is an exporter, not a social Publisher, so after the claim we resolve
-// a fresh media URL, mark the target published and hand the delivery to
-// dispatchPostCompletion. Callers must have verified the platform is
+// a fresh media URL, complete the Drive delivery, and only then mark the
+// target published. Callers must have verified the platform is
 // Google Drive and that the DeliveryRegistry is configured.
 func (w *PublishWorker) publishDriveExport(ctx context.Context, target *models.PostTarget, account *models.PlatformAccount, post *models.Post) error {
 	if w.resolver == nil {
@@ -162,13 +162,6 @@ func (w *PublishWorker) publishDriveExport(ctx context.Context, target *models.P
 	if err != nil {
 		return w.markFailed(target, "resolve fresh media URL for Drive delivery: "+err.Error())
 	}
-	target.Status = models.PostStatusPublished
-	now := time.Now()
-	target.PublishedAt = &now
-	if err := w.updateTargetStatus(ctx, target); err != nil {
-		return fmt.Errorf("mark Drive export target published: %w", err)
-	}
-	w.syncContentPackageState(ctx, post)
 	// Velox destination defaults are carried through UploadJob.Metadata
 	// and materialised on Post.Metadata. Forward only the destination
 	// folder to the provider; credentials and account selection remain
@@ -183,10 +176,35 @@ func (w *PublishWorker) publishDriveExport(ctx context.Context, target *models.P
 			}
 		}
 	}
-	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
+	res, deliverErr := w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
 		ID:          mediaReferenceValue(post.MediaAssetID),
 		ContentType: "video/mp4",
 	}, deliveryURL, config)
+	if deliverErr != nil {
+		return w.markFailed(target, "Drive delivery failed: "+deliverErr.Error())
+	}
+	if res == nil || res.Status != "published" {
+		reason := "Drive delivery did not complete"
+		if res != nil && res.Metadata != nil {
+			if code := res.Metadata["error_code"]; code != "" {
+				reason = "Drive delivery " + code
+			}
+			if res.Metadata["error_code"] == "drive_auth_required" {
+				if flagErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "drive_auth_required", reason); flagErr != nil {
+					w.logger.Warn("could not flag Drive account reauth_required", "platform_account_id", account.ID, "error", flagErr)
+				}
+				return w.markPublishBlockedAuth(target, reason)
+			}
+		}
+		return w.markFailed(target, reason)
+	}
+	target.Status = models.PostStatusPublished
+	now := time.Now()
+	target.PublishedAt = &now
+	if err := w.updateTargetStatus(ctx, target); err != nil {
+		return fmt.Errorf("mark Drive export target published: %w", err)
+	}
+	w.syncContentPackageState(ctx, post)
 	return nil
 }
 
