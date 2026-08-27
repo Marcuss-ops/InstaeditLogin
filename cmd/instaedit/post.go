@@ -28,12 +28,13 @@ type postCreateTarget struct {
 }
 
 type postTargetResponse struct {
-	ID            int64  `json:"id"`
-	PostID        int64  `json:"post_id"`
-	Status        string `json:"status"`
-	RemotePostID  string `json:"remote_post_id"`
-	RemotePostURL string `json:"remote_post_url"`
-	ErrorMessage  string `json:"error_message"`
+	ID             int64  `json:"id"`
+	PostID         int64  `json:"post_id"`
+	Status         string `json:"status"`
+	PlatformPostID string `json:"platform_post_id"`
+	RemotePostID   string `json:"remote_post_id"`
+	RemotePostURL  string `json:"remote_post_url"`
+	ErrorMessage   string `json:"error_message"`
 }
 
 type postCreateResponse struct {
@@ -90,7 +91,7 @@ func publishPost(c *client, postID int64) error {
 }
 
 // waitForPostTarget waits until the publishing worker exposes the real
-// YouTube video id. It returns as soon as remote_post_id is present;
+// YouTube video id. It returns as soon as the provider post id is present;
 // the editor-session creation that follows performs the authoritative
 // processed/channel/privacy checks before changing the video.
 func waitForPostTarget(c *client, targetID int64, timeout, interval time.Duration) (*postTargetResponse, error) {
@@ -105,6 +106,9 @@ func waitForPostTarget(c *client, targetID int64, timeout, interval time.Duratio
 		var target postTargetResponse
 		if err := c.request(http.MethodGet, "/api/v1/post-targets/"+strconv.FormatInt(targetID, 10), nil, &target); err != nil {
 			return nil, err
+		}
+		if target.RemotePostID == "" {
+			target.RemotePostID = target.PlatformPostID
 		}
 		if target.RemotePostID != "" {
 			return &target, nil
