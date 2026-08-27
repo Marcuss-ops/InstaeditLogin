@@ -185,6 +185,21 @@ func (w *PublishWorker) publishYouTubePhase2(ctx context.Context, target *models
 		}
 	}
 
+	// Posts materialized from an upload job use the two-phase YouTube
+	// delivery path: upload_worker owns videos.insert and publish_worker
+	// only performs the later privacy transition. If the delivery row has
+	// not been materialized yet, do not fall through to a second
+	// videos.insert. Direct API-created posts have no UploadJobID and keep
+	// the synchronous path below.
+	if post.UploadJobID != nil {
+		target.Status = models.PostStatusWaitingProvider
+		target.ErrorMessage = "waiting for YouTube delivery materialization"
+		if err := w.updateTargetStatus(ctx, target); err != nil {
+			return false, fmt.Errorf("wait for YouTube delivery materialization: %w", err)
+		}
+		return true, nil
+	}
+
 	return false, nil
 }
 

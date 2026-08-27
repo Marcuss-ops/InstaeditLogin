@@ -333,6 +333,18 @@ func (w *UploadWorker) processYouTubeDelivery(
 	}
 
 	if err := w.uploadVideoAsPrivateForDelivery(ctx, delivery, target, post, workerID); err != nil {
+		// Cancellation is an orchestration event (normally graceful
+		// shutdown), not a provider failure. Release the lease without
+		// consuming an attempt so the next worker can resume the same
+		// delivery from its persisted upload session.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if releaseErr := w.ytPubStore.ReleaseDeliveryLease(context.Background(), delivery.ID, workerID); releaseErr != nil {
+				w.logger.Warn("upload worker: release cancelled delivery lease failed",
+					"delivery_id", delivery.ID, "error", releaseErr)
+			}
+			return err
+		}
 		// Route to retry_wait / dead_letter with exponential backoff.
 		backoff := deliveryRetryBackoff(delivery.AttemptCount)
 		if fErr := w.ytPubStore.MarkDeliveryFailed(ctx, delivery.ID, workerID, "upload_failed", err.Error(), time.Now().Add(backoff)); fErr != nil {

@@ -231,6 +231,54 @@ func TestPublishTarget_YouTube_ReusesPhase1VideoID_VideosUpdate(t *testing.T) {
 	}
 }
 
+// TestPublishTarget_YouTubeUploadJobWaitsForMaterializedDelivery prevents a
+// race between the upload delivery pool and the publish worker. Upload-job
+// posts must never fall through to a second videos.insert while their
+// youtube_target_publications row is still being created.
+func TestPublishTarget_YouTubeUploadJobWaitsForMaterializedDelivery(t *testing.T) {
+	uploadJobID := int64(9001)
+	posts := &mockPostStore{
+		claimFn: func(int64) (bool, error) { return true, nil },
+		findByIDFn: func(int64) (*models.Post, error) {
+			return &models.Post{ID: 100, Title: "queued", Caption: "caption", UploadJobID: &uploadJobID}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: models.PlatformYouTube, PlatformUserID: "UCexpectedYtChan"}, nil
+		},
+	}
+	provider := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: models.PlatformYouTube},
+		publishFn: func(context.Context, string, string, models.PublishPayload) (*models.PublishResult, error) {
+			t.Fatal("upload-job target must wait for materialized delivery, not call videos.insert")
+			return nil, nil
+		},
+		validateChannelBindingFn: func(context.Context, string, string) error { return nil },
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(context.Context, int64, string, credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "fresh-bearer"}, nil
+		},
+	}
+	lookup := &mockYouTubeTargetPublicationLookup{
+		findByPostTargetIDFn: func(context.Context, int64) (*models.YouTubeTargetPublication, error) { return nil, nil },
+	}
+	w := newTestWorker(posts, users, models.PlatformYouTube, provider, vault)
+	w.SetYouTubeTargetPublicationStore(lookup)
+
+	target := scheduledTarget()
+	if err := w.publishTarget(context.Background(), target); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+	if target.Status != models.PostStatusWaitingProvider {
+		t.Fatalf("target status: want %q, got %q", models.PostStatusWaitingProvider, target.Status)
+	}
+	if target.ErrorMessage != "waiting for YouTube delivery materialization" {
+		t.Fatalf("target error: got %q", target.ErrorMessage)
+	}
+}
+
 // TestPublishTarget_YouTube_NativePublishAt_SkipsVideosUpdate validates
 // the migration-126 native-scheduling fast path: when the Phase-1
 // videos.insert carried status.publishAt (recorded on
