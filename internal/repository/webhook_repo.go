@@ -229,13 +229,27 @@ var ErrWebhookDeliveryNotFound = errors.New("webhook delivery not found")
 var ErrWebhookLeaseLost = errors.New("webhook delivery lease lost")
 
 // CreateDelivery inserts a delivery row (fan-out). Returns the new id.
+//
+// Re-insertion safety (migration 131): a duplicate (event_id, endpoint_id)
+// pair is a no-op — ON CONFLICT DO NOTHING skips the insert and the row
+// keeps its existing id/attempt/status. The dedupe protects the fan-out
+// against a caller re-emitting the same event_id: the endpoint receives
+// exactly one delivery attempt set, not one per Emit. The (d.ID == 0)
+// outcome distinguishes "already fanned out" for callers that care; the
+// dispatcher treats it as success (the delivery exists).
 func (r *WebhookRepository) CreateDelivery(ctx context.Context, d *WebhookDelivery) error {
 	err := r.db.QueryRowContext(ctx,
 		`INSERT INTO webhook_deliveries (event_id, endpoint_id, scheduled_at)
 		 VALUES ($1, $2, NOW())
+		 ON CONFLICT (event_id, endpoint_id) DO NOTHING
 		 RETURNING id, attempt, status, scheduled_at`,
 		d.EventID, d.EndpointID,
 	).Scan(&d.ID, &d.Attempt, &d.Status, &d.ScheduledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Conflict: the pair already exists. Leave the struct untouched
+		// (ID stays 0) so the caller can detect the dedupe if needed.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("create webhook delivery: %w", err)
 	}

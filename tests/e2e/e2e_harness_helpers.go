@@ -369,6 +369,19 @@ func applyE2ESchema(db *sql.DB) error {
 			thumbnail_url TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'scheduled',
 			publish_at TIMESTAMPTZ NULL,
+			-- Columns scanned by PostRepository.FindByIDForWorkspace (the
+			-- SELECT surface behind POST /posts/{id}/publish): without them
+			-- the scan errors and the endpoint 404s every publish.
+			-- ingest_after mirrors production migration 049b (NOT NULL
+			-- DEFAULT NOW()): the Go model scans it into a non-pointer
+			-- time.Time, so a NULL row value would fail the scan.
+			ingest_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			privacy_level TEXT NOT NULL DEFAULT '',
+			default_privacy_level TEXT NOT NULL DEFAULT '',
+			upload_job_id BIGINT NULL,
+			media_asset_id BIGINT NULL,
+			storage_object_key TEXT NOT NULL DEFAULT '',
+			bucket TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
@@ -384,6 +397,9 @@ func applyE2ESchema(db *sql.DB) error {
 			post_id BIGINT NOT NULL,
 			platform_account_id BIGINT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
+			-- error_message is written by the publish/reset transitions
+			-- (qPublishPostTargetsReset sets error_message = '').
+			error_message TEXT NOT NULL DEFAULT '',
 			locked_by TEXT NOT NULL DEFAULT '',
 			locked_at TIMESTAMPTZ NULL,
 			heartbeat_at TIMESTAMPTZ NULL,

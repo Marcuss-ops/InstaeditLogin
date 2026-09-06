@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
@@ -235,12 +236,12 @@ func (w *PublishWorker) dispatchPostCompletion(
 	// surfaced loudly above; it does NOT count as a drive_required
 	// violation (mixed signals would obscure the real bug).
 	//
-	// Writeback target: a follow-up Task 8/10.1 will thread a
-	// postRepo into dispatchPostCompletion (mirroring the existing
-	// WithDeliveryRegistry setter pattern). Today the gate logs
-	// a structured warn-level line + emits the drive_required
-	// metric via the existing metrics package, both of which the
-	// operator dashboard surfaces.
+	// Writeback target: repository.PostRepository.MarkDriveRequiredFailed,
+	// invoked through the narrow DriveRequiredStatusWriter interface
+	// (recordDriveRequiredViolation below). The gate also logs a
+	// structured warn-level line + emits the drive_required metric via
+	// the existing metrics package, both of which the operator dashboard
+	// surfaces.
 	if evaluateDriveRequiredGate(dest, res) {
 		slog.Warn(
 			"publish worker: drive_required policy VIOLATED; YouTube publish completed but Drive upload terminally failed",
@@ -255,9 +256,16 @@ func (w *PublishWorker) dispatchPostCompletion(
 		// counter feeds the operator dashboard (previously a DISABLED
 		// TODO because the counter did not exist in pkg/metrics).
 		metrics.RecordDriveRequiredViolation(account.Platform)
-		// TODO(Task 8/10.1): postRepo.UpdateStatus(target.ID, "drive_required_failed")
-		// so a future Task 9 followup can surface this in the admin
-		// queue. Today log-only keeps the publish_worker DB-free.
+		// Writeback: a terminal policy violation must not leave the target
+		// reading 'published' — the Drive copy of the artifact is missing.
+		// Task 8/10.1 closes this via repository.PostRepository's
+		// MarkDriveRequiredFailed (CAS on status='published', aggregate
+		// recomputed in the same tx). The write is accessed through a
+		// narrow optional interface so legacy/test post stores that don't
+		// implement it keep compiling (same pattern as
+		// LeaseAwarePublisherPostStore); a CAS loss (row moved past
+		// 'published') is an expected race, not an alarm.
+		w.recordDriveRequiredViolation(target, account, res)
 		return res, nil
 	}
 
@@ -375,4 +383,58 @@ func targetKey(target *models.PostTarget) string {
 		return ""
 	}
 	return fmt.Sprintf("post_target_%d", target.ID)
+}
+
+// DriveRequiredStatusWriter is the narrow optional contract the
+// drive_required policy gate uses to flip a published target into the
+// terminal 'drive_required_failed' state (Task 8/10.1). Implemented by
+// repository.PostRepository; deliberately NOT part of
+// PublisherPostStore so legacy/test post stores that don't model the
+// policy-failure state keep compiling unchanged (same optional-
+// interface pattern as LeaseAwarePublisherPostStore).
+type DriveRequiredStatusWriter interface {
+	// MarkDriveRequiredFailed CASes the target row from 'published'
+	// to 'drive_required_failed', stamps last_error_code='DRIVE_REQUIRED'
+	// and recomputes the parent post aggregate in one transaction.
+	// Returns repository.ErrPostTargetTransitionStale when the row is
+	// no longer 'published' (already operator-corrected / moved on).
+	MarkDriveRequiredFailed(id int64, lastError string) error
+}
+
+// recordDriveRequiredViolation performs the Task 8/10.1 status
+// writeback for a terminal drive_required policy violation. Best-effort
+// by contract: the YouTube publish already completed, so a writeback
+// failure must never panic the tick — it is warn-logged so the
+// operator can reconcile. A CAS loss (ErrPostTargetTransitionStale)
+// is the expected no-regression outcome, logged at info level.
+func (w *PublishWorker) recordDriveRequiredViolation(target *models.PostTarget, account *models.PlatformAccount, res *models.DeliveryResult) {
+	writer, ok := w.postRepo.(DriveRequiredStatusWriter)
+	if !ok || writer == nil {
+		slog.Warn(
+			"publish worker: drive_required violation NOT written back — post store lacks DriveRequiredStatusWriter; operator reconciliation required",
+			"target_id", target.ID,
+			"platform", account.Platform,
+		)
+		return
+	}
+	detail := "drive_required policy violated: required Drive upload terminally failed"
+	if res != nil && res.ProviderName != "" {
+		detail = fmt.Sprintf("%s (provider=%s)", detail, res.ProviderName)
+	}
+	if err := writer.MarkDriveRequiredFailed(target.ID, detail); err != nil {
+		if errors.Is(err, repository.ErrPostTargetTransitionStale) {
+			slog.Info(
+				"publish worker: drive_required writeback skipped — target no longer 'published' (state did not regress)",
+				"target_id", target.ID,
+				"platform", account.Platform,
+			)
+			return
+		}
+		slog.Warn(
+			"publish worker: drive_required status writeback failed; target still reads 'published' — operator reconciliation required",
+			"target_id", target.ID,
+			"platform", account.Platform,
+			"error", err,
+		)
+	}
 }

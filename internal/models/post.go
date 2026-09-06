@@ -81,6 +81,19 @@ const (
 	// rewrites the row to 'queued'.
 	PostStatusBlockedAuth PostStatus = "blocked_auth"
 
+	// PostStatusDriveRequiredFailed (Task 8/10.1, migration 130) —
+	// terminal policy-violation state: the platform publish completed,
+	// but the operator opted into drive_required=true on the Velox
+	// destination and the required Drive upload terminally failed.
+	// The row must NOT read as a clean 'published' — the Drive copy of
+	// the artifact is missing. Distinct from PostStatusFailed (the
+	// per-attempt generic failure) so dashboards can answer "which
+	// publishes lost their required Drive export?" without parsing
+	// error text. The publish driver + reconciler filters exclude it
+	// exactly like failed/dlq (it is terminal), and the aggregate
+	// resolver treats it as a terminal failure.
+	PostStatusDriveRequiredFailed PostStatus = "drive_required_failed"
+
 	// Deprecated: use PostStatusQueued instead.
 	PostStatusScheduled = PostStatusQueued
 )
@@ -97,7 +110,8 @@ func (s PostStatus) IsValid() bool {
 		PostStatusWaitingProvider,
 		PostStatusRetrying,
 		PostStatusDLQ,
-		PostStatusBlockedAuth:
+		PostStatusBlockedAuth,
+		PostStatusDriveRequiredFailed:
 		return true
 	default:
 		return false
@@ -116,7 +130,8 @@ func (s PostStatus) IsTerminal() bool {
 		s == PostStatusFailed ||
 		s == PostStatusDLQ ||
 		s == PostStatus("dead_letter") ||
-		s == PostStatusBlockedAuth
+		s == PostStatusBlockedAuth ||
+		s == PostStatusDriveRequiredFailed
 }
 
 // String returns the underlying string value.

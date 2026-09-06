@@ -174,6 +174,68 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /jobs/preview:
+    post:
+      tags: [Jobs]
+      operationId: jobsPreviewTarget
+      servers:
+        - url: https://api.instaeditlogin.example/api/v1
+          description: Production canonical API base
+        - url: https://api-staging.instaeditlogin.example/api/v1
+          description: Staging canonical API base
+        - url: http://localhost:8080/api/v1
+          description: Local canonical API base
+      summary: Validate a publication target without creating a job.
+      description: |
+        Dry-run target validation for the `velox.job.v1` publication flow:
+        resolves `target` exactly as `POST /jobs` would (channel/group
+        resolution against the workspace's connected platforms) and returns
+        the canonical resolved target WITHOUT creating any job, delivery,
+        or staging rows.
+
+        Boundary policy for `target.type`:
+
+        * `channel` — accepts `platform_account_id` OR `channel_id` OR
+          `channel_name` (exactly one resolution anchor). `channel_name`
+          is resolved user-scoped at this boundary.
+        * `group` — accepted by the canonical envelope validator; this
+          preview boundary resolves group targets through the same
+          resolver as `POST /jobs`.
+        * Unknown types — rejected with `422`.
+
+        A `422` response means the target is structurally or semantically
+        invalid (unknown type, missing anchor, not found / not enabled for
+        this workspace). A `500` means the resolver itself failed
+        (infrastructure) — the request was not invalid. Unlike `POST /jobs`
+        there is no idempotency key: preview is side-effect free.
+      security:
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VeloxJobPreviewRequest'
+      responses:
+        '200':
+          description: Target is valid; returns the resolved target. Nothing was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VeloxJobPreviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+        '503':
+          description: Channel target resolver not configured (partial deployment).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ───────────── Auth ───────────────────────────────────────────────────────
 
   /auth/{provider}/login:
@@ -2832,6 +2894,71 @@ components:
         pan_y: { type: number, format: double }
         transition:
           $ref: '#/components/schemas/VeloxTransition'
+
+    VeloxJobPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [target]
+      description: |
+        Body of `POST /jobs/preview`. Unknown fields are rejected with
+        `400` (strict decoding, same discipline as the canonical job
+        envelope). Workspace and user identity come from the authenticated
+        session, never from the body.
+      properties:
+        target:
+          $ref: '#/components/schemas/VeloxPublicationTarget'
+
+    VeloxPublicationTarget:
+      type: object
+      additionalProperties: false
+      required: [type]
+      description: |
+        Publication target of a `velox.job.v1` delivery. Exactly one
+        resolution anchor per type: `channel` needs `platform_account_id`,
+        `channel_id`, or `channel_name`; `group` needs `group_id`.
+        Boundary note: `POST /jobs` (canonical envelope) accepts
+        `channel_name` for channel targets; the resolve-target boundary
+        requires `platform_account_id` or `channel_id` — a payload valid
+        on one boundary can be rejected on the other. This is the one
+        deliberate per-boundary difference.
+      properties:
+        type:
+          type: string
+          enum: [channel, group]
+        platform_account_id:
+          type: integer
+          format: int64
+        channel_id:
+          type: string
+        channel_name:
+          type: string
+        group_id:
+          type: integer
+          format: int64
+        group_name:
+          type: string
+        channel_ids:
+          type: array
+          items:
+            type: string
+
+    VeloxJobPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [valid, target, privacy_status]
+      description: |
+        Result of a successful preview. `privacy_status` is the default
+        the final editor-session publish would use; preview never mutates
+        state.
+      properties:
+        valid:
+          type: boolean
+          const: true
+        target:
+          $ref: '#/components/schemas/VeloxPublicationTarget'
+        privacy_status:
+          type: string
+          const: private
 
     VeloxJobSubmissionRequest:
       type: object

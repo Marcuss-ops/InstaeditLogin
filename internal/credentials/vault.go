@@ -47,6 +47,12 @@ var (
 	// ErrInvalidGrant is the typed classification for a provider OAuth
 	// response that says the stored grant is revoked or expired.
 	ErrInvalidGrant = errors.New("oauth grant requires reauthorization")
+	// ErrTokenExpired is the typed classification for a stored token whose
+	// validity window has lapsed (distinct from ErrInvalidGrant: the grant
+	// itself may still be refreshable — only the cached access token is
+	// stale). Wrapped by every vault expiry path so callers classify via
+	// errors.Is instead of parsing unstable error strings.
+	ErrTokenExpired = errors.New("vault: token expired")
 	// ErrModernGrantMissing means the canonical modern token row is absent.
 	// It is the only error that permits callers to try a legacy credential
 	// row; expiry, refresh failures, grant state, audience, and scope errors

@@ -313,10 +313,16 @@ func TestDisconnectSharedGrant_DisconnectA_KeepsBSiblingPublishing_E2E(t *testin
 	revokerSvc := &sharedGrantRevokerService{stubYouTubeOAuthService: &stubYouTubeOAuthService{}}
 
 	capRouter := services.NewCapabilityRouter()
+	// handlePublishPostID resolves Post → Workspace ownership through the
+	// workspace store; without it the publish endpoint 501s ("workspaces
+	// not configured"), which is the correct fail-closed behavior for a
+	// partial deployment but wrong for this full-lifecycle fixture.
+	workspaceRepo := repository.NewWorkspaceRepository(h.pgDB)
 	router := buildE2ERouter(
 		capRouter, userRepo, authMgr,
 		api.WithCredentialVault(vault),
 		api.WithPostStore(postRepo),
+		api.WithWorkspaceStore(workspaceRepo),
 		api.WithYouTubeService(revokerSvc),
 	)
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -20,15 +19,6 @@ type youtubeGroupVideosInflightEntry struct {
 	items []models.YouTubeVideoDetails
 	err   error
 }
-
-// The per-router cache protects completed results. This short-lived
-// single-flight map protects cache misses as well, so concurrent dashboard
-// requests for the same account share one upstream YouTube fetch instead of
-// multiplying quota usage.
-var youtubeGroupVideosInflight = struct {
-	sync.Mutex
-	entries map[string]*youtubeGroupVideosInflightEntry
-}{entries: make(map[string]*youtubeGroupVideosInflightEntry)}
 
 // invalidateAccountCachedVideos drops the cached editable-videos entries
 // for one account. Called after an out-of-band metadata change (e.g.
@@ -53,13 +43,13 @@ func (r *Router) invalidateAccountCachedVideos(acc *models.PlatformAccount) {
 // in the warnings[] / 502 envelope.
 func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *models.PlatformAccount, cfg YouTubeGroupVideosConfig, forceRefresh bool) ([]models.YouTubeVideoDetails, error) {
 	cacheKey := fmt.Sprintf("%d:%s:%d", acc.ID, acc.PlatformUserID, cfg.MaxVideos)
-	// The cache is router-local, while the in-flight map is process-global.
-	// Keep the router identity only on the latter so two independently
-	// configured routers never share an upstream result or token context.
-	// The identity is an explicit constructor-assigned id: a %p pointer
-	// key could be reused by a later allocation after a Router is freed,
-	// silently cross-joining two routers' in-flight fetches.
-	inflightKey := fmt.Sprintf("%d:%s", r.routerInstanceID, cacheKey)
+	// Both the result cache and the single-flight map live on the Router:
+	// two independently configured routers never share an upstream result
+	// or token context, and no router-identity key is needed (the process-
+	// global variant required one because its entries outlived any single
+	// router; a %p pointer key there could be reused after a Router was
+	// freed, silently cross-joining two routers' fetches).
+	inflightKey := cacheKey
 	now := time.Now()
 	if !forceRefresh {
 		r.youtubeGroupVideosCacheMu.Lock()
@@ -72,9 +62,12 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 		r.youtubeGroupVideosCacheMu.Unlock()
 	}
 
-	youtubeGroupVideosInflight.Lock()
-	if pending, exists := youtubeGroupVideosInflight.entries[inflightKey]; exists {
-		youtubeGroupVideosInflight.Unlock()
+	r.youtubeGroupVideosInflightMu.Lock()
+	if r.youtubeGroupVideosInflight == nil {
+		r.youtubeGroupVideosInflight = make(map[string]*youtubeGroupVideosInflightEntry)
+	}
+	if pending, exists := r.youtubeGroupVideosInflight[inflightKey]; exists {
+		r.youtubeGroupVideosInflightMu.Unlock()
 		select {
 		case <-pending.done:
 			return append([]models.YouTubeVideoDetails(nil), pending.items...), pending.err
@@ -83,13 +76,13 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 		}
 	}
 	pending := &youtubeGroupVideosInflightEntry{done: make(chan struct{})}
-	youtubeGroupVideosInflight.entries[inflightKey] = pending
-	youtubeGroupVideosInflight.Unlock()
+	r.youtubeGroupVideosInflight[inflightKey] = pending
+	r.youtubeGroupVideosInflightMu.Unlock()
 	defer func() {
-		youtubeGroupVideosInflight.Lock()
-		delete(youtubeGroupVideosInflight.entries, inflightKey)
+		r.youtubeGroupVideosInflightMu.Lock()
+		delete(r.youtubeGroupVideosInflight, inflightKey)
 		close(pending.done)
-		youtubeGroupVideosInflight.Unlock()
+		r.youtubeGroupVideosInflightMu.Unlock()
 	}()
 
 	items, err := func() (items []models.YouTubeVideoDetails, err error) {

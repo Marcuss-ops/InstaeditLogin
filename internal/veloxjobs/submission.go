@@ -76,12 +76,3 @@ func (s *JobSubmissionService) SubmitCanonical(ctx context.Context, workspaceID,
 	}
 	return &SubmissionResult{Job: job, Estimate: estimate, JobType: req.JobType}, nil
 }
-
-// SubmissionService is kept as a compatibility alias for callers that used
-// the shorter name during the migration.
-type SubmissionService = JobSubmissionService
-
-// NewSubmissionService is the compatibility constructor for the shorter name.
-func NewSubmissionService(client veloxcontract.Client, registry *Registry) *JobSubmissionService {
-	return NewJobSubmissionService(client, registry)
-}

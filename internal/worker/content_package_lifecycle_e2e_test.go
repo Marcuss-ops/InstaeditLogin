@@ -146,6 +146,38 @@ func (s *lifecycleYouTubePublicationStore) FindByPostTargetID(_ context.Context,
 	return &copy, nil
 }
 
+// MarkPublished (YouTubeTargetPublicationLookup) stamps published_at on the
+// Phase-2 reused video row. Upsert-shaped: no-op when the id is unknown so
+// the caller's non-fatal warn path is exercised like production.
+func (s *lifecycleYouTubePublicationStore) MarkPublished(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range s.rows {
+		if row.ID == id {
+			now := time.Now()
+			row.PublishedAt = &now
+			return nil
+		}
+	}
+	return nil
+}
+
+// ClearYouTubeUpload (YouTubeTargetPublicationLookup) nullifies the Phase-1
+// video stamp — used by orphan-video recovery. Not exercised by the happy
+// path in this test but required by the interface.
+func (s *lifecycleYouTubePublicationStore) ClearYouTubeUpload(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range s.rows {
+		if row.ID == id {
+			row.YouTubeVideoID = nil
+			row.YouTubeUploadStatus = "upload_session_initiated"
+			return nil
+		}
+	}
+	return nil
+}
+
 func (s *lifecycleYouTubePublicationStore) MarkYouTubeUploaded(_ context.Context, id int64, videoID string) error {
 	return s.MarkYouTubeUploadedAtomic(context.Background(), id, videoID)
 }
@@ -619,13 +651,22 @@ func TestContentPackageLifecycleE2E_DriveSchedulePreparationPublish_Idempotent(t
 		return nil
 	}
 	publishWorker := NewPublishWorker(postStore, users, router, vault, testMediaDownloadResolver{}, "lifecycle-public-publish", nil, time.Second, nil)
+	// Posts materialized from an upload job carry UploadJobID, so the
+	// publish worker's Phase-2 path (not the synchronous publisher.Publish)
+	// owns the public transition: FindByPostTargetID finds the row stamped
+	// youtube_uploaded by the delivery pool, UpdateVideoPrivacy flips the
+	// video public, and markYouTubeTargetPublished stamps the target.
+	publishWorker.SetYouTubeTargetPublicationStore(ytPubs)
 	for _, target := range uploadPostStore.targets {
 		if err := publishWorker.publishTarget(ctx, target); err != nil {
 			t.Fatalf("public publish target %d: %v", target.ID, err)
 		}
 	}
-	if provider.publishCalls != 3 || publishedTargets != 3 {
-		t.Fatalf("public YouTube publishes=%d target terminal updates=%d, want 3/3", provider.publishCalls, publishedTargets)
+	// Two-phase contract: NO extra videos.insert (publishCalls stays 0) —
+	// the public transition is the Phase-2 privacy update over the Phase-1
+	// private video, one per delivery row.
+	if provider.updateVideoPrivacyCalls != 3 || publishedTargets != 3 {
+		t.Fatalf("Phase-2 privacy updates=%d target terminal updates=%d, want 3/3", provider.updateVideoPrivacyCalls, publishedTargets)
 	}
 	// Re-run every already-published target as a worker retry. The claim
 	// CAS loses before provider dispatch, so no extra provider call occurs.
@@ -634,8 +675,8 @@ func TestContentPackageLifecycleE2E_DriveSchedulePreparationPublish_Idempotent(t
 			t.Fatalf("idempotent retry target %d: %v", target.ID, err)
 		}
 	}
-	if provider.privateUploadCalls != 3 || provider.publishCalls != 3 {
-		t.Fatalf("provider calls changed after retries: private=%d public=%d, want 3/3", provider.privateUploadCalls, provider.publishCalls)
+	if provider.privateUploadCalls != 3 || provider.updateVideoPrivacyCalls != 3 || provider.publishCalls != 0 {
+		t.Fatalf("provider calls changed after retries: private=%d privacy_updates=%d public=%d, want 3/3/0", provider.privateUploadCalls, provider.updateVideoPrivacyCalls, provider.publishCalls)
 	}
 
 	jobAfter, err := uploadRepo.FindByScheduleID(ctx, schedule.ID)

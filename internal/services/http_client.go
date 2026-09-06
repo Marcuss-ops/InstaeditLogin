@@ -220,18 +220,22 @@ func (rrt *retryRoundTripper) maxBackoffOrDefault() time.Duration {
 		return maxBackoff
 	}
 	return rrt.maxBackoff
-}
-
-// delayForRetry returns the wait duration before the next retry. It honors
-// Retry-After when present, caps the result at maxBackoff, and adds jitter.
+} // delayForRetry returns the wait duration before the next retry. It honors
+// Retry-After in both RFC 7231 forms — delay-seconds and HTTP-date — caps
+// the result at maxBackoff, and adds jitter. An HTTP-date in the past
+// (clock skew) falls through to the computed backoff instead of producing
+// a zero/negative wait.
 func (rrt *retryRoundTripper) delayForRetry(base time.Duration, resp *http.Response) time.Duration {
 	delay := base
 	if resp != nil {
 		if ra := resp.Header.Get("Retry-After"); ra != "" {
 			if seconds, err := strconv.Atoi(ra); err == nil && seconds >= 0 {
 				delay = time.Duration(seconds) * time.Second
+			} else if retryAt, err := http.ParseTime(ra); err == nil {
+				if until := time.Until(retryAt); until > 0 {
+					delay = until
+				}
 			}
-			// TODO: support RFC 7231 HTTP-date format if a server sends it.
 		}
 	}
 	if cap := rrt.maxBackoffOrDefault(); delay > cap {

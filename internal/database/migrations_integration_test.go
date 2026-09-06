@@ -62,20 +62,22 @@ var migrationsToTest = []string{
 // (waiting_provider / queued / partially_published). 'queued' is the
 // rename target of the legacy 'scheduled' value which remains in the
 // enum for back-compat with rows already inserted pre-012.
-// Later migrations 018 and 035 add 'retrying' and 'dlq'.
+// Later migrations 018 and 035 add 'retrying' and 'dlq'; migration 130
+// adds the terminal 'drive_required_failed' policy state (Task 8/10.1).
 //
-// Net on-disk enum labels after 035 = 5 (003) + 3 (012) + 2 (018/035)
-// (the 9 active + the 1 deprecated 'scheduled').
+// Net on-disk enum labels after 130 = 5 (003) + 3 (012) + 2 (018/035)
+// + 1 (130) (the 10 active + the 1 deprecated 'scheduled').
 var expectedPostStatusActive = map[string]bool{
-	"draft":               true,
-	"queued":              true,
-	"publishing":          true,
-	"published":           true,
-	"failed":              true,
-	"waiting_provider":    true,
-	"partially_published": true,
-	"retrying":            true,
-	"dlq":                 true,
+	"draft":                 true,
+	"queued":                true,
+	"publishing":            true,
+	"published":             true,
+	"failed":                true,
+	"waiting_provider":      true,
+	"partially_published":   true,
+	"retrying":              true,
+	"dlq":                   true,
+	"drive_required_failed": true,
 }
 
 // requiredColumns lists (table, column) tuples the test asserts exist

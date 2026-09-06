@@ -41,7 +41,7 @@ func (v *CredentialVault) getByOAuthConnection(ctx context.Context, oauthConnect
 		accessExpiresAt = stored.ExpiresAt
 	}
 	if accessExpiresAt != nil && v.clock().After(*accessExpiresAt) {
-		return nil, fmt.Errorf("vault: token expired at %s", accessExpiresAt.Format(time.RFC3339))
+		return nil, fmt.Errorf("%w at %s", ErrTokenExpired, accessExpiresAt.Format(time.RFC3339))
 	}
 	accessCiphertext := stored.EncryptedAccessToken
 	if len(accessCiphertext) == 0 {

@@ -16,15 +16,18 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// isTokenExpired matches the canonical error string produced by
-// vault.Get on a stored-but-expired token. The vault's internal
-// isExpiryError helper (lowercase, package-private) is the source
-// of truth; we probe with substring equality rather than introducing
-// a typed sentinel to avoid an interface dependency in the HTTP
-// layer.
+// isTokenExpired classifies a vault.Get failure as "the stored token's
+// validity window has lapsed". The canonical signal is the typed
+// credentials.ErrTokenExpired sentinel wrapped by every vault expiry path;
+// the substring fallback is the narrowed legacy shape kept so test doubles
+// produced before the sentinel still classify. New producers must wrap the
+// sentinel — never rely on message text.
 func isTokenExpired(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, credentials.ErrTokenExpired) {
+		return true
 	}
 	return strings.Contains(err.Error(), "expired")
 }
@@ -330,21 +333,13 @@ func isInvalidGrantError(err error) bool {
 // text — the same fragile pattern this file's isInvalidGrantError doc
 // warns against — and misclassified any incidental "400" in a message
 // (byte counts, row ids, URLs) as a hard rejection, flipping healthy
-// accounts to reauth_required. The canonical signal is now the typed
+// accounts to reauth_required. The canonical signal is the typed
 // services.ErrGoogleTokenInfoInvalid sentinel emitted by
-// GetTokenInfo on Google's documented HTTP 400 reply. The substring
-// fallback is intentionally narrowed to exact shapes of the
-// pre-sentinel message so test doubles that predate the sentinel still
-// classify correctly, without reintroducing incidental-"400" false
-// positives.
+// GetTokenInfo on Google's documented HTTP 400 reply. There is no
+// string fallback: every producer (services layer and test doubles)
+// wraps the sentinel, so classification never depends on message text.
 func isGoogleTokenInfoRejection(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, services.ErrGoogleTokenInfoInvalid) {
-		return true
-	}
-	return strings.Contains(err.Error(), "youtube tokeninfo returned 400")
+	return errors.Is(err, services.ErrGoogleTokenInfoInvalid)
 }
 
 // handleReconnectAccount flags the account as needing reauth. The

@@ -34,7 +34,7 @@ func (v *CredentialVault) extractRefreshMaterial(stored *models.Token, tokenType
 		}
 		return decrypted, nil
 	}
-	return "", fmt.Errorf("vault: token expired and no refresh token available for account %d (type %s)", stored.PlatformAccountID, tokenType)
+	return "", fmt.Errorf("%w and no refresh token available for account %d (type %s)", ErrTokenExpired, stored.PlatformAccountID, tokenType)
 }
 
 func classifyRefreshFailure(err error) (status, code string) {
@@ -64,9 +64,18 @@ func cloneTime(value *time.Time) *time.Time {
 	return &copy
 }
 
+// isExpiryError classifies token-expiry outcomes. The canonical signal is
+// the typed ErrTokenExpired sentinel wrapped by every vault expiry path;
+// the substring fallback below is the narrowed legacy shape kept only so
+// test doubles (and the historical "token expired at %s" lazy-reencrypt
+// message) produced before the sentinel still classify. New code must wrap
+// ErrTokenExpired, never rely on message text.
 func isExpiryError(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, ErrTokenExpired) {
+		return true
 	}
 	return strings.Contains(err.Error(), "expired")
 }

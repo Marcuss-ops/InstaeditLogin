@@ -13,8 +13,14 @@ import (
 // "400")` heuristic, which misclassified any transport or storage error
 // whose message happened to contain "400" (byte counts, row ids, URLs)
 // as "Google rejected this token" — flipping healthy accounts to
-// reauth_required.
+// reauth_required. There is deliberately NO string fallback: every
+// producer (services layer and test doubles) wraps the sentinel.
 func TestIsGoogleTokenInfoRejectionTypedSentinel(t *testing.T) {
+	legacyLiteral := errors.New("youtube tokeninfo returned 400")
+	if isGoogleTokenInfoRejection(legacyLiteral) {
+		t.Fatalf("string-only literal without the sentinel must NOT classify (fallback removed): %v", legacyLiteral)
+	}
+
 	rejected := fmt.Errorf("youtube tokeninfo returned %d: %w", 400, services.ErrGoogleTokenInfoInvalid)
 	if !isGoogleTokenInfoRejection(rejected) {
 		t.Fatalf("typed hard rejection must classify as tokeninfo rejection: %v", rejected)

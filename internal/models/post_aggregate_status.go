@@ -79,7 +79,8 @@ func (PostAggregateStatusResolver) Resolve(targets []PostTarget) (PostStatus, er
 		case PostStatusDraft:
 			allPublished = false
 			allFailed = false
-		case PostStatusFailed, PostStatusDLQ, PostStatus("dead_letter"), PostStatusBlockedAuth:
+		case PostStatusFailed, PostStatusDLQ, PostStatus("dead_letter"), PostStatusBlockedAuth,
+			PostStatusDriveRequiredFailed:
 			allPublished = false
 			allDraft = false
 		default:

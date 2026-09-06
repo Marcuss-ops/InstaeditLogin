@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -218,6 +219,91 @@ func (r *PostRepository) MarkRetrying(id int64, ownerID string, lastError string
 	}
 	return r.mutateLeasedTarget(id, ownerID, qMarkRetrying, nextAttemptAt, lastError)
 }
+
+// MarkDriveRequiredFailed (Task 8/10.1) transitions a target from
+// status='published' to 'drive_required_failed': the platform publish
+// completed but the drive_required policy gate detected a terminally
+// failed required Drive upload (see
+// internal/worker/publish_worker_delivery.go). CAS on the CURRENT
+// status being 'published' so the writeback can never regress a row
+// that moved on (or was operator-corrected) after the publish — a
+// row that is no longer 'published' at write time returns
+// ErrPostTargetTransitionStale and the caller logs the outcome.
+//
+// The transition runs inside the canonical aggregate-aware transaction
+// (lock target → lock parent → CAS → recompute parent status), the same
+// shape as updateTargetStatusTx. The recompute is mandatory, not
+// optional: without it the parent post would keep reading 'published'
+// after a child flipped to a terminal policy failure — re-creating the
+// exact "declared success without completing" bug this writeback
+// closes, one level up. Until the repair sweep ticked, the parent
+// would even be visible as fully published in the API.
+//
+// lastError is persisted to error_message for operator visibility.
+// last_error_code is set to 'DRIVE_REQUIRED' (stable code indexed by
+// dashboards, mirroring the 'DLQ' / 'RATE_LIMITED' convention).
+func (r *PostRepository) MarkDriveRequiredFailed(id int64, lastError string) (err error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("MarkDriveRequiredFailed: begin tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = markDriveRequiredFailedTx(tx, id, lastError); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("MarkDriveRequiredFailed: commit: %w", err)
+	}
+	return nil
+}
+
+func markDriveRequiredFailedTx(tx *sql.Tx, targetID int64, lastError string) error {
+	postID, err := postIDForTargetTx(tx, targetID)
+	if err != nil {
+		return err
+	}
+	if err := lockTargetTx(tx, targetID); err != nil {
+		return err
+	}
+	if err := lockPostTx(tx, postID); err != nil {
+		return err
+	}
+	result, err := tx.Exec(qMarkDriveRequiredFailed, models.PostStatusDriveRequiredFailed, lastError, targetID)
+	if err != nil {
+		// A 22P06-style failure means the enum value is missing —
+		// only possible if migration 130 was not applied. Surface it
+		// as a wrapped error, never as a silent skip.
+		return fmt.Errorf("mark drive_required_failed target %d: %w", targetID, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read drive_required_failed rows affected: %w", err)
+	}
+	if n == 0 {
+		var current models.PostStatus
+		statusErr := tx.QueryRow(qSelectTargetStatusByID, targetID).Scan(&current)
+		if errors.Is(statusErr, sql.ErrNoRows) {
+			return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, targetID)
+		}
+		if statusErr != nil {
+			return fmt.Errorf("read stale target %d: %w", targetID, statusErr)
+		}
+		return fmt.Errorf("%w: id=%d current=%s", ErrPostTargetTransitionStale, targetID, current)
+	}
+	return persistAggregatePostStatusLockedTx(tx, postID)
+}
+
+var qMarkDriveRequiredFailed = `UPDATE post_targets
+ SET status = $1::text::post_status,
+     error_message = $2,
+     last_error_code = 'DRIVE_REQUIRED',
+     completed_at = NOW()
+ WHERE id = $3
+   AND status = 'published'::post_status`
 
 // MarkRateLimited (SPRINT 5.2) handles the platform's 429/Retry-After
 // response. Stamps next_retry_at and rate_limit_reset_at to the

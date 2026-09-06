@@ -347,13 +347,13 @@ type Router struct {
 	youtubeGroupVideosConfig  YouTubeGroupVideosConfig
 	youtubeGroupVideosCacheMu sync.Mutex
 	youtubeGroupVideosCache   map[string]youtubeGroupVideosCacheEntry
-	// routerInstanceID uniquely identifies this Router for the
-	// process-global single-flight key in fetchCachedAccountEditableVideos.
-	// An explicit monotonically-assigned id replaces the historical
-	// %p pointer-identity key: a freed Router's address can be reused
-	// by a later allocation, silently cross-joining two routers'
-	// in-flight upstream fetches.
-	routerInstanceID uint64
+	// youtubeGroupVideosInflight is the router-local single-flight map for
+	// group-video cache misses: concurrent dashboard requests for the same
+	// account share one upstream YouTube fetch instead of multiplying
+	// quota usage. Router-local (not process-global) so two independently
+	// configured routers never share an upstream result or token context.
+	youtubeGroupVideosInflightMu sync.Mutex
+	youtubeGroupVideosInflight   map[string]*youtubeGroupVideosInflightEntry
 
 	// dashboardAnalyticsCache caches the full dashboard analytics
 	// response (aggregates + per-channel rows + top videos) per
@@ -457,21 +457,6 @@ var _ ThumbnailProjectStore = (*repository.ThumbnailProjectRepository)(nil)
 var _ CoverLibraryStore = (*repository.CoverLibraryRepository)(nil)
 var _ AgentRunStore = (*repository.AgentRunRepository)(nil)
 
-// routerInstanceCounter backs nextRouterInstanceID. Routers are
-// constructed at startup and in tests — never in a hot path — so a
-// plain mutex-guarded counter is correct and contention-free here.
-var routerInstanceCounter struct {
-	sync.Mutex
-	n uint64
-}
-
-func nextRouterInstanceID() uint64 {
-	routerInstanceCounter.Lock()
-	defer routerInstanceCounter.Unlock()
-	routerInstanceCounter.n++
-	return routerInstanceCounter.n
-}
-
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -493,7 +478,6 @@ func NewRouter(
 		thumbnailDownloadClient:   services.NewHTTPClientWithTimeout(30 * time.Second),
 		driveImportUploadClient:   services.NewHTTPClientWithTimeout(30 * time.Minute),
 		thumbnailUploadClient:     services.NewHTTPClientWithTimeout(2 * time.Minute),
-		routerInstanceID:          nextRouterInstanceID(),
 	}
 	for _, opt := range opts {
 		opt(r)
