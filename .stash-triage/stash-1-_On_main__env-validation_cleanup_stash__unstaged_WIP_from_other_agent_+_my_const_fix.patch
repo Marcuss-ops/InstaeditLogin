@@ -1,0 +1,1931 @@
+diff --git a/api/openapi.yaml b/api/openapi.yaml
+index 88e851cf..70f2aaf5 100644
+--- a/api/openapi.yaml
++++ b/api/openapi.yaml
+@@ -926,7 +926,136 @@ paths:
+   #   - workspace not accessible by the caller           → 403
+   #   - session not found                                → 404
+   #   - CAS-loss (session in 'publishing' / 'published') → 409
+-  /api/v1/youtube/editor-sessions/{id}/thumbnail:
++    /api/v1/youtube/editor-sessions/by-project/{velox_project_id}:
++      get:
++        tags: [YouTube]
++        summary: Get editor session by velox_project_id
++        description: |
++          Returns the full editor session row for the given Velox project.
++          Lets the Dark Editor hydrate its form from the URL alone, without
++          first POSTing /editor-sessions to learn the session_id.
++        operationId: getYouTubeEditorSessionByProject
++        security:
++          - ApiKeyAuth: []
++          - JwtCookie: []
++        parameters:
++          - name: velox_project_id
++            in: path
++            required: true
++            schema: { type: string }
++        responses:
++          '200':
++            description: Session row.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/YouTubeEditorSessionDetail'
++          '400':
++            description: Bad request.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '401':
++            description: Unauthorized.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '404':
++            description: Not found.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '500':
++            description: Internal server error.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '503':
++            description: Service unavailable.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++
++    /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish:
++      post:
++        tags: [YouTube]
++        summary: Publish editor session by velox_project_id
++        description: |
++          Publishes the editor session identified by velox_project_id. Body
++          + response shapes match POST /api/v1/youtube/editor-sessions/{id}/publish;
++          the handler delegates to the shared executePublishYouTubeEditorSession
++          helper so the two publish endpoints cannot drift.
++        operationId: publishYouTubeEditorSessionByProject
++        security:
++          - ApiKeyAuth: []
++          - JwtCookie: []
++        parameters:
++          - name: velox_project_id
++            in: path
++            required: true
++            schema: { type: string }
++        requestBody:
++          required: true
++          content:
++            application/json:
++              schema:
++                $ref: '#/components/schemas/PublishYouTubeEditorSessionRequest'
++        responses:
++          '200':
++            description: Publish succeeded or idempotently replayed.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/PublishYouTubeEditorSessionResponse'
++          '400':
++            description: Bad request.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '401':
++            description: Unauthorized.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '404':
++            description: Not found.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '409':
++            description: Conflict (publish in progress or terminal state).
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '500':
++            description: Internal server error.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '502':
++            description: Bad gateway (YouTube API failure).
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++          '503':
++            description: Service unavailable.
++            content:
++              application/json:
++                schema:
++                  $ref: '#/components/schemas/Error'
++
++      /api/v1/youtube/editor-sessions/{id}/thumbnail:
+     post:
+       tags: [YouTube]
+       summary: Attach a verified thumbnail asset to an editor session.
+@@ -1021,95 +1150,18 @@ paths:
+         '503':
+           description: YouTube video edit store not configured.
+ 
+-  # ──────────── YouTube groups (P0 group videos endpoint) ───────
+-  #
+-  # Aggregates the YouTube-listing per channel for every account in
+-  # the group (and its sub-groups when ?include_subgroups=true),
+-  # joined with the existing editor_sessions for each (account,
+-  # video) tuple. Powers the SPA's Group → Click-to-edit video
+-  # card-grid. Read-only GET; no body, no CSRF.
+-  /api/v1/groups/{group_id}/youtube/videos:
+-    get:
+-      tags: [YouTube]
+-      operationId: listGroupYouTubeVideos
+-      summary: List the YouTube private/unlisted videos in a group.
+-      description: |
+-        Aggregates YouTube's per-channel `videos.list` (filtered to
+-        private/unlisted/processed uploads) for every account that
+-        belongs to the requested group. When `include_subgroups=true`
+-        the parent_group_id tree is traversed in O(N) and accounts
+-        from sub-groups are added (deduped) to the fan-out.
+-
+-        Each YouTube row is joined with the existing
+-        `youtube_video_edits` row for the (account, video) tuple —
+-        the join happens in a single SQL query (the repository
+-        method `ListByWorkspaceAccountIDs`).
+-
+-        Concurrency: a bounded per-request semaphore (4 concurrent
+-        YouTube chains) keeps upstream pressure at a fraction of
+-        quota while still aggregating groups with ~16 channels
+-        well under the 5s SLA.
+-
+-        Behaviour matrix:
+-          - 401 — no JWT identity on context.
+-          - 400 — `group_id` is non-numeric / non-positive; OR
+-            `?include_subgroups=true` and the resolved group's
+-            account count exceeds 200.
+-          - 404 — group is unknown OR caller does not own the
+-            workspace (collapsed into the same response for
+-            enumeration-oracle safety).
+-          - 502 — every per-account YouTube fetch failed (graceful
+-            degradation per-account: partial success is 200 +
+-            warnings[]).
+-          - 200 — `videos[]` in per-channel newest-first order,
+-            capped at 500 cards (spa render budget).
+-      security:
+-        - ApiKeyAuth: []
+-        - JwtCookie: []
+-      parameters:
+-        - in: path
+-          name: group_id
+-          required: true
+-          schema:
+-            type: integer
+-            format: int64
+-            minimum: 1
+-        - in: query
+-          name: include_subgroups
+-          required: false
+-          schema:
+-            type: boolean
+-            default: false
+-          description: |
+-            When true, the handler walks the parent_group_id tree
+-            and aggregates accounts from sub-groups (deduped).
+-      responses:
+-        '200':
+-          description: Video cards aggregated across the group's channels.
+-          content:
+-            application/json:
+-              schema:
+-                $ref: '#/components/schemas/GroupYouTubeVideosResponse'
+-        '400':
+-          $ref: '#/components/responses/BadRequestError'
+-        '401':
+-          $ref: '#/components/responses/UnauthorizedError'
+-        '404':
+-          $ref: '#/components/responses/NotFoundError'
+-        '502':
+-          description: |
+-            Every per-account YouTube fetch failed for this group.
+-            The response body is the canonical `Error` envelope
+-            listing the joined warning strings for diagnostics.
+-          content:
+-            application/json:
+-              schema:
+-                $ref: '#/components/schemas/Error'
+-        '503':
+-          description: |
+-            YouTube service OR vault not configured on this server.
+ components:
+ 
++  # NOTE: `GroupYouTubeVideoEntry` + `GroupYouTubeVideosResponse`
++  # schemas were removed together with the `/api/v1/groups/{group_id}/youtube/videos`
++  # path on 2026-07-27 (per the OpenAPI trim to the inter-service
++  # keep-list; see docs/OPENAPI_MIGRATION.md). The Go handler
++  # `listGroupYouTubeVideosHandler` remains in `pkg/api/routes.go`
++  # and keeps serving the SPA until a follow-up ADR either folds
++  # this path back into the public spec or moves it to a private
++  # BFF route.
++
++
+   securitySchemes:
+     ApiKeyAuth:
+       type: http
+@@ -1333,6 +1385,58 @@ components:
+           schema:
+             $ref: '#/components/schemas/Error'
+   schemas:
++    YouTubeEditorSessionDetail:
++      type: object
++      description: |
++        Full editor session row returned by
++        GET /api/v1/youtube/editor-sessions/by-project/{velox_project_id}.
++      properties:
++        id:                   { type: string, format: uuid }
++        workspace_id:         { type: integer, format: int64 }
++        platform_account_id:  { type: integer, format: int64 }
++        youtube_video_id:     { type: string }
++        velox_project_id:     { type: string }
++        source_thumbnail_url: { type: string }
++        thumbnail_media_id:
++          type: string
++          nullable: true
++        desired_privacy:     { type: string, enum: [public, unlisted, private] }
++        publish_at:
++          type: string
++          format: date-time
++          nullable: true
++        status:               { type: string, enum: [editing, ready, publishing, published, failed] }
++        last_error:           { type: string, description: Internal diagnostic hint. }
++        created_at:           { type: string, format: date-time }
++        updated_at:           { type: string, format: date-time }
++      required: [id, workspace_id, platform_account_id, youtube_video_id, velox_project_id, status, created_at, updated_at]
++
++    PublishYouTubeEditorSessionRequest:
++      type: object
++      description: |
++        Body for POST /api/v1/youtube/editor-sessions/{id}/publish AND
++        POST /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish.
++      properties:
++        title:          { type: string, maxLength: 100 }
++        description:    { type: string, maxLength: 5000 }
++        privacy_status: { type: string, enum: [public, unlisted, private] }
++        publish_at:
++          type: string
++          format: date-time
++          nullable: true
++
++    PublishYouTubeEditorSessionResponse:
++      type: object
++      properties:
++        public_url:     { type: string, format: uri }
++        video_id:       { type: string }
++        privacy_status: { type: string, enum: [public, unlisted, private] }
++        published_at:
++          type: string
++          format: date-time
++          nullable: true
++      required: [public_url, video_id, privacy_status]
++
+ 
+     # ────── Errors (canonical envelope, Taglio 5.x design) ──────────
+     Error:
+@@ -1944,73 +2048,6 @@ components:
+             only.
+ 
+     # ────── YouTube group videos (P0 group-videos endpoint) ────────
+-    GroupYouTubeVideoEntry:
+-      type: object
+-      description: |
+-        One row of the GET /api/v1/groups/{group_id}/youtube/videos
+-        response. YouTube-fresh listing joined with the existing
+-        per-video editor_session row, if any. `editor_session_id` /
+-        `velox_project_id` / `editor_url` are omitted when no
+-        youtube_video_edits row exists yet for this (account, video)
+-        tuple — the SPA routes the click to POST /editor-sessions.
+-        `actual_privacy` and `youtube_sync_status` are placeholders
+-        for now (mirror desired_privacy + always "unconfirmed" —
+-        see the handler godoc for the two follow-up commits that
+-        flip them into live values).
+-      required:
+-        - youtube_video_id
+-        - title
+-        - thumbnail_url
+-        - privacy_status
+-        - processing_status
+-        - platform_account_id
+-        - channel_name
+-        - editor_status
+-      properties:
+-        youtube_video_id: { type: string }
+-        title: { type: string }
+-        thumbnail_url: { type: string, format: uri }
+-        privacy_status:
+-          type: string
+-          enum: [private, unlisted, public]
+-          description: YouTube-side status as returned by videos.list.
+-        processing_status: { type: string, enum: [processed, uploading, failed, deleted] }
+-        platform_account_id: { type: integer, format: int64 }
+-        channel_name:
+-          type: string
+-          description: |
+-            PlatformAccount.Username when set, otherwise the YouTube
+-            channel id (PlatformAccount.PlatformUserID).
+-        editor_session_id: { type: string, nullable: true }
+-        velox_project_id: { type: string, nullable: true }
+-        editor_url:
+-          type: string
+-          format: uri
+-          nullable: true
+-        editor_status:
+-          type: string
+-          enum: [ready, editing, failed, publishing, published]
+-        desired_privacy: { type: string, nullable: true }
+-        actual_privacy: { type: string, nullable: true }
+-        youtube_sync_status: { type: string, nullable: true }
+-
+-    GroupYouTubeVideosResponse:
+-      type: object
+-      required: [videos]
+-      properties:
+-        videos:
+-          type: array
+-          items: { $ref: '#/components/schemas/GroupYouTubeVideoEntry' }
+-        warnings:
+-          type: array
+-          items: { type: string }
+-          description: |
+-            Per-account fetch failure messages. The 200 + videos[]
+-            path returns warnings inline so the SPA can surface a
+-            soft "some channels couldn't be read, click here to
+-            reconnect" hint. The 502 path is the SAME warnings[]
+-            surfaced as the canonical Error.message.
+-
+     VeloxArtifactRef:
+       type: object
+       required: [artifact_id, sha256, size_bytes, mime_type]
+diff --git a/docs/DEPLOY.md b/docs/DEPLOY.md
+index fbf27dcd..53322152 100644
+--- a/docs/DEPLOY.md
++++ b/docs/DEPLOY.md
+@@ -825,7 +825,7 @@ scp docker-compose.yml instaedit@$VPS_IP:/srv/instaedit/docker-compose.yml
+ ssh instaedit@$VPS_IP 'chmod 0644 /srv/instaedit/Caddyfile /srv/instaedit/docker-compose.yml'
+ 
+ # ── ENV — write .env.production on the VPS ──────────────────────
+-# Local: fill the 26 secrets (see §8 cross-ref) + DATABASE_URL.
++# Local: fill the 28 secrets (see §8 cross-ref) + DATABASE_URL.
+ scp .env.production instaedit@$VPS_IP:/srv/instaedit/.env.production
+ ssh instaedit@$VPS_IP 'chmod 600 /srv/instaedit/.env.production'
+ 
+diff --git a/internal/config/config.go b/internal/config/config.go
+index b86af9e3..6652f807 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -239,6 +239,9 @@ type WorkerConfig struct {
+ 	// wanting more aggressive space reclamation can lower to e.g.
+ 	// 3600 (hourly) — set ASSET_CLEANUP_INTERVAL_SECONDS.
+ 	AssetCleanupIntervalSeconds int
++	YouTubeDriftReconcileIntervalSeconds int
++	YouTubeDriftReconcileBatchSize int
++	YouTubeDriftReconcileMinRowAgeSeconds int
+ 	// UploadWorkerIntervalSeconds is the cadence of the upload worker.
+ 	UploadWorkerIntervalSeconds int
+ 	// UploadIngestConcurrency is the number of ingest goroutines.
+@@ -603,6 +606,9 @@ func Load() (*Config, error) {
+ 			WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
+ 		SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+ 		AssetCleanupIntervalSeconds:    getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
++		YouTubeDriftReconcileIntervalSeconds:    getEnvInt("YOUTUBE_DRIFT_RECONCILE_INTERVAL_SECONDS", 300),
++		YouTubeDriftReconcileBatchSize:          getEnvInt("YOUTUBE_DRIFT_RECONCILE_BATCH_SIZE", 50),
++		YouTubeDriftReconcileMinRowAgeSeconds:   getEnvInt("YOUTUBE_DRIFT_RECONCILE_MIN_ROW_AGE_SECONDS", 120),
+ 		UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+ 			// P1 step 2 — worker pool config (see struct comment above).
+ 			UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
+@@ -816,6 +822,15 @@ func (c *Config) validate() error {
+ 		if c.Worker.VideoRetentionBufferDays <= 0 {
+ 			return fmt.Errorf("VIDEO_RETENTION_BUFFER_DAYS must be a positive integer (got %d); set to a large value (e.g. 90) to extend the tail, not 0", c.Worker.VideoRetentionBufferDays)
+ 		}
++		if c.Worker.YouTubeDriftReconcileIntervalSeconds <= 0 {
++			return fmt.Errorf("YOUTUBE_DRIFT_RECONCILE_INTERVAL_SECONDS must be a positive integer (got %d); set to 86400 to effectively disable the sweep, not 0", c.Worker.YouTubeDriftReconcileIntervalSeconds)
++		}
++		if c.Worker.YouTubeDriftReconcileBatchSize <= 0 {
++			return fmt.Errorf("YOUTUBE_DRIFT_RECONCILE_BATCH_SIZE must be a positive integer (got %d); set to 1 to throttle, not 0", c.Worker.YouTubeDriftReconcileBatchSize)
++		}
++		if c.Worker.YouTubeDriftReconcileMinRowAgeSeconds <= 0 {
++			return fmt.Errorf("YOUTUBE_DRIFT_RECONCILE_MIN_ROW_AGE_SECONDS must be a positive integer (got %d); set to 60 to relax the freshness gate, not 0", c.Worker.YouTubeDriftReconcileMinRowAgeSeconds)
++		}
+ 		// Asset cleanup interval must be positive; 0 would spin the
+ 		// ticker hot-loop and DDoS Postgres. Operators wanting to
+ 		// effectively disable the schedule should set a very large
+diff --git a/internal/credentials/vault.go b/internal/credentials/vault.go
+index 01b268e6..5f4176e8 100644
+--- a/internal/credentials/vault.go
++++ b/internal/credentials/vault.go
+@@ -70,6 +70,7 @@ type TokenStore interface {
+ 	SaveToken(token *models.Token) error
+ 	FindLatestToken(oauthConnectionID int64, tokenType string) (*models.Token, error)
+ 	UpdateCiphertexts(tokenID int64, oldEncrypted, newEncrypted []byte) error
++	UpdateRefreshTokenCiphertext(tokenID int64, oldEncrypted, newEncrypted []byte) error
+ 	DeleteAllTokensForOAuthConnection(oauthConnectionID int64) error
+ 	// SaveTokenTx writes the supplied token row inside the caller's
+ 	// open *sql.Tx. Credentials.TokenStore implementations run the
+@@ -310,22 +311,9 @@ func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, toke
+ 	if v.encryptor.NeedsRotation(stored.EncryptedToken) {
+ 		newCiphertext, reencErr := v.encryptor.Encrypt(decrypted)
+ 		if reencErr != nil {
+-			// Best-effort: log and continue. The read still
+-			// succeeds; a future read will retry the re-encrypt.
+ 			slog.Warn("vault: lazy re-encrypt failed (will retry on next read)",
+ 				"token_id", stored.ID, "error", reencErr)
+ 		} else if err := v.store.UpdateCiphertexts(stored.ID, stored.EncryptedToken, newCiphertext); err != nil {
+-			// Log-level split (Blocco #2.2 follow-up):
+-			//   - "ciphertext stale" is the EXPECTED race-loser
+-			//     case (concurrent workers, only one wins the
+-			//     optimistic-concurrency UPDATE). High rate
+-			//     under load → Debug (operators can re-enable
+-			//     for forensic investigation, default off in prod).
+-			//   - Anything else is a real DB error worth a
+-			//     breadcrumb at Warn level.
+-			// The read still returns the decrypted value either
+-			// way — the persist is a best-effort background
+-			// upgrade, not part of the read contract.
+ 			if strings.Contains(err.Error(), "ciphertext stale") {
+ 				slog.Debug("vault: lazy re-encrypt race-loser (another worker already upgraded)",
+ 					"token_id", stored.ID)
+@@ -335,6 +323,30 @@ func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, toke
+ 			}
+ 		}
+ 	}
++	// Lazy re-encrypt the refresh token as well, using the same pattern.
++	// This ensures both columns stay on the active key without requiring
++	// a full re-authorisation flow.
++	if len(stored.EncryptedRefreshToken) > 0 && v.encryptor.NeedsRotation(stored.EncryptedRefreshToken) {
++		decryptedRefresh, refreshErr := v.encryptor.Decrypt(stored.EncryptedRefreshToken)
++		if refreshErr != nil {
++			slog.Warn("vault: lazy re-encrypt: cannot decrypt refresh token (skipping rotation)",
++				"token_id", stored.ID, "error", refreshErr)
++		} else {
++			newRefreshCiphertext, reencErr := v.encryptor.Encrypt(decryptedRefresh)
++			if reencErr != nil {
++				slog.Warn("vault: lazy re-encrypt of refresh token failed (will retry on next read)",
++					"token_id", stored.ID, "error", reencErr)
++			} else if err := v.store.UpdateRefreshTokenCiphertext(stored.ID, stored.EncryptedRefreshToken, newRefreshCiphertext); err != nil {
++				if strings.Contains(err.Error(), "stale") {
++					slog.Debug("vault: lazy re-encrypt refresh race-loser (another worker already upgraded)",
++						"token_id", stored.ID)
++				} else {
++					slog.Warn("vault: lazy re-encrypt refresh persist failed (read still returned)",
++						"token_id", stored.ID, "error", err)
++				}
++			}
++		}
++	}
+ 	return &models.OAuthToken{
+ 		AccessToken: decrypted,
+ 		TokenType:   stored.TokenType,
+diff --git a/internal/credentials/vault_test.go b/internal/credentials/vault_test.go
+index bc6e5fe7..e7fb6660 100644
+--- a/internal/credentials/vault_test.go
++++ b/internal/credentials/vault_test.go
+@@ -209,6 +209,21 @@ func (m *mockTokenStore) UpdateCiphertexts(tokenID int64, oldEncrypted, newEncry
+ 	return errors.New("ciphertext stale: row not found (mock)")
+ }
+ 
++func (m *mockTokenStore) UpdateRefreshTokenCiphertext(tokenID int64, oldEncrypted, newEncrypted []byte) error {
++	for _, bucket := range m.state {
++		for _, t := range bucket {
++			if t.ID == tokenID {
++				if !bytes.Equal(t.EncryptedRefreshToken, oldEncrypted) {
++					return errors.New("refresh ciphertext stale: another re-encrypt already applied (mock)")
++				}
++				t.EncryptedRefreshToken = newEncrypted
++				return nil
++			}
++		}
++	}
++	return errors.New("refresh ciphertext stale: row not found (mock)")
++}
++
+ // newTestVault wires a CredentialVault with a real sqlmock-backed *sql.DB
+ // and a mockTokenStore. The returned cleanup closes the DB.
+ //
+diff --git a/internal/models/youtube_target_publication.go b/internal/models/youtube_target_publication.go
+index ae77b397..f317635c 100644
+--- a/internal/models/youtube_target_publication.go
++++ b/internal/models/youtube_target_publication.go
+@@ -94,6 +94,11 @@ type YouTubeTargetPublication struct {
+ 	PublishedAt             *time.Time `json:"published_at,omitempty"`
+ 	LastError               string    `json:"last_error,omitempty"`
+ 	AttemptCount            int       `json:"attempt_count"`
++	// ReconciledAt (migration 069, drift-recon)
++	ReconciledAt          *time.Time `json:"reconciled_at,omitempty"`
++	ReconcileStatus       *string    `json:"reconcile_status,omitempty"`
++	LastReconcileError    string     `json:"last_reconcile_error,omitempty"`
++	LastReconciledPrivacy *string    `json:"last_reconciled_privacy,omitempty"`
+ 	CreatedAt               time.Time `json:"created_at"`
+ 	UpdatedAt               time.Time `json:"updated_at"`
+ }
+diff --git a/internal/models/youtube_video_edit.go b/internal/models/youtube_video_edit.go
+index a8c034ce..57c82de8 100644
+--- a/internal/models/youtube_video_edit.go
++++ b/internal/models/youtube_video_edit.go
+@@ -19,15 +19,28 @@ import "time"
+ //     "unset vs empty string" distinction (we use '' to mean
+ //     "operator erased the title", NULL to mean "publish hasn't
+ //     happened yet or read-back errored").
++//
++// YouTubeUpdatedAt is the YouTube-projection timestamp: "the last
++// time a YouTube API call confirmed what YouTube says the video's
++// privacy is". Distinct from the row's `updated_at` (which is the
++// "InstaeditLogin last touched this" timestamp, bumped by SaveDraft,
++// MarkPublishing, the reconciler itself). The drift_reconciler
++// (migration 074) writes this column on every successful YouTube
++// read-back so the SPA can render the "Last verified by YouTube
++// Studio hh:mm" badge without conflating it with operator edits.
++//
++// Draft* fields persist the operator's mid-edit form state (P2 —
++// migration 073). They sit alongside the canonical publish fields;
++// NULL = "no draft yet", "" = "operator cleared the field".
+ type YouTubeVideoEdit struct {
+ 	ID                 string     `json:"id"`
+ 	WorkspaceID        int64      `json:"workspace_id"`
+ 	PlatformAccountID  int64      `json:"platform_account_id"`
+ 	YouTubeVideoID     string     `json:"youtube_video_id"`
+ 	VeloxProjectID     string     `json:"velox_project_id"`
+-	SourceThumbnailURL string   `json:"source_thumbnail_url,omitempty"`
+-	ThumbnailMediaID   *string  `json:"thumbnail_media_id,omitempty"`
+-	DesiredPrivacy     string   `json:"desired_privacy"`
++	SourceThumbnailURL string     `json:"source_thumbnail_url,omitempty"`
++	ThumbnailMediaID   *string    `json:"thumbnail_media_id,omitempty"`
++	DesiredPrivacy     string     `json:"desired_privacy"`
+ 	PublishAt          *time.Time `json:"publish_at,omitempty"`
+ 	// ActualPrivacy is what YouTube's videos.list reports when the
+ 	// publish orchestrator reads back the published video's status.
+@@ -55,31 +68,29 @@ type YouTubeVideoEdit struct {
+ 	//   - failed   : terminal publish failure (PublishThumbnail +
+ 	//                read-back both errored). Operator replay needed.
+ 	YouTubeSyncStatus *string `json:"youtube_sync_status,omitempty"`
+-	Status            string     `json:"status"`
+-	LastError         string     `json:"last_error,omitempty"`
+-	CreatedAt         time.Time  `json:"created_at"`
+-	UpdatedAt         time.Time  `json:"updated_at"`
+-	// Draft* fields are the Dark Editor auto-save persistence
+-	// (P2 — migration 073). They hold the operator's mid-edit
+-	// values for title/description/tags/default audio language /
+-	// translations/desired privacy between the moment they start
+-	// typing and the publish boundary. NULL = "no draft yet" (the
+-	// common case for a freshly-minted row from FindOrCreateEditableSession);
+-	// empty string = "operator cleared this field intentionally" (a real
+-	// state the SPA distinguishes). The SaveDraft endpoint mirrors these
+-	// fields from the request body verbatim; the publish endpoint reads
+-	// DesiredPrivacy / Tags / etc. as the source of truth at the time of
+-	// click, NOT the draft_*.mirror (the publish payload overrides the
+-	// draft on the publish side — Draft* is only persistence for "I closed
+-	// my laptop mid-edit and want to come back to the same form later").
+-	DraftTitle               *string                            `json:"draft_title,omitempty"`
+-	DraftDescription         *string                            `json:"draft_description,omitempty"`
+-	DraftTags                []string                           `json:"draft_tags,omitempty"`
+-	DraftDefaultLanguage    *string                            `json:"draft_default_language,omitempty"`
+-	DraftDefaultAudioLanguage *string                           `json:"draft_default_audio_language,omitempty"`
+-	DraftTranslations       map[string]YouTubeTranslation        `json:"draft_translations,omitempty"`
+-	DraftDesiredPrivacy     *string                            `json:"draft_desired_privacy,omitempty"`
+-	DraftUpdatedAt          *time.Time                         `json:"draft_updated_at,omitempty"`
++	// YouTubeUpdatedAt is the read-back timestamp the drift_reconciler
++	// (and the publish orchestrator's MarkPublishedWithActualPrivacy
++	// CAS) stamps after confirming YouTube's privacy. Nil means
++	// "we've never read YouTube for this row" — the reconciler's
++	// first tick on a freshly-discovered row populates this so the
++	// SPA can render a "verified by YouTube hh:mm ago" badge.
++	YouTubeUpdatedAt *time.Time `json:"youtube_updated_at,omitempty"`
++	Status           string     `json:"status"`
++	LastError        string     `json:"last_error,omitempty"`
++	CreatedAt        time.Time  `json:"created_at"`
++	UpdatedAt        time.Time  `json:"updated_at"`
++	// DraftTitle / DraftDescription / DraftDefaultLanguage /
++	// DraftDefaultAudioLanguage / DraftDesiredPrivacy are nullable
++	// so the SPA can distinguish "no draft yet" (nil → omitted in
++	// JSON) from "operator cleared this field" ("").
++	DraftTitle               *string                          `json:"draft_title,omitempty"`
++	DraftDescription         *string                          `json:"draft_description,omitempty"`
++	DraftTags                []string                         `json:"draft_tags,omitempty"`
++	DraftDefaultLanguage     *string                          `json:"draft_default_language,omitempty"`
++	DraftDefaultAudioLanguage *string                         `json:"draft_default_audio_language,omitempty"`
++	DraftTranslations        map[string]YouTubeTranslation   `json:"draft_translations,omitempty"`
++	DraftDesiredPrivacy      *string                          `json:"draft_desired_privacy,omitempty"`
++	DraftUpdatedAt           *time.Time                       `json:"draft_updated_at,omitempty"`
+ 	// DirtyFlag stamps the dashboard's "unsaved changes" card pill.
+ 	// Set to TRUE by the SPA on form-change; set to FALSE in the same
+ 	// SQL as draft_updated_at by SaveDraft (a successful 200). The
+@@ -99,3 +110,9 @@ type YouTubeVideoDetails struct {
+ 	Privacy      string `json:"privacy"`
+ 	UploadStatus string `json:"upload_status"`
+ }
++
++// YouTubeTranslation is declared in internal/models/youtube_publish_options.go.
++// Defined once for the whole `models` package to avoid a redeclaration
++// compile error (the original draft PR introduced a copy here; the
++// drift_reconciler PR removes that copy so callers compile against a
++// single source of truth).
+diff --git a/internal/repository/token_repo.go b/internal/repository/token_repo.go
+index f60ef09a..8cab1299 100644
+--- a/internal/repository/token_repo.go
++++ b/internal/repository/token_repo.go
+@@ -211,11 +211,29 @@ func (r *TokenRepository) UpdateCiphertexts(tokenID int64, oldEncrypted, newEncr
+ 		return fmt.Errorf("failed to read rows affected: %w", err)
+ 	}
+ 	if n == 0 {
+-		// Either the row was deleted (rare, possible) or another
+-		// worker already upgraded the ciphertext. Both are
+-		// non-fatal for the vault's Get() caller, which swallows
+-		// this specific error.
+ 		return fmt.Errorf("ciphertext stale: another re-encrypt already applied (id=%d)", tokenID)
+ 	}
+ 	return nil
+ }
++
++// UpdateRefreshTokenCiphertext atomically replaces encrypted_refresh_token
++// for a single token row, using the same optimistic-concurrency pattern as
++// UpdateCiphertexts. The WHERE clause matches on encrypted_refresh_token to
++// prevent stale overwrites when two workers race on the same row.
++func (r *TokenRepository) UpdateRefreshTokenCiphertext(tokenID int64, oldEncrypted, newEncrypted []byte) error {
++	result, err := r.db.Exec(
++		`UPDATE tokens SET encrypted_refresh_token = $1 WHERE id = $2 AND encrypted_refresh_token = $3`,
++		newEncrypted, tokenID, oldEncrypted,
++	)
++	if err != nil {
++		return fmt.Errorf("failed to update refresh token ciphertext: %w", err)
++	}
++	n, err := result.RowsAffected()
++	if err != nil {
++		return fmt.Errorf("failed to read rows affected: %w", err)
++	}
++	if n == 0 {
++		return fmt.Errorf("refresh ciphertext stale: another re-encrypt already applied (id=%d)", tokenID)
++	}
++	return nil
++}
+diff --git a/internal/repository/youtube_target_publication_repo.go b/internal/repository/youtube_target_publication_repo.go
+index 210c71e0..b75feae1 100644
+--- a/internal/repository/youtube_target_publication_repo.go
++++ b/internal/repository/youtube_target_publication_repo.go
+@@ -56,6 +56,11 @@ type YouTubeTargetPublicationStore interface {
+ 	// migration-068 UNIQUE constraint on editor_session_id adds
+ 	// defence-in-depth at the DB layer.
+ 	MarkEditorSessionCreated(ctx context.Context, id int64, editorSessionID, veloxProjectID string) error
++
++	// ListNeedsReconcile (drift-recon, migration 069) — YT pub rows whose youtube_video_id is set AND reconciled_at IS NULL/old OR (canonical "stale-or-never" gate), PLUS created_at < NOW() - minRowAge (defence-in-depth freshness gate so the drift worker doesn't race the fresh-upload publish driver).
++	ListNeedsReconcile(ctx context.Context, threshold, minRowAge time.Duration, limit int) ([]*models.YouTubeTargetPublication, error)
++	// MarkReconciled (drift-recon) — atomic UPDATE stamps reconciled_at (COALESCE-preserved), reconcile_status, last_reconcile_error, last_reconciled_privacy in one statement.
++	MarkReconciled(ctx context.Context, id int64, status, errMsg, observedPrivacy string) error
+ }
+ 
+ // YouTubeTargetPublicationRepository is the concrete *sql.DB-backed
+@@ -84,6 +89,7 @@ const ytTargetPubsSelectColumns = `
+ 	youtube_uploaded_at, youtube_processed_at,
+ 	editor_session_id, velox_project_id, thumbnail_media_id, thumbnail_status,
+ 	desired_privacy, publish_at, published_at, last_error, attempt_count,
++	reconciled_at, reconcile_status, last_reconcile_error, last_reconciled_privacy,
+ 	created_at, updated_at`
+ 
+ // ytPubsRowScanner matches both *sql.Row and *sql.Rows via their shared
+@@ -115,6 +121,10 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
+ 		thumbnailStatus         sql.NullString
+ 		publishAt               sql.NullTime
+ 		publishedAt             sql.NullTime
++		reconciledAt              sql.NullTime
++		reconcileStatus           sql.NullString
++		lastReconcileError        sql.NullString
++		lastReconciledPrivacy     sql.NullString
+ 	)
+ 	if err := s.Scan(
+ 		&pub.ID, &pub.UploadJobID, &pub.PostTargetID, &pub.PlatformAccountID,
+@@ -123,6 +133,7 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
+ 		&editorSessionID, &veloxProjectID, &thumbnailMediaID, &thumbnailStatus,
+ 		&pub.DesiredPrivacy, &publishAt, &publishedAt, &pub.LastError, &pub.AttemptCount,
+ 		&pub.CreatedAt, &pub.UpdatedAt,
++		&reconciledAt, &reconcileStatus, &lastReconcileError, &lastReconciledPrivacy,
+ 	); err != nil {
+ 		return err
+ 	}
+@@ -136,6 +147,10 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
+ 	pub.ThumbnailStatus = ytPubsNullStringPtr(thumbnailStatus)
+ 	pub.PublishAt = ytPubsNullTimePtr(publishAt)
+ 	pub.PublishedAt = ytPubsNullTimePtr(publishedAt)
++	pub.ReconciledAt = ytPubsNullTimePtr(reconciledAt)
++	pub.ReconcileStatus = ytPubsNullStringPtr(reconcileStatus)
++	pub.LastReconcileError = lastReconcileError.String
++	pub.LastReconciledPrivacy = ytPubsNullStringPtr(lastReconciledPrivacy)
+ 	return nil
+ }
+ 
+@@ -532,6 +547,77 @@ func (r *YouTubeTargetPublicationRepository) MarkYouTubeProcessed(ctx context.Co
+ 	return r.checkRowsAffected(res, id)
+ }
+ 
++// ListNeedsReconcile (drift-recon) returns the YT pub rows the
++// periodic drift worker should compare against the live YouTube Data
++// API. Predicate stack: youtube_video_id IS NOT NULL +
++// (reconciled_at IS NULL OR reconciled_at < NOW() - threshold) +
++// created_at < NOW() - minRowAge. ORDER BY matches
++// idx_yt_pubs_drift_reconcile. Returns (nil, nil) when no rows match.
++func (r *YouTubeTargetPublicationRepository) ListNeedsReconcile(ctx context.Context, threshold, minRowAge time.Duration, limit int) ([]*models.YouTubeTargetPublication, error) {
++	if limit <= 0 {
++		limit = 50
++	}
++	rows, err := r.db.QueryContext(ctx,
++		`SELECT `+ytTargetPubsSelectColumns+`
++		 FROM youtube_target_publications
++		 WHERE youtube_video_id IS NOT NULL
++		   AND (reconciled_at IS NULL OR reconciled_at < NOW() - $1::interval)
++		   AND created_at < NOW() - $2::interval
++		 ORDER BY reconciled_at ASC NULLS FIRST
++		 LIMIT $3`,
++		fmtDuration(threshold), fmtDuration(minRowAge), limit)
++	if err != nil {
++		return nil, fmt.Errorf("youtube target publication ListNeedsReconcile: %w", err)
++	}
++	defer rows.Close()
++
++	var out []*models.YouTubeTargetPublication
++	for rows.Next() {
++		pub := &models.YouTubeTargetPublication{}
++		if err := scanYouTubeTargetPublication(rows, pub); err != nil {
++			return nil, fmt.Errorf("youtube target publication ListNeedsReconcile scan: %w", err)
++		}
++		out = append(out, pub)
++	}
++	if err := rows.Err(); err != nil {
++		return nil, fmt.Errorf("youtube target publication ListNeedsReconcile rows: %w", err)
++	}
++	return out, nil
++}
++
++// MarkReconciled (drift-recon) stamps the 4 reconciliation telemetry
++// columns in ONE atomic statement. COALESCE on reconciled_at
++// preserves the FIRST successful reconcile timestamp across re-runs.
++// status is pinned by the worker (canonical: "ok" / "noop" / "error").
++func (r *YouTubeTargetPublicationRepository) MarkReconciled(ctx context.Context, id int64, status, errMsg, observedPrivacy string) error {
++	res, err := r.db.ExecContext(ctx,
++		`UPDATE youtube_target_publications
++		 SET reconciled_at = COALESCE(reconciled_at, NOW()),
++		     reconcile_status = $2,
++		     last_reconcile_error = $3,
++		     last_reconciled_privacy = $4,
++		     updated_at = NOW()
++		 WHERE id = $1`,
++		id, status, errMsg, observedPrivacy,
++	)
++	if err != nil {
++		return fmt.Errorf("youtube target publication MarkReconciled: %w", err)
++	}
++	return r.checkRowsAffected(res, id)
++}
++
++// fmtDuration (drift-recon) formats a time.Duration as the PostgreSQL
++// INTERVAL string ListNeedsReconcile's predicate expects. Postgres
++// accepts literal forms ('120 seconds' / '2 minutes' / '1 hour')
++// natively; we use the integer-seconds form because it is canonical
++// for any period a worker tick cares about.
++func fmtDuration(d time.Duration) string {
++	if d <= 0 {
++		return "0 seconds"
++	}
++	return fmt.Sprintf("%d seconds", int64(d.Seconds()))
++}
++
+ func (r *YouTubeTargetPublicationRepository) checkRowsAffected(res sql.Result, id int64) error {
+ 	n, err := res.RowsAffected()
+ 	if err != nil {
+diff --git a/internal/repository/youtube_video_edit_repo.go b/internal/repository/youtube_video_edit_repo.go
+index f6a58dcf..f6846262 100644
+--- a/internal/repository/youtube_video_edit_repo.go
++++ b/internal/repository/youtube_video_edit_repo.go
+@@ -32,6 +32,16 @@ const (
+ 	YouTubeEditorSessionListMaxLimit     = 500
+ )
+ 
++// YouTubeDriftReconcilerTicksPerRun is the fallback per-call tick cap
++// used by the YouTube drift reconciliation repository helper when the
++// caller passes a limit <= 0. Pairs with the canonical env-driven
++// WorkerConfig.YouTubeDriftReconcileBatchSize (env
++// YOUTUBE_DRIFT_RECONCILE_BATCH_SIZE, default 50) — a "tick" is the
++// innermost sub-batch within a reconcile sweep, so we keep it at the
++// same 50 default to mirror BatchSize and avoid surprising the drift
++// worker with a different ceiling.
++const YouTubeDriftReconcilerTicksPerRun = 50
++
+ // ErrYouTubeVideoEditListLimitInvalid is the typed sentinel returned
+ // by the handler when ?limit is out of [1, MaxLimit]. Handlers map to
+ // HTTP 400 via errors.Is.
+@@ -197,6 +207,38 @@ type YouTubeVideoEditStore interface {
+ 	// handler maps to 409 (CAS-loss). A real *sql.DB error
+ 	// propagates wrapped.
+ 	MarkPublishedWithActualPrivacy(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error)
++	// ListForDriftReconciliation (P2 followup drift_reconciler)
++	// returns up to `limit` editor sessions whose status is in
++	// the supplied slice, ordered by youtube_updated_at ASC NULLS
++	// FIRST. The drift_reconciler worker iterates the result and
++	// re-reads YouTube's live privacy for each row, so the
++	// NULLS-FIRST ordering is critical: freshly-discovered rows
++	// (never read by YouTube yet) converge ahead of never-edited
++	// long-tail rows. `statuses` is expected to be a non-empty
++	// slice; empty input returns (nil, nil) so a misconfigured
++	// caller does not accidentally scan the whole table.
++	// `limit` <= 0 falls back to YouTubeDriftReconcilerTicksPerRun
++	// (= 50 in internal/worker/youtube_drift_reconciler.go),
++	// keeping the per-tick YouTube API quota footprint predictable.
++	// Defence-in-depth: the worker's caller (bootstrap/workers.go)
++	// pins this slice at startup; if a future operator surface
++	// needs to widen the row set, it must pass the same set the
++	// worker uses (YouTubeDriftReconcilerStatuses).
++	ListForDriftReconciliation(ctx context.Context, statuses []string, limit int) ([]*models.YouTubeVideoEdit, error)
++	// UpdateYouTubeSyncState (P2 followup drift_reconciler) atomically
++	// stamps actual_privacy + youtube_updated_at + youtube_sync_status
++	// in a single SQL statement. CAS predicate: id=$1 (no status
++	// restriction — every drift iteration snapshots whatever
++	// status the row is currently in, and a concurrent
++	// publish-flip is harmless because the orchestrator's own
++	// MarkPublishedWithActualPrivacy CAS will re-stamp the row on
++	// the publish boundary, overwriting whatever the drift worker
++	// just wrote). syncStatus is constrained at the DB layer by
++	// the CHECK constraint on youtube_sync_status (migration 072).
++	// Returns ErrYouTubeVideoEditNotFound on 0-rows (handler maps
++	// to a non-error skip — the row was deleted between the list
++	// and the CAS, which is rare but legitimate).
++	UpdateYouTubeSyncState(ctx context.Context, id string, actualPrivacy string, youtubeUpdatedAt time.Time, syncStatus string) (*models.YouTubeVideoEdit, error)
+ }
+ 
+ // YouTubeVideoEditRepository handles CRUD for youtube_video_edits.
+@@ -241,7 +283,7 @@ func (r *YouTubeVideoEditRepository) FindByID(ctx context.Context, id string) (*
+ 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+ 		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+ 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+-		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
++		&edit.ActualPrivacy, &edit.YouTubeSyncStatus, &edit.YouTubeUpdatedAt,
+ 		&edit.CreatedAt, &edit.UpdatedAt,
+ 	)
+ 	if err == sql.ErrNoRows {
+@@ -265,7 +307,7 @@ func (r *YouTubeVideoEditRepository) FindByVeloxProjectID(ctx context.Context, p
+ 	).Scan(
+ 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID, &edit.VeloxProjectID,
+ 		&edit.SourceThumbnailURL, &edit.ThumbnailMediaID, &edit.DesiredPrivacy, &edit.PublishAt,
+-		&edit.Status, &edit.LastError, &edit.ActualPrivacy, &edit.YouTubeSyncStatus,
++		&edit.Status, &edit.LastError, &edit.ActualPrivacy, &edit.YouTubeSyncStatus, &edit.YouTubeUpdatedAt,
+ 		&edit.CreatedAt, &edit.UpdatedAt,
+ 	); err == sql.ErrNoRows {
+ 		return nil, nil
+@@ -382,7 +424,7 @@ func (r *YouTubeVideoEditRepository) AttachThumbnail(ctx context.Context, sessio
+ 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+ 		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+ 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+-		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
++		&edit.ActualPrivacy, &edit.YouTubeSyncStatus, &edit.YouTubeUpdatedAt,
+ 		&edit.CreatedAt, &edit.UpdatedAt,
+ 	)
+ 	if err == sql.ErrNoRows {
+@@ -455,7 +497,7 @@ func (r *YouTubeVideoEditRepository) MarkPublishedWithActualPrivacy(
+ 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+ 		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+ 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+-		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
++		&edit.ActualPrivacy, &edit.YouTubeSyncStatus, &edit.YouTubeUpdatedAt,
+ 		&edit.CreatedAt, &edit.UpdatedAt,
+ 	)
+ 	if err == sql.ErrNoRows {
+@@ -704,7 +746,7 @@ func (r *YouTubeVideoEditRepository) findOpenEditableSessionByTriple(
+ 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+ 		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+ 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+-		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
++		&edit.ActualPrivacy, &edit.YouTubeSyncStatus, &edit.YouTubeUpdatedAt,
+ 		&edit.CreatedAt, &edit.UpdatedAt,
+ 	)
+ 	if err == sql.ErrNoRows {
+@@ -743,7 +785,7 @@ func isPQUniqueViolation(err error) bool {
+ const youtubeVideoEditSelectColumns = `id, workspace_id, platform_account_id, youtube_video_id,
+ 	        velox_project_id, source_thumbnail_url, thumbnail_media_id,
+ 	        desired_privacy, publish_at, status, last_error,
+-	        actual_privacy, youtube_sync_status,
++	        actual_privacy, youtube_sync_status, youtube_updated_at,
+ 	        created_at, updated_at`
+ 
+ // ListByWorkspace returns the editor sessions visible to the
+@@ -829,6 +871,7 @@ func (r *YouTubeVideoEditRepository) ListByWorkspace(ctx context.Context, filter
+ 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+ 			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+ 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
++			&edit.ActualPrivacy, &edit.YouTubeSyncStatus, &edit.YouTubeUpdatedAt,
+ 			&edit.CreatedAt, &edit.UpdatedAt,
+ 		); err != nil {
+ 			return nil, fmt.Errorf("youtube video edit ListByWorkspace scan: %w", err)
+@@ -957,3 +1000,136 @@ func (r *YouTubeVideoEditRepository) SaveDraft(
+ func nullableDraftString(s string) interface{} {
+ 	return s
+ }
++
++// ListForDriftReconciliation (P2 followup drift_reconciler) returns
++// up to `limit` editor sessions whose status is in the supplied
++// slice, ordered by youtube_updated_at ASC NULLS FIRST. See
++// YouTubeVideoEditStore.ListForDriftReconciliation for the full
++// contract — this method matches it one-to-one.
++//
++// The partial index idx_youtube_video_edits_drift (migration 074)
++// covers the predicate + the ordering. The index keeps the sweep
++// to an index-only scan regardless of workspace row count.
++//
++// Edge cases:
++//   - len(statuses) == 0 → (nil, nil): a misconfigured caller
++//     never sweeps the whole table. Defensive: the worker itself
++//     passes a fixed set, so this branch is unreachable in prod.
++//   - limit <= 0 → limit = YouTubeDriftReconcilerTicksPerRun
++//     (= 50 in internal/worker/youtube_drift_reconciler.go) so
++//     the per-tick YouTube API quota footprint stays predictable.
++//   - workspaceID <= 0 (placeholder) → (nil, nil) would be wrong
++//     here: this method does NOT take a workspace_id; it sweeps
++//     the whole table (single-tenant — InstaeditLogin's deployment
++//     is single-deploy-per-org). A future multi-tenant migration
++//     would add the workspace predicate here.
++func (r *YouTubeVideoEditRepository) ListForDriftReconciliation(
++	ctx context.Context,
++	statuses []string,
++	limit int,
++) ([]*models.YouTubeVideoEdit, error) {
++	if len(statuses) == 0 {
++		return nil, nil
++	}
++	if limit <= 0 {
++		limit = YouTubeDriftReconcilerTicksPerRun
++	}
++	rows, err := r.db.QueryContext(ctx,
++		`SELECT `+youtubeVideoEditSelectColumns+`
++		 FROM youtube_video_edits
++		 WHERE status = ANY($1)
++		 ORDER BY youtube_updated_at ASC NULLS FIRST
++		 LIMIT $2`,
++		pq.Array(statuses), limit,
++	)
++	if err != nil {
++		return nil, fmt.Errorf("youtube video edit ListForDriftReconciliation query: %w", err)
++	}
++	defer rows.Close()
++	out := make([]*models.YouTubeVideoEdit, 0, limit)
++	for rows.Next() {
++		edit := &models.YouTubeVideoEdit{}
++		if err := rows.Scan(
++			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
++			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
++			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
++			&edit.ActualPrivacy, &edit.YouTubeSyncStatus, &edit.YouTubeUpdatedAt,
++			&edit.CreatedAt, &edit.UpdatedAt,
++		); err != nil {
++			return nil, fmt.Errorf("youtube video edit ListForDriftReconciliation scan: %w", err)
++		}
++		out = append(out, edit)
++	}
++	if err := rows.Err(); err != nil {
++		return nil, fmt.Errorf("youtube video edit ListForDriftReconciliation rows: %w", err)
++	}
++	return out, nil
++}
++
++// UpdateYouTubeSyncState (P2 followup drift_reconciler) atomically
++// stamps actual_privacy + youtube_updated_at + youtube_sync_status in
++// a single SQL statement. The CAS predicate matches whatever status
++// the row is currently in (no status restriction) because:
++//   - The drift worker snapshots whatever status the row is in
++//     NOW; a concurrent publish-flip is harmless — the publish
++//     orchestrator's own MarkPublishedWithActualPrivacy CAS will
++//     re-stamp the row on the publish boundary, overwriting the
++//     drift worker's write with the publish-bound truth.
++//   - The CAS still locks against a row DELETION between the
++//     ListForDriftReconciliation snapshot and this stamp: a 0-rows
++//     match returns ErrYouTubeVideoEditNotFound which the worker
++//     treats as a non-error skip (the row is gone; nothing to
++//     reconcile).
++//
++// actualPrivacy uses NULLIF($2, '') so an empty-string fallback
++// (e.g. when YouTube returned a payload with no privacy field, or
++// the operator cleared actual_privacy intentionally) collapses to a
++// true SQL NULL on the column. The DTO's `omitempty` behaviour then
++// hides the field from the JSON response.
++//
++// youtubeUpdatedAt is supplied by the worker (time.Now().UTC()) so
++// the timestamp agrees to the microsecond with the operator's
++// expectation: "the last verified reading of YouTube was at the
++// moment I looked". CAS-row + repo CAS ensures no drift between
++// the worker reading and the row stamping.
++//
++// syncStatus is constrained at the DB layer (CHECK constraint,
++// migration 072). The application is the single source of truth
++// for the four lifecycle values; overlaying an allow-list at this
++// layer would just drift the truth away from the DB constraint.
++//
++// Returns ErrYouTubeVideoEditNotFound (wrapped) on 0-rows — the
++// handler maps to a non-error skip (the row was deleted between
++// the list and the CAS). A real *sql.DB error propagates wrapped.
++func (r *YouTubeVideoEditRepository) UpdateYouTubeSyncState(
++	ctx context.Context,
++	id string,
++	actualPrivacy string,
++	youtubeUpdatedAt time.Time,
++	syncStatus string,
++) (*models.YouTubeVideoEdit, error) {
++	edit := &models.YouTubeVideoEdit{}
++	err := r.db.QueryRowContext(ctx,
++		`UPDATE youtube_video_edits
++		 SET actual_privacy = NULLIF($2, ''),
++		     youtube_updated_at = $3,
++		     youtube_sync_status = $4,
++		     updated_at = NOW()
++		 WHERE id = $1
++		 RETURNING `+youtubeVideoEditSelectColumns,
++		id, actualPrivacy, youtubeUpdatedAt, syncStatus,
++	).Scan(
++		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
++		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
++		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
++		&edit.ActualPrivacy, &edit.YouTubeSyncStatus, &edit.YouTubeUpdatedAt,
++		&edit.CreatedAt, &edit.UpdatedAt,
++	)
++	if err == sql.ErrNoRows {
++		return nil, fmt.Errorf("%w: id=%s", ErrYouTubeVideoEditNotFound, id)
++	}
++	if err != nil {
++		return nil, fmt.Errorf("youtube video edit UpdateYouTubeSyncState: %w", err)
++	}
++	return edit, nil
++}
+diff --git a/internal/services/youtube_oauth.go b/internal/services/youtube_oauth.go
+index 7a6aac83..857273a0 100644
+--- a/internal/services/youtube_oauth.go
++++ b/internal/services/youtube_oauth.go
+@@ -203,6 +203,16 @@ func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuth
+ 	return "https://accounts.google.com/o/oauth2/v2/auth?" + params.Encode()
+ }
+ 
++// hasScope reports whether scopes contains the given scope string.
++func hasScope(scopes []string, required string) bool {
++	for _, scope := range scopes {
++		if strings.TrimSpace(scope) == required {
++			return true
++		}
++	}
++	return false
++}
++
+ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+ 	slog.Info("YouTube: exchanging code for token")
+ 
+@@ -211,6 +221,19 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
+ 		return nil, nil, fmt.Errorf("youtube token exchange: %w", err)
+ 	}
+ 
++	scopes := strings.Split(tokenResp.Scope, " ")
++
++	slog.Info("YouTube OAuth scopes received",
++		"has_upload", hasScope(scopes, "https://www.googleapis.com/auth/youtube.upload"),
++		"has_readonly", hasScope(scopes, "https://www.googleapis.com/auth/youtube.readonly"),
++		"has_force_ssl", hasScope(scopes, "https://www.googleapis.com/auth/youtube.force-ssl"),
++	)
++
++	if !hasScope(scopes, "https://www.googleapis.com/auth/youtube.force-ssl") {
++		slog.Warn("YouTube authorization missing youtube.force-ssl scope — videos.update and videos.delete will fail",
++			"granted_scopes", scopes)
++	}
++
+ 	slog.Info("YouTube: fetching user info")
+ 	profile, err := s.getUserInfo(ctx, tokenResp.AccessToken)
+ 	if err != nil {
+@@ -222,7 +245,7 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
+ 		RefreshToken: tokenResp.RefreshToken,
+ 		TokenType:    models.TokenTypeBearer,
+ 		ExpiresIn:    tokenResp.ExpiresIn,
+-		Scopes:       strings.Split(tokenResp.Scope, " "),
++		Scopes:       scopes,
+ 	}
+ 
+ 	return profile, tokenData, nil
+@@ -463,6 +486,7 @@ type youtubeVideoContent struct {
+ type youtubeVideoStatus struct {
+ 	PrivacyStatus string `json:"privacyStatus"`
+ 	UploadStatus  string `json:"uploadStatus"`
++	PublishAt     string `json:"publishAt"`
+ }
+ 
+ type youtubeVideoProcessingDetails struct {
+diff --git a/internal/services/youtube_publish.go b/internal/services/youtube_publish.go
+index a9e952b6..ea3031e5 100644
+--- a/internal/services/youtube_publish.go
++++ b/internal/services/youtube_publish.go
+@@ -314,3 +314,35 @@ func validateYouTubePrivacyLevel(level string) error {
+ func normalizeYouTubePrivacyLevel(level string) string {
+ 	return strings.ToLower(strings.TrimSpace(level))
+ }
++
++// DriftObservation (drift-recon) is the snapshot the periodic YouTube
++// Data API drift worker compares against the local DB row. 3-axis
++// drift (privacy, processing, publishAt).
++type DriftObservation struct {
++	PrivacyStatus    string     `json:"privacyStatus"`
++	ProcessingStatus string     `json:"processingStatus"`
++	PublishAt        *time.Time `json:"publishAt,omitempty"`
++}
++
++// QueryVideoLiveState (drift-recon) fetches live YouTube Data API state
++// for videoID via GET videos.list?part=status,processingDetails.
++// Returns the 3-axis DriftObservation.
++func (s *YouTubeOAuthService) QueryVideoLiveState(ctx context.Context, accessToken, videoID string) (*DriftObservation, error) {
++	video, err := s.fetchVideoStatus(ctx, accessToken, videoID)
++	if err != nil {
++		return nil, err
++	}
++	obs := &DriftObservation{PrivacyStatus: "", ProcessingStatus: "", PublishAt: nil}
++	if video.Status.PrivacyStatus != "" {
++		obs.PrivacyStatus = strings.ToLower(strings.TrimSpace(video.Status.PrivacyStatus))
++		if video.Status.PublishAt != "" {
++			if t, perr := time.Parse(time.RFC3339, video.Status.PublishAt); perr == nil {
++				obs.PublishAt = &t
++			}
++		}
++	}
++	if video.ProcessingDetails != nil {
++		obs.ProcessingStatus = video.ProcessingDetails.ProcessingStatus
++	}
++	return obs, nil
++}
+diff --git a/pkg/api/accounts_read_handlers.go b/pkg/api/accounts_read_handlers.go
+index 645a4006..3b1dd9fc 100644
+--- a/pkg/api/accounts_read_handlers.go
++++ b/pkg/api/accounts_read_handlers.go
+@@ -2,6 +2,7 @@ package api
+ 
+ import (
+ 	"context"
++	"fmt"
+ 	"log/slog"
+ 	"net/http"
+ 	"strconv"
+@@ -390,17 +391,20 @@ func (r *Router) handleAccountContent(w http.ResponseWriter, req *http.Request)
+ 		return
+ 	}
+ 
+-	// Retrieve the access token from the vault.
+-	token, err := r.vault.Get(req.Context(), account.ID, models.TokenTypeBearer)
+-	if err != nil {
+-		token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
+-		if err != nil {
+-			token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
+-			if err != nil {
+-				writeError(w, http.StatusUnauthorized, "no valid token found for this account")
+-				return
++	// Retrieve the access token from the vault. Use Renew() so expired
++	// tokens are transparently refreshed via the stored refresh token.
++	token, err := r.vault.Renew(req.Context(), account.ID, models.TokenTypeBearer,
++		func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
++			p, ok := r.capabilities.OAuth(account.Platform)
++			if !ok {
++				return nil, fmt.Errorf("platform %s has no OAuth provider", account.Platform)
+ 			}
+-		}
++			return p.RefreshOAuthToken(ctx, refreshToken)
++		},
++	)
++	if err != nil {
++		writeError(w, http.StatusUnauthorized, "no valid token found for this account: "+err.Error())
++		return
+ 	}
+ 
+ 	cursor := req.URL.Query().Get("cursor")
+diff --git a/pkg/api/youtube_editor_sessions_by_project.go b/pkg/api/youtube_editor_sessions_by_project.go
+index 5b6780b1..9eadf13a 100644
+--- a/pkg/api/youtube_editor_sessions_by_project.go
++++ b/pkg/api/youtube_editor_sessions_by_project.go
+@@ -45,8 +45,13 @@ type youTubeEditorSessionDetail struct {
+ 	LastError          string     `json:"last_error,omitempty"`
+ 	ActualPrivacy      *string    `json:"actual_privacy,omitempty"`
+ 	YouTubeSyncStatus  *string    `json:"youtube_sync_status,omitempty"`
+-	CreatedAt          time.Time  `json:"created_at"`
+-	UpdatedAt          time.Time  `json:"updated_at"`
++	// YouTubeUpdatedAt is the drift-reconciler/projection
++	// timestamp: "the last time a YouTube read confirmed what the
++	// video's privacy is". The SPA renders a "verified by YouTube
++	// hh:mm ago" badge against this field (P2 followup commit).
++	YouTubeUpdatedAt *time.Time `json:"youtube_updated_at,omitempty"`
++	CreatedAt       time.Time  `json:"created_at"`
++	UpdatedAt       time.Time  `json:"updated_at"`
+ }
+ 
+ func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSessionDetail {
+@@ -64,6 +69,7 @@ func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSe
+ 		LastError:          edit.LastError,
+ 		ActualPrivacy:      edit.ActualPrivacy,
+ 		YouTubeSyncStatus:  edit.YouTubeSyncStatus,
++		YouTubeUpdatedAt:   edit.YouTubeUpdatedAt,
+ 		CreatedAt:          edit.CreatedAt,
+ 		UpdatedAt:          edit.UpdatedAt,
+ 	}
+diff --git a/pkg/api/youtube_group_videos.go b/pkg/api/youtube_group_videos.go
+index 96ae934c..1842af6e 100644
+--- a/pkg/api/youtube_group_videos.go
++++ b/pkg/api/youtube_group_videos.go
+@@ -102,6 +102,15 @@ type groupYouTubeVideoEntry struct {
+ 	// by the CHECK constraint on youtube_video_edits.youtube_sync_status
+ 	// (migration 072).
+ 	YouTubeSyncStatus *string `json:"youtube_sync_status,omitempty"`
++	// YouTubeUpdatedAt is the drift-reconciler/projection
++	// timestamp: "the last time a YouTube read confirmed what the
++	// video's privacy is". The SPA card grid renders a
++	// "verified by YouTube hh:mm ago" badge against this field.
++	// Pointer-to-time.Time so the SPA distinguishes "never read"
++	// (nil) from "read at this moment" (stamped). Stamped by the
++	// drift_reconciler (UpdateYouTubeSyncState CAS) on every
++	// successful batch-tick.
++	YouTubeUpdatedAt *time.Time `json:"youtube_updated_at,omitempty"`
+ }
+ 
+ // groupYouTubeVideosResponse is the envelope. `videos: []` is
+@@ -398,6 +407,9 @@ if len(accountLookup) > groupYouTubeVideosMaxAccounts {
+ 			if s.YouTubeSyncStatus != nil {
+ 				entry.YouTubeSyncStatus = s.YouTubeSyncStatus
+ 			}
++			if s.YouTubeUpdatedAt != nil {
++				entry.YouTubeUpdatedAt = s.YouTubeUpdatedAt
++			}
+ 		}
+ 			entries = append(entries, entry)
+ 		}
+diff --git a/pkg/metrics/observability.go b/pkg/metrics/observability.go
+index 7f81c443..4b4492c3 100644
+--- a/pkg/metrics/observability.go
++++ b/pkg/metrics/observability.go
+@@ -321,6 +321,14 @@ var (
+ 	// (notably internal/worker/task_10_10_recovery_test.go) can
+ 	// assert the counter increments via prometheus/testutil.
+ 	// Mirrors the YouTubePublishChannelMismatch export pattern.
++	YoutubeDriftReconcileTotal = prometheus.NewCounterVec(
++		prometheus.CounterOpts{
++			Name: "youtube_drift_reconcile_total",
++			Help: "Periodic YouTube drift reconciliation attempts by outcome (ok / drift_failed / api_error / api_video_missing).",
++		},
++		[]string{"result"},
++	)
++
+ 	LeaseExpiryCount = prometheus.NewCounterVec(
+ 		prometheus.CounterOpts{
+ 			Name: "lease_expiry_total",
+@@ -429,6 +437,7 @@ func init() {
+ 		YouTubeVideosInsertCalls,
+ 		webhookDeliveryFailures,
+ 		LeaseExpiryCount,
++		YoutubeDriftReconcileTotal,
+ 		ResumableRecoveryCount,
+ 		uploadThroughputBytes,
+ 		httpRequestsTotal,
+@@ -633,6 +642,18 @@ func RecordResumableRecovery(reason string) {
+ 	ResumableRecoveryCount.WithLabelValues(reason).Inc()
+ }
+ 
++// RecordYoutubeDriftReconcile (commit drift-recon) increments
++// YoutubeDriftReconcileTotal with a canonical result label.
++func RecordYoutubeDriftReconcile(result string) {
++	switch result {
++	case "ok", "drift_failed", "api_error", "api_video_missing":
++	default:
++		slog.Debug("metrics.RecordYoutubeDriftReconcile: unknown result, recording skipped", "result", result)
++		return
++	}
++	YoutubeDriftReconcileTotal.WithLabelValues(result).Inc()
++}
++
+ // SetQueueDepth / SetQueueLagSeconds / SetTargetsByStatus / SetDeadLetterCount /
+ // SetDatabasePoolUsage are the periodic-gauge setters called by the
+ // collector goroutine (Phase 2). Each takes the value directly;
+diff --git a/web/src/components/uploads/UploadStatusBadge.tsx b/web/src/components/uploads/UploadStatusBadge.tsx
+index a693df2a..4deea3e3 100644
+--- a/web/src/components/uploads/UploadStatusBadge.tsx
++++ b/web/src/components/uploads/UploadStatusBadge.tsx
+@@ -1,7 +1,5 @@
+ import {
+   CheckCircle2,
+-  AlertTriangle,
+-  Info,
+   XCircle,
+   Loader2,
+   Clock,
+@@ -19,25 +17,19 @@ export function UploadStatusBadge({ state }: { state: SubmitState }) {
+     case "submitting":
+       return (
+         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/[0.12] border border-blue-500/[0.30] text-[12px] text-blue-300">
+-          <Loader2 size={12} className="animate-spin" /> Scheduling…
++          <Loader2 size={12} className="animate-spin" /> Queuing…
+         </span>
+       );
+-    case "success":
++    case "queued":
+       return (
+         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/[0.12] border border-emerald-500/[0.30] text-[12px] text-emerald-300">
+-          <CheckCircle2 size={12} /> {state.payload.scheduledCount} scheduled
++          <CheckCircle2 size={12} /> Queued
+         </span>
+       );
+-    case "partial":
++    case "polling":
+       return (
+-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/[0.12] border border-amber-500/[0.30] text-[12px] text-amber-300">
+-          <AlertTriangle size={12} /> Partial ({state.payload.scheduledCount})
+-        </span>
+-      );
+-    case "guidance":
+-      return (
+-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/[0.12] border border-amber-500/[0.30] text-[12px] text-amber-300">
+-          <Info size={12} /> Guidance
++        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/[0.12] border border-blue-500/[0.30] text-[12px] text-blue-300">
++          <Loader2 size={12} className="animate-spin" /> Processing
+         </span>
+       );
+     case "error":
+diff --git a/web/src/components/uploads/UploadsTable.tsx b/web/src/components/uploads/UploadsTable.tsx
+index 6193c3a3..c7bc06a7 100644
+--- a/web/src/components/uploads/UploadsTable.tsx
++++ b/web/src/components/uploads/UploadsTable.tsx
+@@ -1,20 +1,26 @@
+ import { formatRelHours } from "../../lib/formatters";
+-import type { BatchResponse } from "../../types/uploads";
++
++type BatchEntry = {
++  index: number;
++  drive_file_id: string;
++  name: string;
++  job_id: number;
++  scheduled_at: string;
++  relative_hours_from_now: number;
++};
+ 
+ export function UploadsTable({
+   entries,
+   previewLimit = 5,
+ }: {
+-  entries: NonNullable<BatchResponse["entries"]>;
++  entries: BatchEntry[];
+   previewLimit?: number;
+ }) {
+   const preview = entries.slice(0, previewLimit);
+ 
+   if (entries.length === 0) {
+     return (
+-      <p className="text-[13px] text-[#9aa0aa]">
+-        No entries scheduled.
+-      </p>
++      <p className="text-[13px] text-[#9aa0aa]">No entries scheduled.</p>
+     );
+   }
+ 
+@@ -43,8 +49,8 @@ export function UploadsTable({
+       </ul>
+       {entries.length > preview.length && (
+         <p className="mt-2 text-[12px] text-[#9aa0aa]/80">
+-          +{entries.length - preview.length} more — open the calendar to see them
+-          all.
++          +{entries.length - preview.length} more — open the calendar to see
++          them all.
+         </p>
+       )}
+     </div>
+diff --git a/web/src/pages/internal/Uploads.test.tsx b/web/src/pages/internal/Uploads.test.tsx
+index 6e206533..567b8563 100644
+--- a/web/src/pages/internal/Uploads.test.tsx
++++ b/web/src/pages/internal/Uploads.test.tsx
+@@ -1,9 +1,10 @@
+-import { describe, expect, it, vi, beforeEach } from "vitest";
++import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+ import { render, screen, waitFor, within } from "@testing-library/react";
+ import userEvent from "@testing-library/user-event";
+ import { MemoryRouter, Route, Routes } from "react-router-dom";
+ import { ToastProvider } from "../../components/toast";
+ import { InternalUploads } from "./Uploads";
++import { DEFAULT_MIN_JITTER_SEC, DEFAULT_MAX_JITTER_SEC } from "../../types/uploads";
+ 
+ function mockJsonResponse(data: unknown, ok = true, status = 202) {
+   return {
+@@ -14,11 +15,13 @@ function mockJsonResponse(data: unknown, ok = true, status = 202) {
+ }
+ 
+ const sampleWorkspaces = [{ id: 47, name: "Personal" }];
+-const samplePages = [
++const sampleYouTubeChannels = [
+   {
+     id: 9,
+-    platform: "facebook",
+-    username: "caleb-foster",
++    platform: "youtube",
++    platform_user_id: "UC1234567890",
++    username: "my-channel",
++    status: "active",
+     created_at: "2026-07-10T00:00:00Z",
+   },
+ ];
+@@ -26,7 +29,9 @@ const sampleDrives = [
+   {
+     id: 21,
+     platform: "google-drive",
++    platform_user_id: "drive-user-1",
+     username: "caleb-foster",
++    status: "active",
+     created_at: "2026-07-10T00:00:00Z",
+   },
+ ];
+@@ -34,50 +39,17 @@ const sampleDrives = [
+ function setupFetchMock(opts: {
+   importResponse?: { ok: boolean; body: unknown; status?: number };
+   includeDrives?: boolean;
++  pollResponse?: unknown;
+ }) {
+   const importResponse = opts.importResponse ?? {
+     ok: true,
+     body: {
+-      folder_id: "abc123",
+-      scheduled_count: 3,
+-      page_count: 1,
+-      first_publish_at: "2026-07-17T16:00:00Z",
+-      last_scheduled_at: "2026-07-19T07:00:00Z",
+-      entries: [
+-        {
+-          index: 0,
+-          drive_file_id: "f-1",
+-          name: "intro.mp4",
+-          job_id: 101,
+-          scheduled_at: "2026-07-17T16:00:00Z",
+-          relative_hours_from_now: 0.05,
+-        },
+-        {
+-          index: 1,
+-          drive_file_id: "f-2",
+-          name: "demo.mp4",
+-          job_id: 102,
+-          scheduled_at: "2026-07-17T19:30:00Z",
+-          relative_hours_from_now: 3.5,
+-        },
+-        {
+-          index: 2,
+-          drive_file_id: "f-3",
+-          name: "outro.mp4",
+-          job_id: 103,
+-          scheduled_at: "2026-07-18T00:00:00Z",
+-          relative_hours_from_now: 8.0,
+-        },
+-      ],
+-      partial_failure: false,
+-      failed_at_page: 0,
+-      failed_at_page_token: "",
+-      note: "",
+-      needs_google_drive_api_key: false,
+-      needs_drive_account: false,
+-      error: "",
++      batch_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
++      status: "queued",
++      schedule_clamped: false,
+     },
+   };
++  const includeDrives = opts.includeDrives !== false;
+   const calls: { url: string; method: string; body?: unknown }[] = [];
+   vi.stubGlobal(
+     "fetch",
+@@ -99,16 +71,26 @@ function setupFetchMock(opts: {
+         return mockJsonResponse({ workspaces: sampleWorkspaces });
+       }
+       if (url.endsWith("/api/v1/accounts")) {
+-        const accounts = opts.includeDrives
+-          ? [...samplePages, ...sampleDrives]
+-          : [...samplePages];
++        const accounts = includeDrives
++          ? [...sampleYouTubeChannels, ...sampleDrives]
++          : [...sampleYouTubeChannels];
+         return mockJsonResponse({ accounts });
+       }
+-      if (url.includes("/api/v1/uploads/batch/by-folder")) {
++      if (url.includes("/api/v1/media/import/drive/folder/async")) {
++        if (method === "GET") {
++          return mockJsonResponse(
++            opts.pollResponse ?? {
++              id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
++              status: "completed",
++              processed_count: 3,
++              file_count: 3,
++            },
++          );
++        }
+         return mockJsonResponse(
+           importResponse.body,
+           importResponse.ok,
+-          importResponse.status ?? (importResponse.ok ? 202 : 502),
++          importResponse.status ?? (importResponse.ok ? 202 : 422),
+         );
+       }
+       return mockJsonResponse({}, false, 404);
+@@ -118,14 +100,15 @@ function setupFetchMock(opts: {
+ }
+ 
+ function renderPage() {
+-  // Render with a sibling route so Link-based CTAs (calendar nav) don't
+-  // 404 in the test environment.
+   return render(
+     <MemoryRouter initialEntries={["/app/uploads"]}>
+       <ToastProvider>
+         <Routes>
+           <Route path="/app/uploads" element={<InternalUploads />} />
+-          <Route path="/app/uploads/calendar" element={<div data-testid="calendar-stub" />} />
++          <Route
++            path="/app/youtube/studio"
++            element={<div data-testid="yt-studio-stub" />}
++          />
+         </Routes>
+       </ToastProvider>
+     </MemoryRouter>,
+@@ -135,6 +118,11 @@ function renderPage() {
+ describe("InternalUploads (/app/uploads)", () => {
+   beforeEach(() => {
+     vi.resetAllMocks();
++    vi.useFakeTimers({ shouldAdvanceTime: true });
++  });
++
++  afterEach(() => {
++    vi.useRealTimers();
+   });
+ 
+   it("renders the form fields after dependencies load", async () => {
+@@ -144,17 +132,20 @@ describe("InternalUploads (/app/uploads)", () => {
+       expect(screen.getByTestId("uploads-form")).toBeInTheDocument();
+     });
+     expect(screen.getByLabelText(/Workspace/i)).toBeInTheDocument();
+-    expect(screen.getByLabelText(/Facebook Page/i)).toBeInTheDocument();
++    expect(screen.getByLabelText(/YouTube Channel/i)).toBeInTheDocument();
+     expect(screen.getByLabelText(/Google Drive Folder ID/i)).toBeInTheDocument();
++    expect(screen.getByLabelText(/Drive account/i)).toBeInTheDocument();
+   });
+ 
+   it("blocks submit and shows inline error when the folder id is malformed", async () => {
+     const calls = setupFetchMock({});
+-    const user = userEvent.setup();
++    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+     renderPage();
+     await waitFor(() =>
+       expect(screen.getByLabelText(/Google Drive Folder ID/i)).toBeInTheDocument(),
+     );
++    // Select drive account first
++    await user.selectOptions(screen.getByLabelText(/Drive account/i), "21");
+     await user.type(
+       screen.getByLabelText(/Google Drive Folder ID/i),
+       "bad id with spaces",
+@@ -165,195 +156,115 @@ describe("InternalUploads (/app/uploads)", () => {
+     const submit = screen.getByTestId("uploads-submit") as HTMLButtonElement;
+     expect(submit.disabled).toBe(true);
+     const importCalls = calls.filter((c) =>
+-      c.url.includes("/api/v1/uploads/batch/by-folder"),
++      c.url.includes("/api/v1/media/import/drive/folder/async"),
+     );
+     expect(importCalls).toHaveLength(0);
+   });
+ 
+-  it("happy path: sends the right payload and renders the success view", async () => {
++  it("happy path: sends the right payload and shows queued view", async () => {
+     const calls = setupFetchMock({});
+-    const user = userEvent.setup();
++    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+     renderPage();
+     await waitFor(() =>
+       expect(screen.getByLabelText(/Google Drive Folder ID/i)).toBeInTheDocument(),
+     );
++    await user.selectOptions(screen.getByLabelText(/Drive account/i), "21");
+     await user.type(
+       screen.getByLabelText(/Google Drive Folder ID/i),
+       "1HregS58okcSoe8597qdXgpZM6K4CwEBD",
+     );
+     await user.click(screen.getByTestId("uploads-submit"));
+ 
++    // With fake timers, polling completes instantly → queued view
+     await waitFor(() => {
+-      expect(screen.getByTestId("uploads-success")).toBeInTheDocument();
++      expect(screen.getByTestId("uploads-queued")).toBeInTheDocument();
+     });
+-    expect(screen.getByText(/3 videos scheduled/i)).toBeInTheDocument();
+-    expect(screen.getByText(/Open calendar/i)).toBeInTheDocument();
+ 
+-    const importCall = calls.find((c) =>
+-      c.url.includes("/api/v1/uploads/batch/by-folder"),
++    const importCall = calls.find(
++      (c) =>
++        c.url.includes("/api/v1/media/import/drive/folder/async") &&
++        c.method === "POST",
+     );
+     expect(importCall).toBeDefined();
+-    expect(importCall!.method).toBe("POST");
+     const body = importCall!.body as Record<string, unknown>;
+-    expect(body.folder_id).toBe("1HregS58okcSoe8597qdXgpZM6K4CwEBD");
++    const source = body.source as Record<string, unknown>;
++    expect(source.provider).toBe("google_drive");
++    expect(source.folder_id).toBe("1HregS58okcSoe8597qdXgpZM6K4CwEBD");
+     expect(body.workspace_id).toBe(47);
+-    expect(body.facebook_account_id).toBe(9);
+-    // Jitter defaults are NOT sent (advanced toggle closed).
+-    expect(body.min_jitter_seconds).toBeUndefined();
+-    expect(body.max_jitter_seconds).toBeUndefined();
+-    expect(body.drive_account_id).toBeUndefined();
+-  });
+-
+-  it("partial-failure response renders resume instructions + summary blocks", async () => {
+-    setupFetchMock({
+-      importResponse: {
+-        ok: true,
+-        body: {
+-          folder_id: "abc",
+-          scheduled_count: 2,
+-          page_count: 2,
+-          first_publish_at: "2026-07-17T16:00:00Z",
+-          last_scheduled_at: "2026-07-17T20:00:00Z",
+-          entries: [
+-            {
+-              index: 0,
+-              drive_file_id: "a",
+-              name: "a.mp4",
+-              job_id: 1,
+-              scheduled_at: "2026-07-17T16:00:00Z",
+-              relative_hours_from_now: 0,
+-            },
+-            {
+-              index: 1,
+-              drive_file_id: "b",
+-              name: "b.mp4",
+-              job_id: 2,
+-              scheduled_at: "2026-07-17T20:00:00Z",
+-              relative_hours_from_now: 4,
+-            },
+-          ],
+-          partial_failure: true,
+-          failed_at_page: 3,
+-          failed_at_page_token: "tok-FAILED",
+-          note:
+-            "Drive returned 5xx on page 3 \u2014 retry from cursor_scheduled_at to resume the cumulative jitter.",
+-          needs_google_drive_api_key: false,
+-          needs_drive_account: false,
+-          error: "",
+-        },
+-      },
+-    });
+-    const user = userEvent.setup();
+-    renderPage();
+-    await waitFor(() =>
+-      expect(screen.getByLabelText(/Google Drive Folder ID/i)).toBeInTheDocument(),
+-    );
+-    await user.type(screen.getByLabelText(/Google Drive Folder ID/i), "abc");
+-    await user.click(screen.getByTestId("uploads-submit"));
+-
+-    await waitFor(() => {
+-      expect(screen.getByTestId("uploads-partial")).toBeInTheDocument();
+-    });
+-    expect(within(screen.getByTestId("uploads-partial")).getByText(/Partial/i)).toBeInTheDocument();
+-    expect(screen.getByText(/tok-FAILED/)).toBeInTheDocument();
+-    expect(
+-      screen.getByText(/POST \/api\/v1\/media\/import\/drive\/folder/i),
+-    ).toBeInTheDocument();
++    expect(body.target_account_ids).toEqual([9]);
++    expect(body.default_privacy_level).toBe("private");
++    const schedule = body.publish_schedule as Record<string, unknown>;
++    expect(typeof schedule.start_at).toBe("string");
++    expect(schedule.min_gap_seconds).toBe(DEFAULT_MIN_JITTER_SEC);
++    expect(schedule.max_gap_seconds).toBe(DEFAULT_MAX_JITTER_SEC);
+   });
+ 
+-  it("server-side config guidance view renders when the API key is missing", async () => {
+-    setupFetchMock({
+-      importResponse: {
+-        ok: true,
+-        body: {
+-          folder_id: "abc",
+-          scheduled_count: 0,
+-          page_count: 0,
+-          first_publish_at: "",
+-          last_scheduled_at: "",
+-          entries: [],
+-          partial_failure: false,
+-          note:
+-            "Server is missing GOOGLE_DRIVE_API_KEY. Either set the env var OR pass a drive_account_id to use your linked Drive.",
+-          needs_google_drive_api_key: true,
+-          needs_drive_account: true,
+-          error: "",
+-        },
+-      },
+-    });
+-    const user = userEvent.setup();
+-    renderPage();
+-    await waitFor(() =>
+-      expect(screen.getByLabelText(/Google Drive Folder ID/i)).toBeInTheDocument(),
+-    );
+-    await user.type(screen.getByLabelText(/Google Drive Folder ID/i), "abc");
+-    await user.click(screen.getByTestId("uploads-submit"));
+-
+-    await waitFor(() => {
+-      expect(screen.getByTestId("uploads-guidance")).toBeInTheDocument();
+-    });
+-    expect(screen.getByText(/Server needs configuration/i)).toBeInTheDocument();
+-    expect(screen.getByText(/GOOGLE_DRIVE_API_KEY/i)).toBeInTheDocument();
+-  });
+-
+-  it("renders the error view on a 502 upstream error", async () => {
++  it("error view renders on a 422 upstream error", async () => {
+     setupFetchMock({
+       importResponse: {
+         ok: false,
+-        status: 502,
+-        body: { error: "Drive listing returned 502" },
++        status: 422,
++        body: { error: "schedule would exceed the publish horizon cap" },
+       },
+     });
+-    const user = userEvent.setup();
++    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+     renderPage();
+     await waitFor(() =>
+       expect(screen.getByLabelText(/Google Drive Folder ID/i)).toBeInTheDocument(),
+     );
++    await user.selectOptions(screen.getByLabelText(/Drive account/i), "21");
+     await user.type(screen.getByLabelText(/Google Drive Folder ID/i), "abc");
+     await user.click(screen.getByTestId("uploads-submit"));
+ 
+     await waitFor(() => {
+       expect(screen.getByTestId("uploads-error")).toBeInTheDocument();
+     });
+-    expect(within(screen.getByTestId("uploads-error")).getByText(/Drive listing returned 502/i)).toBeInTheDocument();
++    expect(
++      within(screen.getByTestId("uploads-error")).getByText(
++        /schedule would exceed the publish horizon cap/i,
++      ),
++    ).toBeInTheDocument();
+   });
+ 
+   it("sends advanced jitter settings when the toggle is expanded", async () => {
+     const calls = setupFetchMock({});
+-    const user = userEvent.setup();
++    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+     renderPage();
+     await waitFor(() =>
+       expect(screen.getByLabelText(/Google Drive Folder ID/i)).toBeInTheDocument(),
+     );
++    await user.selectOptions(screen.getByLabelText(/Drive account/i), "21");
+     await user.click(screen.getByTestId("uploads-advanced-toggle"));
+     const minInput = screen.getByLabelText(/Minimum gap/i);
+     const maxInput = screen.getByLabelText(/Maximum gap/i);
+     await user.clear(minInput);
+-    await user.type(minInput, "9000"); // 2.5h
++    await user.type(minInput, "9000");
+     await user.clear(maxInput);
+-    await user.type(maxInput, "14400"); // 4h
++    await user.type(maxInput, "14400");
+     await user.type(screen.getByLabelText(/Google Drive Folder ID/i), "abc");
+     await user.click(screen.getByTestId("uploads-submit"));
+ 
+     await waitFor(() => {
+-      expect(screen.getByTestId("uploads-success")).toBeInTheDocument();
++      expect(screen.getByTestId("uploads-queued")).toBeInTheDocument();
+     });
+-    const body = calls.find((c) =>
+-      c.url.includes("/api/v1/uploads/batch/by-folder"),
++    const body = calls.find(
++      (c) =>
++        c.url.includes("/api/v1/media/import/drive/folder/async") &&
++        c.method === "POST",
+     )!.body as Record<string, unknown>;
+-    expect(body.min_jitter_seconds).toBe(9000);
+-    expect(body.max_jitter_seconds).toBe(14400);
++    const schedule = body.publish_schedule as Record<string, unknown>;
++    expect(schedule.min_gap_seconds).toBe(9000);
++    expect(schedule.max_gap_seconds).toBe(14400);
+   });
+ 
+   it("sends drive_account_id when a linked Drive account is picked", async () => {
+-    const calls = setupFetchMock({ includeDrives: true });
+-    const user = userEvent.setup();
++    const calls = setupFetchMock({});
++    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+     renderPage();
+     await waitFor(() =>
+       expect(screen.getByLabelText(/Drive account/i)).toBeInTheDocument(),
+     );
+-    const driveSelect = screen.getByLabelText(/Drive account/i);
+-    await user.selectOptions(driveSelect, "21"); // first linked drive id
++    await user.selectOptions(screen.getByLabelText(/Drive account/i), "21");
+     await user.type(
+       screen.getByLabelText(/Google Drive Folder ID/i),
+       "privatefolder123",
+@@ -361,15 +272,18 @@ describe("InternalUploads (/app/uploads)", () => {
+     await user.click(screen.getByTestId("uploads-submit"));
+ 
+     await waitFor(() => {
+-      expect(screen.getByTestId("uploads-success")).toBeInTheDocument();
++      expect(screen.getByTestId("uploads-queued")).toBeInTheDocument();
+     });
+-    const body = calls.find((c) =>
+-      c.url.includes("/api/v1/uploads/batch/by-folder"),
++    const body = calls.find(
++      (c) =>
++        c.url.includes("/api/v1/media/import/drive/folder/async") &&
++        c.method === "POST",
+     )!.body as Record<string, unknown>;
+-    expect(body.drive_account_id).toBe(21);
++    const source = body.source as Record<string, unknown>;
++    expect(source.drive_account_id).toBe(21);
+   });
+ 
+-  it("shows an empty state with CTA when no Facebook Pages are linked", async () => {
++  it("shows an empty state with CTA when no YouTube channels are linked", async () => {
+     vi.stubGlobal(
+       "fetch",
+       vi.fn().mockImplementation(async (input: RequestInfo) => {
+@@ -385,7 +299,9 @@ describe("InternalUploads (/app/uploads)", () => {
+     );
+     renderPage();
+     await waitFor(() => {
+-      expect(screen.getByText(/No Facebook Pages connected/i)).toBeInTheDocument();
++      expect(
++        screen.getByText(/No YouTube channels connected/i),
++      ).toBeInTheDocument();
+     });
+   });
+ });
+diff --git a/web/src/pages/internal/YouTubeStudio.tsx b/web/src/pages/internal/YouTubeStudio.tsx
+index 10c9cd4c..f31dd17e 100644
+--- a/web/src/pages/internal/YouTubeStudio.tsx
++++ b/web/src/pages/internal/YouTubeStudio.tsx
+@@ -44,6 +44,7 @@ function buildSessionsQuery(workspaceId: number | "", accountId: number | "") {
+   const params = new URLSearchParams();
+   if (workspaceId !== "") params.set("workspace_id", String(workspaceId));
+   if (accountId !== "") params.set("account_id", String(accountId));
++  params.set("include_terminal", "true");
+   return params.toString();
+ }
+ 
+@@ -253,7 +254,7 @@ export function InternalYouTubeStudio() {
+         toast.success("Thumbnail attached.");
+         setThumbnailMediaId("");
+         setActiveSessionId(null);
+-        void handleRefresh();
++        await handleRefresh();
+       } catch {
+         // toast surfaced by authedFetch
+       } finally {
+@@ -277,7 +278,7 @@ export function InternalYouTubeStudio() {
+           },
+         );
+         toast.success("Video published.");
+-        void handleRefresh();
++        await handleRefresh();
+       } catch {
+         // toast surfaced by authedFetch
+       } finally {
+@@ -310,7 +311,7 @@ export function InternalYouTubeStudio() {
+         toast.success("Publication scheduled.");
+         setScheduleAt("");
+         setActiveSessionId(null);
+-        void handleRefresh();
++        await handleRefresh();
+       } catch {
+         // toast surfaced by authedFetch
+       } finally {
+@@ -551,6 +552,7 @@ function SessionRow({
+   const hasThumbnail = !!session.thumbnail_media_id;
+   const canAttach = !isActive && thumbnailMediaId.trim().length > 0;
+   const canSchedule = !isPublishing && scheduleAt.length > 0;
++  const canPublish = hasThumbnail && !isPublishing;
+ 
+   return (
+     <article
+@@ -616,7 +618,7 @@ function SessionRow({
+         <button
+           type="button"
+           onClick={onPublishNow}
+-          disabled={isPublishing}
++          disabled={!canPublish}
+           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500/[0.12] border border-emerald-500/30 text-[12px] font-semibold text-emerald-200 hover:bg-emerald-500/[0.18] transition-colors disabled:opacity-50"
+           data-testid="yt-studio-publish-now"
+         >
+@@ -828,4 +830,4 @@ function FormSelect({
+       </select>
+     </div>
+   );
+-}
+\ No newline at end of file
++}

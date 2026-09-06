@@ -33,6 +33,9 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 // Renew, which passes nil and has no observer side effects.
 func (v *CredentialVault) renew(ctx context.Context, platformAccountID int64, tokenType string, refresher TokenRefresher, observer func(string)) (*models.OAuthToken, error) {
 	if err := ctx.Err(); err != nil {
+		// The caller arrived with a dead context: record the cancelled
+		// outcome so every Renew termination is measurable.
+		metrics.RecordVaultRefreshSlowPath("cancelled", tokenType, 0)
 		return nil, err
 	}
 
@@ -54,12 +57,14 @@ func (v *CredentialVault) renew(ctx context.Context, platformAccountID int64, to
 	}
 
 	key := fmt.Sprintf("renew:%d:%s", oauthConnectionID, tokenType)
+	renewStart := v.clock()
 	resultCh := v.renewFlight.DoChan(key, func() (any, error) {
 		// Detach cancellation from the leader so its disconnect does not
 		// abort work needed by concurrent waiters, while retaining any
 		// request deadline as an upper bound.
 		workCtx, cancel := contextWithoutCancelWithDeadline(ctx)
 		defer cancel()
+		metrics.RecordVaultRefreshFlightStart(tokenType)
 		return nil, v.renewUnderGrantLock(workCtx, platformAccountID, tokenType, refresher, oauthConnectionID, window)
 	})
 	if observer != nil {
@@ -67,6 +72,12 @@ func (v *CredentialVault) renew(ctx context.Context, platformAccountID int64, to
 	}
 	select {
 	case result := <-resultCh:
+		if result.Shared {
+			// This caller joined an in-flight renewal rather than leading
+			// one — the shared-grant queueing signal.
+			metrics.RecordVaultRefreshFlightShared(tokenType)
+		}
+		metrics.RecordVaultRefreshSlowPath(outcomeForRenew(result.Err), tokenType, v.clock().Sub(renewStart).Seconds())
 		if result.Err != nil {
 			return nil, result.Err
 		}
@@ -76,8 +87,18 @@ func (v *CredentialVault) renew(ctx context.Context, platformAccountID int64, to
 		// public read path so lazy ciphertext re-encryption remains intact.
 		return v.Get(ctx, platformAccountID, tokenType)
 	case <-ctx.Done():
+		metrics.RecordVaultRefreshSlowPath("cancelled", tokenType, v.clock().Sub(renewStart).Seconds())
 		return nil, ctx.Err()
 	}
+}
+
+// outcomeForRenew maps a slow-path renewal result to the bounded metric
+// outcome label: "success" or "error" (never provider error text).
+func outcomeForRenew(err error) string {
+	if err == nil {
+		return "success"
+	}
+	return "error"
 }
 
 func contextWithoutCancelWithDeadline(ctx context.Context) (context.Context, context.CancelFunc) {

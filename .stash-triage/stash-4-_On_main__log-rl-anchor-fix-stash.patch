@@ -1,0 +1,726 @@
+diff --git a/cmd/link-drive-and-import/main.go b/cmd/link-drive-and-import/main.go
+index c7be6f91..12e0d18c 100644
+--- a/cmd/link-drive-and-import/main.go
++++ b/cmd/link-drive-and-import/main.go
+@@ -125,6 +125,21 @@ func run() error {
+ 		return fmt.Errorf("no linked google-drive account found for user %d; complete Google Drive login first", userID)
+ 	}
+ 	driveAccountID := driveAccounts[0].ID
++	if configured := strings.TrimSpace(os.Getenv("DRIVE_ACCOUNT_ID")); configured != "" {
++		selected, parseErr := strconv.ParseInt(configured, 10, 64)
++		if parseErr != nil || selected <= 0 {
++			return fmt.Errorf("DRIVE_ACCOUNT_ID must be a positive integer")
++		}
++		for _, account := range driveAccounts {
++			if account.ID == selected {
++				driveAccountID = selected
++				break
++			}
++		}
++		if driveAccountID != selected {
++			return fmt.Errorf("DRIVE_ACCOUNT_ID=%d is not linked to user %d", selected, userID)
++		}
++	}
+ 	slog.Info("using linked google-drive platform account", "id", driveAccountID)
+ 
+ 	// The refresh token is encrypted in the database vault; no token file is needed.
+diff --git a/internal/crypto/encrypt.go b/internal/crypto/encrypt.go
+index 2ed77bfa..8321a2e9 100644
+--- a/internal/crypto/encrypt.go
++++ b/internal/crypto/encrypt.go
+@@ -242,19 +242,33 @@ func (e *Encryptor) Decrypt(encrypted []byte) (string, error) {
+ 		}
+ 		// Key not in map OR open failed: fall through.
+ 	}
+-	// Legacy format: assume LegacyKeyID. The first nonceSize
+-	// bytes are the nonce; the rest is ciphertext+tag.
++	// Legacy format has no embedded key id. Try the historical key first,
++	// then every configured key; this supports databases whose pre-rotation
++	// rows were written by different legacy deployments.
+ 	nonce := encrypted[:nonceSize]
+ 	ct := encrypted[nonceSize:]
+-	aead, ok := e.aeads[LegacyKeyID]
+-	if !ok {
+-		return "", fmt.Errorf("%w: legacy key id %d", ErrKeyNotFound, LegacyKeyID)
++	tried := make(map[uint32]bool, len(e.aeads))
++	keyIDs := []uint32{LegacyKeyID}
++	for keyID := range e.aeads {
++		keyIDs = append(keyIDs, keyID)
+ 	}
+-	pt, err := aead.Open(nil, nonce, ct, nil)
+-	if err != nil {
+-		return "", fmt.Errorf("crypto: decrypt: %w", err)
++	var lastErr error
++	for _, keyID := range keyIDs {
++		if tried[keyID] {
++			continue
++		}
++		tried[keyID] = true
++		aead, ok := e.aeads[keyID]
++		if !ok {
++			continue
++		}
++		pt, err := aead.Open(nil, nonce, ct, nil)
++		if err == nil {
++			return string(pt), nil
++		}
++		lastErr = err
+ 	}
+-	return string(pt), nil
++	return "", fmt.Errorf("crypto: decrypt: %w", lastErr)
+ }
+ 
+ // mapKeysSorted returns the keys of m in ascending order, used
+diff --git a/internal/database/migrations_integration_test.go b/internal/database/migrations_integration_test.go
+index 07660d60..51756a2c 100644
+--- a/internal/database/migrations_integration_test.go
++++ b/internal/database/migrations_integration_test.go
+@@ -83,6 +83,8 @@ var requiredColumns = []struct{ Table, Column string }{
+ 	{"posts", "media_url"}, {"posts", "scheduled_at"}, {"posts", "status"}, {"posts", "created_at"},
+ 	{"post_targets", "id"}, {"post_targets", "post_id"}, {"post_targets", "platform_account_id"},
+ 	{"post_targets", "status"}, {"post_targets", "platform_post_id"}, {"post_targets", "error_message"}, {"post_targets", "published_at"},
++	{"post_targets", "content_hash"},
++	{"upload_jobs", "source_fingerprint"},
+ 	// 005_account_lifecycle
+ 	{"platform_accounts", "status"}, {"platform_accounts", "connected_at"},
+ 	{"platform_accounts", "last_validated_at"}, {"platform_accounts", "last_refresh_at"},
+diff --git a/internal/models/post.go b/internal/models/post.go
+index d6bfd1b2..99cf1b4a 100644
+--- a/internal/models/post.go
++++ b/internal/models/post.go
+@@ -209,6 +209,7 @@ type PostTarget struct {
+ 	// been keyed (pre-migration-022 + freshly-claimed targets in
+ 	// flight) expose nil; the partial UNIQUE index allows NULLs.
+ 	ProviderIdempotencyKey *string `json:"provider_idempotency_key,omitempty"`
++	ContentHash            *string `json:"content_hash,omitempty"`
+ 
+ 	// Optimistic-concurrency + audit timestamps (migration 012).
+ 	Version   int64     `json:"version"`
+diff --git a/internal/models/upload_job.go b/internal/models/upload_job.go
+index 62f3e212..880638be 100644
+--- a/internal/models/upload_job.go
++++ b/internal/models/upload_job.go
+@@ -42,23 +42,24 @@ const (
+ // per-folder to report dashboard counters without scanning the whole
+ // upload_jobs table. Pointer-typed so NULL ↔ omitempty maps cleanly.
+ type UploadJob struct {
+-	ID             int64           `json:"id"`
+-	UserID         int64           `json:"user_id"`
+-	WorkspaceID    int64           `json:"workspace_id"`
+-	SourceType     UploadJobSource `json:"source_type"`
+-	SourceID       string          `json:"source_id"`
+-	DriveAccountID *int64          `json:"drive_account_id,omitempty"`
+-	FolderID       *string         `json:"folder_id,omitempty"`
+-	Title          string          `json:"title"`
+-	Caption        string          `json:"caption"`
+-	Targets        []int64         `json:"targets"`
+-	Status         UploadJobStatus `json:"status"`
+-	ErrorMessage   string          `json:"error_message,omitempty"`
+-	PostID         *int64          `json:"post_id,omitempty"`
+-	AssetID        *string         `json:"asset_id,omitempty"`
+-	ScheduledAt    *time.Time      `json:"scheduled_at,omitempty"`
+-	CreatedAt      time.Time       `json:"created_at"`
+-	UpdatedAt      time.Time       `json:"updated_at"`
++	ID                int64           `json:"id"`
++	UserID            int64           `json:"user_id"`
++	WorkspaceID       int64           `json:"workspace_id"`
++	SourceType        UploadJobSource `json:"source_type"`
++	SourceID          string          `json:"source_id"`
++	SourceFingerprint string          `json:"-"`
++	DriveAccountID    *int64          `json:"drive_account_id,omitempty"`
++	FolderID          *string         `json:"folder_id,omitempty"`
++	Title             string          `json:"title"`
++	Caption           string          `json:"caption"`
++	Targets           []int64         `json:"targets"`
++	Status            UploadJobStatus `json:"status"`
++	ErrorMessage      string          `json:"error_message,omitempty"`
++	PostID            *int64          `json:"post_id,omitempty"`
++	AssetID           *string         `json:"asset_id,omitempty"`
++	ScheduledAt       *time.Time      `json:"scheduled_at,omitempty"`
++	CreatedAt         time.Time       `json:"created_at"`
++	UpdatedAt         time.Time       `json:"updated_at"`
+ }
+ 
+ // ScanTargets unmarshals the JSONB targets column into the Targets slice.
+diff --git a/internal/repository/errors.go b/internal/repository/errors.go
+index e5584966..44da3ac0 100644
+--- a/internal/repository/errors.go
++++ b/internal/repository/errors.go
+@@ -103,6 +103,8 @@ var (
+ 	// regress on pre-existing data. The error is the safety net for
+ 	// degenerate runbook INSERTs and unintended duplicate-key stamps.
+ 	ErrProviderIdempotencyConflict = errors.New("provider idempotency key conflict: account already has a target with this key")
++	ErrContentDuplicate            = errors.New("content already published to this account")
++	ErrUploadJobDuplicate          = errors.New("video already exists in this workspace upload queue")
+ 
+ 	// ErrAccountAlreadyLinked is returned by UserRepository.AttachPlatformAccount
+ 	// when the (platform, platform_user_id) row exists but belongs to a
+diff --git a/internal/repository/post_repo.go b/internal/repository/post_repo.go
+index 73f9760a..57369e94 100644
+--- a/internal/repository/post_repo.go
++++ b/internal/repository/post_repo.go
+@@ -334,6 +334,30 @@ func (r *PostRepository) SetProviderIdempotencyKey(id int64, key string) error {
+ 	return nil
+ }
+ 
++// SetContentHash reserves a content fingerprint for a target. The unique
++// database index is the concurrency boundary for duplicate Facebook posts.
++func (r *PostRepository) SetContentHash(id int64, hash string) error {
++	if hash == "" {
++		return fmt.Errorf("SetContentHash: hash is empty for post_target id=%d", id)
++	}
++	result, err := r.db.Exec(qUpdateTargetContentHash, hash, id)
++	if err != nil {
++		var pqErr *pq.Error
++		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "post_targets_account_content_hash_uniq" {
++			return fmt.Errorf("%w: id=%d", ErrContentDuplicate, id)
++		}
++		return fmt.Errorf("failed to set content_hash: %w", err)
++	}
++	n, err := result.RowsAffected()
++	if err != nil {
++		return fmt.Errorf("failed to read rows affected: %w", err)
++	}
++	if n == 0 {
++		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, id)
++	}
++	return nil
++}
++
+ // UpdateStatus mutates the lifecycle fields of a single post_target row.
+ // The worker's per-attempt flow is:
+ //
+@@ -840,7 +864,7 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
+ 		t := models.PostTarget{}
+ 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+ 			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+-			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
++			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt, &t.ContentHash); err != nil {
+ 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+ 		}
+ 		targets = append(targets, t)
+@@ -882,7 +906,7 @@ func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
+ 		t := models.PostTarget{}
+ 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+ 			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+-			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
++			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt, &t.ContentHash); err != nil {
+ 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+ 		}
+ 		targets = append(targets, t)
+@@ -916,7 +940,7 @@ func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, err
+ 		t := models.PostTarget{}
+ 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+ 			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+-			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
++			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt, &t.ContentHash); err != nil {
+ 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+ 		}
+ 		targets = append(targets, t)
+diff --git a/internal/repository/post_repo_test.go b/internal/repository/post_repo_test.go
+index 94a17b75..9eef1f47 100644
+--- a/internal/repository/post_repo_test.go
++++ b/internal/repository/post_repo_test.go
+@@ -524,16 +524,16 @@ func TestPostListByPost_OKWithNullablePublishedAt(t *testing.T) {
+ 		`SELECT id, post_id, platform_account_id, status,
+ 		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+ 		        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+-		        provider_idempotency_key, completed_at
++		        provider_idempotency_key, completed_at, content_hash
+ 		 FROM post_targets
+ 		 WHERE post_id = $1
+ 		 ORDER BY id ASC`,
+ 	).WithArgs(int64(100)).
+ 		WillReturnRows(sqlmock.NewRows(
+-			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key", "completed_at"},
+-		).AddRow(10, 100, 1000, models.PostStatusScheduled, "", "", nil, "", "", nil, nil).
+-			AddRow(11, 100, 1001, models.PostStatusPublished, "remote-1", "", publishedAt, "", "", nil, nil).
+-			AddRow(12, 100, 1002, models.PostStatusFailed, "", "twitter error", nil, "", "", nil, nil))
++			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key", "completed_at", "content_hash"},
++		).AddRow(10, 100, 1000, models.PostStatusScheduled, "", "", nil, "", "", nil, nil, nil).
++			AddRow(11, 100, 1001, models.PostStatusPublished, "remote-1", "", publishedAt, "", "", nil, nil, nil).
++			AddRow(12, 100, 1002, models.PostStatusFailed, "", "twitter error", nil, "", "", nil, nil, nil))
+ 
+ 	got, err := repo.ListByPost(100)
+ 	if err != nil {
+@@ -591,7 +591,7 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
+ 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
+ 		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
+ 		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
+-		        pt.provider_idempotency_key, pt.completed_at
++		        pt.provider_idempotency_key, pt.completed_at, pt.content_hash
+ 		 FROM post_targets pt
+ 		 JOIN posts p ON p.id = pt.post_id
+ 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')
+@@ -599,9 +599,9 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
+ 		 ORDER BY p.scheduled_at ASC NULLS FIRST`,
+ 	).WithArgs(cutoff).
+ 		WillReturnRows(sqlmock.NewRows(
+-			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key", "completed_at"},
+-		).AddRow(101, 1, 1000, models.PostStatusScheduled, "", "", nil, "", "", nil, nil).
+-			AddRow(102, 1, 1001, models.PostStatusScheduled, "", "", nil, "", "", nil, nil))
++			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key", "completed_at", "content_hash"},
++		).AddRow(101, 1, 1000, models.PostStatusScheduled, "", "", nil, "", "", nil, nil, nil).
++			AddRow(102, 1, 1001, models.PostStatusScheduled, "", "", nil, "", "", nil, nil, nil))
+ 
+ 	targets, err := repo.ListPending(cutoff)
+ 	if err != nil {
+diff --git a/internal/repository/queries.go b/internal/repository/queries.go
+index de695270..9d20de11 100644
+--- a/internal/repository/queries.go
++++ b/internal/repository/queries.go
+@@ -45,7 +45,7 @@ const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url,
+ const qSelectTargetsByPost = `SELECT id, post_id, platform_account_id, status,
+ 		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+ 		        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+-		provider_idempotency_key, completed_at
++		provider_idempotency_key, completed_at, content_hash
+ 		 FROM post_targets
+ 		 WHERE post_id = $1
+ 		 ORDER BY id ASC`
+@@ -53,7 +53,7 @@ const qSelectTargetsByPost = `SELECT id, post_id, platform_account_id, status,
+ const qSelectPublishingTargets = `SELECT id, post_id, platform_account_id, status,
+ 		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+ 		        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+-		provider_idempotency_key, completed_at
++		provider_idempotency_key, completed_at, content_hash
+ 		 FROM post_targets
+ 		 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
+ 		 ORDER BY id ASC`
+@@ -61,7 +61,7 @@ const qSelectPublishingTargets = `SELECT id, post_id, platform_account_id, statu
+ const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
+ 		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
+ 		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
+-		        pt.provider_idempotency_key, pt.completed_at
++		        pt.provider_idempotency_key, pt.completed_at, pt.content_hash
+ 		 FROM post_targets pt
+ 		 JOIN posts p ON p.id = pt.post_id
+ 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')
+@@ -78,6 +78,8 @@ const qUpdateTargetProviderIdempotencyKey = `UPDATE post_targets
+  SET provider_idempotency_key = $1
+  WHERE id = $2`
+ 
++const qUpdateTargetContentHash = `UPDATE post_targets SET content_hash = $1 WHERE id = $2`
++
+ const qUpdateTargetStatus = `UPDATE post_targets
+  SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+      provider_state = $6, container_id = $7
+diff --git a/internal/repository/upload_job_dedupe.go b/internal/repository/upload_job_dedupe.go
+index 1de0b0b5..8390c75c 100644
+--- a/internal/repository/upload_job_dedupe.go
++++ b/internal/repository/upload_job_dedupe.go
+@@ -11,8 +11,11 @@ import (
+ const duplicateUploadJobMessage = "duplicate source suppressed before upload"
+ 
+ // CreateIfSourceAbsent inserts job only when the same source has not already
+-// been queued, processed, or completed for the same user, Drive account, and
+-// target set. Failed rows are intentionally ignored so operators can retry a
++// been queued, processed, or completed for the same user and target set.
++// Google Drive file IDs are globally unique, so the linked Drive account is
++// deliberately excluded: the same file must not be imported twice merely
++// because the user has refreshed or relinked Drive. Failed rows are
++// intentionally ignored so operators can retry a
+ // source after fixing a transient error.
+ //
+ // The advisory transaction lock serializes concurrent schedulers for the same
+@@ -53,14 +56,12 @@ func (r *UploadJobRepository) CreateIfSourceAbsent(job *models.UploadJob) (bool,
+ 			WHERE user_id = $1
+ 			  AND source_type = $2
+ 			  AND source_id = $3
+-			  AND drive_account_id IS NOT DISTINCT FROM $4
+-			  AND targets = $5::jsonb
++			  AND targets = $4::jsonb
+ 			  AND status <> 'failed'
+ 		)`,
+ 		job.UserID,
+ 		string(job.SourceType),
+ 		job.SourceID,
+-		job.DriveAccountID,
+ 		targetsJSON,
+ 	).Scan(&exists); err != nil {
+ 		return false, fmt.Errorf("failed to check upload job source: %w", err)
+@@ -108,7 +109,7 @@ func (r *UploadJobRepository) SuppressPendingDuplicates(userID int64) (int64, er
+ 			SELECT
+ 				id,
+ 				ROW_NUMBER() OVER (
+-					PARTITION BY user_id, source_type, source_id, COALESCE(drive_account_id, 0), targets
++				PARTITION BY user_id, source_type, source_id, targets
+ 					ORDER BY
+ 						CASE status
+ 							WHEN 'completed' THEN 0
+diff --git a/internal/repository/upload_job_dedupe_test.go b/internal/repository/upload_job_dedupe_test.go
+index f637093c..dae3ef28 100644
+--- a/internal/repository/upload_job_dedupe_test.go
++++ b/internal/repository/upload_job_dedupe_test.go
+@@ -40,7 +40,7 @@ func TestCreateIfSourceAbsentCreatesCanonicalJob(t *testing.T) {
+ 		WithArgs(sqlmock.AnyArg()).
+ 		WillReturnResult(sqlmock.NewResult(0, 1))
+ 	mock.ExpectQuery(`SELECT EXISTS`).
+-		WithArgs(job.UserID, string(job.SourceType), job.SourceID, job.DriveAccountID, []byte(`[4,8]`)).
++		WithArgs(job.UserID, string(job.SourceType), job.SourceID, []byte(`[4,8]`)).
+ 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+ 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO upload_jobs`)).
+ 		WithArgs(
+@@ -99,7 +99,7 @@ func TestCreateIfSourceAbsentSkipsExistingSource(t *testing.T) {
+ 		WithArgs(sqlmock.AnyArg()).
+ 		WillReturnResult(sqlmock.NewResult(0, 1))
+ 	mock.ExpectQuery(`SELECT EXISTS`).
+-		WithArgs(job.UserID, string(job.SourceType), job.SourceID, job.DriveAccountID, []byte(`[4]`)).
++		WithArgs(job.UserID, string(job.SourceType), job.SourceID, []byte(`[4]`)).
+ 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+ 	mock.ExpectCommit()
+ 
+diff --git a/internal/repository/upload_job_repo.go b/internal/repository/upload_job_repo.go
+index 5b2cf1fc..1a6d95d3 100644
+--- a/internal/repository/upload_job_repo.go
++++ b/internal/repository/upload_job_repo.go
+@@ -8,6 +8,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
++	"github.com/lib/pq"
+ )
+ 
+ // UploadJobRepository handles persistence for upload_jobs — the background
+@@ -43,15 +44,20 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
+ 		folderID = sql.NullString{String: *job.FolderID, Valid: true}
+ 	}
+ 
+-	return r.db.QueryRow(
++	fingerprint := job.SourceFingerprint
++	if fingerprint == "" {
++		fingerprint = job.SourceID
++	}
++	err = r.db.QueryRow(
+ 		`INSERT INTO upload_jobs
+-			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption, targets, status, scheduled_at)
+-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
++			(user_id, workspace_id, source_type, source_id, source_fingerprint, drive_account_id, folder_id, title, caption, targets, status, scheduled_at)
++		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ 		RETURNING id, created_at, updated_at`,
+ 		job.UserID,
+ 		job.WorkspaceID,
+ 		string(job.SourceType),
+ 		job.SourceID,
++		fingerprint,
+ 		job.DriveAccountID,
+ 		folderID,
+ 		job.Title,
+@@ -60,6 +66,14 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
+ 		string(job.Status),
+ 		scheduledAt,
+ 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
++	if err != nil {
++		var pqErr *pq.Error
++		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "upload_jobs_workspace_source_fingerprint_uniq" {
++			return fmt.Errorf("%w: workspace_id=%d source_id=%s", ErrUploadJobDuplicate, job.WorkspaceID, job.SourceID)
++		}
++		return err
++	}
++	return nil
+ }
+ 
+ // FindByID returns the upload job with the given id, or (nil, nil) if not found.
+diff --git a/internal/services/google_drive_oauth.go b/internal/services/google_drive_oauth.go
+index a4adf0d8..e6c3101b 100644
+--- a/internal/services/google_drive_oauth.go
++++ b/internal/services/google_drive_oauth.go
+@@ -330,10 +330,11 @@ type googleDriveTokenResponse struct {
+ // GoogleDriveFile is the subset of the Drive v3 file resource the
+ // import endpoint needs.
+ type GoogleDriveFile struct {
+-	ID       string `json:"id"`
+-	Name     string `json:"name"`
+-	MimeType string `json:"mimeType"`
+-	Size     string `json:"size"`
++	ID          string `json:"id"`
++	Name        string `json:"name"`
++	MimeType    string `json:"mimeType"`
++	Size        string `json:"size"`
++	MD5Checksum string `json:"md5Checksum"`
+ }
+ 
+ // DriveImporter is the narrow interface the drive-import handler needs
+@@ -427,7 +428,7 @@ func (s *GoogleDriveOAuthService) ListFolder(ctx context.Context, folderID, acce
+ 	q := "'" + folderID + "' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'"
+ 	params := url.Values{}
+ 	params.Set("q", q)
+-	params.Set("fields", "files(id,name,mimeType,size),nextPageToken")
++	params.Set("fields", "files(id,name,mimeType,size,md5Checksum),nextPageToken")
+ 	params.Set("pageSize", strconv.Itoa(pageSize))
+ 	params.Set("orderBy", "createdTime")
+ 	if pageToken != "" {
+diff --git a/internal/worker/publish_worker.go b/internal/worker/publish_worker.go
+index 215f2389..51e574a2 100644
+--- a/internal/worker/publish_worker.go
++++ b/internal/worker/publish_worker.go
+@@ -30,6 +30,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"log/slog"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
+@@ -69,6 +70,14 @@ func computeProviderIdempotencyKey(postID, platformAccountID int64) string {
+ 	return hex.EncodeToString(sum)[:providerIdempotencyKeyLen]
+ }
+ 
++// computeContentHash fingerprints the fields Facebook publishes. Trimming
++// avoids treating accidental surrounding whitespace as a new post.
++func computeContentHash(title, caption, mediaURL string) string {
++	h := sha256.New()
++	fmt.Fprintf(h, "v1:%s\x00%s\x00%s", strings.TrimSpace(title), strings.TrimSpace(caption), strings.TrimSpace(mediaURL))
++	return hex.EncodeToString(h.Sum(nil))
++}
++
+ // PublisherPostStore is the narrow slice of the post + post_targets
+ // repository the *driver* (PublishWorker.publishTarget) depends on.
+ // Distinct from ReconcilePostStore because the driver needs the
+@@ -110,6 +119,7 @@ type PublisherPostStore interface {
+ 	//   * ErrPostTargetNotFound: id is stale.
+ 	//   * Other: wrapped DB error.
+ 	SetProviderIdempotencyKey(id int64, key string) error
++	SetContentHash(id int64, hash string) error
+ }
+ 
+ // PublisherUserStore is the narrow slice of the user /
+@@ -371,6 +381,32 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
+ 	// payload's ImageURL branch is reserved for image-only posts that
+ 	// don't have a content_type column — future enhancement).
+ 	//
++	payload := models.PublishPayload{Text: post.Caption, Title: post.Title}
++	if post.MediaURL != "" {
++		payload.VideoURL = post.MediaURL
++	}
++
++	// Different Post rows with the same content must not create duplicate
++	// Facebook Page posts. The unique index makes this safe across workers.
++	if account.Platform == models.PlatformFacebook {
++		hash := computeContentHash(payload.Title, payload.Text, payload.VideoURL)
++		if target.ContentHash != nil && *target.ContentHash != "" {
++			hash = *target.ContentHash
++		} else {
++			target.ContentHash = &hash
++			if err := w.postRepo.SetContentHash(target.ID, hash); err != nil {
++				if errors.Is(err, repository.ErrContentDuplicate) {
++					target.Status = models.PostStatusFailed
++					target.ErrorMessage = "duplicate Facebook content: already published to this Page"
++					if updateErr := w.postRepo.UpdateStatus(target); updateErr != nil {
++						return fmt.Errorf("duplicate Facebook content (also failed to mark failed: %v): %w", updateErr, err)
++					}
++				}
++				return err
++			}
++		}
++	}
++
+ 	// Taglio 4.7 LEVEL 2 (migration 022): ensure the post_target has
+ 	// the deterministic provider_idempotency_key stamped onto it BEFORE
+ 	// publishing. The key is computed from (post.ID, account.ID) so it
+@@ -426,13 +462,6 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
+ 			return fmt.Errorf("ensure provider idempotency key: %w", err)
+ 		}
+ 	}
+-	payload := models.PublishPayload{
+-		Text:  post.Caption,
+-		Title: post.Title,
+-	}
+-	if post.MediaURL != "" {
+-		payload.VideoURL = post.MediaURL
+-	}
+ 	// TikTok (and some other platforms) require an explicit privacy
+ 	// level; the Compose UI does not yet expose a selector, so fall
+ 	// back to PUBLIC_TO_EVERYONE for immediate publishes.
+diff --git a/internal/worker/publish_worker_test.go b/internal/worker/publish_worker_test.go
+index 1ad1415f..4fef4709 100644
+--- a/internal/worker/publish_worker_test.go
++++ b/internal/worker/publish_worker_test.go
+@@ -134,6 +134,8 @@ func (m *mockPostStore) SetProviderIdempotencyKey(id int64, key string) error {
+ 	return m.setKeyFn(id, key)
+ }
+ 
++func (m *mockPostStore) SetContentHash(id int64, hash string) error { return nil }
++
+ // ------------------------------------------------------------------
+ // publishTarget tests (sync platforms — the pre-4.2 behaviour /
+ // driver surface)
+@@ -1127,3 +1129,17 @@ func TestComputeProviderIdempotencyKey_DifferentInputs(t *testing.T) {
+ 		t.Error("(100, 10) should be self-consistent")
+ 	}
+ }
++
++func TestComputeContentHash_DeterministicAndWhitespaceStable(t *testing.T) {
++	h1 := computeContentHash(" Titolo ", " Caption ", " https://cdn.example/video.mp4 ")
++	h2 := computeContentHash("Titolo", "Caption", "https://cdn.example/video.mp4")
++	if h1 != h2 {
++		t.Fatalf("content hash must ignore surrounding whitespace: %q != %q", h1, h2)
++	}
++	if len(h1) != 64 {
++		t.Fatalf("content hash must be a full SHA-256 hex digest, got length %d", len(h1))
++	}
++	if h1 == computeContentHash("Titolo", "Different caption", "https://cdn.example/video.mp4") {
++		t.Fatal("different content produced the same hash")
++	}
++}
+diff --git a/pkg/api/drive_batch.go b/pkg/api/drive_batch.go
+index aa446d23..acf893c0 100644
+--- a/pkg/api/drive_batch.go
++++ b/pkg/api/drive_batch.go
+@@ -15,6 +15,7 @@ import (
+ 
+ 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
+ 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
++	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+ 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+ )
+ 
+@@ -92,11 +93,11 @@ type DriveBatchImportRequest struct {
+ 
+ // DriveBatchImportResponse returns the scheduled jobs.
+ type DriveBatchImportResponse struct {
+-	FolderID               string                 `json:"folder_id"`
+-	ScheduledCount         int                    `json:"scheduled_count"`
+-	TotalRuntimeSeconds    int                    `json:"total_runtime_estimate_seconds"`
+-	FirstPublishAt         time.Time              `json:"first_publish_at"`
+-	LastScheduledAt        time.Time              `json:"last_scheduled_at"`
++	FolderID            string    `json:"folder_id"`
++	ScheduledCount      int       `json:"scheduled_count"`
++	TotalRuntimeSeconds int       `json:"total_runtime_estimate_seconds"`
++	FirstPublishAt      time.Time `json:"first_publish_at"`
++	LastScheduledAt     time.Time `json:"last_scheduled_at"`
+ 	// NextPageToken is ALWAYS emitted (no `omitempty`) so callers can
+ 	// reliably distinguish "got everything (token === "")" from "you
+ 	// forgot to read it". The earlier omitempty hid the boundary case
+@@ -118,13 +119,13 @@ type DriveBatchImportResponse struct {
+ 
+ // DriveBatchImportItem describes one queued upload_job.
+ type DriveBatchImportItem struct {
+-	Index        int       `json:"index"`
+-	DriveFileID  string    `json:"drive_file_id"`
+-	Name         string    `json:"name"`
+-	MimeType     string    `json:"mime_type"`
+-	JobID        int64     `json:"job_id"`
+-	ScheduledAt  time.Time `json:"scheduled_at"`
+-	RelativeHours float64  `json:"relative_hours_from_now"`
++	Index         int       `json:"index"`
++	DriveFileID   string    `json:"drive_file_id"`
++	Name          string    `json:"name"`
++	MimeType      string    `json:"mime_type"`
++	JobID         int64     `json:"job_id"`
++	ScheduledAt   time.Time `json:"scheduled_at"`
++	RelativeHours float64   `json:"relative_hours_from_now"`
+ }
+ 
+ // DriveBatchStatusResponse is the dashboard-friendly aggregate for a
+@@ -146,16 +147,16 @@ type DriveBatchImportItem struct {
+ // distinguishes an empty/cancelled batch from a fresh non-existent
+ // folder id.
+ type DriveBatchStatusResponse struct {
+-	FolderID         string     `json:"folder_id"`
+-	UserID           int64      `json:"user_id"`
+-	PendingCount     int        `json:"pending_count"`
+-	ProcessingCount  int        `json:"processing_count"`
+-	CompletedCount   int        `json:"completed_count"`
+-	FailedCount      int        `json:"failed_count"`
+-	TotalCount       int        `json:"total_count"`
+-	FirstPublishAt   *time.Time `json:"first_publish_at,omitempty"`
+-	LastPublishAt    *time.Time `json:"last_publish_at,omitempty"`
+-	Note             string     `json:"note,omitempty"`
++	FolderID        string     `json:"folder_id"`
++	UserID          int64      `json:"user_id"`
++	PendingCount    int        `json:"pending_count"`
++	ProcessingCount int        `json:"processing_count"`
++	CompletedCount  int        `json:"completed_count"`
++	FailedCount     int        `json:"failed_count"`
++	TotalCount      int        `json:"total_count"`
++	FirstPublishAt  *time.Time `json:"first_publish_at,omitempty"`
++	LastPublishAt   *time.Time `json:"last_publish_at,omitempty"`
++	Note            string     `json:"note,omitempty"`
+ }
+ 
+ // driveFolderIDPatternRegex mirrors the service-level regex that
+@@ -462,10 +463,10 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
+ 		// Empty or non-existent folder. 200 OK so the SPA renders a
+ 		// productive "no videos found" message instead of an error.
+ 		writeJSON(w, http.StatusOK, DriveBatchImportResponse{
+-			FolderID:        body.FolderID,
+-			ScheduledCount:  0,
+-			Entries:         []DriveBatchImportItem{},
+-			Note:            "no videos found in the folder (or folder is empty / has zero video files)",
++			FolderID:          body.FolderID,
++			ScheduledCount:    0,
++			Entries:           []DriveBatchImportItem{},
++			Note:              "no videos found in the folder (or folder is empty / has zero video files)",
+ 			NeedsDriveAccount: needsDriveAccount,
+ 		})
+ 		return
+@@ -525,22 +526,33 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
+ 			caption = caption + " — " + f.Name
+ 		}
+ 
+-	job := &models.UploadJob{
+-		UserID:      userID,
+-		WorkspaceID: body.WorkspaceID,
+-		SourceType:  models.UploadJobSourcePublicDrive,
+-		SourceID:    f.ID,
+-		// FolderID is the new migration-038 column. Wiring it here so the
+-		// dashboard status endpoint can GROUP BY folder and report counts
+-		// without scanning the entire upload_jobs table on every poll.
+-		FolderID:    &body.FolderID, // pointer so SQL NULL when empty
+-		Title:       title,
+-		Caption:     caption,
+-		Targets:     []int64{body.FacebookAccountID},
+-		Status:      models.UploadJobStatusPending,
+-		ScheduledAt: &scheduledAt,
+-	}
++		job := &models.UploadJob{
++			UserID:      userID,
++			WorkspaceID: body.WorkspaceID,
++			SourceType:  models.UploadJobSourcePublicDrive,
++			SourceID:    f.ID,
++			SourceFingerprint: func() string {
++				if strings.TrimSpace(f.MD5Checksum) != "" {
++					return strings.TrimSpace(f.MD5Checksum)
++				}
++				return f.ID
++			}(),
++			// FolderID is the new migration-038 column. Wiring it here so the
++			// dashboard status endpoint can GROUP BY folder and report counts
++			// without scanning the entire upload_jobs table on every poll.
++			FolderID:    &body.FolderID, // pointer so SQL NULL when empty
++			Title:       title,
++			Caption:     caption,
++			Targets:     []int64{body.FacebookAccountID},
++			Status:      models.UploadJobStatusPending,
++			ScheduledAt: &scheduledAt,
++		}
+ 		if err := r.uploadJobStore.Create(job); err != nil {
++			if errors.Is(err, repository.ErrUploadJobDuplicate) {
++				slog.Info("drive batch import: skipping video already queued or imported",
++					"workspace_id", body.WorkspaceID, "drive_file_id", f.ID)
++				continue
++			}
+ 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("create upload job for %s: %v", f.Name, err))
+ 			return
+ 		}
+@@ -561,13 +573,17 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
+ 		FolderID:            body.FolderID,
+ 		ScheduledCount:      len(entries),
+ 		TotalRuntimeSeconds: int(cursor.Sub(now).Seconds()),
+-		FirstPublishAt:      entries[0].ScheduledAt,
+-		LastScheduledAt:     entries[len(entries)-1].ScheduledAt,
+ 		NextPageToken:       nextPageToken,
+ 		Entries:             entries,
+ 		NeedsDriveAccount:   needsDriveAccount,
+ 		CursorClampedToNow:  cursorClampedToNow,
+ 	}
++	if len(entries) > 0 {
++		resp.FirstPublishAt = entries[0].ScheduledAt
++		resp.LastScheduledAt = entries[len(entries)-1].ScheduledAt
++	} else {
++		resp.Note = "all videos in this page were already queued or imported; no new upload jobs created"
++	}
+ 	if nextPageToken != "" {
+ 		resp.Note = "folder contains more videos than fit on one page. To continue: re-call this endpoint with `page_token` = next_page_token AND `cursor_scheduled_at` = last_scheduled_at (in RFC3339). The cursor is what keeps the random 3-4.5h gap continuous across pages \u2014 sending cursor_scheduled_at empty collapses the gap at the page boundary. Stop re-calling when next_page_token comes back empty."
+ 	}

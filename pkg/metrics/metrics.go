@@ -14,6 +14,7 @@ package metrics
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -264,10 +265,27 @@ func TruncateSubjectForLabel(subject string) string {
 
 // --- Error classification -------------------------------------------------
 
+// ErrorKindCarrier is the typed classification hook errors may implement.
+// A carrier announces its own bucket instead of being guessed from message
+// text, so a wrapped 401 no longer depends on the string "401" surviving
+// redaction or refactor. The returned name MUST be one of the four ErrKind*
+// constants; anything else is bucketed as internal (defensive: a carrier
+// must not be able to inject arbitrary label values into the error_kind
+// series).
+type ErrorKindCarrier interface {
+	ErrorKindName() string
+}
+
 // ErrorKind classifies an error into one of {auth, api, network, internal}.
 // This is the ONLY function allowed to put a value into the error_kind label.
 // Never inline pattern-matching at call sites — keep the bucketing here so
 // dashboards stay consistent.
+//
+// Resolution order:
+//  1. the outermost ErrorKindCarrier in the wrap chain (typed contract);
+//  2. the legacy substring heuristic below — kept ONLY for untyped legacy
+//     errors. New error types must implement ErrorKindCarrier instead of
+//     relying on their message text matching a marker.
 //
 // Contract: callers must guard with `err != nil` before calling. The function
 // does not nil-check on purpose: a nil here indicates a programming error
@@ -275,6 +293,15 @@ func TruncateSubjectForLabel(subject string) string {
 // block, which already gates on err != nil). Returning "" for nil would
 // silently produce unlabeled series; panicking would be too aggressive.
 func ErrorKind(err error) string {
+	var carrier ErrorKindCarrier
+	if errors.As(err, &carrier) {
+		switch name := carrier.ErrorKindName(); name {
+		case ErrKindAuth, ErrKindAPI, ErrKindNetwork, ErrKindInternal:
+			return name
+		default:
+			return ErrKindInternal
+		}
+	}
 	s := strings.ToLower(err.Error())
 	switch {
 	case

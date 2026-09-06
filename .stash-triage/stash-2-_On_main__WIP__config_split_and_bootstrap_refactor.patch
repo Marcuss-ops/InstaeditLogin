@@ -1,0 +1,1156 @@
+diff --git a/internal/bootstrap/api.go b/internal/bootstrap/api.go
+index 03ec9a9d..c01b38af 100644
+--- a/internal/bootstrap/api.go
++++ b/internal/bootstrap/api.go
+@@ -62,7 +62,7 @@ func WireAPI(core *Core) (http.Handler, error) {
+ 		api.WithUserWorkspaceHelper(userWorkspaceHelper),
+ 		api.WithTeamStore(core.teamRepo),
+ 		api.WithAuthEmailService(authEmailSvc),
+-		api.WithSessionsService(core.sessionsSvc),
++		api.WithSessionsService(core.SessionsSvc),
+ 		api.WithWorkspaceStore(core.workspaceRepo),
+ 		api.WithPostStore(core.postRepo),
+ 		api.WithMediaStore(core.mediaRepo),
+diff --git a/internal/bootstrap/core.go b/internal/bootstrap/core.go
+index be2f5622..fbaf44ce 100644
+--- a/internal/bootstrap/core.go
++++ b/internal/bootstrap/core.go
+@@ -36,7 +36,7 @@ type Core struct {
+ 	OneTimeCodes  api.OneTimeCodeStore
+ 
+ 	authMgr     *auth.Manager
+-	sessionsSvc *services.SessionsService
++	SessionsSvc *services.SessionsService
+ 
+ 	// Repositories shared between API and worker paths.
+ 	userRepo                *repository.UserRepository
+@@ -156,7 +156,7 @@ func WireCore(ctx context.Context) (*Core, error) {
+ 		WebhookRepo:             repository.NewWebhookRepository(db),
+ 		OneTimeCodes:            oneTimeCodes,
+ 		authMgr:                 authMgr,
+-		sessionsSvc:             sessionsSvc,
++		SessionsSvc:             sessionsSvc,
+ 		userRepo:                userRepo,
+ 		tokenRepo:               tokenRepo,
+ 		teamRepo:                teamRepo,
+diff --git a/internal/config/config.go b/internal/config/config.go
+index cc20aa97..da8428d1 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -21,330 +21,43 @@ const (
+ 
+ // Config holds all configuration for the application.
+ //
+-// Taglio 5b: SERVER_PORT + SERVER_HOST removed — the server listens on the
+-// PORT env var only (Vercel / Railway / Render standard). TWITTER_* env vars
+-// renamed to X_*; TIKTOK_CLIENT_KEY renamed to TIKTOK_CLIENT_ID.
++// It composes several typed sub-configs. Fields are promoted so existing
++// code (and tests) can keep using cfg.Field directly. Sub-configs live in
++// sections.go and group related env vars (HTTP, database, auth, storage,
++// workers, Velox and monitoring).
+ type Config struct {
+-	// VeloxAPIToken authenticates artifact HEAD/GET requests back to Velox.
+-	// This is the REVERSE direction token (Velox → InstaEdit via
+-	// /internal/v1/* routes). Loaded from VELOX_API_TOKEN.
+-	VeloxAPIToken string
+-
+-	// VeloxControlURL is the base URL of the Velox master that the
+-	// BFF calls when proxying user-facing /api/v1/velox/* requests.
+-	// The browser never sees this URL — only InstaEdit calls it.
+-	// Loaded from VELOX_CONTROL_URL. Empty = BFF routes not mounted.
+-	VeloxControlURL string
+-
+-	// VeloxControlJWTSecret is the shared HS256 secret for the
+-	// short-lived JWT InstaEdit signs when calling the Velox master.
+-	// This MUST be the same value as VeloxEditiingg's
+-	// INSTAEDIT_CONTROL_JWT_SECRET. It is DISTINCT from
+-	// VeloxAPIToken (the reverse-direction Bearer token) — the two
+-	// secrets MUST NOT be reused across directions. Loaded from
+-	// VELOX_CONTROL_JWT_SECRET. Empty = BFF routes not mounted.
+-	VeloxControlJWTSecret string
+-
+-	// VeloxWebhookSecret is the shared HMAC-SHA256 secret used to
+-	// sign callbacks sent from InstaEdit to Velox. It is distinct
+-	// from VeloxAPIToken and VeloxControlJWTSecret. Loaded from
+-	// VELOX_WEBHOOK_SECRET.
+-	VeloxWebhookSecret string
+-	// FrontendURL is where the OAuth callback should redirect.
+-	FrontendURL string
+-	// AllowedCORSOrigins is the comma-separated list of origins.
+-	AllowedCORSOrigins []string
+-
+-	// Database (PostgreSQL). DATABASE_URL for production; individual fields
+-	// (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE) are kept
+-	// for local tooling. DATABASE_URL takes precedence.
+-	DatabaseURL string
+-	DBHost      string
+-	DBPort      string
+-	DBUser      string
+-	DBPassword  string
+-	DBName      string
+-	DBSSLMode   string
+-
+-	// Meta OAuth — shared App ID and Secret.
+-	MetaAppID       string
+-	MetaAppSecret   string
+-	MetaRedirectURI string // DEPRECATED
+-
+-	// Per-platform redirect URIs.
+-	InstagramRedirectURI string
+-	FacebookRedirectURI  string
+-	ThreadsRedirectURI   string
+-
+-	// TikTok OAuth
+-	TikTokClientID     string
+-	TikTokClientSecret string
+-	TikTokRedirectURI  string
+-
+-	// X (Twitter) OAuth 2.0 PKCE
+-	XClientID     string
+-	XClientSecret string
+-	XRedirectURI  string
+-
+-	// YouTube OAuth
+-	YouTubeClientID     string
+-	YouTubeClientSecret string
+-	YouTubeRedirectURI  string
+-
+-	// P1#6 — YouTube resumable-upload tuning. The resumable upload
+-	// protocol streams the binary in N chunks; Google requires each
+-	// chunk be a multiple of 256 KB (262144 bytes) and recommends
+-	// larger chunks for fewer round-trips (valutazione doc spec:
+-	// 16 MB default). Backoff uses full-jitter exponential growth
+-	// capped at 5 min, with Retry-After from the server ALWAYS honored
+-	// (the cap applies only to the calculated fallback when the
+-	// server didn't send a hint — see youtube_oauth.go for the
+-	// rationale: capping a server hint to a smaller value guarantees
+-	// we'd hammer the API mid-quota-window and risk blacklisting).
+-	//
+-	// These are independent of the upload-job-level retries in
+-	// internal/worker/upload_worker.go::computeUploadBackoff; chunk
+-	// retries recover a transient network blip during the PUT, while
+-	// job-level retries recover a budget-exhausted publish that the
+-	// inner chunk loop couldn't escape.
+-	YouTubeUploadChunkBytes    int64 // YOUTUBE_UPLOAD_CHUNK_BYTES; default 16777216 (16 MB), MUST be multiple of 262144 (256 KB)
+-	YouTubeUploadMaxRetries    int   // YOUTUBE_UPLOAD_MAX_RETRIES; default 5 (per-chunk PUT budget, distinct from upload-job retries)
+-	YouTubeUploadBackoffBaseMs int   // YOUTUBE_UPLOAD_BACKOFF_BASE_MS; default 1000 (1 s)
+-	YouTubeUploadBackoffCapMs  int   // YOUTUBE_UPLOAD_BACKOFF_CAP_MS; default 300000 (5 min); applies to CALCULATED backoff only, NOT server Retry-After
+-	YouTubeDailyQuotaLimit     int   // YOUTUBE_DAILY_QUOTA_LIMIT; default 300; daily pre-call videos.insert gate. 1 videos.insert = 1 bucket unit under the 2026 quota model (default 100/day from Google, 300/day for the 200-channel rollout with 50% buffer). When calls >= limit, publish_worker stamps retry_wait + metadata.retry_after_seconds until next UTC midnight.
+-
+-	// Google Drive OAuth (read-only import of video clips)
+-	GoogleDriveClientID       string
+-	GoogleDriveClientSecret   string
+-	GoogleDriveRedirectURI    string
+-	GoogleDriveUploadFolderID string
+-
+-	// LinkedIn OAuth
+-	LinkedInClientID     string
+-	LinkedInClientSecret string
+-	LinkedInRedirectURI  string
+-
+-	// Encryption (Blocco #2.2 — multi-key support).
+-	//
+-	// Two parallel surfaces:
+-	//
+-	//   1. ENCRYPTION_KEY + (implied) ACTIVE_ENCRYPTION_KEY_ID=1
+-	//      — the legacy single-key path. Pre-Blocco #2.2 deployments
+-	//      set only ENCRYPTION_KEY. Validate() promotes that single
+-	//      key into EncryptionKeys[1] and ActiveEncryptionKeyID=1,
+-	//      so Wire() and every consumer sees the same struct shape
+-	//      regardless of which env-var surface the operator uses.
+-	//
+-	//   2. ENCRYPTION_KEYS (CSV: id:base64key,id:base64key,...) +
+-	//      ACTIVE_ENCRYPTION_KEY_ID (uint32) — the multi-key path.
+-	//      Validate() parses the CSV, validates every key
+-	//      (base64 + 32 bytes), and confirms the active id is
+-	//      present in the map.
+-	//
+-	// Mixing both surfaces is a misconfiguration: validate() rejects
+-	// "both ENCRYPTION_KEY and ENCRYPTION_KEYS set" with a
+-	// descriptive error so operators can act on it.
+-	EncryptionKey string // LEGACY: single-key fallback
+-	// EncryptionKeys is the post-validation map of all key ids
+-	// known to this process. Always populated: either from
+-	// ENCRYPTION_KEYS (multi-key) or from the legacy fallback.
+-	EncryptionKeys map[uint32]string
+-	// ActiveEncryptionKeyID is the key id used for new Encrypt
+-	// calls. Always populated: either from ACTIVE_ENCRYPTION_KEY_ID
+-	// (multi-key) or 1 (legacy fallback).
+-	ActiveEncryptionKeyID uint32
+-	// EncryptionKeysRaw is the unparsed ENCRYPTION_KEYS string,
+-	// preserved here only for the validate() error message when
+-	// the CSV is malformed. Not used outside validation.
+-	EncryptionKeysRaw string
+-	// ActiveEncryptionKeyIDRaw is the unparsed ACTIVE_ENCRYPTION_KEY_ID
+-	// string, same purpose as EncryptionKeysRaw.
+-	ActiveEncryptionKeyIDRaw string
+-
+-	// JWT
+-	JWTSecret           string
+-	JWTAccessTTLMinutes int
+-	JWTRefreshTTLDays   int
+-	// TrustedProxies is a comma-separated list of IP addresses and/or
+-	// CIDR ranges that are allowed to supply X-Forwarded-For /
+-	// X-Real-IP headers. When empty, the API trusts only the direct
+-	// peer address (RemoteAddr). Example: "10.0.0.0/8,127.0.0.1".
+-	TrustedProxies string
+-
+-	// Metrics basic-auth credentials. In production both must be set;
+-	// validate() fail-closes the boot if either is empty.
+-	MetricsBasicAuthUser string
+-	MetricsBasicAuthPass string
+-	// MetricsHost/MetricsPort optionally start a separate internal
+-	// listener for the /metrics endpoint. When MetricsPort is 0, the
+-	// endpoint is served only on the main HTTP server at
+-	// /api/v1/metrics. When MetricsPort > 0, an additional listener
+-	// is started on MetricsHost:MetricsPort (default MetricsHost
+-	// 127.0.0.1 if empty) so scrapers on a private network can reach
+-	// metrics without exposing the main API.
+-	MetricsHost string
+-	MetricsPort int
+-
+-	// Deprecated: JWT_TTL_HOURS is the legacy single-knob TTL.
+-	// If JWT_ACCESS_TTL_MINUTES is unset, the hours value is
+-	// converted to minutes. Prefer the explicit access/refresh
+-	// variables for new deployments.
+-	JWTTTLHours int
+-
+-	// Logging
+-	LogLevel string
+-
+-	// AppEnv is the deployment environment.
+-	AppEnv string
+-
+-	// Background worker tuning.
+-	PublishWorkerIntervalSeconds int
+-	// Taglio 5.x — independent tick interval for the new
+-	// ReconcileWorker goroutine. The driver (PublishWorker) ticks
+-	// at PublishWorkerIntervalSeconds (default 30s); the reconciler
+-	// ticks faster (default 5s) so an async publish's
+-	// publishing→published transition is observed promptly without
+-	// coupling to the driver's cadence. Both run as separate
+-	// goroutines on independent contexts with parallel shutdown.
+-	ReconcileWorkerIntervalSeconds int
+-	// SPRINT 4.2 — independent tick interval for the WebhookWorker
+-	// goroutine. Drains the webhook_deliveries table every
+-	// WEBHOOK_WORKER_INTERVAL_SECONDS (default 5s). Faster than
+-	// the publish driver so an end-to-end delivery latency is
+-	// bounded by a 1-2s ceiling under typical load. Same
+-	// lifecycle shape: independent goroutine, ctx-cancellable,
+-	// drained in parallel on shutdown.
+-	WebhookWorkerIntervalSeconds int
+-
+-	// SessionCleanupIntervalSeconds — cadence of the retention
+-	// policy goroutine (commit: cleanup-policy). Drives the
+-	// periodic SessionsCleanupWorker that DELETEs rows from the
+-	// `sessions` table whose revoked_at is older than 30 days OR
+-	// whose refresh_expires_at is older than 7 days. Default 300s
+-	// (5 min) is coarse enough to not thrash the DB under traffic
+-	// spikes but fine-grained enough to keep the sessions table
+-	// bounded under normal load.
+-	SessionCleanupIntervalSeconds int
+-
+-	// UploadWorkerIntervalSeconds — cadence of the background upload
+-	// worker that drains upload_jobs (public or authenticated Google
+-	// Drive imports). Default 30s.
+-	UploadWorkerIntervalSeconds int
+-
+-	// P1 step 2 — ingest pool / upload pool split. The upload_worker
+-	// package now spawns two parallel pools against the upload_jobs
+-	// queue, each with its own concurrency cap (the valutazione doc
+-	// recommends 2–3 ingest + 3–4 YouTube-upload on dev boxen,
+-	// scaling only after RAM/disk/bandwidth measurements).
+-	//
+-	// The ingest pool claims status IN ('pending','retry_wait') and
+-	// streams Drive→S3; the upload pool claims status =
+-	// 'ready_to_publish' and runs videos.insert. Both pools use the
+-	// same lease + heartbeat machinery, with distinct workerID
+-	// prefixes so a Mark* CAS can never collide.
+-	UploadIngestConcurrency        int  // UPLOAD_INGEST_CONCURRENCY; default 3
+-	YouTubeUploadConcurrency       int  // YOUTUBE_UPLOAD_CONCURRENCY; default 4
+-	UploadLeaseTTLSeconds          int  // UPLOAD_LEASE_TTL_SECONDS; default 60
+-	UploadHeartbeatIntervalSeconds int  // UPLOAD_HEARTBEAT_INTERVAL_SECONDS; default 20
+-	UploadReclaimIntervalSeconds   int  // UPLOAD_RECLAIM_INTERVAL_SECONDS; default 30
+-	UploadReclaimOnStart           bool // UPLOAD_RECLAIM_ON_START; default true
+-
+-	// GoogleDriveAPIKey is a Google Cloud API key used to list CONTENTS
+-	// of a public Drive folder when the user has not linked their Drive
+-	// account. Without it, batch folder imports only work for folders
+-	// the linked Drive account can access (typically: nothing, since the
+-	// linked account isn't the folder's owner).
+-	//
+-	// Create one at https://console.cloud.google.com → APIs & Services →
+-	// Credentials → API key, scoped to the Google Drive API. Empty
+-	// default means the batch folder endpoint can only target folders
+-	// the user's Drive OAuth grant can see.
+-	GoogleDriveAPIKey string
+-
+-	// S3-compatible storage (mandatory).
+-	S3Endpoint  string
+-	S3Bucket    string
+-	S3AccessKey string
+-	S3SecretKey string
+-	S3Region    string
+-	// S3PathStyle selects path-style addressing ({host}/{bucket}/{key})
+-	// instead of the default virtual-hosted ({bucket}.{host}/{key}).
+-	// Required when S3_ENDPOINT is a single fixed origin (e.g. a
+-	// Cloudflare quick tunnel) that cannot serve per-bucket subdomains.
+-	S3PathStyle bool
+-
+-	// MaxUploadBytes caps the size of any single file upload.
+-	MaxUploadBytes int64
+-
+-	// Stripe billing (optional — billing endpoints are 501 when not configured).
+-	StripeSecretKey     string
+-	StripeWebhookSecret string
+-	StripeSuccessURL    string
+-	StripeCancelURL     string
+-
+-	// Sentry (optional, Blocco #5.3).
+-	//
+-	// SENTRY_DSN is the SDK DSN string (`https://key@sentry.io/projid`).
+-	// Empty (the default) disables the entire observability surface:
+-	//   - sentry.Init is NOT called at startup.
+-	//   - the panic-catching middleware falls back to a plain
+-	//     `recover(http.Handler)` that writes 500 with NO outbound
+-	//     network traffic.
+-	// - Non-empty: sentry.Init runs at startup; the panic-catching
+-	//   middleware wraps with sentryhttp.New so CaptureException is
+-	//   called for every recovered panic and the SDK buffers out-of-band.
+-	//
+-	// SENTRY_ENVIRONMENT defaults to AppEnv ("dev"/"staging"/"production")
+-	// when empty; SENTRY_RELEASE is passed straight through to the SDK
+-	// (the operator typically wires this to the deploy SHA via the CI
+-	// pipeline). Both are passed via env so the production deploy can
+-	// set them without re-baking the binary.
+-	SentryDSN         string
+-	SentryEnvironment string
+-	SentryRelease     string
+-
+-	// CookieDomain is the optional `Domain` attribute applied to the
+-	// csrf_token cookie ONLY (session + refresh cookies stay host-only).
+-	// Defaults to empty so dev (localhost:5173 + localhost:8080) keeps
+-	// working unchanged. Production sets it to e.g. ".instaedit.org"
+-	// so the SPA on app.instaedit.org can read the csrf_token via
+-	// document.cookie over a cross-origin backend on api.instaedit.org.
+-	// Use a leading dot to make the cookie available to every
+-	// subdomain; the value is passed straight through to Go's
+-	// http.Cookie Domain field (which the browser interprets per
+-	// RFC 6265). Validation is intentionally NOT applied — the
+-	// HTTPS / SameSite=None / leading-dot trade-off is the
+-	// operator's call.
+-	CookieDomain string
+-
+-	// AdminInviteToken gates the public registration endpoint
+-	// (POST /api/v1/auth/register). The handler requires the request
+-	// to present the same value via the X-Admin-Token header
+-	// (constant-time compare). When empty, registration is fully
+-	// disabled (the handler returns 403 "registration is
+-	// invite-only"). Generate with `openssl rand -hex 32` and
+-	// rotate via `flyctl secrets import`. NOT logged, NOT exposed
+-	// in error messages.
+-	AdminInviteToken string
+-
+-	// AppMode lets operators pin the deployment to Google's OAuth-
+-	// consent-screen publishing status. "production" means refresh
+-	// tokens are durable (no automatic 7-day expiry). "testing"
+-	// means Google's Testing-mode 7-day refresh-token TTL applies
+-	// and any refresh attempt after day 7 returns invalid_grant.
+-	// Default "production" so a missing env var falls into the safer
+-	// bucket; ops must explicitly opt-in to "testing" when validating
+-	// against a staging OAuth-client. Loaded from env APP_MODE.
+-	AppMode string
++	HTTPConfig
++	DatabaseConfig
++	AuthConfig
++	StorageConfig
++	WorkerConfig
++	VeloxConfig
++	MonitoringConfig
+ }
+ 
+ // Load reads configuration from environment variables.
+ func Load() (*Config, error) {
+ 	_ = godotenv.Load()
+ 
+-	cfg := &Config{
++	cfg := &Config{}
++
++	cfg.HTTPConfig = HTTPConfig{
+ 		FrontendURL:          getEnv("FRONTEND_URL", ""),
+ 		AllowedCORSOrigins:   splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
++		AppMode:                    getEnv("APP_MODE", "production"),
++		TrustedProxies:                 getEnv("TRUSTED_PROXIES", ""),
++		LogLevel:                       getEnv("LOG_LEVEL", "info"),
++		AppEnv:                         getEnv("APP_ENV", "dev"),
++		MaxUploadBytes:                 getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
++		StripeSecretKey:                getEnv("STRIPE_SECRET_KEY", ""),
++		StripeWebhookSecret:            getEnv("STRIPE_WEBHOOK_SECRET", ""),
++		StripeSuccessURL:               getEnv("STRIPE_SUCCESS_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?success=1"),
++		StripeCancelURL:                getEnv("STRIPE_CANCEL_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?canceled=1"),
++		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
++		AdminInviteToken: getEnv("ADMIN_INVITE_TOKEN", ""),
++	}
++
++	cfg.DatabaseConfig = DatabaseConfig{
+ 		DatabaseURL:          getEnv("DATABASE_URL", ""),
+ 		DBHost:               getEnv("DB_HOST", "localhost"),
+ 		DBPort:               getEnv("DB_PORT", "5432"),
+@@ -352,6 +65,9 @@ func Load() (*Config, error) {
+ 		DBPassword:           getEnv("DB_PASSWORD", ""),
+ 		DBName:               getEnv("DB_NAME", "instaedit_login"),
+ 		DBSSLMode:            getEnv("DB_SSLMODE", "disable"),
++	}
++
++	cfg.AuthConfig = AuthConfig{
+ 		MetaAppID:            getEnv("META_APP_ID", ""),
+ 		MetaAppSecret:        getEnv("META_APP_SECRET", ""),
+ 		MetaRedirectURI:      getEnv("META_REDIRECT_URI", ""),
+@@ -367,100 +83,69 @@ func Load() (*Config, error) {
+ 		YouTubeClientID:      getEnv("YOUTUBE_CLIENT_ID", ""),
+ 		YouTubeClientSecret:  getEnv("YOUTUBE_CLIENT_SECRET", ""),
+ 		YouTubeRedirectURI:   getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+-		// P1#6 — YouTube resumable upload tuning. Defaults mirror the
+-		// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
+-		// backoff). Validation runs unconditionally (so an operator typo
+-		// surfaces at boot, not first upload).
+-		YouTubeUploadChunkBytes: getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
+-		// AppMode lets operators pin the deployment to Google's OAuth-
+-		// consent-screen publishing status. "production" means refresh
+-		// tokens are durable (no automatic 7-day expiry); "testing"
+-		// means Google's Testing-mode 7-day refresh-token TTL applies
+-		// and any refresh attempt after day 7 surfaces invalid_grant.
+-		// Default "production" so a missing env var falls into the
+-		// safer bucket; ops must explicitly opt-in to "testing" when
+-		// validating against a staging OAuth-client.
+-		AppMode:                    getEnv("APP_MODE", "production"),
+-		YouTubeUploadMaxRetries:    getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
+-		YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
+-		YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
+-		YouTubeDailyQuotaLimit:     getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
+ 		GoogleDriveClientID:        getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
+ 		GoogleDriveClientSecret:    getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
+ 		GoogleDriveRedirectURI:     getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
+ 		GoogleDriveUploadFolderID:  getEnv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID", ""),
+-		VeloxAPIToken:              getEnv("VELOX_API_TOKEN", ""),
+-		VeloxControlURL:            getEnv("VELOX_CONTROL_URL", ""),
+-		VeloxControlJWTSecret:      getEnv("VELOX_CONTROL_JWT_SECRET", ""),
+-		VeloxWebhookSecret:         getEnv("VELOX_WEBHOOK_SECRET", ""),
+ 		LinkedInClientID:           getEnv("LINKEDIN_CLIENT_ID", ""),
+ 		LinkedInClientSecret:       getEnv("LINKEDIN_CLIENT_SECRET", ""),
+ 		LinkedInRedirectURI:        getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
+ 		EncryptionKey:              getEnv("ENCRYPTION_KEY", ""),
+-		// Blocco #2.2: read the multi-key env vars. The actual
+-		// parsing + validation happens in validate(); Load() only
+-		// captures the raw strings so validate() can surface
+-		// high-quality error messages with the original input.
+ 		EncryptionKeysRaw:              getEnv("ENCRYPTION_KEYS", ""),
+ 		ActiveEncryptionKeyIDRaw:       getEnv("ACTIVE_ENCRYPTION_KEY_ID", ""),
+ 		JWTSecret:                      getEnv("JWT_SECRET", ""),
+ 		JWTAccessTTLMinutes:            getEnvInt("JWT_ACCESS_TTL_MINUTES", 0),
+ 		JWTRefreshTTLDays:              getEnvInt("JWT_REFRESH_TTL_DAYS", 0),
+-		TrustedProxies:                 getEnv("TRUSTED_PROXIES", ""),
+-		MetricsBasicAuthUser:           getEnv("METRICS_BASIC_AUTH_USER", ""),
+-		MetricsBasicAuthPass:           getEnv("METRICS_BASIC_AUTH_PASS", ""),
+-		MetricsHost:                    getEnv("METRICS_HOST", ""),
+-		MetricsPort:                    getEnvInt("METRICS_PORT", 0),
+ 		JWTTTLHours:                    getEnvInt("JWT_TTL_HOURS", 0),
+-		LogLevel:                       getEnv("LOG_LEVEL", "info"),
+-		AppEnv:                         getEnv("APP_ENV", "dev"),
++	}
++
++	cfg.StorageConfig = StorageConfig{
++		GoogleDriveAPIKey:              getEnv("GOOGLE_DRIVE_API_KEY", ""),
++		S3Endpoint:                     getEnv("S3_ENDPOINT", ""),
++		S3Bucket:                       getEnv("S3_BUCKET", ""),
++		S3PathStyle:                    getEnvBool("S3_PATH_STYLE", false),
++		S3AccessKey:                    getEnv("S3_ACCESS_KEY", ""),
++		S3SecretKey:                    getEnv("S3_SECRET_KEY", ""),
++		S3Region:                       getEnv("S3_REGION", ""),
++	}
++
++	cfg.WorkerConfig = WorkerConfig{
++		YouTubeUploadChunkBytes: getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
++		YouTubeUploadMaxRetries:    getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
++		YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
++		YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
++		YouTubeDailyQuotaLimit:     getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
+ 		PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
+ 		ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
+ 		WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
+ 		SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+ 		UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+-		// P1 step 2 — worker pool config (see struct comment above).
+ 		UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
+ 		YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),
+ 		UploadLeaseTTLSeconds:          getEnvInt("UPLOAD_LEASE_TTL_SECONDS", 60),
+ 		UploadHeartbeatIntervalSeconds: getEnvInt("UPLOAD_HEARTBEAT_INTERVAL_SECONDS", 20),
+ 		UploadReclaimIntervalSeconds:   getEnvInt("UPLOAD_RECLAIM_INTERVAL_SECONDS", 30),
+ 		UploadReclaimOnStart:           getEnvBool("UPLOAD_RECLAIM_ON_START", true),
+-		GoogleDriveAPIKey:              getEnv("GOOGLE_DRIVE_API_KEY", ""),
+-		S3Endpoint:                     getEnv("S3_ENDPOINT", ""),
+-		S3Bucket:                       getEnv("S3_BUCKET", ""),
+-		S3PathStyle:                    getEnvBool("S3_PATH_STYLE", false),
+-		S3AccessKey:                    getEnv("S3_ACCESS_KEY", ""),
+-		S3SecretKey:                    getEnv("S3_SECRET_KEY", ""),
+-		S3Region:                       getEnv("S3_REGION", ""),
+-		MaxUploadBytes:                 getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
+-		StripeSecretKey:                getEnv("STRIPE_SECRET_KEY", ""),
+-		StripeWebhookSecret:            getEnv("STRIPE_WEBHOOK_SECRET", ""),
+-		StripeSuccessURL:               getEnv("STRIPE_SUCCESS_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?success=1"),
+-		StripeCancelURL:                getEnv("STRIPE_CANCEL_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?canceled=1"),
+-		// Sentry (Blocco #5.3). SENTRY_DSN empty == SDK never
+-		// initialised + recovery middleware uses plain recover.
++	}
++
++	cfg.VeloxConfig = VeloxConfig{
++		VeloxAPIToken:              getEnv("VELOX_API_TOKEN", ""),
++		VeloxControlURL:            getEnv("VELOX_CONTROL_URL", ""),
++		VeloxControlJWTSecret:      getEnv("VELOX_CONTROL_JWT_SECRET", ""),
++		VeloxWebhookSecret:         getEnv("VELOX_WEBHOOK_SECRET", ""),
++	}
++
++	cfg.MonitoringConfig = MonitoringConfig{
++		MetricsBasicAuthUser:           getEnv("METRICS_BASIC_AUTH_USER", ""),
++		MetricsBasicAuthPass:           getEnv("METRICS_BASIC_AUTH_PASS", ""),
++		MetricsHost:                    getEnv("METRICS_HOST", ""),
++		MetricsPort:                    getEnvInt("METRICS_PORT", 0),
+ 		SentryDSN:         getEnv("SENTRY_DSN", ""),
+ 		SentryEnvironment: getEnv("SENTRY_ENVIRONMENT", ""),
+ 		SentryRelease:     getEnv("SENTRY_RELEASE", ""),
+-		// COOKIE_DOMAIN: optional cross-subdomain scope for the
+-		// csrf_token cookie ONLY (session + refresh stay host-only).
+-		// Defaults to empty so dev (localhost:5173 + localhost:8080)
+-		// keeps working unchanged. Pass ".instaedit.org" in
+-		// production so the SPA on app.instaedit.org can read the
+-		// csrf_token via document.cookie against the API on
+-		// api.instaedit.org. NOT validated — the operator owns the
+-		// Domain shape (leading dot for cross-subdomain, exact host
+-		// to pin, etc.) and Go's http.Cookie Domain field will
+-		// pass it straight through to the browser unchanged.
+-		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
+-		// Disable public registration unless an admin invite token
+-		// is configured. Operators create users manually (via the
+-		// admin endpoint or by setting ADMIN_INVITE_TOKEN and calling
+-		// /api/v1/auth/register with X-Admin-Token).
+-		AdminInviteToken: getEnv("ADMIN_INVITE_TOKEN", ""),
+ 	}
+ 
++
+ 	// Resolve JWT TTL defaults and legacy fallback. Access TTL defaults
+ 	// to 15 minutes; refresh TTL defaults to 30 days. The legacy
+ 	// JWT_TTL_HOURS variable is converted to minutes when the explicit
+@@ -482,13 +167,6 @@ func Load() (*Config, error) {
+ 	return cfg, nil
+ }
+ 
+-// metricsConfigured returns true only when both metrics basic-auth
+-// credentials are non-empty. It is used for both runtime fail-closed
+-// decisions and boot-time validation in production.
+-func (c *Config) metricsConfigured() bool {
+-	return c.MetricsBasicAuthUser != "" && c.MetricsBasicAuthPass != ""
+-}
+-
+ func (c *Config) validate() error {
+ 	// Metrics are fail-closed in production: missing or incomplete
+ 	// basic-auth credentials prevent the process from booting. This
+@@ -823,17 +501,6 @@ func SortedKeyIDs(m map[uint32]string) []uint32 {
+ 	return out
+ }
+ 
+-// DSN returns the PostgreSQL connection string.
+-func (c *Config) DSN() string {
+-	if c.DatabaseURL != "" {
+-		return c.DatabaseURL
+-	}
+-	return fmt.Sprintf(
+-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+-		c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName, c.DBSSLMode,
+-	)
+-}
+-
+ func getEnv(key, fallback string) string {
+ 	if value, ok := os.LookupEnv(key); ok {
+ 		return value
+diff --git a/pkg/api/admin_velox_destinations_test.go b/pkg/api/admin_velox_destinations_test.go
+index 37adc682..b4cf19a1 100644
+--- a/pkg/api/admin_velox_destinations_test.go
++++ b/pkg/api/admin_velox_destinations_test.go
+@@ -347,7 +347,15 @@ func setupRouterForCreateDestination() (*Router, *fakeExternalDestinationStore,
+ 		csrfMiddleware:       passthroughCSRF, // bypass CSRF for test
+ 		authMiddleware:       passthroughAuth, // bypass JWT for test
+ 	}
+-	r.registerUserVeloxDestinations(r.mux)
++	im := NewIntegrationsModule(IntegrationsModuleDeps{
++		ExternalDestinationStore: destStore,
++		WorkspaceStore:           wsStore,
++		UserStore:                userStore,
++		AuditLogStore:            auditStore,
++		AuthMiddleware:           passthroughAuth,
++		CSRFMiddleware:           passthroughCSRF,
++	}).(*IntegrationsModule)
++	im.Register(r.mux)
+ 	return r, destStore, wsStore, userStore, auditStore
+ }
+ 
+diff --git a/pkg/api/internal_velox_deliver_test.go b/pkg/api/internal_velox_deliver_test.go
+index bd3c8cd0..28790d9b 100644
+--- a/pkg/api/internal_velox_deliver_test.go
++++ b/pkg/api/internal_velox_deliver_test.go
+@@ -190,7 +190,12 @@ func buildDeliverRouter(dst ExternalDestinationStore, del ExternalDeliveryStore,
+ func runDeliver(t *testing.T, dst ExternalDestinationStore, del ExternalDeliveryStore, token string, body []byte, authHeader string) *httptest.ResponseRecorder {
+ 	t.Helper()
+ 	r := buildDeliverRouter(dst, del, token)
+-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleCreateInternalDelivery))
++	vm := NewVeloxModule(VeloxModuleDeps{
++		ExternalDestinationStore: dst,
++		ExternalDeliveryStore:    del,
++		VeloxAPIToken:            token,
++	}).(*VeloxModule)
++	handler := r.internalVeloxAuth(http.HandlerFunc(vm.handleCreateInternalDelivery))
+ 	mux := chi.NewRouter()
+ 	mux.Method(http.MethodPost, "/internal/v1/deliveries", handler)
+ 
+@@ -668,7 +673,12 @@ func TestDeliver_NilStore(t *testing.T) {
+ 		externalDeliveries:   nil,
+ 		veloxAPIToken:        testDeliverAPIToken,
+ 	}
+-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleCreateInternalDelivery))
++	vm := NewVeloxModule(VeloxModuleDeps{
++		ExternalDestinationStore: r.externalDestinations,
++		ExternalDeliveryStore:    nil,
++		VeloxAPIToken:            testDeliverAPIToken,
++	}).(*VeloxModule)
++	handler := r.internalVeloxAuth(http.HandlerFunc(vm.handleCreateInternalDelivery))
+ 	mux := chi.NewRouter()
+ 	mux.Method(http.MethodPost, "/internal/v1/deliveries", handler)
+ 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/deliveries",
+diff --git a/pkg/api/internal_velox_get_delivery_test.go b/pkg/api/internal_velox_get_delivery_test.go
+index ff23316c..5d94fc51 100644
+--- a/pkg/api/internal_velox_get_delivery_test.go
++++ b/pkg/api/internal_velox_get_delivery_test.go
+@@ -53,7 +53,7 @@ func (f *fakeDeliveryStorage) Insert(_ context.Context, e *models.ExternalDelive
+ }
+ 
+ // fakeDestinationStorage is the stub used by newVeloxTestRouter
+-// to satisfy the route-guard inside registerInternalVeloxRoutes.
++// to satisfy the route-guard inside VeloxModule.Register.
+ // The GET handler under test does NOT consult destinations, so the
+ // stub returns (nil, nil) on every lookup. Production code paths
+ // that hit the destinations store never exercise this stub (they
+@@ -136,7 +136,7 @@ func (f *fakeDeliveryStorage) seedRow(id string, status models.ExternalDeliveryS
+ }
+ 
+ // newVeloxTestRouter wires a Router with the deps the GET handler
+-// needs AND initializes mux so registerInternalVeloxRoutes() can
++// needs AND initializes mux so VeloxModule.Register() can
+ // mount the GET route on it. Mirrors the inline-construction
+ // pattern from buildDeliverRouter in internal_velox_deliver_test.go
+ // but adds mux: chi.NewRouter() — the runtime pkgs register routes
+@@ -144,7 +144,7 @@ func (f *fakeDeliveryStorage) seedRow(id string, status models.ExternalDeliveryS
+ //
+ // We DELIBERATELY skip MustNewRouter(, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second))) because the GET handler under
+ // test does not depend on capRouter / auth.Manager / UserStore /
+-// frontendURL. Calling registerInternalVeloxRoutes() preserves
++// frontendURL. Calling VeloxModule.Register() preserves
+ // the production route-guard semantics:
+ //   - externalDeliveries=nil OR veloxAPIToken=""  →  route NOT
+ //     mounted → chi returns 404 on any request.
+@@ -159,7 +159,12 @@ func newVeloxTestRouter(t *testing.T, deliveries ExternalDeliveryStore, token st
+ 		externalDeliveries:   deliveries,
+ 		veloxAPIToken:        token,
+ 	}
+-	r.registerInternalVeloxRoutes()
++	vm := NewVeloxModule(VeloxModuleDeps{
++		ExternalDestinationStore: r.externalDestinations,
++		ExternalDeliveryStore:    deliveries,
++		VeloxAPIToken:            token,
++	}).(*VeloxModule)
++	vm.Register(r.mux)
+ 	return r
+ }
+ 
+@@ -305,7 +310,7 @@ func TestHandleGetInternalDelivery_NotFound(t *testing.T) {
+ 
+ // TestHandleGetInternalDelivery_StoreUnconfigured — when the
+ // router was built WITHOUT WithExternalDeliveryStore, the
+-// route-guard in registerInternalVeloxRoutes refuses to mount
++// route-guard in VeloxModule.Register refuses to mount
+ // the GET route. The chi mux then returns 404 on any request
+ // that hits the path. Matches the same collapse-with-not-found
+ // semantic the validate handler uses for disabled destinations.
+diff --git a/pkg/api/internal_velox_validate_test.go b/pkg/api/internal_velox_validate_test.go
+index 3c023f2b..df6938ee 100644
+--- a/pkg/api/internal_velox_validate_test.go
++++ b/pkg/api/internal_velox_validate_test.go
+@@ -179,7 +179,13 @@ func buildVeloxTestRouter(dst ExternalDestinationStore, wsLookup *mockWorkspaceL
+ func runValidate(t *testing.T, dst ExternalDestinationStore, wsLookup *mockWorkspaceLookup, userLookup *mockUserLookup, token, id, authHeader, query string) *httptest.ResponseRecorder {
+ 	t.Helper()
+ 	r := buildVeloxTestRouter(dst, wsLookup, userLookup, token)
+-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination))
++	vm := NewVeloxModule(VeloxModuleDeps{
++		ExternalDestinationStore: dst,
++		WorkspaceStore:           wrapWorkspaceLookup(wsLookup),
++		UserStore:                wrapUserLookup(userLookup),
++		VeloxAPIToken:            token,
++	}).(*VeloxModule)
++	handler := r.internalVeloxAuth(http.HandlerFunc(vm.handleValidateInternalDestination))
+ 	mux := chi.NewRouter()
+ 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate", handler)
+ 
+@@ -512,7 +518,13 @@ func TestValidate_DiagnosticHeader(t *testing.T) {
+ 	}
+ 	// Custom httptest invocation with header.
+ 	r := buildVeloxTestRouter(dst, ws, user, testVeloxAPIToken)
+-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination))
++	vm := NewVeloxModule(VeloxModuleDeps{
++		ExternalDestinationStore: dst,
++		WorkspaceStore:           wrapWorkspaceLookup(ws),
++		UserStore:                wrapUserLookup(user),
++		VeloxAPIToken:            testVeloxAPIToken,
++	}).(*VeloxModule)
++	handler := r.internalVeloxAuth(http.HandlerFunc(vm.handleValidateInternalDestination))
+ 	mux := chi.NewRouter()
+ 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate", handler)
+ 	req := httptest.NewRequest(http.MethodPost,
+@@ -708,8 +720,14 @@ func TestValidate_RateLimitExceeded(t *testing.T) {
+ 	}
+ 	r := buildVeloxTestRouter(dst, ws, user, testVeloxAPIToken)
+ 	WithVeloxValidateRateLimit(2, 60*time.Second)(r)
+-
+-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination))
++	vm := NewVeloxModule(VeloxModuleDeps{
++		ExternalDestinationStore: dst,
++		WorkspaceStore:           wrapWorkspaceLookup(ws),
++		UserStore:                wrapUserLookup(user),
++		VeloxAPIToken:            testVeloxAPIToken,
++		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
++	}).(*VeloxModule)
++	handler := r.internalVeloxAuth(http.HandlerFunc(vm.handleValidateInternalDestination))
+ 	mux := chi.NewRouter()
+ 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate", handler)
+ 
+@@ -783,8 +801,14 @@ func TestValidate_RateLimitDisabledByZeroOption(t *testing.T) {
+ 	}
+ 	r := buildVeloxTestRouter(dst, ws, user, testVeloxAPIToken)
+ 	WithVeloxValidateRateLimit(0, 0)(r) // disables
+-
+-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination))
++	vm := NewVeloxModule(VeloxModuleDeps{
++		ExternalDestinationStore: dst,
++		WorkspaceStore:           wrapWorkspaceLookup(ws),
++		UserStore:                wrapUserLookup(user),
++		VeloxAPIToken:            testVeloxAPIToken,
++		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
++	}).(*VeloxModule)
++	handler := r.internalVeloxAuth(http.HandlerFunc(vm.handleValidateInternalDestination))
+ 	mux := chi.NewRouter()
+ 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate", handler)
+ 
+diff --git a/pkg/api/modules.go b/pkg/api/modules.go
+index 8fbcd1e6..26a402d0 100644
+--- a/pkg/api/modules.go
++++ b/pkg/api/modules.go
+@@ -1,11 +1,13 @@
+ package api
+ 
+ import (
++	"net"
+ 	"net/http"
+ 
+ 	"github.com/go-chi/chi/v5"
+ 
+ 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
++	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
+ 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+ 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
+ )
+@@ -401,69 +403,98 @@ func (m *PublishingModule) Register(mux chi.Router) {
+ 	})
+ }
+ 
+-// AuthHandlers groups the HTTP handler functions used by the auth
+-// module. Keeping them in a nested struct keeps AuthModuleDeps readable.
+-type AuthHandlers struct {
+-	Login               http.HandlerFunc
+-	Callback            http.HandlerFunc
+-	ExchangeCode        http.HandlerFunc
+-	Me                  http.HandlerFunc
+-	Refresh             http.HandlerFunc
+-	Logout              http.HandlerFunc
+-	LogoutAll           http.HandlerFunc
+-	ListSessions        http.HandlerFunc
+-	DeleteSession       http.HandlerFunc
+-	ListAccounts        http.HandlerFunc
+-	GetAccount          http.HandlerFunc
+-	GetAccountsPerformanceSummary http.HandlerFunc
+-	GetAccountPerformance http.HandlerFunc
+-	ValidateAccount     http.HandlerFunc
+-	ReconnectAccount    http.HandlerFunc
+-	DeleteAccount       http.HandlerFunc
+-	SyncAccount         http.HandlerFunc
+-	AccountContent      http.HandlerFunc
+-	UpdateAccount       http.HandlerFunc
+-	CreateWorkspace     http.HandlerFunc
+-	ListWorkspaces      http.HandlerFunc
+-	GetWorkspace        http.HandlerFunc
+-	DeleteWorkspace     http.HandlerFunc
+-	SwitchWorkspace     http.HandlerFunc
+-	AttachWorkspaceChannel http.HandlerFunc
+-	ListWorkspaceChannels http.HandlerFunc
+-	UpdateWorkspaceChannel http.HandlerFunc
+-	DetachWorkspaceChannel http.HandlerFunc
+-	ListGroups          http.HandlerFunc
+-	CreateGroup         http.HandlerFunc
+-	GetGroup            http.HandlerFunc
+-	UpdateGroup         http.HandlerFunc
+-	DeleteGroup         http.HandlerFunc
+-	ListGroupAccounts   http.HandlerFunc
+-	SetGroupAccounts    http.HandlerFunc
+-	CreateApiKey        http.HandlerFunc
+-	ListApiKeys         http.HandlerFunc
+-	GetApiKey           http.HandlerFunc
+-	DeleteApiKey        http.HandlerFunc
+-	RotateApiKey        http.HandlerFunc
+-}
+-
+-// AuthModuleDeps is the narrow set of dependencies the auth module
+-// needs to mount its routes.
++// AuthModuleDeps is the set of dependencies the auth module needs to
++// mount and serve its routes. It intentionally mirrors the subset of
++// Router fields used by the auth handlers so the module no longer
++// depends on the full *Router.
+ type AuthModuleDeps struct {
+-	AuthEmailSvc        AuthEmailStore
+-	TeamStore           TeamStore
+-	GroupStore          GroupStore
+-	WebhookStore        WebhookStore
+-	RateLimitSvc        *services.RateLimitService
+-	AuthMiddleware      func(http.Handler) http.Handler
+-	ApiKeyAuthMiddleware func(http.Handler) http.Handler
+-	Protected           func(http.HandlerFunc) http.HandlerFunc
+-	CsrfConfig          func() auth.CSRFConfig
+-	OAuthStartLimiter   func(http.Handler) http.Handler
+-	OAuthSessionRedirect func(http.HandlerFunc) http.HandlerFunc
++	AuthManager             *auth.Manager
++	Capabilities            *services.CapabilityRouter
++	UserStore               UserStore
++	WorkspaceStore          WorkspaceStore
++	TeamStore               TeamStore
++	GroupStore              GroupStore
++	WebhookStore            WebhookStore
++	AuthEmailSvc            AuthEmailStore
++	Vault                   credentials.VaultAPI
++	Authorizer              services.ChannelAuthorizer
++	OneTimeCodes            OneTimeCodeStore
++	SessionsSvc             SessionsStore
++	UserAndWorkspaceHelper  UserWorkspaceHelper
++	FrontendURL             string
++	CookieDomain            string
++	CookieSecure            bool
++	AllowedOrigin           []string
++	MaxUploadBytes          int64
++	TrustedProxies          []*net.IPNet
++	YouTubeSvc              YouTubeOAuthService
++	SnapshotStore           SnapshotStore
++	MetricHistoryStore      MetricHistoryStore
++	ApiKeyStore             ApiKeyStore
++	ConnectLinkNonceStore   ConnectLinkNonceStore
++	MetricsUser             string
++	MetricsPass             string
++	RateLimitSvc            *services.RateLimitService
++	AuthMiddleware          func(http.Handler) http.Handler
++	ApiKeyAuthMiddleware    func(http.Handler) http.Handler
++	// The fields below are temporary shims so AuthModule can mount routes
++	// without immediately moving every handler body from *Router. They
++	// will be removed as handlers are converted to methods on *AuthModule.
++	Handlers                AuthHandlers
++	Protected               func(http.HandlerFunc) http.HandlerFunc
++	CsrfConfig              func() auth.CSRFConfig
++	OAuthStartLimiter       func(http.Handler) http.Handler
++	OAuthSessionRedirect    func(http.HandlerFunc) http.HandlerFunc
+ 	RegisterAuthEmailRoutes func()
+-	RegisterTeamRoutes  func()
+-	RegisterWebhookRoutes func()
+-	Handlers            AuthHandlers
++	RegisterTeamRoutes      func()
++	RegisterWebhookRoutes   func()
++}
++
++// AuthHandlers collects the individual HTTP handlers mounted by
++// AuthModule. It is a temporary bridge while the methods still live on
++// *Router; once the handlers are moved onto *AuthModule this type will
++// be removed.
++type AuthHandlers struct {
++	Login                       http.HandlerFunc
++	Callback                    http.HandlerFunc
++	ExchangeCode                http.HandlerFunc
++	Me                          http.HandlerFunc
++	Refresh                     http.HandlerFunc
++	Logout                      http.HandlerFunc
++	LogoutAll                   http.HandlerFunc
++	ListSessions                http.HandlerFunc
++	DeleteSession               http.HandlerFunc
++	ListAccounts                http.HandlerFunc
++	GetAccount                    http.HandlerFunc
++	GetAccountsPerformanceSummary http.HandlerFunc
++	GetAccountPerformance         http.HandlerFunc
++	ValidateAccount             http.HandlerFunc
++	ReconnectAccount            http.HandlerFunc
++	DeleteAccount               http.HandlerFunc
++	SyncAccount                 http.HandlerFunc
++	AccountContent              http.HandlerFunc
++	UpdateAccount               http.HandlerFunc
++	CreateWorkspace             http.HandlerFunc
++	ListWorkspaces              http.HandlerFunc
++	GetWorkspace                http.HandlerFunc
++	DeleteWorkspace             http.HandlerFunc
++	SwitchWorkspace             http.HandlerFunc
++	AttachWorkspaceChannel      http.HandlerFunc
++	ListWorkspaceChannels       http.HandlerFunc
++	UpdateWorkspaceChannel      http.HandlerFunc
++	DetachWorkspaceChannel      http.HandlerFunc
++	ListGroups                  http.HandlerFunc
++	CreateGroup                 http.HandlerFunc
++	GetGroup                    http.HandlerFunc
++	UpdateGroup                 http.HandlerFunc
++	DeleteGroup                 http.HandlerFunc
++	ListGroupAccounts           http.HandlerFunc
++	SetGroupAccounts            http.HandlerFunc
++	CreateApiKey                http.HandlerFunc
++	ListApiKeys                   http.HandlerFunc
++	GetApiKey                     http.HandlerFunc
++	DeleteApiKey                  http.HandlerFunc
++	RotateApiKey                  http.HandlerFunc
+ }
+ 
+ // AuthModule mounts authentication, sessions, accounts, workspaces,
+diff --git a/pkg/api/router.go b/pkg/api/router.go
+index 14017977..99737c4b 100644
+--- a/pkg/api/router.go
++++ b/pkg/api/router.go
+@@ -815,74 +815,4 @@ func (r *Router) validateRequiredDeps() error {
+ // injection site rather than at compile time.
+ var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
+ 
+-// The following thin wrappers keep existing unit tests (which call the
+-// handlers directly on *Router) compiling while the public module
+-// constructors receive typed deps. They simply forward to a module
+-// instance built from the Router's current fields.
+-//
+-// TODO: These wrappers exist only for test compatibility. Migrate the
+-// affected tests to use the typed VeloxModule / IntegrationsModule
+-// constructors and then delete the wrappers. Do NOT add new production
+-// code here; new routes should use the typed modules.
+-
+-func (r *Router) veloxModule() *VeloxModule {
+-	return NewVeloxModule(VeloxModuleDeps{
+-		ExternalDestinationStore: r.externalDestinations,
+-		ExternalDeliveryStore:    r.externalDeliveries,
+-		WorkspaceStore:           r.workspaceStore,
+-		UserStore:                r.userRepo,
+-		VeloxAPIToken:            r.veloxAPIToken,
+-		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
+-	}).(*VeloxModule)
+-}
+-
+-func (r *Router) integrationsModule() *IntegrationsModule {
+-	return NewIntegrationsModule(IntegrationsModuleDeps{
+-		ExternalDestinationStore: r.externalDestinations,
+-		WorkspaceStore:           r.workspaceStore,
+-		UserStore:                r.userRepo,
+-		AuditLogStore:            r.auditLogStore,
+-		AuthMiddleware:           r.authMiddleware,
+-		CSRFMiddleware:           r.csrfMiddleware,
+-	}).(*IntegrationsModule)
+-}
+-
+-func (r *Router) registerInternalVeloxRoutes() {
+-	r.veloxModule().Register(r.mux)
+-}
+-
+-func (r *Router) registerUserVeloxDestinations(mux chi.Router) {
+-	r.integrationsModule().Register(mux)
+-}
+-
+-func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *http.Request) {
+-	r.veloxModule().handleValidateInternalDestination(w, req)
+-}
+-
+-func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {
+-	r.veloxModule().handleCreateInternalDelivery(w, req)
+-}
+ 
+-func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {
+-	r.veloxModule().handleGetInternalDelivery(w, req)
+-}
+-
+-func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+-	r.integrationsModule().handleCreateIntegrationVeloxDestination(w, req)
+-}
+-
+-func (r *Router) handleListIntegrationVeloxDestinations(w http.ResponseWriter, req *http.Request) {
+-	r.integrationsModule().handleListIntegrationVeloxDestinations(w, req)
+-}
+-
+-func (r *Router) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+-	r.integrationsModule().handleGetIntegrationVeloxDestination(w, req)
+-}
+-
+-func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+-	r.integrationsModule().handleDeleteIntegrationVeloxDestination(w, req)
+-}
+-
+-func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+-	r.integrationsModule().handleUpdateIntegrationVeloxDestination(w, req)
+-}
+diff --git a/pkg/api/routes.go b/pkg/api/routes.go
+index 48ffd4fa..19ac341a 100644
+--- a/pkg/api/routes.go
++++ b/pkg/api/routes.go
+@@ -4,6 +4,8 @@ import (
+ 	"net/http"
+ 
+ 	"github.com/go-chi/chi/v5"
++
++	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+ )
+ 
+ // Setup wires the application's route table.  Route registration is
+@@ -62,61 +64,83 @@ func (r *Router) Setup() http.Handler {
+ 		authMiddleware = r.auth.Middleware
+ 	}
+ 	reg.Register(NewAuthModule(AuthModuleDeps{
+-		AuthEmailSvc:        r.authEmailSvc,
+-		TeamStore:           r.teamStore,
+-		GroupStore:          r.groupStore,
+-		WebhookStore:        r.webhookStore,
+-		RateLimitSvc:        r.rateLimitSvc,
+-		AuthMiddleware:      authMiddleware,
+-		ApiKeyAuthMiddleware: apiKeyAuthMw,
+-		Protected:           r.protected,
+-		CsrfConfig:          r.csrfConfig,
+-		OAuthStartLimiter:   OAuthStartLimitIfConfigured(r.rateLimitSvc, r.trustedProxies),
+-		OAuthSessionRedirect: r.oauthSessionRedirect,
+-		RegisterAuthEmailRoutes: r.registerAuthEmailRoutes,
+-		RegisterTeamRoutes:  r.registerTeamRoutes,
+-		RegisterWebhookRoutes: r.registerWebhookRoutes,
++		AuthManager:             r.auth,
++		Capabilities:            r.capabilities,
++		UserStore:               r.userRepo,
++		WorkspaceStore:          r.workspaceStore,
++		TeamStore:               r.teamStore,
++		GroupStore:              r.groupStore,
++		WebhookStore:            r.webhookStore,
++		AuthEmailSvc:            r.authEmailSvc,
++		Vault:                   r.vault,
++		Authorizer:              r.authorizer,
++		OneTimeCodes:            r.oneTimeCodes,
++		SessionsSvc:             r.sessionsSvc,
++		UserAndWorkspaceHelper:  r.userAndWorkspaceHelper,
++		FrontendURL:             r.frontendURL,
++		CookieDomain:            r.cookieDomain,
++		CookieSecure:            r.cookieSecure,
++		AllowedOrigin:           r.allowedOrigin,
++		MaxUploadBytes:          r.maxUploadBytes,
++		TrustedProxies:          r.trustedProxies,
++		YouTubeSvc:              r.youTubeSvc,
++		SnapshotStore:           r.snapshotStore,
++		MetricHistoryStore:      r.metricHistoryStore,
++		ApiKeyStore:             r.apiKeyStore,
++		ConnectLinkNonceStore:   r.connectLinkNonceStore,
++		MetricsUser:             r.metricsUser,
++		MetricsPass:             r.metricsPass,
++		RateLimitSvc:            r.rateLimitSvc,
++		AuthMiddleware:          authMiddleware,
++		ApiKeyAuthMiddleware:    apiKeyAuthMw,
++		Protected:               func(next http.HandlerFunc) http.HandlerFunc { return r.protected(next) },
++		CsrfConfig:              func() auth.CSRFConfig { return r.csrfConfig() },
++		OAuthStartLimiter:       OAuthStartLimitIfConfigured(r.rateLimitSvc, r.trustedProxies),
++		OAuthSessionRedirect:    func(next http.HandlerFunc) http.HandlerFunc { return r.oauthSessionRedirect(next) },
++		RegisterAuthEmailRoutes: func() { r.registerAuthEmailRoutes() },
++		RegisterTeamRoutes:      func() { r.registerTeamRoutes() },
++		RegisterWebhookRoutes:   func() { r.registerWebhookRoutes() },
+ 		Handlers: AuthHandlers{
+-			Login:               r.handleLogin,
+-			Callback:            r.handleCallback,
+-			ExchangeCode:        r.handleExchangeCode,
+-			Me:                  r.handleMe,
+-			Refresh:             r.handleRefresh,
+-			Logout:              r.handleLogout,
+-			LogoutAll:           r.handleLogoutAll,
+-			ListSessions:        r.handleListSessions,
+-			DeleteSession:       r.handleDeleteSession,
+-			ListAccounts:        r.handleListAccounts,
+-			GetAccount:          r.handleGetAccount,
++			Login:                       r.handleLogin,
++			Callback:                    r.handleCallback,
++			ExchangeCode:                r.handleExchangeCode,
++			Me:                          r.handleMe,
++			Refresh:                     r.handleRefresh,
++			Logout:                      r.handleLogout,
++			LogoutAll:                   r.handleLogoutAll,
++			ListSessions:                r.handleListSessions,
++			DeleteSession:               r.handleDeleteSession,
++			ListAccounts:                r.handleListAccounts,
++			GetAccount:                  r.handleGetAccount,
+ 			GetAccountsPerformanceSummary: r.handleGetAccountsPerformanceSummary,
+-			GetAccountPerformance: r.handleGetAccountPerformance,
+-			ValidateAccount:     r.handleValidateAccount,
+-			ReconnectAccount:    r.handleReconnectAccount,
+-			DeleteAccount:       r.handleDeleteAccount,
+-			SyncAccount:         r.handleSyncAccount,
+-			AccountContent:      r.handleAccountContent,
+-			UpdateAccount:       r.handleUpdateAccount,
+-			CreateWorkspace:     r.handleCreateWorkspace,
+-			ListWorkspaces:      r.handleListWorkspaces,
+-			GetWorkspace:        r.handleGetWorkspace,
+-			DeleteWorkspace:     r.handleDeleteWorkspace,
+-			SwitchWorkspace:     r.handleSwitchWorkspace,
+-			AttachWorkspaceChannel: r.handleAttachWorkspaceChannel,
+-			ListWorkspaceChannels: r.handleListWorkspaceChannels,
+-			UpdateWorkspaceChannel: r.handleUpdateWorkspaceChannel,
+-			DetachWorkspaceChannel: r.handleDetachWorkspaceChannel,
+-			ListGroups:          r.handleListGroups,
+-			CreateGroup:         r.handleCreateGroup,
+-			GetGroup:            r.handleGetGroup,
+-			UpdateGroup:         r.handleUpdateGroup,
+-			DeleteGroup:         r.handleDeleteGroup,
+-			ListGroupAccounts:   r.handleListGroupAccounts,
+-			SetGroupAccounts:    r.handleSetGroupAccounts,
+-			CreateApiKey:        r.handleCreateApiKey,
+-			ListApiKeys:         r.handleListApiKeys,
+-			GetApiKey:           r.handleGetApiKey,
+-			DeleteApiKey:        r.handleDeleteApiKey,
+-			RotateApiKey:        r.handleRotateApiKey,
++			GetAccountPerformance:       r.handleGetAccountPerformance,
++			ValidateAccount:           r.handleValidateAccount,
++			ReconnectAccount:          r.handleReconnectAccount,
++			DeleteAccount:             r.handleDeleteAccount,
++			SyncAccount:               r.handleSyncAccount,
++			AccountContent:            r.handleAccountContent,
++			UpdateAccount:             r.handleUpdateAccount,
++			CreateWorkspace:           r.handleCreateWorkspace,
++			ListWorkspaces:            r.handleListWorkspaces,
++			GetWorkspace:              r.handleGetWorkspace,
++			DeleteWorkspace:           r.handleDeleteWorkspace,
++			SwitchWorkspace:           r.handleSwitchWorkspace,
++			AttachWorkspaceChannel:    r.handleAttachWorkspaceChannel,
++			ListWorkspaceChannels:     r.handleListWorkspaceChannels,
++			UpdateWorkspaceChannel:    r.handleUpdateWorkspaceChannel,
++			DetachWorkspaceChannel:    r.handleDetachWorkspaceChannel,
++			ListGroups:                r.handleListGroups,
++			CreateGroup:               r.handleCreateGroup,
++			GetGroup:                  r.handleGetGroup,
++			UpdateGroup:               r.handleUpdateGroup,
++			DeleteGroup:               r.handleDeleteGroup,
++			ListGroupAccounts:         r.handleListGroupAccounts,
++			SetGroupAccounts:          r.handleSetGroupAccounts,
++			CreateApiKey:              r.handleCreateApiKey,
++			ListApiKeys:               r.handleListApiKeys,
++			GetApiKey:                 r.handleGetApiKey,
++			DeleteApiKey:              r.handleDeleteApiKey,
++			RotateApiKey:              r.handleRotateApiKey,
+ 		},
+ 	}))
+ 	reg.Register(NewMediaModule(MediaModuleDeps{

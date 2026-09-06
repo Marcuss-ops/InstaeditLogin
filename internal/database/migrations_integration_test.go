@@ -63,10 +63,14 @@ var migrationsToTest = []string{
 // rename target of the legacy 'scheduled' value which remains in the
 // enum for back-compat with rows already inserted pre-012.
 // Later migrations 018 and 035 add 'retrying' and 'dlq'; migration 130
-// adds the terminal 'drive_required_failed' policy state (Task 8/10.1).
+// adds the terminal 'drive_required_failed' policy state (Task 8/10.1);
+// migration 132 adds the terminal-per-account 'blocked_auth' state
+// (Task 2/10) — previously referenced by Go code and SQL literals but
+// missing from the enum (caught by this map: the labels below are the
+// contract).
 //
-// Net on-disk enum labels after 130 = 5 (003) + 3 (012) + 2 (018/035)
-// + 1 (130) (the 10 active + the 1 deprecated 'scheduled').
+// Net on-disk enum labels after 132 = 5 (003) + 3 (012) + 2 (018/035)
+// + 1 (130) + 1 (132) (the 11 active + the 1 deprecated 'scheduled').
 var expectedPostStatusActive = map[string]bool{
 	"draft":                 true,
 	"queued":                true,
@@ -78,6 +82,7 @@ var expectedPostStatusActive = map[string]bool{
 	"retrying":              true,
 	"dlq":                   true,
 	"drive_required_failed": true,
+	"blocked_auth":          true,
 }
 
 // requiredColumns lists (table, column) tuples the test asserts exist
@@ -144,8 +149,9 @@ func TestMigrations_001To012_AppliesCleanly(t *testing.T) {
 // documented in docs/SANDBOX.md + API/openapi.yaml (Taglio 5.x SSOT).
 // Per migration 003 (CREATE TYPE post_status AS ENUM) + 012 (ADD VALUE
 // waiting_provider / queued / partially_published) + 018/035 (ADD VALUE
-// retrying / dlq), the on-disk enum has 10 labels (9 active + 'scheduled'
-// deprecated back-compat alias).
+// retrying / dlq) + 130 (drive_required_failed) + 132 (blocked_auth),
+// the on-disk enum has 12 labels (11 active + 'scheduled' deprecated
+// back-compat alias).
 //
 // This test catches schema drift: if a future migration accidentally
 // drops an active value OR adds a third alias, CI fails.

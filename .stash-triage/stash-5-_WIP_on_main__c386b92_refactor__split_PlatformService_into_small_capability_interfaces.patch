@@ -1,0 +1,1411 @@
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index 2928bd85..5e1f0ca6 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -35,8 +35,6 @@ func minimalValidConfig(jwtSecret string) *Config {
+ 	return &Config{
+ 		AppEnv:        "dev",
+ 		DatabaseURL:   "postgres://x",
+-		MetaAppID:     "meta-id",
+-		MetaAppSecret: validMetaSecret32,
+ 		EncryptionKey: minValid32ByteBase64Key,
+ 		JWTSecret:     jwtSecret,
+ 	}
+@@ -108,6 +106,15 @@ func TestValidate_JWTSecretLength(t *testing.T) {
+ }
+ 
+ func TestValidate_MetaAppSecretLength(t *testing.T) {
++	// Meta validation only fires when at least one redirect URI is set.
++	// Use InstagramRedirectURI to trigger the Meta credentials check.
++	metaCfg := func(secret string) *Config {
++		c := minimalValidConfig(validJWTSecret())
++		c.MetaAppID = "meta-id"
++		c.MetaAppSecret = secret
++		c.InstagramRedirectURI = "http://localhost/api/v1/auth/instagram/callback"
++		return c
++	}
+ 	tests := []struct {
+ 		name      string
+ 		secret    string
+@@ -140,8 +147,7 @@ func TestValidate_MetaAppSecretLength(t *testing.T) {
+ 
+ 	for _, tc := range tests {
+ 		t.Run(tc.name, func(t *testing.T) {
+-			cfg := minimalValidConfig(validJWTSecret())
+-			cfg.MetaAppSecret = tc.secret
++			cfg := metaCfg(tc.secret)
+ 			err := cfg.validate()
+ 			if tc.wantErr {
+ 				if err == nil {
+@@ -301,12 +307,10 @@ func TestValidate_JWTSecretLengthDoesNotMaskEncryptionCheck(t *testing.T) {
+ }
+ 
+ func TestValidate_MetaAppLengthDoesNotMaskEncryptionCheck(t *testing.T) {
+-	// Companion sanity: with a too-short META_APP_SECRET and valid JWT_SECRET,
+-	// validate() surfaces META_APP_SECRET first — confirms the new ordering
+-	// doesn't let META_APP_SECRET short-circuit into later checks (this
+-	// would catch a regression where someone reorders meta after encryption).
+ 	cfg := minimalValidConfig(validJWTSecret())
++	cfg.MetaAppID = "meta-id"
+ 	cfg.MetaAppSecret = strings.Repeat("a", 31) // too short
++	cfg.InstagramRedirectURI = "http://localhost/api/v1/auth/instagram/callback"
+ 
+ 	err := cfg.validate()
+ 	if err == nil || !strings.Contains(err.Error(), "META_APP_SECRET") {
+@@ -327,10 +331,29 @@ func TestLoad_ConfigValidationErrors(t *testing.T) {
+ 	// the failure mode is silent, not noisy.
+ 	baseEnv := func() {
+ 		t.Setenv("DATABASE_URL", "postgres://x")
+-		t.Setenv("META_APP_ID", "meta-id")
+-		t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
+ 		t.Setenv("ENCRYPTION_KEY", minValid32ByteBase64Key)
+ 		t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
++		t.Setenv("META_APP_ID", "")
++		t.Setenv("META_APP_SECRET", "")
++		t.Setenv("INSTAGRAM_REDIRECT_URI", "")
++		t.Setenv("FACEBOOK_REDIRECT_URI", "")
++		t.Setenv("THREADS_REDIRECT_URI", "")
++		t.Setenv("TIKTOK_CLIENT_KEY", "")
++		t.Setenv("TIKTOK_CLIENT_SECRET", "")
++		t.Setenv("TWITTER_CLIENT_ID", "")
++		t.Setenv("TWITTER_CLIENT_SECRET", "")
++		t.Setenv("YOUTUBE_CLIENT_ID", "")
++		t.Setenv("YOUTUBE_CLIENT_SECRET", "")
++		t.Setenv("LINKEDIN_CLIENT_ID", "")
++		t.Setenv("LINKEDIN_CLIENT_SECRET", "")
++		t.Setenv("APP_ENV", "dev")
++	}
++
++	metaEnv := func() {
++		baseEnv()
++		t.Setenv("META_APP_ID", "meta-id")
++		t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
++		t.Setenv("INSTAGRAM_REDIRECT_URI", "http://localhost/instagram/callback")
+ 	}
+ 
+ 	t.Run("all required envs valid succeeds", func(t *testing.T) {
+@@ -340,19 +363,36 @@ func TestLoad_ConfigValidationErrors(t *testing.T) {
+ 		}
+ 	})
+ 
+-	t.Run("empty META_APP_SECRET fails", func(t *testing.T) {
++	t.Run("meta family with valid envs succeeds", func(t *testing.T) {
++		metaEnv()
++		if _, err := Load(); err != nil {
++			t.Fatalf("Load() with valid Meta+Instagram envs should succeed; got %v", err)
++		}
++	})
++
++	t.Run("meta redirect without App ID fails", func(t *testing.T) {
+ 		baseEnv()
++		t.Setenv("INSTAGRAM_REDIRECT_URI", "http://localhost/instagram/callback")
++		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "META_APP_ID is required") {
++			t.Fatalf("Load() with redirect URI but no META_APP_ID should fail; got %v", err)
++		}
++	})
++
++	t.Run("empty META_APP_SECRET fails when redirect set", func(t *testing.T) {
++		baseEnv()
++		t.Setenv("META_APP_ID", "meta-id")
+ 		t.Setenv("META_APP_SECRET", "")
++		t.Setenv("FACEBOOK_REDIRECT_URI", "http://localhost/fb/callback")
+ 		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "META_APP_SECRET is required") {
+-			t.Fatalf("Load() with empty META_APP_SECRET should fail with required-error; got %v", err)
++			t.Fatalf("Load() with empty META_APP_SECRET should fail; got %v", err)
+ 		}
+ 	})
+ 
+-	t.Run("short META_APP_SECRET fails with length-error", func(t *testing.T) {
+-		baseEnv()
++	t.Run("short META_APP_SECRET fails when redirect set", func(t *testing.T) {
++		metaEnv()
+ 		t.Setenv("META_APP_SECRET", strings.Repeat("a", 31))
+ 		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "at least 32 characters") {
+-			t.Fatalf("Load() with too-short META_APP_SECRET should fail with length-error; got %v", err)
++			t.Fatalf("Load() with too-short META_APP_SECRET should fail; got %v", err)
+ 		}
+ 	})
+ 
+diff --git a/internal/models/post.go b/internal/models/post.go
+index 6c6d5773..45e62b52 100644
+--- a/internal/models/post.go
++++ b/internal/models/post.go
+@@ -74,14 +74,17 @@ func (s *PostStatus) Scan(src any) error {
+ // Token.ExpiresAt convention. Title/Caption/MediaURL are omitted from JSON
+ // when empty to keep API responses compact.
+ type Post struct {
+-	ID          int64      `json:"id"`
+-	WorkspaceID int64      `json:"workspace_id"`
+-	Title       string     `json:"title,omitempty"`
+-	Caption     string     `json:"caption,omitempty"`
+-	MediaURL    string     `json:"media_url,omitempty"`
+-	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+-	Status      PostStatus `json:"status"`
+-	CreatedAt   time.Time  `json:"created_at"`
++	ID             int64      `json:"id"`
++	WorkspaceID    int64      `json:"workspace_id"`
++	Title          string     `json:"title,omitempty"`
++	Caption        string     `json:"caption,omitempty"`
++	MediaURL       string     `json:"media_url,omitempty"`
++	ScheduledAt    *time.Time `json:"scheduled_at,omitempty"`
++	Status         PostStatus `json:"status"`
++	IdempotencyKey string     `json:"idempotency_key,omitempty"`
++	Version        int64      `json:"version"`
++	CreatedAt      time.Time  `json:"created_at"`
++	UpdatedAt      time.Time  `json:"updated_at"`
+ }
+ 
+ // PostTarget represents the fan-out of a Post to a specific platform account.
+@@ -96,4 +99,49 @@ type PostTarget struct {
+ 	PlatformPostID    string     `json:"platform_post_id,omitempty"`
+ 	ErrorMessage      string     `json:"error_message,omitempty"`
+ 	PublishedAt       *time.Time `json:"published_at,omitempty"`
++	Version           int64      `json:"version"`
++	CreatedAt         time.Time  `json:"created_at"`
++	UpdatedAt         time.Time  `json:"updated_at"`
++}
++
++// MediaAsset is an attachment linked to a Post.
++type MediaAsset struct {
++	ID        int64     `json:"id"`
++	PostID    int64     `json:"post_id"`
++	URL       string    `json:"url"`
++	MimeType  string    `json:"mime_type,omitempty"`
++	SizeBytes int64     `json:"size_bytes,omitempty"`
++	CreatedAt time.Time `json:"created_at"`
++}
++
++// PostStatusTransition describes a valid state-machine transition.
++type PostStatusTransition struct {
++	From PostStatus
++	To   PostStatus
++}
++
++// ValidPostTransitions lists allowed post/target status transitions.
++// Both Post and PostTarget share the same lifecycle enum, so the same
++// transition table applies to both.
++var ValidPostTransitions = []PostStatusTransition{
++	{PostStatusDraft, PostStatusScheduled},
++	{PostStatusScheduled, PostStatusPublishing},
++	{PostStatusPublishing, PostStatusPublished},
++	{PostStatusPublishing, PostStatusFailed},
++	{PostStatusScheduled, PostStatusDraft},     // cancel
++	{PostStatusFailed, PostStatusScheduled},    // retry
++	{PostStatusDraft, PostStatusDraft},         // no-op edit
++	{PostStatusScheduled, PostStatusScheduled}, // no-op edit
++	{PostStatusPublished, PostStatusPublished}, // no-op
++	{PostStatusFailed, PostStatusFailed},       // no-op
++}
++
++// CanTransition reports whether a status change from -> to is allowed.
++func CanTransition(from, to PostStatus) bool {
++	for _, t := range ValidPostTransitions {
++		if t.From == from && t.To == to {
++			return true
++		}
++	}
++	return false
+ }
+diff --git a/internal/models/user.go b/internal/models/user.go
+index 0cfa110b..ce830913 100644
+--- a/internal/models/user.go
++++ b/internal/models/user.go
+@@ -33,6 +33,8 @@ const (
+ )
+ 
+ // PlatformAccount links a User to a social platform profile.
++// OrganizationID and ProjectID are optional FK columns added by migration
++// 006_organizations_and_projects.sql; nil means the account is unscoped.
+ type PlatformAccount struct {
+ 	ID               int64      `json:"id"`
+ 	UserID           int64      `json:"user_id"`
+@@ -40,6 +42,8 @@ type PlatformAccount struct {
+ 	PlatformUserID   string     `json:"platform_user_id"`
+ 	Username         string     `json:"username"`
+ 	Status           string     `json:"status"`
++	OrganizationID   *int64     `json:"organization_id,omitempty"`
++	ProjectID        *int64     `json:"project_id,omitempty"`
+ 	ConnectedAt      *time.Time `json:"connected_at,omitempty"`
+ 	LastValidatedAt  *time.Time `json:"last_validated_at,omitempty"`
+ 	LastRefreshAt    *time.Time `json:"last_refresh_at,omitempty"`
+diff --git a/internal/repository/post_repo.go b/internal/repository/post_repo.go
+index 1ceed173..39072d71 100644
+--- a/internal/repository/post_repo.go
++++ b/internal/repository/post_repo.go
+@@ -3,13 +3,15 @@ package repository
+ import (
+ 	"database/sql"
+ 	"fmt"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+ )
+ 
+ // PostRepository handles CRUD operations for posts and post_targets — the
+-// scheduled-publishing fan-out domain introduced by migration 003.
++// scheduled-publishing fan-out domain introduced by migration 003 and
++// extended by migration 007.
+ //
+ // A Post belongs to a Workspace and represents one piece of content
+ // (idea → edit → publish pipeline). Each Post fans out to 1..N PostTargets
+@@ -34,9 +36,9 @@ func NewPostRepository(db *sql.DB) *PostRepository {
+ 
+ // Create inserts a new Post and, when targets is non-empty, its initial
+ // PostTargets inside a single explicit transaction. The auto-generated
+-// post.id and post.created_at are assigned back to post; the post_id of
+-// each target is filled in (silently overwriting any value the caller
+-// supplied — the relationship is owned by the parent insert).
++// post.id, post.created_at and post.updated_at are assigned back to post;
++// the post_id of each target is filled in (silently overwriting any value
++// the caller supplied — the relationship is owned by the parent insert).
+ //
+ // Empty targets is valid (e.g. a draft that will get targets later via
+ // Save). The transaction guarantees no orphan post is ever visible
+@@ -53,13 +55,14 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
+ 		}
+ 	}()
+ 
+-	// Insert the parent Post; capture auto-assigned id + created_at.
++	// Insert the parent Post; capture auto-assigned id + timestamps.
+ 	err = tx.QueryRow(
+-		`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
+-		 VALUES ($1, $2, $3, $4, $5, $6)
+-		 RETURNING id, created_at`,
++		`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status, idempotency_key, version)
++		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
++		 RETURNING id, created_at, updated_at`,
+ 		post.WorkspaceID, post.Title, post.Caption, post.MediaURL, post.ScheduledAt, post.Status,
+-	).Scan(&post.ID, &post.CreatedAt)
++		post.IdempotencyKey, post.Version,
++	).Scan(&post.ID, &post.CreatedAt, &post.UpdatedAt)
+ 	if err != nil {
+ 		return fmt.Errorf("failed to create post: %w", err)
+ 	}
+@@ -68,11 +71,11 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
+ 	for _, t := range targets {
+ 		t.PostID = post.ID
+ 		err = tx.QueryRow(
+-			`INSERT INTO post_targets (post_id, platform_account_id, status)
+-			 VALUES ($1, $2, $3)
+-			 RETURNING id`,
+-			t.PostID, t.PlatformAccountID, t.Status,
+-		).Scan(&t.ID)
++			`INSERT INTO post_targets (post_id, platform_account_id, status, version)
++			 VALUES ($1, $2, $3, $4)
++			 RETURNING id, created_at, updated_at`,
++			t.PostID, t.PlatformAccountID, t.Status, t.Version,
++		).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt)
+ 		if err != nil {
+ 			return fmt.Errorf("failed to create post_target: %w", err)
+ 		}
+@@ -86,7 +89,9 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
+ 
+ // Update persists the editable state of an existing post (title, caption,
+ // media_url, scheduled_at, status). workspace_id and created_at are
+-// intentionally NOT updated (immutable from this entrypoint).
++// intentionally NOT updated (immutable from this entrypoint). version is
++// incremented and updated_at is refreshed. The WHERE clause includes the
++// current version for optimistic locking.
+ //
+ // The WHERE clause includes both id AND workspace_id: the workspace_id
+ // lookup must match the post's actual workspace, acting as a tenant-isolation
+@@ -95,21 +100,15 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
+ func (r *PostRepository) Update(post *models.Post) error {
+ 	result, err := r.db.Exec(
+ 		`UPDATE posts
+-		 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
+-		 WHERE id = $6 AND workspace_id = $7`,
++		 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5,
++		     version = version + 1, updated_at = NOW()
++		 WHERE id = $6 AND workspace_id = $7 AND version = $8`,
+ 		post.Title, post.Caption, post.MediaURL, post.ScheduledAt, post.Status,
+-		post.ID, post.WorkspaceID,
++		post.ID, post.WorkspaceID, post.Version,
+ 	)
+ 	if err != nil {
+ 		return fmt.Errorf("failed to update post: %w", err)
+ 	}
+-	// RowsAffected = 0 means either id doesn't exist OR workspace_id doesn't
+-	// match (tenant-isolation miss). Surface as a real error so the API
+-	// layer can map to 404 instead of silently leaving stale state.
+-	// Used as ErrPostUnauthorized (not ErrPostNotFound) because the two
+-	// cases are indistinguishable from a single UPDATE statement; mapping
+-	// both to 404 via the sentinel prevents leaking workspace existence
+-	// to cross-tenant probes.
+ 	n, err := result.RowsAffected()
+ 	if err != nil {
+ 		return fmt.Errorf("failed to read rows affected: %w", err)
+@@ -125,12 +124,13 @@ func (r *PostRepository) Update(post *models.Post) error {
+ func (r *PostRepository) FindByID(id int64) (*models.Post, error) {
+ 	p := &models.Post{}
+ 	err := r.db.QueryRow(
+-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
++		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status,
++		        idempotency_key, version, created_at, updated_at
+ 		 FROM posts
+ 		 WHERE id = $1`,
+ 		id,
+ 	).Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
+-		&p.ScheduledAt, &p.Status, &p.CreatedAt)
++		&p.ScheduledAt, &p.Status, &p.IdempotencyKey, &p.Version, &p.CreatedAt, &p.UpdatedAt)
+ 	if err == sql.ErrNoRows {
+ 		return nil, nil
+ 	}
+@@ -140,12 +140,30 @@ func (r *PostRepository) FindByID(id int64) (*models.Post, error) {
+ 	return p, nil
+ }
+ 
++// FindWithTargets returns a post together with its targets and media assets.
++func (r *PostRepository) FindWithTargets(id int64) (*models.Post, []models.PostTarget, []models.MediaAsset, error) {
++	post, err := r.FindByID(id)
++	if err != nil || post == nil {
++		return post, nil, nil, err
++	}
++	targets, err := r.ListByPost(id)
++	if err != nil {
++		return nil, nil, nil, err
++	}
++	assets, err := r.ListMediaAssets(id)
++	if err != nil {
++		return nil, nil, nil, err
++	}
++	return post, targets, assets, nil
++}
++
+ // ListByWorkspace returns every post in the given workspace, ordered by
+ // created_at DESC (most-recent first). Targets are NOT loaded — use
+ // ListByPost separately to fetch the fan-out set.
+ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, error) {
+ 	rows, err := r.db.Query(
+-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
++		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status,
++		        idempotency_key, version, created_at, updated_at
+ 		 FROM posts
+ 		 WHERE workspace_id = $1
+ 		 ORDER BY created_at DESC`,
+@@ -160,7 +178,7 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
+ 	for rows.Next() {
+ 		p := models.Post{}
+ 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
+-			&p.ScheduledAt, &p.Status, &p.CreatedAt); err != nil {
++			&p.ScheduledAt, &p.Status, &p.IdempotencyKey, &p.Version, &p.CreatedAt, &p.UpdatedAt); err != nil {
+ 			return nil, fmt.Errorf("failed to scan post: %w", err)
+ 		}
+ 		posts = append(posts, p)
+@@ -168,13 +186,119 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
+ 	return posts, nil
+ }
+ 
++// PostFilter drives cursor-based listing of posts.
++type PostFilter struct {
++	WorkspaceID int64
++	Status      models.PostStatus
++	Search      string
++	Limit       int
++	CursorID    int64
++}
++
++// PagedPosts is the result of a filtered, cursor-paginated list.
++type PagedPosts struct {
++	Posts      []models.Post
++	NextCursor int64
++	HasMore    bool
++}
++
++// List returns posts filtered by workspace, status and search, ordered by
++// id DESC with cursor-based pagination. A cursor value of 0 means "first page".
++func (r *PostRepository) List(filter PostFilter) (*PagedPosts, error) {
++	limit := filter.Limit
++	if limit <= 0 {
++		limit = 20
++	}
++	if limit > 100 {
++		limit = 100
++	}
++
++	where := []string{"workspace_id = $1"}
++	args := []interface{}{filter.WorkspaceID}
++	argIdx := 1
++
++	if filter.Status != "" {
++		argIdx++
++		where = append(where, fmt.Sprintf("status = $%d", argIdx))
++		args = append(args, filter.Status)
++	}
++	if filter.Search != "" {
++		argIdx++
++		where = append(where, fmt.Sprintf("(title ILIKE $%d OR caption ILIKE $%d)", argIdx, argIdx))
++		args = append(args, "%"+filter.Search+"%")
++	}
++	if filter.CursorID > 0 {
++		argIdx++
++		where = append(where, fmt.Sprintf("id < $%d", argIdx))
++		args = append(args, filter.CursorID)
++	}
++
++	query := fmt.Sprintf(
++		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status,
++		        idempotency_key, version, created_at, updated_at
++		 FROM posts
++		 WHERE %s
++		 ORDER BY id DESC
++		 LIMIT $%d`,
++		strings.Join(where, " AND "),
++		argIdx+1,
++	)
++	args = append(args, limit+1)
++
++	rows, err := r.db.Query(query, args...)
++	if err != nil {
++		return nil, fmt.Errorf("failed to list posts: %w", err)
++	}
++	defer rows.Close()
++
++	var posts []models.Post
++	for rows.Next() {
++		p := models.Post{}
++		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
++			&p.ScheduledAt, &p.Status, &p.IdempotencyKey, &p.Version, &p.CreatedAt, &p.UpdatedAt); err != nil {
++			return nil, fmt.Errorf("failed to scan post: %w", err)
++		}
++		posts = append(posts, p)
++	}
++	if err := rows.Err(); err != nil {
++		return nil, err
++	}
++
++	hasMore := len(posts) > limit
++	if hasMore {
++		posts = posts[:limit]
++	}
++	var nextCursor int64
++	if len(posts) > 0 {
++		nextCursor = posts[len(posts)-1].ID
++	}
++	return &PagedPosts{Posts: posts, NextCursor: nextCursor, HasMore: hasMore}, nil
++}
++
++// Delete removes a post by id. Returns ErrPostNotFound when no row matches.
++func (r *PostRepository) Delete(id int64) error {
++	result, err := r.db.Exec(`DELETE FROM posts WHERE id = $1`, id)
++	if err != nil {
++		return fmt.Errorf("failed to delete post: %w", err)
++	}
++	n, err := result.RowsAffected()
++	if err != nil {
++		return fmt.Errorf("failed to read rows affected: %w", err)
++	}
++	if n == 0 {
++		return fmt.Errorf("%w: id=%d", ErrPostNotFound, id)
++	}
++	return nil
++}
++
+ // ListScheduled returns posts whose status='scheduled' AND scheduled_at <=
+ // before. `before` is the cutoff time (typically time.Now()); passing it
+ // from Go (instead of using SQL NOW()) decouples the DB clock from the
+ // application clock, making the worker loop and tests fully deterministic.
+ func (r *PostRepository) ListScheduled(before time.Time) ([]models.Post, error) {
+ 	rows, err := r.db.Query(
+-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
++		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status,
++		        idempotency_key, version, created_at, updated_at
+ 		 FROM posts
+ 		 WHERE status = 'scheduled' AND scheduled_at <= $1
+ 		 ORDER BY scheduled_at ASC`,
+@@ -189,7 +313,7 @@ func (r *PostRepository) ListScheduled(before time.Time) ([]models.Post, error)
+ 	for rows.Next() {
+ 		p := models.Post{}
+ 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
+-			&p.ScheduledAt, &p.Status, &p.CreatedAt); err != nil {
++			&p.ScheduledAt, &p.Status, &p.IdempotencyKey, &p.Version, &p.CreatedAt, &p.UpdatedAt); err != nil {
+ 			return nil, fmt.Errorf("failed to scan post: %w", err)
+ 		}
+ 		posts = append(posts, p)
+@@ -205,11 +329,11 @@ func (r *PostRepository) ListScheduled(before time.Time) ([]models.Post, error)
+ // which wraps both inserts in one transaction.
+ func (r *PostRepository) Save(target *models.PostTarget) error {
+ 	err := r.db.QueryRow(
+-		`INSERT INTO post_targets (post_id, platform_account_id, status)
+-		 VALUES ($1, $2, $3)
+-		 RETURNING id`,
+-		target.PostID, target.PlatformAccountID, target.Status,
+-	).Scan(&target.ID)
++		`INSERT INTO post_targets (post_id, platform_account_id, status, version)
++		 VALUES ($1, $2, $3, $4)
++		 RETURNING id, created_at, updated_at`,
++		target.PostID, target.PlatformAccountID, target.Status, target.Version,
++	).Scan(&target.ID, &target.CreatedAt, &target.UpdatedAt)
+ 	if err != nil {
+ 		return fmt.Errorf("failed to save post_target: %w", err)
+ 	}
+@@ -225,11 +349,12 @@ func (r *PostRepository) Save(target *models.PostTarget) error {
+ //
+ // target.ID identifies the row; every other field supplies the new values.
+ // Persists status, platform_post_id, error_message, published_at atomically
+-// (single UPDATE).
++// (single UPDATE). version is incremented and updated_at refreshed.
+ func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
+ 	result, err := r.db.Exec(
+ 		`UPDATE post_targets
+-		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4
++		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
++		     version = version + 1, updated_at = NOW()
+ 		 WHERE id = $5`,
+ 		target.Status, target.PlatformPostID, target.ErrorMessage,
+ 		target.PublishedAt, target.ID,
+@@ -237,10 +362,6 @@ func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
+ 	if err != nil {
+ 		return fmt.Errorf("failed to update post_target status: %w", err)
+ 	}
+-	// RowsAffected = 0 means the post_target id is stale or invalid. The
+-	// worker would otherwise see nil error and assume the transition
+-	// happened, leaving a ghost target in the pending queue. Sentinel
+-	// (ErrPostTargetNotFound) lets the worker drop the phantom attempt.
+ 	n, err := result.RowsAffected()
+ 	if err != nil {
+ 		return fmt.Errorf("failed to read rows affected: %w", err)
+@@ -268,7 +389,7 @@ func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
+ func (r *PostRepository) ClaimScheduledTarget(id int64) (bool, error) {
+ 	result, err := r.db.Exec(
+ 		`UPDATE post_targets
+-		 SET status = 'publishing'
++		 SET status = 'publishing', version = version + 1, updated_at = NOW()
+ 		 WHERE id = $1 AND status = 'scheduled'`,
+ 		id,
+ 	)
+@@ -287,7 +408,8 @@ func (r *PostRepository) ClaimScheduledTarget(id int64) (bool, error) {
+ // (the empty slice path through Scan-loop).
+ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
+ 	rows, err := r.db.Query(
+-		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at
++		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message,
++		        published_at, version, created_at, updated_at
+ 		 FROM post_targets
+ 		 WHERE post_id = $1
+ 		 ORDER BY id ASC`,
+@@ -302,7 +424,7 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
+ 	for rows.Next() {
+ 		t := models.PostTarget{}
+ 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+-			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt); err != nil {
++			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt, &t.Version, &t.CreatedAt, &t.UpdatedAt); err != nil {
+ 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+ 		}
+ 		targets = append(targets, t)
+@@ -320,7 +442,8 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
+ func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, error) {
+ 	rows, err := r.db.Query(
+ 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
+-		        pt.platform_post_id, pt.error_message, pt.published_at
++		        pt.platform_post_id, pt.error_message, pt.published_at,
++		        pt.version, pt.created_at, pt.updated_at
+ 		 FROM post_targets pt
+ 		 JOIN posts p ON p.id = pt.post_id
+ 		 WHERE pt.status = 'scheduled' AND p.scheduled_at <= $1
+@@ -336,10 +459,221 @@ func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, err
+ 	for rows.Next() {
+ 		t := models.PostTarget{}
+ 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+-			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt); err != nil {
++			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt, &t.Version, &t.CreatedAt, &t.UpdatedAt); err != nil {
+ 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+ 		}
+ 		targets = append(targets, t)
+ 	}
+ 	return targets, nil
+ }
++
++// --- State-machine helpers ---
++
++// TransitionTargetStatus atomically transitions a single target from one
++// status to another, validating the transition. It returns ErrPostTargetNotFound
++// when no row matches or the current status is unexpected.
++func (r *PostRepository) TransitionTargetStatus(id int64, from, to models.PostStatus) error {
++	if !models.CanTransition(from, to) {
++		return fmt.Errorf("invalid status transition %s -> %s", from, to)
++	}
++	result, err := r.db.Exec(
++		`UPDATE post_targets
++		 SET status = $1, version = version + 1, updated_at = NOW()
++		 WHERE id = $2 AND status = $3`,
++		to, id, from,
++	)
++	if err != nil {
++		return fmt.Errorf("failed to transition target status: %w", err)
++	}
++	n, err := result.RowsAffected()
++	if err != nil {
++		return fmt.Errorf("failed to read rows affected: %w", err)
++	}
++	if n == 0 {
++		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, id)
++	}
++	return nil
++}
++
++// TransitionPostStatus atomically transitions a post from one status to another.
++func (r *PostRepository) TransitionPostStatus(id int64, from, to models.PostStatus) error {
++	if !models.CanTransition(from, to) {
++		return fmt.Errorf("invalid status transition %s -> %s", from, to)
++	}
++	result, err := r.db.Exec(
++		`UPDATE posts
++		 SET status = $1, version = version + 1, updated_at = NOW()
++		 WHERE id = $2 AND status = $3`,
++		to, id, from,
++	)
++	if err != nil {
++		return fmt.Errorf("failed to transition post status: %w", err)
++	}
++	n, err := result.RowsAffected()
++	if err != nil {
++		return fmt.Errorf("failed to read rows affected: %w", err)
++	}
++	if n == 0 {
++		return fmt.Errorf("%w: id=%d", ErrPostNotFound, id)
++	}
++	return nil
++}
++
++// RetryPost resets all failed targets of a post to scheduled and transitions
++// the post itself from failed to scheduled. This is the "retry" action from
++// the API.
++func (r *PostRepository) RetryPost(id int64) error {
++	tx, err := r.db.Begin()
++	if err != nil {
++		return fmt.Errorf("failed to begin retry tx: %w", err)
++	}
++	defer func() {
++		if err != nil {
++			_ = tx.Rollback()
++		}
++	}()
++
++	_, err = tx.Exec(
++		`UPDATE post_targets
++		 SET status = 'scheduled', version = version + 1, updated_at = NOW(), error_message = NULL
++		 WHERE post_id = $1 AND status = 'failed'`,
++		id,
++	)
++	if err != nil {
++		return fmt.Errorf("failed to retry post targets: %w", err)
++	}
++
++	result, err := tx.Exec(
++		`UPDATE posts
++		 SET status = 'scheduled', version = version + 1, updated_at = NOW()
++		 WHERE id = $1 AND status = 'failed'`,
++		id,
++	)
++	if err != nil {
++		return fmt.Errorf("failed to retry post: %w", err)
++	}
++	n, err := result.RowsAffected()
++	if err != nil {
++		return fmt.Errorf("failed to read rows affected: %w", err)
++	}
++	if n == 0 {
++		// The post may already be scheduled/published/draft; still commit target retry.
++	}
++
++	if err = tx.Commit(); err != nil {
++		return fmt.Errorf("failed to commit retry tx: %w", err)
++	}
++	return nil
++}
++
++// CancelPost transitions a scheduled post back to draft and cancels any
++// scheduled targets.
++func (r *PostRepository) CancelPost(id int64) error {
++	tx, err := r.db.Begin()
++	if err != nil {
++		return fmt.Errorf("failed to begin cancel tx: %w", err)
++	}
++	defer func() {
++		if err != nil {
++			_ = tx.Rollback()
++		}
++	}()
++
++	_, err = tx.Exec(
++		`UPDATE post_targets
++		 SET status = 'draft', version = version + 1, updated_at = NOW()
++		 WHERE post_id = $1 AND status = 'scheduled'`,
++		id,
++	)
++	if err != nil {
++		return fmt.Errorf("failed to cancel post targets: %w", err)
++	}
++
++	result, err := tx.Exec(
++		`UPDATE posts
++		 SET status = 'draft', scheduled_at = NULL, version = version + 1, updated_at = NOW()
++		 WHERE id = $1 AND status = 'scheduled'`,
++		id,
++	)
++	if err != nil {
++		return fmt.Errorf("failed to cancel post: %w", err)
++	}
++	n, err := result.RowsAffected()
++	if err != nil {
++		return fmt.Errorf("failed to read rows affected: %w", err)
++	}
++	if n == 0 {
++		err = fmt.Errorf("%w: id=%d", ErrPostNotFound, id)
++		return err
++	}
++
++	if err = tx.Commit(); err != nil {
++		return fmt.Errorf("failed to commit cancel tx: %w", err)
++	}
++	return nil
++}
++
++// PublishPost immediately schedules a post for now by setting scheduled_at
++// to NOW() and status to scheduled. The worker will pick it up on the next
++// tick.
++func (r *PostRepository) PublishPost(id int64) error {
++	result, err := r.db.Exec(
++		`UPDATE posts
++		 SET status = 'scheduled', scheduled_at = NOW(), version = version + 1, updated_at = NOW()
++		 WHERE id = $1 AND status IN ('draft', 'scheduled', 'failed')`,
++		id,
++	)
++	if err != nil {
++		return fmt.Errorf("failed to publish post: %w", err)
++	}
++	n, err := result.RowsAffected()
++	if err != nil {
++		return fmt.Errorf("failed to read rows affected: %w", err)
++	}
++	if n == 0 {
++		return fmt.Errorf("%w: id=%d", ErrPostNotFound, id)
++	}
++	return nil
++}
++
++// RetryTarget resets a single failed target to scheduled.
++func (r *PostRepository) RetryTarget(id int64) error {
++	return r.TransitionTargetStatus(id, models.PostStatusFailed, models.PostStatusScheduled)
++}
++
++// --- MediaAssets ---
++
++// AddMediaAsset inserts a media asset linked to a post.
++func (r *PostRepository) AddMediaAsset(asset *models.MediaAsset) error {
++	return r.db.QueryRow(
++		`INSERT INTO media_assets (post_id, url, mime_type, size_bytes)
++		 VALUES ($1, $2, $3, $4)
++		 RETURNING id, created_at`,
++		asset.PostID, asset.URL, asset.MimeType, asset.SizeBytes,
++	).Scan(&asset.ID, &asset.CreatedAt)
++}
++
++// ListMediaAssets returns all media assets for a post.
++func (r *PostRepository) ListMediaAssets(postID int64) ([]models.MediaAsset, error) {
++	rows, err := r.db.Query(
++		`SELECT id, post_id, url, mime_type, size_bytes, created_at
++		 FROM media_assets
++		 WHERE post_id = $1
++		 ORDER BY id ASC`,
++		postID,
++	)
++	if err != nil {
++		return nil, fmt.Errorf("failed to list media assets: %w", err)
++	}
++	defer rows.Close()
++
++	var assets []models.MediaAsset
++	for rows.Next() {
++		a := models.MediaAsset{}
++		if err := rows.Scan(&a.ID, &a.PostID, &a.URL, &a.MimeType, &a.SizeBytes, &a.CreatedAt); err != nil {
++			return nil, fmt.Errorf("failed to scan media asset: %w", err)
++		}
++		assets = append(assets, a)
++	}
++	return assets, nil
++}
+diff --git a/internal/repository/user_repo.go b/internal/repository/user_repo.go
+index 9dba39e0..c684f924 100644
+--- a/internal/repository/user_repo.go
++++ b/internal/repository/user_repo.go
+@@ -96,15 +96,18 @@ func (r *UserRepository) FindPlatformAccount(platform, platformUserID string) (*
+ 	account := &models.PlatformAccount{}
+ 	var metadata []byte
+ 	err := r.db.QueryRow(
+-		`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
++		`SELECT id, user_id, platform, platform_user_id, username, status,
++		        organization_id, project_id, connected_at,
+ 		        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
+ 		        last_error_message, metadata, created_at, updated_at
+ 		 FROM platform_accounts WHERE platform = $1 AND platform_user_id = $2`,
+ 		platform, platformUserID,
+ 	).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
+-		&account.Username, &account.Status, &account.ConnectedAt, &account.LastValidatedAt,
+-		&account.LastRefreshAt, &account.ReauthRequiredAt, &account.LastErrorCode,
+-		&account.LastErrorMessage, &metadata, &account.CreatedAt, &account.UpdatedAt)
++		&account.Username, &account.Status,
++		&account.OrganizationID, &account.ProjectID, &account.ConnectedAt,
++		&account.LastValidatedAt, &account.LastRefreshAt, &account.ReauthRequiredAt,
++		&account.LastErrorCode, &account.LastErrorMessage, &metadata,
++		&account.CreatedAt, &account.UpdatedAt)
+ 
+ 	if err == sql.ErrNoRows {
+ 		return nil, nil
+@@ -124,9 +127,10 @@ func (r *UserRepository) CreatePlatformAccount(account *models.PlatformAccount)
+ 	now := time.Now()
+ 	account.ConnectedAt = &now
+ 	err := r.db.QueryRow(
+-		`INSERT INTO platform_accounts (user_id, platform, platform_user_id, username, status, connected_at)
+-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at, updated_at`,
+-		account.UserID, account.Platform, account.PlatformUserID, account.Username, account.Status, account.ConnectedAt,
++		`INSERT INTO platform_accounts (user_id, platform, platform_user_id, username, status, organization_id, project_id, connected_at)
++		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at, updated_at`,
++		account.UserID, account.Platform, account.PlatformUserID, account.Username, account.Status,
++		account.OrganizationID, account.ProjectID, account.ConnectedAt,
+ 	).Scan(&account.ID, &account.CreatedAt, &account.UpdatedAt)
+ 
+ 	if err != nil {
+@@ -137,21 +141,19 @@ func (r *UserRepository) CreatePlatformAccount(account *models.PlatformAccount)
+ 
+ // ListPlatformAccountsByUser returns all platform accounts for a user, optionally filtered by platform.
+ func (r *UserRepository) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
++	query := `SELECT id, user_id, platform, platform_user_id, username, status,
++		        organization_id, project_id, connected_at,
++		        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
++		        last_error_message, metadata, created_at, updated_at
++		 FROM platform_accounts`
++
+ 	var rows *sql.Rows
+ 	var err error
+ 
+ 	if platform == "" {
+-		rows, err = r.db.Query(
+-			`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
+-			        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
+-			        last_error_message, metadata, created_at, updated_at
+-			 FROM platform_accounts WHERE user_id = $1 ORDER BY created_at DESC`, userID)
++		rows, err = r.db.Query(query+` WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+ 	} else {
+-		rows, err = r.db.Query(
+-			`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
+-			        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
+-			        last_error_message, metadata, created_at, updated_at
+-			 FROM platform_accounts WHERE user_id = $1 AND platform = $2 ORDER BY created_at DESC`,
++		rows, err = r.db.Query(query+` WHERE user_id = $1 AND platform = $2 ORDER BY created_at DESC`,
+ 			userID, platform)
+ 	}
+ 
+@@ -164,7 +166,8 @@ func (r *UserRepository) ListPlatformAccountsByUser(userID int64, platform strin
+ 	for rows.Next() {
+ 		a := &models.PlatformAccount{}
+ 		var metadata []byte
+-		if err := rows.Scan(&a.ID, &a.UserID, &a.Platform, &a.PlatformUserID, &a.Username, &a.Status, &a.ConnectedAt,
++		if err := rows.Scan(&a.ID, &a.UserID, &a.Platform, &a.PlatformUserID, &a.Username, &a.Status,
++			&a.OrganizationID, &a.ProjectID, &a.ConnectedAt,
+ 			&a.LastValidatedAt, &a.LastRefreshAt, &a.ReauthRequiredAt, &a.LastErrorCode,
+ 			&a.LastErrorMessage, &metadata, &a.CreatedAt, &a.UpdatedAt); err != nil {
+ 			return nil, fmt.Errorf("failed to scan platform account: %w", err)
+@@ -189,15 +192,18 @@ func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAcco
+ 	account := &models.PlatformAccount{}
+ 	var metadata []byte
+ 	err := r.db.QueryRow(
+-		`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
++		`SELECT id, user_id, platform, platform_user_id, username, status,
++		        organization_id, project_id, connected_at,
+ 		        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
+ 		        last_error_message, metadata, created_at, updated_at
+ 		 FROM platform_accounts
+ 		 WHERE id = $1`, id,
+ 	).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
+-		&account.Username, &account.Status, &account.ConnectedAt, &account.LastValidatedAt,
+-		&account.LastRefreshAt, &account.ReauthRequiredAt, &account.LastErrorCode,
+-		&account.LastErrorMessage, &metadata, &account.CreatedAt, &account.UpdatedAt)
++		&account.Username, &account.Status,
++		&account.OrganizationID, &account.ProjectID, &account.ConnectedAt,
++		&account.LastValidatedAt, &account.LastRefreshAt, &account.ReauthRequiredAt,
++		&account.LastErrorCode, &account.LastErrorMessage, &metadata,
++		&account.CreatedAt, &account.UpdatedAt)
+ 	if err == sql.ErrNoRows {
+ 		return nil, nil
+ 	}
+@@ -304,6 +310,9 @@ func scanMetadata(data []byte) models.Metadata {
+ }
+ 
+ // UpdatePlatformAccount persists lifecycle changes to a platform account.
++// UpdatePlatformAccount persists status changes. OrganizationID and ProjectID
++// are intentionally excluded — scoping an account to an org/project after
++// the OAuth callback is a future concern (Step 4 or later).
+ func (r *UserRepository) UpdatePlatformAccount(account *models.PlatformAccount) error {
+ 	metadataJSON, err := json.Marshal(account.Metadata)
+ 	if err != nil {
+diff --git a/internal/services/twitter_oauth_test.go b/internal/services/twitter_oauth_test.go
+index 5135ac8b..2671cee2 100644
+--- a/internal/services/twitter_oauth_test.go
++++ b/internal/services/twitter_oauth_test.go
+@@ -254,5 +254,3 @@ func TestTwitter_HandleCallback_UserInfoFails(t *testing.T) {
+ 		t.Fatal("expected error when user info fails")
+ 	}
+ }
+-
+-
+diff --git a/pkg/api/posts.go b/pkg/api/posts.go
+index 6b0d5de4..d2d7fec4 100644
+--- a/pkg/api/posts.go
++++ b/pkg/api/posts.go
+@@ -7,6 +7,7 @@ import (
+ 	"fmt"
+ 	"net/http"
+ 	"strconv"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/go-chi/chi/v5"
+@@ -17,13 +18,15 @@ import (
+ 
+ // CreatePostRequest is the JSON body for POST /posts/.
+ type CreatePostRequest struct {
+-	WorkspaceID int64               `json:"workspace_id"`
+-	Title       string              `json:"title,omitempty"`
+-	Caption     string              `json:"caption,omitempty"`
+-	MediaURL    string              `json:"media_url,omitempty"`
+-	ScheduledAt *time.Time          `json:"scheduled_at,omitempty"`
+-	Status      models.PostStatus   `json:"status,omitempty"`
+-	Targets     []PostTargetRequest `json:"targets,omitempty"`
++	WorkspaceID    int64               `json:"workspace_id"`
++	Title          string              `json:"title,omitempty"`
++	Caption        string              `json:"caption,omitempty"`
++	MediaURL       string              `json:"media_url,omitempty"`
++	ScheduledAt    *time.Time          `json:"scheduled_at,omitempty"`
++	Status         models.PostStatus   `json:"status,omitempty"`
++	IdempotencyKey string              `json:"idempotency_key,omitempty"`
++	Targets        []PostTargetRequest `json:"targets,omitempty"`
++	MediaAssets    []MediaAssetRequest `json:"media_assets,omitempty"`
+ }
+ 
+ // PostTargetRequest is one row in CreatePostRequest.Targets.
+@@ -32,6 +35,22 @@ type PostTargetRequest struct {
+ 	Status            models.PostStatus `json:"status,omitempty"`
+ }
+ 
++// MediaAssetRequest is one row in CreatePostRequest.MediaAssets.
++type MediaAssetRequest struct {
++	URL       string `json:"url"`
++	MimeType  string `json:"mime_type,omitempty"`
++	SizeBytes int64  `json:"size_bytes,omitempty"`
++}
++
++// UpdatePostRequest is the JSON body for PATCH /posts/{id}.
++type UpdatePostRequest struct {
++	Title       string            `json:"title,omitempty"`
++	Caption     string            `json:"caption,omitempty"`
++	MediaURL    string            `json:"media_url,omitempty"`
++	ScheduledAt *time.Time        `json:"scheduled_at,omitempty"`
++	Status      models.PostStatus `json:"status,omitempty"`
++}
++
+ // SchedulePostRequest is the JSON body for POST /posts/{id}/schedule.
+ type SchedulePostRequest struct {
+ 	ScheduledAt time.Time `json:"scheduled_at"`
+@@ -150,12 +169,14 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
+ 		body.Status = models.PostStatusDraft
+ 	}
+ 	post := &models.Post{
+-		WorkspaceID: body.WorkspaceID,
+-		Title:       body.Title,
+-		Caption:     body.Caption,
+-		MediaURL:    body.MediaURL,
+-		ScheduledAt: body.ScheduledAt,
+-		Status:      body.Status,
++		WorkspaceID:    body.WorkspaceID,
++		Title:          body.Title,
++		Caption:        body.Caption,
++		MediaURL:       body.MediaURL,
++		ScheduledAt:    body.ScheduledAt,
++		Status:         body.Status,
++		IdempotencyKey: body.IdempotencyKey,
++		Version:        1,
+ 	}
+ 	targets := make([]*models.PostTarget, 0, len(body.Targets))
+ 	for _, t := range body.Targets {
+@@ -163,13 +184,23 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
+ 		if status == "" {
+ 			status = models.PostStatusScheduled
+ 		}
+-		targets = append(targets, &models.PostTarget{PlatformAccountID: t.PlatformAccountID, Status: status})
++		targets = append(targets, &models.PostTarget{PlatformAccountID: t.PlatformAccountID, Status: status, Version: 1})
+ 	}
+ 	if err := r.postStore.Create(post, targets); err != nil {
+ 		status, msg := mapRepoError(err)
+ 		writeError(w, status, "failed to create post: "+msg)
+ 		return
+ 	}
++
++	// Persist any media assets supplied at creation time.
++	for _, a := range body.MediaAssets {
++		asset := &models.MediaAsset{PostID: post.ID, URL: a.URL, MimeType: a.MimeType, SizeBytes: a.SizeBytes}
++		if err := r.postStore.AddMediaAsset(asset); err != nil {
++			writeError(w, http.StatusInternalServerError, "failed to add media asset: "+err.Error())
++			return
++		}
++	}
++
+ 	// Response shape: the post fields are at the top level (so a flat
+ 	// decoder like {id, workspace_id, status, targets} works) AND nested
+ 	// under a "post" key (so the older nested decoder {post, targets}
+@@ -199,13 +230,92 @@ func (c createPostResponse) MarshalJSON() ([]byte, error) {
+ 		"media_url":    c.post.MediaURL,
+ 		"scheduled_at": c.post.ScheduledAt,
+ 		"status":       c.post.Status,
++		"version":      c.post.Version,
+ 		"created_at":   c.post.CreatedAt,
++		"updated_at":   c.post.UpdatedAt,
+ 		"post":         c.post,
+ 		"targets":      c.targets,
+ 	}
+ 	return json.Marshal(flat)
+ }
+ 
++// handleUpdatePost updates an existing post. Only draft/scheduled/failed
++// posts may be edited; published posts are immutable.
++func (r *Router) handleUpdatePost(w http.ResponseWriter, req *http.Request) {
++	if r.postStore == nil {
++		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
++		return
++	}
++	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
++	if err != nil {
++		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
++		return
++	}
++	existing, err := r.postStore.FindByID(id)
++	if err != nil || existing == nil {
++		status, msg := mapRepoError(err)
++		if status == http.StatusOK {
++			status = http.StatusNotFound
++			msg = "post not found"
++		}
++		writeError(w, status, msg)
++		return
++	}
++	if existing.Status == models.PostStatusPublished {
++		writeError(w, http.StatusConflict, "cannot edit a published post")
++		return
++	}
++
++	var body UpdatePostRequest
++	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
++		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
++		return
++	}
++	if body.Status != "" && !body.Status.IsValid() {
++		writeError(w, http.StatusBadRequest, "status must be one of: draft, scheduled, publishing, published, failed")
++		return
++	}
++
++	post := &models.Post{
++		ID:          id,
++		WorkspaceID: existing.WorkspaceID,
++		Title:       body.Title,
++		Caption:     body.Caption,
++		MediaURL:    body.MediaURL,
++		ScheduledAt: body.ScheduledAt,
++		Status:      body.Status,
++		Version:     existing.Version,
++	}
++	if post.Status == "" {
++		post.Status = existing.Status
++	}
++	if err := r.postStore.Update(post); err != nil {
++		status, msg := mapRepoError(err)
++		writeError(w, status, "failed to update post: "+msg)
++		return
++	}
++	writeJSON(w, http.StatusOK, post)
++}
++
++// handleDeletePost removes a post and its targets/media assets.
++func (r *Router) handleDeletePost(w http.ResponseWriter, req *http.Request) {
++	if r.postStore == nil {
++		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
++		return
++	}
++	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
++	if err != nil {
++		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
++		return
++	}
++	if err := r.postStore.Delete(id); err != nil {
++		status, msg := mapRepoError(err)
++		writeError(w, status, "failed to delete post: "+msg)
++		return
++	}
++	w.WriteHeader(http.StatusNoContent)
++}
++
+ // handleAddTarget appends a post_target to an existing post. Pre-checks
+ // the post exists so ErrPostTargetNotFound is the only sentinel the handler
+ // can produce on success path. 501 if WithPostStore was not wired.
+@@ -242,7 +352,7 @@ func (r *Router) handleAddTarget(w http.ResponseWriter, req *http.Request) {
+ 	if status == "" {
+ 		status = models.PostStatusScheduled
+ 	}
+-	target := &models.PostTarget{PostID: id, PlatformAccountID: body.PlatformAccountID, Status: status}
++	target := &models.PostTarget{PostID: id, PlatformAccountID: body.PlatformAccountID, Status: status, Version: 1}
+ 	if err := r.postStore.Save(target); err != nil {
+ 		status2, msg := mapRepoError(err)
+ 		writeError(w, status2, "failed to add target: "+msg)
+@@ -292,6 +402,7 @@ func (r *Router) handleSchedulePost(w http.ResponseWriter, req *http.Request) {
+ 		MediaURL:    existing.MediaURL,
+ 		ScheduledAt: &body.ScheduledAt,
+ 		Status:      models.PostStatusScheduled,
++		Version:     existing.Version,
+ 	}
+ 	if err := r.postStore.Update(post); err != nil {
+ 		status, msg := mapRepoError(err)
+@@ -301,6 +412,82 @@ func (r *Router) handleSchedulePost(w http.ResponseWriter, req *http.Request) {
+ 	writeJSON(w, http.StatusOK, post)
+ }
+ 
++// handlePublishPostAction immediately schedules a post for publishing.
++func (r *Router) handlePublishPostAction(w http.ResponseWriter, req *http.Request) {
++	if r.postStore == nil {
++		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
++		return
++	}
++	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
++	if err != nil {
++		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
++		return
++	}
++	if err := r.postStore.PublishPost(id); err != nil {
++		status, msg := mapRepoError(err)
++		writeError(w, status, "failed to publish: "+msg)
++		return
++	}
++	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "scheduled"})
++}
++
++// handleCancelPost cancels a scheduled post, moving it back to draft.
++func (r *Router) handleCancelPost(w http.ResponseWriter, req *http.Request) {
++	if r.postStore == nil {
++		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
++		return
++	}
++	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
++	if err != nil {
++		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
++		return
++	}
++	if err := r.postStore.CancelPost(id); err != nil {
++		status, msg := mapRepoError(err)
++		writeError(w, status, "failed to cancel: "+msg)
++		return
++	}
++	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "draft"})
++}
++
++// handleRetryPost retries a failed post.
++func (r *Router) handleRetryPost(w http.ResponseWriter, req *http.Request) {
++	if r.postStore == nil {
++		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
++		return
++	}
++	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
++	if err != nil {
++		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
++		return
++	}
++	if err := r.postStore.RetryPost(id); err != nil {
++		status, msg := mapRepoError(err)
++		writeError(w, status, "failed to retry post: "+msg)
++		return
++	}
++	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "scheduled"})
++}
++
++// handleRetryTarget retries a single failed post target.
++func (r *Router) handleRetryTarget(w http.ResponseWriter, req *http.Request) {
++	if r.postStore == nil {
++		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
++		return
++	}
++	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
++	if err != nil {
++		writeError(w, http.StatusBadRequest, "invalid target id: "+err.Error())
++		return
++	}
++	if err := r.postStore.RetryTarget(id); err != nil {
++		status, msg := mapRepoError(err)
++		writeError(w, status, "failed to retry target: "+msg)
++		return
++	}
++	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "scheduled"})
++}
++
+ // handleGetPost fetches a post by id (without its targets) and enforces
+ // cross-tenant isolation: the caller's user_id must match the post's
+ // workspace's owner_id, otherwise we return 404 (existence-leak
+@@ -343,8 +530,36 @@ func (r *Router) handleGetPost(w http.ResponseWriter, req *http.Request) {
+ 	writeJSON(w, http.StatusOK, p)
+ }
+ 
+-// handleListByWorkspace lists posts in a given workspace. 501 if
+-// WithPostStore was not wired.
++// handleGetPostTargets returns a post with its targets and media assets.
++func (r *Router) handleGetPostTargets(w http.ResponseWriter, req *http.Request) {
++	if r.postStore == nil {
++		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
++		return
++	}
++	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
++	if err != nil {
++		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
++		return
++	}
++	post, targets, assets, err := r.postStore.FindWithTargets(id)
++	if err != nil {
++		status, msg := mapRepoError(err)
++		writeError(w, status, "failed to get post targets: "+msg)
++		return
++	}
++	if post == nil {
++		writeError(w, http.StatusNotFound, "post not found")
++		return
++	}
++	writeJSON(w, http.StatusOK, map[string]interface{}{
++		"post":         post,
++		"targets":      targets,
++		"media_assets": assets,
++	})
++}
++
++// handleListByWorkspace lists posts in a given workspace with optional
++// cursor-based pagination, status filter, search and sorting.
+ func (r *Router) handleListByWorkspace(w http.ResponseWriter, req *http.Request) {
+ 	if r.postStore == nil {
+ 		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
+@@ -355,14 +570,70 @@ func (r *Router) handleListByWorkspace(w http.ResponseWriter, req *http.Request)
+ 		writeError(w, http.StatusBadRequest, "invalid workspace id: "+err.Error())
+ 		return
+ 	}
+-	posts, err := r.postStore.ListByWorkspace(wid)
++
++	filter := repository.PostFilter{WorkspaceID: wid}
++	if s := req.URL.Query().Get("status"); s != "" {
++		filter.Status = models.PostStatus(s)
++	}
++	if s := req.URL.Query().Get("search"); s != "" {
++		filter.Search = s
++	}
++	if s := req.URL.Query().Get("cursor"); s != "" {
++		filter.CursorID, _ = strconv.ParseInt(s, 10, 64)
++	}
++	if s := req.URL.Query().Get("limit"); s != "" {
++		filter.Limit, _ = strconv.Atoi(s)
++	}
++
++	result, err := r.postStore.List(filter)
+ 	if err != nil {
+ 		status, msg := mapRepoError(err)
+ 		writeError(w, status, "failed to list posts: "+msg)
+ 		return
+ 	}
+-	if posts == nil {
+-		posts = []models.Post{}
++	writeJSON(w, http.StatusOK, map[string]interface{}{
++		"posts":       result.Posts,
++		"next_cursor": result.NextCursor,
++		"has_more":    result.HasMore,
++	})
++}
++
++// handleListPosts is the global (workspace-scoped via query param) listing
++// endpoint with cursor pagination, filters and search.
++func (r *Router) handleListPosts(w http.ResponseWriter, req *http.Request) {
++	if r.postStore == nil {
++		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
++		return
++	}
++	wid, err := strconv.ParseInt(req.URL.Query().Get("workspace_id"), 10, 64)
++	if err != nil || wid == 0 {
++		writeError(w, http.StatusUnprocessableEntity, "workspace_id query parameter is required")
++		return
++	}
++
++	filter := repository.PostFilter{WorkspaceID: wid}
++	if s := req.URL.Query().Get("status"); s != "" {
++		filter.Status = models.PostStatus(s)
++	}
++	if s := req.URL.Query().Get("search"); s != "" {
++		filter.Search = strings.TrimSpace(s)
++	}
++	if s := req.URL.Query().Get("cursor"); s != "" {
++		filter.CursorID, _ = strconv.ParseInt(s, 10, 64)
++	}
++	if s := req.URL.Query().Get("limit"); s != "" {
++		filter.Limit, _ = strconv.Atoi(s)
++	}
++
++	result, err := r.postStore.List(filter)
++	if err != nil {
++		status, msg := mapRepoError(err)
++		writeError(w, status, "failed to list posts: "+msg)
++		return
+ 	}
+-	writeJSON(w, http.StatusOK, map[string]interface{}{"posts": posts})
++	writeJSON(w, http.StatusOK, map[string]interface{}{
++		"posts":       result.Posts,
++		"next_cursor": result.NextCursor,
++		"has_more":    result.HasMore,
++	})
+ }
+diff --git a/pkg/api/posts_test.go b/pkg/api/posts_test.go
+index f24a796d..163a4793 100644
+--- a/pkg/api/posts_test.go
++++ b/pkg/api/posts_test.go
+@@ -153,8 +153,10 @@ func TestPostsAPI_Get_NotFound_404(t *testing.T) {
+ 
+ func TestPostsAPI_ListByWorkspace_Happy(t *testing.T) {
+ 	r := newPostsTestRouter(&mockPostStore{
+-		listByWorkspaceFn: func(wid int64) ([]models.Post, error) {
+-			return []models.Post{{ID: 1, WorkspaceID: wid}, {ID: 2, WorkspaceID: wid}}, nil
++		listFn: func(filter repository.PostFilter) (*repository.PagedPosts, error) {
++			return &repository.PagedPosts{
++				Posts: []models.Post{{ID: 1, WorkspaceID: filter.WorkspaceID}, {ID: 2, WorkspaceID: filter.WorkspaceID}},
++			}, nil
+ 		},
+ 	})
+ 	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/workspace/1", nil)
+diff --git a/pkg/metrics/metrics.go b/pkg/metrics/metrics.go
+index 50e4a023..091df8f7 100644
+--- a/pkg/metrics/metrics.go
++++ b/pkg/metrics/metrics.go
+@@ -3,7 +3,7 @@
+ // Metric naming follows the Prometheus best practices:
+ //   - <subject>_<unit>_total for monotonic counters
+ //   - <subject>_<unit> for histograms (latency in seconds)
+-//   - low-cardinality labels only: `platform` ∈ {meta,tiktok,twitter,youtube},
++//   - low-cardinality labels only: `platform` ∈ {instagram,facebook,threads,tiktok,twitter,youtube,linkedin},
+ //     `error_kind` ∈ {auth, api, network, internal}. NEVER put err.Error()
+ //     raw bytes into a label.
+ //
+@@ -22,10 +22,12 @@ import (
+ 
+ // Platform label values. Kept in sync with internal/models.
+ const (
+-	PlatformMeta    = "meta"
+-	PlatformTikTok  = "tiktok"
+-	PlatformTwitter = "twitter"
+-	PlatformYouTube = "youtube"
++	PlatformInstagram = "instagram"
++	PlatformFacebook  = "facebook"
++	PlatformThreads   = "threads"
++	PlatformTikTok    = "tiktok"
++	PlatformTwitter   = "twitter"
++	PlatformYouTube   = "youtube"
+ )
+ 
+ // error_kind label values.

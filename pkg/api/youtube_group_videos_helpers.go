@@ -16,6 +16,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // collectDescendantGroups returns the immediate + transitive children
@@ -127,18 +128,28 @@ func filterRecentYouTubeVideos(items []models.YouTubeVideoDetails, days int) []m
 	return filtered
 }
 
+// isInvalidYouTubeTokenError classifies a per-account fetch failure as
+// "the account's token is unusable and the UI should prompt a reconnect".
+// Classification is fully typed:
+//   - credentials.ErrInvalidGrant / credentials.ErrTokenExpired — the
+//     vault's sentinel family (grant rejected or validity window lapsed);
+//   - credentials.ErrYouTubeInvalidGrant — the YouTube renewal envelope;
+//   - *services.YouTubeAPIError with Category "auth" (401/403) — the
+//     data-plane API rejected the bearer.
+//
+// Message text is never consulted.
 func isInvalidYouTubeTokenError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, credentials.ErrInvalidGrant) {
+	if errors.Is(err, credentials.ErrInvalidGrant) ||
+		errors.Is(err, credentials.ErrTokenExpired) ||
+		errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
 		return true
 	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"status 401", "token expired", "token revoked"} {
-		if strings.Contains(message, marker) {
-			return true
-		}
+	var apiErr *services.YouTubeAPIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Category == "auth"
 	}
 	return false
 }

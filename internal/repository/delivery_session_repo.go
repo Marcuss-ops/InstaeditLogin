@@ -334,18 +334,15 @@ func (r *DeliverySessionRepository) MarkFailed(
 	return nil
 }
 
-// DeleteByID removes a row outright. Used by the destination's
-// TTL/hard-reset path: when a row reaches state="expired" OR the
-// expires_at cursor leaks past the current time, the destination
-// deletes the row and re-creates it with a fresh session URI +
-// version=1 — the DB UNIQUE(deliverable_type, idempotency_key)
-// constraint plus Create's ON CONFLICT DO NOTHING semantics
-// would otherwise leave the expired row in place and the next
-// re-Create would be a silent no-op. Deletion is the only way to
-// guarantee the re-initiate path lands a usable row.
+// DeleteByID removes a row outright. Used ONLY for hard data
+// corrections (operator-triggered deletes); the delivery recovery path
+// uses ResetForReinitiate instead so attempt_count stays monotonic —
+// deleting + re-Creating reset the counter to 0 on every cycle and let
+// a permanently failing upload loop forever (Drive quota burn + one
+// worker tick per cycle).
 //
 // CAS: the version-CAS clause guards against a peer worker's
-// concurrent Delete on the same row (CAS loss → ErrDeliverySessionNotFound
+// concurrent Delete on the same row (CAS loss → ErrDeliverySessionVersionMismatch
 // so we don't double-delete and don't accidentally delete a peer's
 // fresh replacement row).
 func (r *DeliverySessionRepository) DeleteByID(ctx context.Context, id int64, expectedVersion int) error {
@@ -405,6 +402,64 @@ func (r *DeliverySessionRepository) MarkExpired(
 		return fmt.Errorf("%w: id=%d expectedVersion=%d", ErrDeliverySessionVersionMismatch, id, expectedVersion)
 	}
 	return nil
+}
+
+// ResetForReinitiate prepares a dead session row for a fresh initiate
+// WITHOUT deleting it. It keeps the row (and its UNIQUE
+// (deliverable_type, idempotency_key) identity) in place and resets the
+// upload-progress fields so the destination's fresh-initiate branch can
+// proceed exactly as it would after a Create — while attempt_count stays
+// MONOTONIC. The previous delete + re-Create cycle reset attempt_count to
+// 0 on every recovery, so a permanently failing upload (dead source URL,
+// poisoned folder, rejected payload) looped forever, one Drive initiate
+// per worker tick.
+//
+// Returns the post-reset attempt_count so the caller can enforce the
+// re-initiate budget (driveReinitiateCap) and alarm via
+// metrics.RecordDriveReinitiateLoop when the budget is exhausted.
+//
+// CAS: version-guarded like every other writer; CAS loss →
+// ErrDeliverySessionVersionMismatch (a peer already reset or completed
+// the row; the caller re-Finds on its next tick).
+func (r *DeliverySessionRepository) ResetForReinitiate(
+	ctx context.Context,
+	id int64,
+	expectedVersion int,
+	workerID string,
+) (int, error) {
+	if id <= 0 {
+		return 0, errors.New("delivery session ResetForReinitiate: non-positive id")
+	}
+	if workerID == "" {
+		return 0, errors.New("delivery session ResetForReinitiate: empty workerID")
+	}
+	var newAttemptCount int
+	err := r.db.QueryRowContext(ctx,
+		`UPDATE delivery_sessions
+            SET state                 = 'initiated',
+                session_uri_encrypted = NULL,
+                uploaded_bytes        = 0,
+                remote_file_id        = NULL,
+                remote_url            = NULL,
+                error_message         = NULL,
+                error_code            = NULL,
+                worker_id             = $2,
+                lease_expires_at      = NULL,
+                attempt_count         = attempt_count + 1,
+                version               = version + 1,
+                updated_at            = NOW()
+          WHERE id      = $1
+            AND version = $3
+          RETURNING attempt_count`,
+		id, workerID, expectedVersion,
+	).Scan(&newAttemptCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w: id=%d expectedVersion=%d (peer already reset or completed the row)", ErrDeliverySessionVersionMismatch, id, expectedVersion)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("delivery session ResetForReinitiate: %w", err)
+	}
+	return newAttemptCount, nil
 }
 
 // scanDeliverySession is the private SELECT scanner shared between

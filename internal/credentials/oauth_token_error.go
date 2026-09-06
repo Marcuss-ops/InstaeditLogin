@@ -37,6 +37,24 @@ func (e *OAuthTokenError) Unwrap() error {
 	return nil
 }
 
+// ErrorKindName implements metrics.ErrorKindCarrier: token-endpoint failures
+// are announced as auth (or network for transport-shaped statuses) instead of
+// being guessed from message text — the provider description is deliberately
+// redacted from Error(), so the substring heuristic never sees useful text.
+func (e *OAuthTokenError) ErrorKindName() string {
+	if e == nil {
+		return "internal"
+	}
+	switch {
+	case e.StatusCode == 0:
+		return "internal"
+	case e.StatusCode == 429 || e.StatusCode >= 500:
+		return "network"
+	default:
+		return "auth"
+	}
+}
+
 // ParseOAuthTokenError decodes a provider token-endpoint error envelope. It
 // always returns a typed error for a non-success response, including malformed
 // or non-JSON bodies; only the stable `error` enum is retained in Error().

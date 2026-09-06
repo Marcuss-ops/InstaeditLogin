@@ -1,0 +1,99 @@
+diff --git a/web/src/pages/Editor.tsx b/web/src/pages/Editor.tsx
+index 3a3b05fa..9ee1bf9f 100644
+--- a/web/src/pages/Editor.tsx
++++ b/web/src/pages/Editor.tsx
+@@ -9,6 +9,7 @@ import {
+   Sparkles,
+   PlayCircle,
+   MonitorPlay,
++  Phone,
+ } from "lucide-react";
+ import type { SVGProps } from "react";
+ 
+@@ -639,6 +640,78 @@ function HowItWorks() {
+   );
+ }
+ 
++/* ----------------------------------------------------------------------------
++ * ContactSection — a direct phone line for prospects who want a human
++ * conversation before signing up. Sits between HowItWorks and FinalCTA so
++ * the page reads top-to-bottom as: "see the editor → speak to the team →
++ * open an account". The number is also a clickable tel: link so mobile
++ * visitors can tap to dial.
++ *
++ * Number: +39 327 464 9129 (Italian mobile, WhatsApp enabled). The tel: URI
++ * uses no spaces/formatting per RFC 3966 so it dials correctly on every
++ * platform.
++ * -------------------------------------------------------------------------- */
++const CONTACT_PHONE_DISPLAY = "+39 327 464 9129";
++const CONTACT_PHONE_TEL = "+393274649129";
++
++function ContactSection() {
++  return (
++    <section className="relative py-24 sm:py-32 overflow-hidden bg-elevated">
++      <div
++        aria-hidden="true"
++        className="absolute inset-0 cta-glow pointer-events-none"
++      />
++      <div aria-hidden="true\" className=\"absolute inset-0 pointer-events-none\">\n        <div className=\"glow-orb bg-violet-500 w-[440px] h-[440px] -top-32 -left-24 animate-drift-slow opacity-55\" />\n        <div className=\"glow-orb bg-emerald-400 w-[380px] h-[380px] -bottom-32 -right-24 animate-drift-rev opacity-40\" />\n      </div>
++
++      <div className=\"relative mx-auto max-w-5xl px-6\">
++        <div className=\"surface-glass border border-white/15 rounded-3xl px-8 py-14 sm:px-14 sm:py-16 text-center relative overflow-hidden shadow-[0_40px_120px_-40px_rgba(124,58,237,0.5)] animate-fade-up\">
++          <div className=\"inline-flex items-center gap-2 px-3 py-1.5 rounded-full surface-glass border border-white/15 text-xs font-medium text-zinc-200 mb-6\">\n            <Phone className=\"w-3.5 h-3.5 text-emerald-400\" />
++            <span>Speak directly with the founder</span>
++          </div>
++
++          <h2 className=\"text-display-2 text-white max-w-[24ch] mx-auto\">
++            Want a <span className=\"text-gradient\">closer look?</span>
++          </h2>
++
++          <p className=\"text-body-lg text-zinc-300/90 mt-6 max-w-[52ch] mx-auto\">
++            For tailored demos, custom workflows, or anything that doesn’t fit
++            the self-serve flow — give us a call. We’ll walk you through what
++            is possible for your team in under ten minutes.
++          </p>
++
++          <div className=\"mt-9 flex items-center justify-center gap-3 flex-wrap\">
++            <a
++              href={`tel:${CONTACT_PHONE_TEL}`}
++              className=\"group inline-flex items-center gap-3 px-6 py-3.5 rounded-full bg-white text-black text-base font-semibold hover:bg-zinc-100 transition-colors shadow-[0_10px_40px_-10px_rgba(255,255,255,0.55)]\"
++              aria-label={`Call ${CONTACT_PHONE_DISPLAY} for more information`}
++            >
++              <Phone className=\"w-5 h-5 group-hover:rotate-[-12deg] transition-transform\" />
++              <span className=\"tabular-nums font-bold\">
++                {CONTACT_PHONE_DISPLAY}
++              </span>
++            </a>
++            <Link
++              to=\"/login\"
++              className=\"inline-flex items-center gap-2 px-6 py-3.5 rounded-full surface-glass text-zinc-200 font-medium hover:text-white hover:border-white/25 transition-colors\"
++            >
++              Or open an account
++              <ArrowRight className=\"w-5 h-5\" />
++            </Link>
++          </div>
++
++          <div className=\"mt-7 text-xs text-zinc-500 flex items-center justify-center gap-2 flex-wrap\">
++            <span>Mon–Fri · 09:00–18:00 CET</span>
++            <span aria-hidden=\"true\">·</span>
++            <span>WhatsApp also OK</span>
++            <span aria-hidden=\"true\">·</span>
++            <span>Scrivi a {CONTACT_PHONE_DISPLAY} per maggiori informazioni</span>
++          </div>
++        </div>
++      </div>
++    </section>
++  );
++}
++
+ /* ----------------------------------------------------------------------------
+  * FinalCTA — same shape as Landing's final CTA, but the action routes to
+  * /login (not /login) and the copy invites the user to "connect an
+@@ -874,6 +947,7 @@ export function Editor() {
+         </div>
+         <SpeedStats />
+         <HowItWorks />
++        <ContactSection />
+         <FinalCTA />
+       </main>
+       <Footer />

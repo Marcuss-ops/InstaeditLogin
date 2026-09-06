@@ -208,14 +208,23 @@ func (w *PublishWorker) dispatchPostCompletion(
 		// Fail-soft. The pre-publish flow already succeeded;
 		// propagating would roll back the published state and
 		// cause a retry loop that double-uploads.
+		deliveryClass := deliveryErrorCode(deliverErr)
 		slog.Warn(
 			"publish worker: delivery registry dispatch failed; pre-publish already succeeded, NOT propagating",
 			"target_id", target.ID,
 			"platform", account.Platform,
 			"provider", provider.Name(),
-			"delivery_class", deliveryErrorCode(deliverErr),
+			"delivery_class", deliveryClass,
 			"error", deliverErr,
 		)
+		// Persist the stable delivery_class on the target row so
+		// dashboards can query failures (SELECT ... WHERE
+		// last_error_code = 'HTTP_503') instead of grepping logs.
+		// The write only stamps last_error_code — status, published_at,
+		// and the parent aggregate are untouched, so the publish state
+		// machine is unaffected. Best-effort by contract (same rationale
+		// as the warn above: pre-publish already succeeded).
+		w.recordDeliveryDispatchError(target, deliveryClass)
 		return nil, deliverErr
 	}
 
@@ -332,6 +341,44 @@ func deliveryErrorCode(err error) string {
 		}
 	}
 	return "DELIVERY_ERROR"
+}
+
+// DeliveryErrorCodeWriter is the narrow optional contract the dispatch
+// failure path uses to persist the stable delivery_class onto the target
+// row (post_targets.last_error_code). Implemented by
+// repository.PostRepository; deliberately NOT part of
+// PublisherPostStore so legacy/test post stores keep compiling unchanged
+// (same optional-interface pattern as DriveRequiredStatusWriter).
+type DeliveryErrorCodeWriter interface {
+	// MarkDeliveryDispatchFailed stamps last_error_code=errorCode on the
+	// target row WITHOUT touching status or any state-machine field. The
+	// write is idempotent: stamping the same code twice is a no-op, and
+	// an already-different code is overwritten (the newest dispatch
+	// failure is the diagnostic). Never fails for "already stamped".
+	MarkDeliveryDispatchFailed(id int64, errorCode string) error
+}
+
+// recordDeliveryDispatchError persists the delivery_class for a failed
+// completion dispatch. Best-effort: the pre-publish flow already
+// succeeded, so a write failure is warn-logged and never propagated.
+func (w *PublishWorker) recordDeliveryDispatchError(target *models.PostTarget, deliveryClass string) {
+	if deliveryClass == "" {
+		return
+	}
+	writer, ok := w.postRepo.(DeliveryErrorCodeWriter)
+	if !ok || writer == nil {
+		// Legacy/test post store: the class is already in the warn log
+		// above; nothing further to do.
+		return
+	}
+	if err := writer.MarkDeliveryDispatchFailed(target.ID, deliveryClass); err != nil {
+		slog.Warn(
+			"publish worker: could not persist delivery_class on target; dashboards must rely on logs",
+			"target_id", target.ID,
+			"delivery_class", deliveryClass,
+			"error", err,
+		)
+	}
 }
 
 // evaluateDriveRequiredGate is the pure predicate that decides

@@ -15,6 +15,26 @@ type YouTubeAPIError struct {
 	Message    string
 }
 
+// ErrorKindName implements metrics.ErrorKindCarrier: the API layer announces
+// its own metric bucket instead of being guessed from message text. Categories
+// map to the four error_kind buckets; any future category value defaults to
+// api (metrics.ErrorKind re-buckets unknown names defensively).
+func (e *YouTubeAPIError) ErrorKindName() string {
+	if e == nil {
+		return "internal"
+	}
+	switch e.Category {
+	case "auth":
+		return "auth"
+	case "network":
+		return "network"
+	case "api", "":
+		return "api"
+	default:
+		return "api"
+	}
+}
+
 // Error implements the error interface.
 func (e *YouTubeAPIError) Error() string {
 	return e.Message

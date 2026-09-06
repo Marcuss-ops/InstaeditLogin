@@ -12,6 +12,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // GoogleDriveDestination is the Task 8/10 DeliveryProvider for
@@ -146,6 +147,20 @@ const driveSessionTTL = 7 * 24 * time.Hour
 // ErrDriveSessionExpired is the typed sentinel Deliver returns
 // when the persisted session URI exceeded Google's 7-day TTL.
 var ErrDriveSessionExpired = errors.New("ERR_DRIVE_SESSION_EXPIRED")
+
+// ErrDriveReinitiateBudgetExhausted is the typed sentinel Deliver returns
+// when a session key has burned its re-initiate budget (the row kept dying
+// past driveReinitiateCap consecutive sessions). The upload stops looping;
+// the session row is left in state='failed' and
+// delivery_drive_reinitiate_loops_total increments for the dashboard alarm.
+var ErrDriveReinitiateBudgetExhausted = errors.New("ERR_DRIVE_REINITIATE_BUDGET_EXHAUSTED")
+
+// driveReinitiateCap is the re-initiate budget per delivery-session key:
+// how many consecutive dead sessions (TTL expiry / chunk failure → reset →
+// fresh initiate) one logical delivery may burn before the destination
+// declares the upload permanently failing and caps the loop. Matches the
+// repo-wide max_attempts default of 5.
+const driveReinitiateCap = 5
 
 // ErrDriveIdempotencyConflict is the typed sentinel Deliver
 // returns when the app-property lookup finds a DIFFERENT file_id
@@ -316,11 +331,13 @@ func (d *GoogleDriveDestination) Deliver(
 	// each tick which leaves the row in state="expired" + empty
 	// session_uri_encrypted forever, blocking recovery).
 	//
-	// Recover path: delete the stale row so the Create call below
-	// (with the same deliverable_type + idempotency_key) lands
-	// fresh. The UNIQUE constraint + ON CONFLICT DO NOTHING mean a
-	// re-Create on an existing key is a silent no-op — only a
-	// DELETE paves the way for a re-Create to succeed.
+	// Recover path: RESET the row in place (ResetForReinitiate) so the
+	// fresh-initiate branch below can proceed immediately. The previous
+	// delete + re-Create cycle reset attempt_count to 0 on every
+	// recovery, so a permanently failing upload looped forever (one
+	// Drive initiate + one worker tick per cycle). The in-place reset
+	// keeps attempt_count monotonic, which makes the re-initiate budget
+	// below enforceable.
 	var needsFreshInitiate bool
 	if row != nil && row.State == models.DeliverySessionStateExpired {
 		needsFreshInitiate = true
@@ -329,15 +346,63 @@ func (d *GoogleDriveDestination) Deliver(
 		needsFreshInitiate = true
 	}
 	if needsFreshInitiate {
-		// Best-effort MarkExpired for telemetry (the dashboard's
-		// "expired" badge reflects operator triage intent). Then
-		// delete to pave the re-Create path. Both can race with a
-		// peer worker; CAS loss surfaces upstream.
-		_ = d.sessionStore.MarkExpired(ctx, row.ID, row.Version)
-		if delErr := d.sessionStore.DeleteByID(ctx, row.ID, row.Version+1); delErr != nil && !errors.Is(delErr, repository.ErrDeliverySessionVersionMismatch) {
-			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("sessionStore", delErr))
+		// Reset the dead row IN PLACE (no delete, no re-Create):
+		// attempt_count stays monotonic, which is what makes the
+		// re-initiate budget below enforceable. CAS loss means a peer
+		// already reset/completed the row — re-read so we never act on
+		// a stale snapshot.
+		newAttempts, resetErr := d.sessionStore.ResetForReinitiate(ctx, row.ID, row.Version, "publish_worker_post_completion")
+		if resetErr != nil && !errors.Is(resetErr, repository.ErrDeliverySessionVersionMismatch) {
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("sessionStore", resetErr))
 		}
-		row = nil // fall through to fresh-initiate branch
+		refreshed, findErr := d.sessionStore.FindByIdempotencyKey(ctx, d.Name(), idempotencyKey)
+		if findErr != nil {
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("FindByIdempotencyKey", findErr))
+		}
+		row = refreshed
+		if resetErr == nil && newAttempts > driveReinitiateCap {
+			// Budget exhausted: this key has failed to complete
+			// driveReinitiateCap consecutive sessions. Cap the loop
+			// (row goes to 'failed' so the reconciler stops re-picking
+			// it every tick) and alarm on the dashboard.
+			metrics.RecordDriveReinitiateLoop(d.Name())
+			if markErr := d.sessionStore.MarkFailed(ctx, row.ID, row.Version, "drive_reinitiate_budget_exhausted",
+				fmt.Sprintf("re-initiate budget exhausted after %d consecutive dead sessions (permanent upload failure suspected)", newAttempts-1),
+				"publish_worker_post_completion"); markErr != nil && !errors.Is(markErr, repository.ErrDeliverySessionVersionMismatch) {
+				slog.Warn("google drive destination: could not stamp failed state after re-initiate budget exhaustion",
+					"idempotency_key", idempotencyKey, "error", markErr)
+			}
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w",
+				newDeliveryStageError("sessionStore", fmt.Errorf("%w: re-initiate budget exhausted after %d attempts for key %s", ErrDriveReinitiateBudgetExhausted, newAttempts-1, idempotencyKey)))
+		}
+		// Fall through with the REFRESHED row (state='initiated', empty
+		// session URI) so the fresh-initiate branch below re-POSTs and
+		// UpdateProgress stamps the new URI — no Create, no attempt_count
+		// reset, no panic (the previous code set row = nil here and the
+		// decrypt step below dereferenced it).
+	}
+
+	// Fresh-initiate branch: a row with no usable session URI (freshly
+	// reset or newly created below) must POST initiate BEFORE the chunk
+	// loop can run.
+	if row.SessionURIEncrypted == "" {
+		sessionURIFresh, postErr := d.postInitiateSession(ctx, accessToken, folderID, filename, mimeType, asset.SizeBytes, idempotencyKey)
+		if postErr != nil {
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("postInitiateSession", postErr))
+		}
+		cipherFresh, encErr := d.encryptor.Encrypt(sessionURIFresh)
+		if encErr != nil {
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("encryptor.Encrypt", encErr))
+		}
+		cipherEnc := base64.StdEncoding.EncodeToString(cipherFresh)
+		if err := d.sessionStore.UpdateProgress(ctx, row.ID, row.Version, cipherEnc, row.UploadedBytes, "publish_worker_post_completion"); err != nil {
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("sessionStore.UpdateProgress", err))
+		}
+		// UpdateProgress bumped the server-side version; keep the
+		// in-memory snapshot in lockstep so the chunk loop's first
+		// persistProgress CAS does not spuriously abort.
+		row.Version++
+		row.SessionURIEncrypted = cipherEnc
 	}
 
 	// 4. Stream chunks. Decrypt session URI + chunk loop.
@@ -371,7 +436,7 @@ func (d *GoogleDriveDestination) Deliver(
 		// variants of "session is dead"), we MUST call MarkExpired
 		// (NOT MarkFailed) so the next-tick Deliver sees
 		// row.State == "expired" and triggers the recovery branch
-		// (DeleteByID + re-POST fresh initiate).
+		// (ResetForReinitiate + re-POST fresh initiate).
 		//
 		// MarkFailed sets state="failed"; the recovery branch only
 		// fires on state="expired" (or expires_at < now()). If we

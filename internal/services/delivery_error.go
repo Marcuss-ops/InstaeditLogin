@@ -22,7 +22,7 @@ import (
 //   - Status == 0        → the failure is not HTTP-classified (crypto,
 //     store, or transport-layer errors that never got a response).
 type DeliveryError struct {
-	Stage  string // pipeline stage, e.g. "sessionStore.Create" → SESSIONSTORE_CREATE
+	Stage  string // pipeline stage, e.g. "sessionStore.Create" → SESSIONSTORE.CREATE
 	Status int    // upstream HTTP status; 0 = not HTTP-classified
 	Err    error
 }

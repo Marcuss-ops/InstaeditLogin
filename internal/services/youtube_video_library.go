@@ -194,7 +194,17 @@ func (s *YouTubeOAuthService) getYouTubeLibraryJSON(ctx context.Context, accessT
 		return err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("status %d", resp.StatusCode)
+		// Typed so callers classify (e.g. token-invalidation detection on
+		// 401/403) without substring-matching message text.
+		category := ""
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			category = "auth"
+		}
+		return &YouTubeAPIError{
+			StatusCode: resp.StatusCode,
+			Category:   category,
+			Message:    fmt.Sprintf("youtube video library: unexpected HTTP status %d", resp.StatusCode),
+		}
 	}
 	if err := json.Unmarshal(body, destination); err != nil {
 		return fmt.Errorf("decode response: %w", err)

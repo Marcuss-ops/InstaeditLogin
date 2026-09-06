@@ -131,7 +131,13 @@ test: backend-test
 # regression check. Keep this aggregate aligned with the blocking CI checks
 # while leaving operational production probes (SSH, live workers, and
 # credentials) out.
-verify: lint-check backend-test verify-entrypoint-topology verify-no-velox-catalog-sync loc-check
+verify: lint-check backend-test verify-entrypoint-topology verify-no-velox-catalog-sync verify-error-classification loc-check
+
+# Negative pattern guard: error classification must be typed (errors.Is /
+# errors.As on sentinels), never string-matched over err.Error(). Ratchet
+# baseline in the script pins pre-existing classifiers; new ones fail CI.
+verify-error-classification:
+	./scripts/verify-error-classification.sh
 
 # Negative architecture guard: InstaEdit must never grow a Velox-owned
 # Groups/Channels catalog or a synchronization path. The project-scoped

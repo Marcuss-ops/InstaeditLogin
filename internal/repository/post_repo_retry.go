@@ -220,6 +220,46 @@ func (r *PostRepository) MarkRetrying(id int64, ownerID string, lastError string
 	return r.mutateLeasedTarget(id, ownerID, qMarkRetrying, nextAttemptAt, lastError)
 }
 
+// MarkDeliveryDispatchFailed stamps the stable delivery_class
+// (post_targets.last_error_code) after a post-completion delivery
+// dispatch failed — see internal/worker/publish_worker_delivery.go's
+// DeliveryErrorCodeWriter contract. The write is intentionally NARROW:
+// status, published_at, provider_state, and every other state-machine
+// field are untouched (the platform publish already succeeded; this is
+// diagnostic bookkeeping, not a state transition) — so no aggregate
+// recompute, no lease CAS, no completed_at stamp. Idempotent by design:
+// stamping the same code twice is a no-op; a different code overwrites
+// (the newest dispatch failure is the diagnostic).
+func (r *PostRepository) MarkDeliveryDispatchFailed(id int64, errorCode string) error {
+	if id <= 0 {
+		return fmt.Errorf("MarkDeliveryDispatchFailed: non-positive id %d", id)
+	}
+	if errorCode == "" {
+		return fmt.Errorf("MarkDeliveryDispatchFailed: empty errorCode")
+	}
+	result, err := r.db.Exec(qMarkDeliveryDispatchFailed, id, errorCode)
+	if err != nil {
+		return fmt.Errorf("MarkDeliveryDispatchFailed target %d: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("MarkDeliveryDispatchFailed rows affected %d: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, id)
+	}
+	return nil
+}
+
+// qMarkDeliveryDispatchFailed keeps the WHERE clause deliberately
+// status-agnostic (no status CAS): a dispatch failure can occur on a
+// target in ANY state (published, publishing, blocked_auth...), and the
+// stamp must never regress or race a concurrent state transition — it
+// writes one diagnostic column only.
+var qMarkDeliveryDispatchFailed = `UPDATE post_targets
+ SET last_error_code = $2
+ WHERE id = $1`
+
 // MarkDriveRequiredFailed (Task 8/10.1) transitions a target from
 // status='published' to 'drive_required_failed': the platform publish
 // completed but the drive_required policy gate detected a terminally

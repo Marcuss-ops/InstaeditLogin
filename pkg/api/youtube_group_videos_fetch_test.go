@@ -198,19 +198,30 @@ func TestParseGroupVideosPagination(t *testing.T) {
 	}
 }
 
+// TestGroupYouTubeVideos_InvalidTokenClassification pins the typed-only
+// classification contract: vault sentinels, the YouTube renewal envelope,
+// and auth-category (401/403) YouTubeAPIError classify as invalid token;
+// message text alone never classifies.
 func TestGroupYouTubeVideos_InvalidTokenClassification(t *testing.T) {
 	for _, test := range []struct {
-		message string
-		want    bool
+		name string
+		err  error
+		want bool
 	}{
-		{message: "oauth: invalid_grant", want: false},
-		{message: "youtube list: status 401", want: true},
-		{message: "youtube list: status 500", want: false},
-		{message: "context deadline exceeded", want: false},
+		{name: "invalid grant sentinel", err: fmt.Errorf("renew: %w", credentials.ErrInvalidGrant), want: true},
+		{name: "token expired sentinel", err: fmt.Errorf("renew: %w", credentials.ErrTokenExpired), want: true},
+		{name: "youtube renewal envelope", err: fmt.Errorf("renew: %w", credentials.ErrYouTubeInvalidGrant), want: true},
+		{name: "data-plane 401 (auth category)", err: &services.YouTubeAPIError{StatusCode: 401, Category: "auth", Message: "youtube video library: unexpected HTTP status 401"}, want: true},
+		{name: "data-plane 403 (auth category)", err: &services.YouTubeAPIError{StatusCode: 403, Category: "auth", Message: "forbidden"}, want: true},
+		{name: "data-plane 500 (no category)", err: &services.YouTubeAPIError{StatusCode: 500, Message: "boom"}, want: false},
+		{name: "provider text mentioning 401 must NOT classify", err: errors.New("youtube list: status 401"), want: false},
+		{name: "provider text mentioning 'token revoked' must NOT classify", err: errors.New("upstream says: token revoked"), want: false},
+		{name: "transient failure", err: errors.New("context deadline exceeded"), want: false},
+		{name: "nil", err: nil, want: false},
 	} {
-		t.Run(test.message, func(t *testing.T) {
-			if got := isInvalidYouTubeTokenError(errors.New(test.message)); got != test.want {
-				t.Errorf("isInvalidYouTubeTokenError(%q) = %v, want %v", test.message, got, test.want)
+		t.Run(test.name, func(t *testing.T) {
+			if got := isInvalidYouTubeTokenError(test.err); got != test.want {
+				t.Errorf("isInvalidYouTubeTokenError(%v) = %v, want %v", test.err, got, test.want)
 			}
 		})
 	}

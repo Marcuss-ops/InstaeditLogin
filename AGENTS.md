@@ -141,3 +141,11 @@ make instaedit-staging-smoke
 The staging smoke refuses non-staging HTTPS hostnames and is read-only by default. To intentionally exercise upload, thumbnail attachment, and unlisted publish, provide disposable staging inputs and explicitly set `APPLY_CLI_SMOKE=1`, `INSTAEDIT_SMOKE_MEDIA_FILE`, and `INSTAEDIT_SMOKE_COVER_FILE`. Never commit these values or print the API key.
 
 All commands emit JSON on stdout. Errors are written to stderr and return a non-zero exit code. Preserve command output IDs for subsequent commands, but never preserve or log the API key.
+
+## Git hygiene for agents
+
+Never leave state behind that the next session cannot reconstruct:
+
+- Do not create `git stash` entries. If you must temporarily set work aside, restore it before ending the session; if it must survive, export it with `git stash show -p > .stash-triage/<label>.patch` and delete the stash entry in the same session.
+- Do not leave scratch worktrees (e.g. baseline checks under `/tmp`) — remove them with `git worktree remove` before finishing.
+- Never drop or pop another session's stash: triage it into a patch file first and leave the decision to a human.
