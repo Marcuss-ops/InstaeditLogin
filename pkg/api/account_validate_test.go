@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +64,7 @@ func TestHandleValidateAccount_ActiveToken(t *testing.T) {
 }
 
 // TestHandleValidateAccount_ExpiredToken verifies the expired path:
-// vault returns "token expired at ..." ⇒ status='expired' on the
+// vault wraps credentials.ErrTokenExpired ⇒ status='expired' on the
 // UPDATE. The handler always returns 200 (validation IS the answer;
 // caller reads status to react).
 func TestHandleValidateAccount_ExpiredToken(t *testing.T) {
@@ -82,7 +83,7 @@ func TestHandleValidateAccount_ExpiredToken(t *testing.T) {
 	}
 	vault := &mockCredentialVault{
 		getFn: func(ctx context.Context, accountID int64, tokenType string) (*models.OAuthToken, error) {
-			return nil, fmt.Errorf("vault: token expired at 2020-01-01T00:00:00Z")
+			return nil, credentials.ErrTokenExpired
 		},
 	}
 	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
@@ -97,6 +98,27 @@ func TestHandleValidateAccount_ExpiredToken(t *testing.T) {
 	}
 	if updatedAccount.Status != models.AccountStatusExpired {
 		t.Errorf("status: want expired, got %s", updatedAccount.Status)
+	}
+}
+
+// TestIsTokenExpired_TypedOnly pins the sentinel-only classification
+// contract: a provider-controlled string merely mentioning "expired"
+// must NOT flip the account to 'expired' (the substring fallback is
+// removed). Google's invalid_grant body ("Token has been expired or
+// revoked.") must route to reauth_required, not expired.
+func TestIsTokenExpired_TypedOnly(t *testing.T) {
+	if !isTokenExpired(credentials.ErrTokenExpired) {
+		t.Fatal("typed sentinel must classify as expired")
+	}
+	if !isTokenExpired(fmt.Errorf("vault: %w", credentials.ErrTokenExpired)) {
+		t.Fatal("wrapped sentinel must classify as expired")
+	}
+	incidental := errors.New("Token has been expired or revoked.")
+	if isTokenExpired(incidental) {
+		t.Fatalf("provider-controlled string must NOT classify (substring fallback removed): %v", incidental)
+	}
+	if isTokenExpired(nil) {
+		t.Fatal("nil must not classify as expired")
 	}
 }
 

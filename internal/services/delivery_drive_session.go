@@ -38,7 +38,8 @@ func (d *GoogleDriveDestination) verifyUploadedSize(
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return fmt.Errorf("verify GET returned %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("verify GET: %s: %w", string(body),
+			newDeliveryHTTPError(resp.StatusCode, errors.New("verify GET failed")))
 	}
 
 	var parsed struct {
@@ -73,7 +74,7 @@ func (d *GoogleDriveDestination) lookupByAppProperty(
 ) (string, string, error) {
 	accessToken, err := d.tokenProvider.GetAccessToken(ctx, driveAccountID)
 	if err != nil {
-		return "", "", fmt.Errorf("app-property lookup: tokenProvider: %w", err)
+		return "", "", fmt.Errorf("app-property lookup: tokenProvider: %w", newDeliveryStageError("lookupByAppProperty", err))
 	}
 
 	q := fmt.Sprintf("appProperties has { key='instaedit_delivery_id' and value='%s' }",
@@ -88,12 +89,13 @@ func (d *GoogleDriveDestination) lookupByAppProperty(
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("app-property lookup: GET: %w", err)
+		return "", "", fmt.Errorf("app-property lookup: GET: %w", newDeliveryStageError("lookupByAppProperty", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return "", "", fmt.Errorf("app-property lookup: server returned %d: %s", resp.StatusCode, string(body))
+		return "", "", fmt.Errorf("app-property lookup: %s: %w", string(body),
+			&DeliveryError{Stage: "lookupByAppProperty", Status: resp.StatusCode, Err: errors.New("server returned non-200")})
 	}
 
 	var parsed struct {
@@ -124,11 +126,11 @@ func (d *GoogleDriveDestination) decryptSessionURI(ciphertext string) (string, e
 	}
 	raw, err := base64.StdEncoding.DecodeString(ciphertext)
 	if err != nil {
-		return "", fmt.Errorf("decrypt session URI: base64: %w", err)
+		return "", fmt.Errorf("decrypt session URI: base64: %w", newDeliveryStageError("decrypt session URI", err))
 	}
 	plaintext, err := d.encryptor.Decrypt(raw)
 	if err != nil {
-		return "", fmt.Errorf("decrypt session URI: decrypt: %w", err)
+		return "", fmt.Errorf("decrypt session URI: decrypt: %w", newDeliveryStageError("decrypt session URI", err))
 	}
 	return plaintext, nil
 }

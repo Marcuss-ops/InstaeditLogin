@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
@@ -17,19 +16,10 @@ import (
 )
 
 // isTokenExpired classifies a vault.Get failure as "the stored token's
-// validity window has lapsed". The canonical signal is the typed
-// credentials.ErrTokenExpired sentinel wrapped by every vault expiry path;
-// the substring fallback is the narrowed legacy shape kept so test doubles
-// produced before the sentinel still classify. New producers must wrap the
-// sentinel — never rely on message text.
+// validity window has lapsed". Classification is exclusively typed
+// (credentials.ErrTokenExpired) — message text is never consulted.
 func isTokenExpired(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, credentials.ErrTokenExpired) {
-		return true
-	}
-	return strings.Contains(err.Error(), "expired")
+	return errors.Is(err, credentials.ErrTokenExpired)
 }
 
 // validateAccountRequest is the JSON body handler handleValidateAccount

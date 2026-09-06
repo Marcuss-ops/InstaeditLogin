@@ -103,14 +103,14 @@ func (p *DriveVaultTokenProvider) GetAccessToken(ctx context.Context, platformAc
 	}
 	refreshToken, err := p.vault.GetRefreshToken(ctx, platformAccountID)
 	if err != nil {
-		return "", fmt.Errorf("DriveVaultTokenProvider.GetAccessToken: vault.GetRefreshToken: %w", err)
+		return "", fmt.Errorf("DriveVaultTokenProvider.GetAccessToken: vault.GetRefreshToken: %w", newDeliveryStageError("GetAccessToken", err))
 	}
 	if refreshToken == "" {
 		return "", fmt.Errorf("%w: platformAccountID=%d", ErrDriveNoRefreshToken, platformAccountID)
 	}
 	td, err := p.oauth.RefreshOAuthToken(ctx, refreshToken)
 	if err != nil {
-		return "", fmt.Errorf("DriveVaultTokenProvider.GetAccessToken: oauth.RefreshOAuthToken: %w", err)
+		return "", fmt.Errorf("DriveVaultTokenProvider.GetAccessToken: oauth.RefreshOAuthToken: %w", newDeliveryStageError("GetAccessToken", err))
 	}
 	if td == nil || td.AccessToken == "" {
 		return "", fmt.Errorf("DriveVaultTokenProvider.GetAccessToken: oauth returned empty bearer (platformAccountID=%d)", platformAccountID)

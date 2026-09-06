@@ -64,18 +64,11 @@ func cloneTime(value *time.Time) *time.Time {
 	return &copy
 }
 
-// isExpiryError classifies token-expiry outcomes. The canonical signal is
-// the typed ErrTokenExpired sentinel wrapped by every vault expiry path;
-// the substring fallback below is the narrowed legacy shape kept only so
-// test doubles (and the historical "token expired at %s" lazy-reencrypt
-// message) produced before the sentinel still classify. New code must wrap
-// ErrTokenExpired, never rely on message text.
+// isExpiryError classifies token-expiry outcomes exclusively via the typed
+// ErrTokenExpired sentinel wrapped by every vault expiry path. Message text
+// is never consulted: provider-controlled strings are unstable, and the
+// historical "Token has been expired or revoked." invalid_grant body must
+// classify as reauth (ErrInvalidGrant), not expiry.
 func isExpiryError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, ErrTokenExpired) {
-		return true
-	}
-	return strings.Contains(err.Error(), "expired")
+	return errors.Is(err, ErrTokenExpired)
 }

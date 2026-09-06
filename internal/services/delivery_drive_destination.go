@@ -260,18 +260,18 @@ func (d *GoogleDriveDestination) Deliver(
 	// Find-or-create the session row.
 	row, findErr := d.sessionStore.FindByIdempotencyKey(ctx, d.Name(), idempotencyKey)
 	if findErr != nil && !errors.Is(findErr, repository.ErrDeliverySessionNotFound) {
-		return nil, fmt.Errorf("GoogleDriveDestination.Deliver: sessionStore.FindByIdempotencyKey: %w", findErr)
+		return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("FindByIdempotencyKey", findErr))
 	}
 
 	if row == nil {
 		// Fresh delivery. POST initiate + insert.
 		sessionURI, postErr := d.postInitiateSession(ctx, accessToken, folderID, filename, mimeType, asset.SizeBytes, idempotencyKey)
 		if postErr != nil {
-			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: postInitiateSession: %w", postErr)
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("postInitiateSession", postErr))
 		}
 		cipher, encErr := d.encryptor.Encrypt(sessionURI)
 		if encErr != nil {
-			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: encryptor.Encrypt: %w", encErr)
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("encryptor.Encrypt", encErr))
 		}
 
 		row = &models.DeliverySession{
@@ -292,7 +292,7 @@ func (d *GoogleDriveDestination) Deliver(
 		row.WorkerID = "publish_worker_post_completion"
 
 		if err := d.sessionStore.Create(ctx, row); err != nil {
-			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: sessionStore.Create: %w", err)
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("sessionStore.Create", err))
 		}
 	}
 
@@ -335,7 +335,7 @@ func (d *GoogleDriveDestination) Deliver(
 		// peer worker; CAS loss surfaces upstream.
 		_ = d.sessionStore.MarkExpired(ctx, row.ID, row.Version)
 		if delErr := d.sessionStore.DeleteByID(ctx, row.ID, row.Version+1); delErr != nil && !errors.Is(delErr, repository.ErrDeliverySessionVersionMismatch) {
-			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: sessionStore.DeleteByID: %w", delErr)
+			return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("sessionStore", delErr))
 		}
 		row = nil // fall through to fresh-initiate branch
 	}
@@ -343,12 +343,13 @@ func (d *GoogleDriveDestination) Deliver(
 	// 4. Stream chunks. Decrypt session URI + chunk loop.
 	sessionURI, decodeErr := d.decryptSessionURI(row.SessionURIEncrypted)
 	if decodeErr != nil {
-		return nil, fmt.Errorf("GoogleDriveDestination.Deliver: decrypt session URI: %w", decodeErr)
+		return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("decrypt session URI", decodeErr))
 	}
 
 	sourceURL := dest.RemoteURL
 	if sourceURL == "" {
-		return nil, fmt.Errorf("GoogleDriveDestination.Deliver: dest.RemoteURL empty (asset source must be reachable)")
+		return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w",
+			newDeliveryStageError("decrypt session URI", errors.New("dest.RemoteURL empty (asset source must be reachable)")))
 	}
 
 	// Mount source stream. Multi-callable GetBytes helper not
@@ -431,7 +432,7 @@ func (d *GoogleDriveDestination) Deliver(
 	}
 
 	if err := d.sessionStore.MarkCompleted(ctx, row.ID, row.Version, fileID, webViewLink, row.WorkerID); err != nil && !errors.Is(err, repository.ErrDeliverySessionVersionMismatch) {
-		return nil, fmt.Errorf("GoogleDriveDestination.Deliver: sessionStore.MarkCompleted: %w", err)
+		return nil, fmt.Errorf("GoogleDriveDestination.Deliver: %w", newDeliveryStageError("sessionStore.MarkCompleted", err))
 	}
 
 	return &models.DeliveryResult{

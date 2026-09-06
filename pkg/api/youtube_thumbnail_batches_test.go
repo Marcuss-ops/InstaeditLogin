@@ -50,7 +50,7 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewsExpiredAccessToken(t *testing.T) {
 		},
 		getFn: func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
 			getCalled = true
-			return nil, errors.New("token expired") // the pre-fix failure mode
+			return nil, credentials.ErrTokenExpired // the pre-fix failure mode
 		},
 	}
 
@@ -111,7 +111,7 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewMissingModernGrant_FallsBackToLegac
 			switch tokenType {
 			case models.TokenTypeBearer:
 				bearerGetCalled = true
-				return nil, errors.New("token expired")
+				return nil, credentials.ErrTokenExpired
 			case models.TokenTypeLongLived:
 				longLivedGetCalled = true
 				return &models.OAuthToken{AccessToken: "legacy-long-lived-token"}, nil
@@ -409,7 +409,7 @@ func TestPublishYouTubeEditorSession_ExpiredToken_RenewsAutomatically(t *testing
 				return &models.OAuthToken{AccessToken: "fresh-access-token", TokenType: tokenType}, nil
 			},
 			getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
-				return nil, errors.New("token expired") // the pre-fix failure mode
+				return nil, credentials.ErrTokenExpired // the pre-fix failure mode
 			},
 		}),
 	)

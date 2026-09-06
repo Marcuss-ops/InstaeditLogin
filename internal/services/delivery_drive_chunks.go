@@ -17,6 +17,10 @@ import (
 
 // postInitiateSession calls POST /upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true.
 // Returns the session URI from the Location response header.
+// errDriveInitiatePOST is the legacy deliveryErrorCode marker for the
+// initiate stage; newDeliveryHTTPError stamps the concrete HTTP status on top.
+var errDriveInitiatePOST = errors.New("initiate POST")
+
 func (d *GoogleDriveDestination) postInitiateSession(
 	ctx context.Context,
 	accessToken, folderID, filename, mimeType string,
@@ -45,7 +49,7 @@ func (d *GoogleDriveDestination) postInitiateSession(
 		"https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true",
 		bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("google drive destination: build initiate request: %w", err)
+		return "", fmt.Errorf("google drive destination: %w", newDeliveryStageError("postInitiateSession", err))
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
@@ -54,13 +58,14 @@ func (d *GoogleDriveDestination) postInitiateSession(
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("google drive destination: initiate POST: %w", err)
+		return "", fmt.Errorf("google drive destination: %w", newDeliveryStageError("initiate POST", err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return "", fmt.Errorf("google drive destination: initiate POST returned %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("google drive destination: initiate POST: %s: %w", string(body),
+			newDeliveryHTTPError(resp.StatusCode, errDriveInitiatePOST))
 	}
 
 	location := resp.Header.Get("Location")
@@ -110,7 +115,8 @@ func (d *GoogleDriveDestination) streamChunks(
 		// presigned URL + Range header.
 		chunkBytes, err := d.sourceRangeGET(ctx, sourceURL, offset, end)
 		if err != nil {
-			return "", "", fmt.Errorf("google drive destination: source Range GET %d-%d: %w", offset, end, err)
+			return "", "", fmt.Errorf("google drive destination: source Range GET %d-%d: %w", offset, end,
+				newDeliveryStageError("source Range GET", err))
 		}
 		if int64(len(chunkBytes)) != chunkLen {
 			return "", "", fmt.Errorf("google drive destination: source short read: want %d, got %d", chunkLen, len(chunkBytes))
@@ -167,7 +173,8 @@ func (d *GoogleDriveDestination) streamChunks(
 				// Re-load row to refresh Version post-bump.
 				refreshed, refreshErr := d.sessionStore.FindByIdempotencyKey(ctx, d.Name(), idempotencyKey)
 				if refreshErr != nil {
-					return "", "", fmt.Errorf("google drive destination: re-FindByIdempotencyKey after persist: %w", refreshErr)
+					return "", "", fmt.Errorf("google drive destination: re-FindByIdempotencyKey after persist: %w",
+						newDeliveryStageError("FindByIdempotencyKey", refreshErr))
 				}
 				row = refreshed
 			}

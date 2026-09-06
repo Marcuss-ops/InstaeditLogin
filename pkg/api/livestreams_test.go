@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
@@ -328,7 +328,7 @@ func TestCreateLivestream_RejectsUnavailableGrant(t *testing.T) {
 	account := livestreamTestAccount()
 	vault := &mockCredentialVault{
 		getFn: func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
-			return nil, errors.New("token expired")
+			return nil, credentials.ErrTokenExpired
 		},
 	}
 	r := livestreamTestRouterWithVault(&mockLivestreamStore{}, account, 1, vault)

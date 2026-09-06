@@ -283,43 +283,52 @@ func (w *PublishWorker) dispatchPostCompletion(
 // deliveryErrorCode keeps delivery diagnostics useful after the global
 // logger redacts error text. It intentionally returns only stable, non-secret
 // categories; the original error remains redacted in production logs.
+//
+// Classification is fully typed (errors.Is on the ERR_DRIVE_* sentinels,
+// errors.As on services.DeliveryError carriers) — no message-text matching.
+// Precedence mirrors the historical string classifier so existing dashboards
+// keep their codes:
+//  1. ERR_DRIVE_* sentinels (wrapped by the Drive destination);
+//  2. an upstream HTTP status carried by any DeliveryError → HTTP_<n>;
+//  3. the pipeline stage carried by the outermost DeliveryError with a
+//     stage → upper-snake code ("sessionStore.Create" → SESSIONSTORE.CREATE —
+//     the legacy codes kept dots, only spaces became underscores);
+//  4. DELIVERY_ERROR.
 func deliveryErrorCode(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := err.Error()
-	for _, code := range []string{
-		"ERR_DRIVE_CONFIG",
-		"ERR_DRIVE_NO_REFRESH_TOKEN",
-		"ERR_DRIVE_INVALID_ACCOUNT_ID",
-		"ERR_DRIVE_IDEMPOTENCY_CONFLICT",
-		"ERR_DRIVE_SESSION_EXPIRED",
-	} {
-		if strings.Contains(s, code) {
-			return code
+	switch {
+	case errors.Is(err, services.ErrDriveConfig):
+		return "ERR_DRIVE_CONFIG"
+	case errors.Is(err, services.ErrDriveNoRefreshToken):
+		return "ERR_DRIVE_NO_REFRESH_TOKEN"
+	case errors.Is(err, services.ErrDriveInvalidAccountID):
+		return "ERR_DRIVE_INVALID_ACCOUNT_ID"
+	case errors.Is(err, services.ErrDriveIdempotencyConflict):
+		return "ERR_DRIVE_IDEMPOTENCY_CONFLICT"
+	case errors.Is(err, services.ErrDriveSessionExpired):
+		return "ERR_DRIVE_SESSION_EXPIRED"
+	}
+	var carriers []*services.DeliveryError
+	for e := err; e != nil; {
+		if d, ok := e.(*services.DeliveryError); ok {
+			carriers = append(carriers, d)
+		}
+		u, ok := e.(interface{ Unwrap() error })
+		if !ok {
+			break
+		}
+		e = u.Unwrap()
+	}
+	for _, d := range carriers {
+		if d.Status != 0 {
+			return services.DeliveryHTTPCode(d.Status)
 		}
 	}
-	for _, status := range []string{"returned 401", "returned 403", "returned 404", "returned 408", "returned 429", "returned 500", "returned 502", "returned 503"} {
-		if strings.Contains(s, status) {
-			return strings.ReplaceAll(status, " returned ", "_")
-		}
-	}
-	for _, marker := range []string{
-		"lookupByAppProperty",
-		"FindByIdempotencyKey",
-		"GetAccessToken",
-		"postInitiateSession",
-		"initiate POST",
-		"encryptor.Encrypt",
-		"sessionStore.Create",
-		"decrypt session URI",
-		"source Range GET",
-		"streamChunks",
-		"sessionStore.MarkCompleted",
-		"sessionStore",
-	} {
-		if strings.Contains(s, marker) {
-			return strings.ToUpper(strings.ReplaceAll(marker, " ", "_"))
+	for _, d := range carriers {
+		if d.Stage != "" {
+			return services.DeliveryStageCode(d.Stage)
 		}
 	}
 	return "DELIVERY_ERROR"
