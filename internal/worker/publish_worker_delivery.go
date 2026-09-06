@@ -14,7 +14,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
-	// "github.com/Marcuss-ops/InstaeditLogin/pkg/metrics" // DISABLED Task 8/10 followup: DriveRequiredViolations counter not yet exported
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // WithDeliveryRegistry wires a DeliveryRegistry into the
@@ -251,7 +251,10 @@ func (w *PublishWorker) dispatchPostCompletion(
 			"policy", "drive_required=true",
 			"violation_status", res.Status,
 		)
-		// metrics.DriveRequiredViolations.Inc() // DISABLED Task 8/10 followup: counter not yet exported in pkg/metrics
+		// Terminal policy violation must be alarmable, not log-only: the
+		// counter feeds the operator dashboard (previously a DISABLED
+		// TODO because the counter did not exist in pkg/metrics).
+		metrics.RecordDriveRequiredViolation(account.Platform)
 		// TODO(Task 8/10.1): postRepo.UpdateStatus(target.ID, "drive_required_failed")
 		// so a future Task 9 followup can surface this in the admin
 		// queue. Today log-only keeps the publish_worker DB-free.

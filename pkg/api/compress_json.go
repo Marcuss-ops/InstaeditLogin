@@ -7,7 +7,17 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 )
+
+// gzipWriterPool recycles gzip Writers across responses. A fresh
+// gzip.NewWriter allocates ~hundreds of KB of window/dictionary state
+// per JSON response; Reset() reinitializes a pooled writer to the exact
+// NewWriter state (same default compression level), so byte output is
+// identical while the steady-state allocation drops to zero.
+var gzipWriterPool = sync.Pool{
+	New: func() any { return gzip.NewWriter(nil) },
+}
 
 // gzipJSONMiddleware compresses JSON responses only when the client advertises
 // gzip support. Streaming, upgrades, already-encoded responses, and empty
@@ -52,7 +62,9 @@ func (w *gzipResponseWriter) WriteHeader(status int) {
 		w.Header().Del("Content-Length")
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
-		w.writer = gzip.NewWriter(w.ResponseWriter)
+		gw := gzipWriterPool.Get().(*gzip.Writer)
+		gw.Reset(w.ResponseWriter)
+		w.writer = gw
 		w.compressed = true
 	}
 	w.ResponseWriter.WriteHeader(status)
@@ -110,5 +122,7 @@ func (w *gzipResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWri
 func (w *gzipResponseWriter) close() {
 	if w.writer != nil {
 		_ = w.writer.Close()
+		gzipWriterPool.Put(w.writer)
+		w.writer = nil
 	}
 }

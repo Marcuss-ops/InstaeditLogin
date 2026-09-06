@@ -19,39 +19,39 @@ const CanonicalAssemblyContractV1 = "velox.assembly.v1"
 type AssemblyAssetKind string
 
 const (
-	AssemblyAssetSourceClip   AssemblyAssetKind = "source_clip"
-	AssemblyAssetVoiceover    AssemblyAssetKind = "voiceover"
-	AssemblyAssetMusic        AssemblyAssetKind = "music"
-	AssemblyAssetOverlay      AssemblyAssetKind = "overlay"
+	AssemblyAssetSourceClip     AssemblyAssetKind = "source_clip"
+	AssemblyAssetVoiceover      AssemblyAssetKind = "voiceover"
+	AssemblyAssetMusic          AssemblyAssetKind = "music"
+	AssemblyAssetOverlay        AssemblyAssetKind = "overlay"
 	AssemblyAssetGeneratedScene AssemblyAssetKind = "generated_scene"
-	AssemblyAssetPreparedScene AssemblyAssetKind = "prepared_scene"
-	AssemblyAssetSubtitle     AssemblyAssetKind = "subtitle"
+	AssemblyAssetPreparedScene  AssemblyAssetKind = "prepared_scene"
+	AssemblyAssetSubtitle       AssemblyAssetKind = "subtitle"
 )
 
 // AssemblyAssetState describes asset readiness on a specific worker.
 type AssemblyAssetState string
 
 const (
-	AssemblyAssetWaiting    AssemblyAssetState = "WAITING"
+	AssemblyAssetWaiting     AssemblyAssetState = "WAITING"
 	AssemblyAssetPrefetching AssemblyAssetState = "PREFETCHING"
-	AssemblyAssetReady      AssemblyAssetState = "READY"
-	AssemblyAssetMissing    AssemblyAssetState = "MISSING"
-	AssemblyAssetInvalid    AssemblyAssetState = "INVALID"
+	AssemblyAssetReady       AssemblyAssetState = "READY"
+	AssemblyAssetMissing     AssemblyAssetState = "MISSING"
+	AssemblyAssetInvalid     AssemblyAssetState = "INVALID"
 )
 
 // AssemblyJobState describes the preparation/execution lifecycle.
 type AssemblyJobState string
 
 const (
-	AssemblyJobPending    AssemblyJobState = "PENDING"
-	AssemblyJobPrefetching AssemblyJobState = "PREFETCHING"
-	AssemblyJobPrepared   AssemblyJobState = "PREPARED"
+	AssemblyJobPending      AssemblyJobState = "PENDING"
+	AssemblyJobPrefetching  AssemblyJobState = "PREFETCHING"
+	AssemblyJobPrepared     AssemblyJobState = "PREPARED"
 	AssemblyJobWaitingFinal AssemblyJobState = "WAITING_FINAL_MANIFEST"
-	AssemblyJobExecuting  AssemblyJobState = "EXECUTING"
-	AssemblyJobCompleted  AssemblyJobState = "COMPLETED"
-	AssemblyJobExpired    AssemblyJobState = "EXPIRED"
-	AssemblyJobFailed     AssemblyJobState = "FAILED"
-	AssemblyJobCancelled  AssemblyJobState = "CANCELLED"
+	AssemblyJobExecuting    AssemblyJobState = "EXECUTING"
+	AssemblyJobCompleted    AssemblyJobState = "COMPLETED"
+	AssemblyJobExpired      AssemblyJobState = "EXPIRED"
+	AssemblyJobFailed       AssemblyJobState = "FAILED"
+	AssemblyJobCancelled    AssemblyJobState = "CANCELLED"
 )
 
 // AssemblyProfileID identifies a deterministic media profile.
@@ -61,29 +61,29 @@ const AssemblyProfileVeloxH264CopyV1 AssemblyProfileID = "velox-h264-copy-v1"
 
 // AssemblyProfile describes the compatibility requirements for an asset.
 type AssemblyProfile struct {
-	ID            AssemblyProfileID `json:"profile_id"`
-	Container     string            `json:"container"`
-	VideoCodec    string            `json:"video_codec"`
-	AudioCodec    string            `json:"audio_codec"`
-	Width         int               `json:"width"`
-	Height        int               `json:"height"`
-	FPS           int               `json:"fps"`
-	AllowCopy     bool              `json:"allow_copy"`
+	ID         AssemblyProfileID `json:"profile_id"`
+	Container  string            `json:"container"`
+	VideoCodec string            `json:"video_codec"`
+	AudioCodec string            `json:"audio_codec"`
+	Width      int               `json:"width"`
+	Height     int               `json:"height"`
+	FPS        int               `json:"fps"`
+	AllowCopy  bool              `json:"allow_copy"`
 }
 
 // AssemblyAsset is a content-addressed asset reference. SHA256 is mandatory
 // and is the only identity used for local cache reuse.
 type AssemblyAsset struct {
-	AssetID       string             `json:"asset_id"`
-	Kind          AssemblyAssetKind  `json:"kind"`
-	SHA256        string             `json:"sha256"`
-	URL           string             `json:"url,omitempty"`
-	SizeBytes     int64              `json:"size_bytes"`
-	MimeType      string             `json:"mime_type,omitempty"`
-	ProfileID     AssemblyProfileID  `json:"profile_id,omitempty"`
-	State         AssemblyAssetState `json:"state,omitempty"`
-	Required      bool               `json:"required"`
-	SceneID       string             `json:"scene_id,omitempty"`
+	AssetID   string             `json:"asset_id"`
+	Kind      AssemblyAssetKind  `json:"kind"`
+	SHA256    string             `json:"sha256"`
+	URL       string             `json:"url,omitempty"`
+	SizeBytes int64              `json:"size_bytes"`
+	MimeType  string             `json:"mime_type,omitempty"`
+	ProfileID AssemblyProfileID  `json:"profile_id,omitempty"`
+	State     AssemblyAssetState `json:"state,omitempty"`
+	Required  bool               `json:"required"`
+	SceneID   string             `json:"scene_id,omitempty"`
 }
 
 // TimelineRevision makes timeline updates monotonic and idempotent.
@@ -101,12 +101,12 @@ type AssemblyTimeline struct {
 
 // PreparationManifest is the small initial manifest used for eager prefetch.
 type PreparationManifest struct {
-	ContractVersion string             `json:"contract_version"`
-	JobID           string             `json:"job_id"`
-	PreparationHash string             `json:"preparation_hash"`
-	ExpectedProfile AssemblyProfileID  `json:"expected_profile"`
-	Revision        int                `json:"revision"`
-	Assets          []AssemblyAsset    `json:"assets"`
+	ContractVersion string            `json:"contract_version"`
+	JobID           string            `json:"job_id"`
+	PreparationHash string            `json:"preparation_hash"`
+	ExpectedProfile AssemblyProfileID `json:"expected_profile"`
+	Revision        int               `json:"revision"`
+	Assets          []AssemblyAsset   `json:"assets"`
 }
 
 // FinalManifestDelta carries only assets and fields produced after prefetch.

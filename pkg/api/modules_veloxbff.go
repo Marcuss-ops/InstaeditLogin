@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +15,7 @@ import (
 type VeloxBFFModuleDeps struct {
 	Client         veloxapi.Client
 	JobRegistry    *veloxjobs.Registry
+	ResolveTarget  func(context.Context, int64, int64, veloxapi.PublicationTarget) (veloxapi.PublicationTarget, error)
 	AuthMiddleware func(http.Handler) http.Handler
 	CSRFMiddleware func(http.Handler) http.Handler
 }
@@ -40,6 +42,7 @@ func (m *VeloxBFFModule) Register(mux chi.Router) {
 	veloxapi.Register(mux, veloxapi.Deps{
 		Client:         m.deps.Client,
 		JobRegistry:    m.deps.JobRegistry,
+		ResolveTarget:  m.deps.ResolveTarget,
 		AuthMiddleware: m.deps.AuthMiddleware,
 		CSRFMiddleware: m.deps.CSRFMiddleware,
 	})

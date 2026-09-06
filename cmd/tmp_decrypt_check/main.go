@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -79,5 +78,3 @@ func maskedLast(s string) string {
 	}
 	return strings.Repeat("*", 3) + s[len(s)-1:]
 }
-
-var _ = bytes.MinRead

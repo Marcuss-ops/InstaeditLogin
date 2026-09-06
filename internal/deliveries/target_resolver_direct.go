@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // resolveChannelTarget validates one channel target. Returns the
@@ -52,12 +53,11 @@ func (r *TargetResolver) resolveChannelTarget(ctx context.Context, req ResolveRe
 	if err != nil {
 		slog.Error("target resolver: platform_account lookup failed",
 			"platform_account_id", accountID, "err", err)
-		return &ResolveResult{
-			Valid:           false,
-			ErrorCode:       ErrCodeBlockedAuth,
-			Message:         "platform_account lookup failed",
-			ResolvedTargets: []ResolvedTargetEntry{},
-		}, nil
+		// A store failure is INFRA, not a domain outcome: it must map
+		// to 500 at the boundary, not to a domain "blocked_auth" 422
+		// that tells the user to re-authorize a healthy channel.
+		// Only a nil row (missing account) is a domain result.
+		return nil, fmt.Errorf("target resolver: platform_account lookup failed: %w", err)
 	}
 	if pa == nil {
 		return &ResolveResult{
@@ -127,7 +127,13 @@ func (r *TargetResolver) resolveAccountIDForChannel(
 		if err != nil || pa == nil {
 			continue
 		}
-		if pa.Platform == platform && pa.PlatformUserID == t.ChannelID {
+		if pa.Platform != platform {
+			continue
+		}
+		if t.ChannelID != "" && pa.PlatformUserID == t.ChannelID {
+			return ch.PlatformAccountID, nil
+		}
+		if t.ChannelName != "" && strings.EqualFold(strings.TrimSpace(pa.Username), strings.TrimSpace(t.ChannelName)) {
 			return ch.PlatformAccountID, nil
 		}
 	}

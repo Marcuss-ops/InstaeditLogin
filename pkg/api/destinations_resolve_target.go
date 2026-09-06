@@ -9,6 +9,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/deliveries"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
 
 type VeloxResolveTargetRequest struct {
@@ -21,6 +22,7 @@ type VeloxResolveTargetPayload struct {
 	Type              string `json:"type"`
 	PlatformAccountID int64  `json:"platform_account_id,omitempty"`
 	ChannelID         string `json:"channel_id,omitempty"`
+	ChannelName       string `json:"channel_name,omitempty"`
 	GroupID           int64  `json:"group_id,omitempty"`
 }
 
@@ -97,6 +99,7 @@ func (m *VeloxModule) handleResolveTargetInternalDestination(w http.ResponseWrit
 			Type:              payload.Target.Type,
 			PlatformAccountID: payload.Target.PlatformAccountID,
 			ChannelID:         payload.Target.ChannelID,
+			ChannelName:       payload.Target.ChannelName,
 			GroupID:           payload.Target.GroupID,
 		},
 	})
@@ -195,26 +198,41 @@ func validateResolveTargetRequest(payload *VeloxResolveTargetRequest) error {
 
 	target := payload.Target
 	switch target.Type {
-	case "channel":
-		if target.PlatformAccountID == 0 && target.ChannelID == "" {
-			return errors.New("target.type=channel requires platform_account_id OR channel_id")
-		}
-		if target.GroupID != 0 {
-			return errors.New("target.type=channel cannot specify group_id")
-		}
-	case "group":
-		if target.GroupID <= 0 {
-			return errors.New("target.type=group requires group_id > 0")
-		}
-		if target.PlatformAccountID != 0 || target.ChannelID != "" {
-			return errors.New("target.type=group cannot specify platform_account_id or channel_id")
-		}
 	case "catalog":
 		if target.PlatformAccountID != 0 || target.ChannelID != "" || target.GroupID != 0 {
 			return errors.New("target.type=catalog cannot specify channel or group identifiers")
 		}
 	default:
-		return fmt.Errorf("target.type %q is not supported (today: channel, group or catalog)", target.Type)
+		// The structural channel/group rules are owned by the shared
+		// veloxcontract validator (single source of truth — previously
+		// duplicated here and in the canonical envelope with diverging
+		// semantics). This boundary demands an explicit identifier
+		// (platform_account_id or channel_id); channel_name-only targets
+		// are a canonical-envelope capability. Sentinel errors are
+		// mapped back to this endpoint's legacy wire messages so the
+		// response text is byte-identical to the pre-consolidation
+		// contract.
+		err := veloxcontract.ValidateTargetShape(veloxcontract.PublicationTarget{
+			Type:              target.Type,
+			PlatformAccountID: target.PlatformAccountID,
+			ChannelID:         target.ChannelID,
+			ChannelName:       target.ChannelName,
+			GroupID:           target.GroupID,
+		}, false)
+		if err != nil {
+			switch {
+			case errors.Is(err, veloxcontract.ErrTargetChannelRequiresIdentifier):
+				return errors.New("target.type=channel requires platform_account_id OR channel_id")
+			case errors.Is(err, veloxcontract.ErrTargetChannelHasGroupFields):
+				return errors.New("target.type=channel cannot specify group_id")
+			case errors.Is(err, veloxcontract.ErrTargetGroupRequiresIdentifier):
+				return errors.New("target.type=group requires group_id > 0")
+			case errors.Is(err, veloxcontract.ErrTargetGroupHasChannelFields):
+				return errors.New("target.type=group cannot specify platform_account_id or channel_id")
+			default:
+				return fmt.Errorf("target.type %q is not supported (today: channel, group or catalog)", target.Type)
+			}
+		}
 	}
 	return nil
 }

@@ -19,8 +19,8 @@ const (
 const (
 	DefaultPreparationLeaseTTL = 10 * time.Minute
 	DefaultExecutionLeaseTTL   = 5 * time.Minute
-	MinimumLeaseTTL             = 5 * time.Second
-	MaximumLeaseTTL             = 24 * time.Hour
+	MinimumLeaseTTL            = 5 * time.Second
+	MaximumLeaseTTL            = 24 * time.Hour
 )
 
 // LeaseState is the lifecycle of a lease record.

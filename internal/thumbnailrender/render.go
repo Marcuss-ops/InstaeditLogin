@@ -61,6 +61,11 @@ func (s *Scene) Render(ctx context.Context, contentType string, resolve ImageRes
 	}
 
 	var buf bytes.Buffer
+	// Capacity hint: the encoder streams a full-canvas image, so start
+	// with one bounded allocation instead of the buffer's default
+	// grow-and-copy doublings (typical full-HD JPEG output lands in
+	// the hundreds of KB).
+	buf.Grow(64 * 1024)
 	switch contentType {
 	case "image/png":
 		if err := png.Encode(&buf, img); err != nil {
@@ -94,6 +99,10 @@ func (s *Scene) renderObject(ctx context.Context, o *Object, resolve ImageResolv
 // renderRect draws a solid rectangle (optionally rounded) into a layer.
 // Layer dimensions are clamped to the canvas bound so a crafted
 // snapshot cannot force unbounded allocation.
+// Allocation discipline: an opaque unrounded rect fills the layer
+// uniformly (draw.Draw with image.NewUniform, SIMD-friendly) instead
+// of a per-pixel SetRGBA loop; rounded corners keep the per-pixel
+// mask. Pixel output is identical for the opaque case.
 func renderRect(o *Object) *image.RGBA {
 	w := clampDim(o.Width)
 	h := clampDim(o.Height)
@@ -102,6 +111,10 @@ func renderRect(o *Object) *image.RGBA {
 	}
 	layer := image.NewRGBA(image.Rect(0, 0, w, h))
 	radius := int(math.Round(o.Radius))
+	if radius <= 0 && o.Fill.A == 255 {
+		draw.Draw(layer, layer.Bounds(), image.NewUniform(o.Fill), image.Point{}, draw.Src)
+		return layer
+	}
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			if radius > 0 && !insideRoundedRect(x, y, w, h, radius) {
@@ -239,17 +252,22 @@ func toRGBA(src image.Image) *image.RGBA {
 
 // scaleImage resizes src to w x h with nearest-neighbour sampling. The
 // integer division makes scaling deterministic across runs.
+//
+// Allocation discipline: an identity-sized scale (w,h == src size)
+// returns src itself instead of allocating a full-size copy. Callers
+// treat layers as read-only (composite only reads pixels via RGBAAt /
+// draw.Over; rotation path also only reads), so sharing is safe and
+// skips one full-canvas allocation per unscaled object.
 func scaleImage(src *image.RGBA, w, h int) *image.RGBA {
 	if w <= 0 || h <= 0 {
 		return nil
 	}
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
-	if sw <= 0 || sh <= 0 {
-		return dst
-	}
 	if sw == w && sh == h {
-		draw.Draw(dst, dst.Bounds(), src, image.Point{}, draw.Src)
+		return src
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	if sw <= 0 || sh <= 0 {
 		return dst
 	}
 	sx0, sy0 := src.Bounds().Min.X, src.Bounds().Min.Y

@@ -137,6 +137,15 @@ type YouTubeTokenInfo struct {
 	HasMonetary bool
 }
 
+// ErrGoogleTokenInfoInvalid is returned (wrapped) by GetTokenInfo when
+// Google's tokeninfo endpoint answered HTTP 400 — the documented
+// "expired, revoked, malformed, or otherwise un-introspectable token"
+// reply. Callers classify hard rejection via errors.Is instead of
+// substring-matching "400" in the error text, which misfired on any
+// incidental "400" in transport/storage error messages (byte counts,
+// row ids, URLs) and flipped healthy accounts to reauth_required.
+var ErrGoogleTokenInfoInvalid = errors.New("google tokeninfo rejected the token")
+
 // GetTokenInfo calls Google's oauth2/v3/tokeninfo public introspection
 // endpoint with the supplied access token and returns the structured
 // introspection reply.
@@ -197,6 +206,11 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode == http.StatusBadRequest {
+		// Google's documented invalid-token reply. Typed sentinel so
+		// callers classify with errors.Is (see ErrGoogleTokenInfoInvalid).
+		return nil, fmt.Errorf("youtube tokeninfo returned %d: %w", resp.StatusCode, ErrGoogleTokenInfoInvalid)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("youtube tokeninfo returned %d", resp.StatusCode)
 	}

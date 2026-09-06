@@ -59,6 +59,9 @@ type Delivery struct {
 	RetryFrom             string `json:"retry_from,omitempty"`
 	PlatformMediaID       string `json:"platform_media_id,omitempty"`
 	PlatformURL           string `json:"platform_url,omitempty"`
+	ChannelName           string `json:"channel_name,omitempty"`
+	ChannelID             string `json:"channel_id,omitempty"`
+	YouTubeVideoID        string `json:"youtube_video_id,omitempty"`
 }
 
 // JobDetail is the aggregated response for GET /api/v1/velox/jobs/{id}.
@@ -123,12 +126,13 @@ type CreateJobRequest struct {
 // PublicationTarget identifies the logical destination selected in
 // InstaEdit Social. It never replaces opaque external destination IDs.
 type PublicationTarget struct {
-	Type        string   `json:"type"`
-	ChannelID   string   `json:"channel_id,omitempty"`
-	ChannelName string   `json:"channel_name,omitempty"`
-	GroupID     int64    `json:"group_id,omitempty"`
-	GroupName   string   `json:"group_name,omitempty"`
-	ChannelIDs  []string `json:"channel_ids,omitempty"`
+	Type              string   `json:"type"`
+	PlatformAccountID int64    `json:"platform_account_id,omitempty"`
+	ChannelID         string   `json:"channel_id,omitempty"`
+	ChannelName       string   `json:"channel_name,omitempty"`
+	GroupID           int64    `json:"group_id,omitempty"`
+	GroupName         string   `json:"group_name,omitempty"`
+	ChannelIDs        []string `json:"channel_ids,omitempty"`
 }
 
 // UnmarshalJSON keeps the canonical client DTO strict and prevents

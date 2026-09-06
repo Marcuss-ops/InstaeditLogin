@@ -304,15 +304,8 @@ func (e profileCostEstimator) Estimate(spec json.RawMessage, output *veloxcontra
 	}
 	return CostEstimate{
 		RenderUnits:         base * int64(assets) * pixels,
-		EstimatedDurationMS: int64(maxInt(scenes, assets)) * 1000,
+		EstimatedDurationMS: int64(max(scenes, assets)) * 1000,
 		SceneCount:          scenes,
 		AssetCount:          assets,
 	}, nil
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

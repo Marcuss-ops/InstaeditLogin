@@ -56,7 +56,10 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 	// The cache is router-local, while the in-flight map is process-global.
 	// Keep the router identity only on the latter so two independently
 	// configured routers never share an upstream result or token context.
-	inflightKey := fmt.Sprintf("%p:%s", r, cacheKey)
+	// The identity is an explicit constructor-assigned id: a %p pointer
+	// key could be reused by a later allocation after a Router is freed,
+	// silently cross-joining two routers' in-flight fetches.
+	inflightKey := fmt.Sprintf("%d:%s", r.routerInstanceID, cacheKey)
 	now := time.Now()
 	if !forceRefresh {
 		r.youtubeGroupVideosCacheMu.Lock()

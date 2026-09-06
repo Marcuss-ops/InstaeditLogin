@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"time"
 
@@ -284,13 +284,18 @@ func (r *Router) processYouTubeThumbnailBatch(ctx context.Context, batchID strin
 		}
 		if processErr == nil {
 			payload := publishYouTubeEditorSessionRequest{Title: item.Title, Description: item.Description, Tags: item.Tags, PrivacyStatus: "private"}
-			recorder := httptest.NewRecorder()
+			// Production capture writer: background batch orchestration
+			// reuses the same publish core as the HTTP endpoints but must
+			// not depend on net/http/httptest (a test package) in shipped
+			// code. Behavior is identical to httptest.NewRecorder for the
+			// writeJSON/writeError surface this core uses.
+			recorder := &batchPublishCaptureWriter{}
 			r.executePublishYouTubeEditorSession(ctx, recorder, identity, edit, payload)
-			if recorder.Code < http.StatusOK || recorder.Code >= http.StatusMultipleChoices {
-				processErr = fmt.Errorf("publish returned HTTP %d: %s", recorder.Code, batchErrorMessage(recorder.Body.Bytes()))
+			if recorder.Status() < http.StatusOK || recorder.Status() >= http.StatusMultipleChoices {
+				processErr = fmt.Errorf("publish returned HTTP %d: %s", recorder.Status(), batchErrorMessage(recorder.BodyBytes()))
 			} else {
 				var result publishYouTubeEditorSessionResponse
-				if decodeErr := json.Unmarshal(recorder.Body.Bytes(), &result); decodeErr != nil {
+				if decodeErr := json.Unmarshal(recorder.BodyBytes(), &result); decodeErr != nil {
 					processErr = fmt.Errorf("decode publish response: %w", decodeErr)
 				} else {
 					item.EditorSessionID = edit.ID
@@ -305,10 +310,68 @@ func (r *Router) processYouTubeThumbnailBatch(ctx context.Context, batchID strin
 			item.Status = "completed"
 			item.LastError = ""
 		}
-		_ = r.youtubeThumbnailBatchStore.UpdateItem(ctx, item)
-		_, _ = r.youtubeThumbnailBatchStore.Recompute(ctx, batchID)
+		if updateErr := r.youtubeThumbnailBatchStore.UpdateItem(ctx, item); updateErr != nil {
+			// Swallowing this write silently re-published items: after
+			// the claim lease expires (10 min) another cycle re-claims
+			// the item and re-runs a REAL YouTube publish. The failure
+			// must at minimum be observable.
+			slog.Error("youtube thumbnail batch: item status writeback failed; item will be re-claimed after lease expiry and re-published",
+				"batch_id", batchID, "item_id", item.ID, "item_status", item.Status, "err", updateErr)
+		}
+		if _, err := r.youtubeThumbnailBatchStore.Recompute(ctx, batchID); err != nil {
+			slog.Warn("youtube thumbnail batch: recompute failed",
+				"batch_id", batchID, "err", err)
+		}
 	}
-	_, _ = r.youtubeThumbnailBatchStore.Recompute(ctx, batchID)
+	if _, err := r.youtubeThumbnailBatchStore.Recompute(ctx, batchID); err != nil {
+		slog.Warn("youtube thumbnail batch: final recompute failed",
+			"batch_id", batchID, "err", err)
+	}
+}
+
+// batchPublishCaptureWriter is a minimal production http.ResponseWriter
+// that captures the status code and body bytes written by the shared
+// publish core so background batch processing can inspect the outcome
+// without a real HTTP connection. It replaces the previous misuse of
+// httptest.NewRecorder (a net/http/httptest test type) in production
+// code; the observable behavior for writeJSON/writeError is identical.
+type batchPublishCaptureWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	code   int
+}
+
+func (b *batchPublishCaptureWriter) Header() http.Header {
+	if b.header == nil {
+		b.header = make(http.Header)
+	}
+	return b.header
+}
+
+func (b *batchPublishCaptureWriter) WriteHeader(code int) {
+	if b.code == 0 {
+		b.code = code
+	}
+}
+
+func (b *batchPublishCaptureWriter) Write(p []byte) (int, error) {
+	if b.code == 0 {
+		b.code = http.StatusOK
+	}
+	return b.body.Write(p)
+}
+
+// Status returns the captured status code, defaulting to 200 when the
+// core never wrote a header — matching httptest.NewRecorder's default.
+func (b *batchPublishCaptureWriter) Status() int {
+	if b.code == 0 {
+		return http.StatusOK
+	}
+	return b.code
+}
+
+func (b *batchPublishCaptureWriter) BodyBytes() []byte {
+	return b.body.Bytes()
 }
 
 func (r *Router) ensurePrivateYouTubeBatchVideo(ctx context.Context, edit *models.YouTubeVideoEdit) error {

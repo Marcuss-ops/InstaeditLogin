@@ -338,7 +338,17 @@ func (r *YouTubeCredentialResolver) sharedGrantValidation(ctx context.Context, a
 		if introspect {
 			info, err = r.deps.TokenInfo.GetTokenInfo(ctx, token.AccessToken)
 			if err != nil {
-				return nil, fmt.Errorf("%w: %w", ErrYouTubeCredentialTokenInfo, err)
+				// Only a hard Google rejection (HTTP 400 invalid_token,
+				// typed ErrGoogleTokenInfoInvalid) may keep the
+				// ErrYouTubeCredentialTokenInfo classification that the
+				// HTTP layer maps to reauth_required. Transport/decode
+				// failures are transient: they classify as token
+				// unavailability (500) so a network blip cannot flip a
+				// healthy account to reauth_required.
+				if errors.Is(err, ErrGoogleTokenInfoInvalid) {
+					return nil, fmt.Errorf("%w: %w", ErrYouTubeCredentialTokenInfo, err)
+				}
+				return nil, fmt.Errorf("%w: tokeninfo transport failure: %w", ErrYouTubeCredentialToken, err)
 			}
 			if info == nil {
 				return nil, ErrYouTubeCredentialTokenInfo

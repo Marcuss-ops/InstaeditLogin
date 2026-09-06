@@ -36,7 +36,6 @@ func Load() (*Config, error) {
 		Auth: AuthConfig{
 			MetaAppID:            getEnv("META_APP_ID", ""),
 			MetaAppSecret:        getEnv("META_APP_SECRET", ""),
-			MetaRedirectURI:      getEnv("META_REDIRECT_URI", ""),
 			InstagramRedirectURI: getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
 			FacebookRedirectURI:  getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
 			ThreadsRedirectURI:   getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),

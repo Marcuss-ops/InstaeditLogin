@@ -125,6 +125,7 @@ type TargetDescriptor struct {
 	Type              string // "channel" or "group"
 	PlatformAccountID int64
 	ChannelID         string
+	ChannelName       string
 	GroupID           int64
 }
 
@@ -229,10 +230,13 @@ func (r *TargetResolver) resolveSavedDestination(ctx context.Context, req Resolv
 	}
 
 	dest, err := r.deps.DestinationStore.GetByID(ctx, req.DestID)
-	// dest==nil is checked BEFORE err!=nil because production repos
-	// return (nil, ErrExternalDestinationNotFound) for missing rows.
-	// The resolver treats any nil-dest result — regardless of error —
-	// as a clean "not found" so the handler maps it to 404.
+	// err is checked BEFORE the nil-dest check: the production repo
+	// returns (nil, nil) for a missing row but (nil, err) for a real
+	// infra failure (DB down, context cancelled). Collapsing both into
+	// a clean "not found" hid transient outages behind a 422/404.
+	if err != nil {
+		return nil, fmt.Errorf("target resolver: destination lookup failed: %w", err)
+	}
 	if dest == nil || !dest.Enabled {
 		return &ResolveResult{
 			Valid:           false,
@@ -240,9 +244,6 @@ func (r *TargetResolver) resolveSavedDestination(ctx context.Context, req Resolv
 			Message:         ErrDestinationNotFound.Error(),
 			ResolvedTargets: []ResolvedTargetEntry{},
 		}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("target resolver: destination lookup failed: %w", err)
 	}
 
 	// Workspace check.

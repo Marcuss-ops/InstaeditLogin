@@ -3,6 +3,7 @@ package veloxcontract
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -208,6 +209,7 @@ func (r JobSubmissionRequest) ValidateCanonical() error {
 			return err
 		}
 	}
+
 	if len(r.Publications) > 0 {
 		var publications []json.RawMessage
 		if err := json.Unmarshal(r.Publications, &publications); err != nil || len(publications) == 0 {
@@ -217,24 +219,27 @@ func (r JobSubmissionRequest) ValidateCanonical() error {
 	return nil
 }
 
+// validatePublicationTarget delegates the structural decision to the
+// shared single-source validator (target_shape.go) and maps the
+// sentinel errors back to this boundary's legacy wire messages so the
+// BFF-visible text is byte-identical to the pre-consolidation contract.
+// The canonical envelope accepts a channel_name-only target because the
+// BFF resolves it to a concrete platform account before forwarding.
 func validatePublicationTarget(target PublicationTarget) error {
-	switch strings.TrimSpace(target.Type) {
-	case "channel":
-		if strings.TrimSpace(target.ChannelID) == "" && strings.TrimSpace(target.ChannelName) == "" {
-			return fmt.Errorf("target channel requires channel_id or channel_name")
-		}
-		if target.GroupID != 0 || strings.TrimSpace(target.GroupName) != "" {
-			return fmt.Errorf("channel target cannot include group fields")
-		}
-	case "group":
-		if target.GroupID <= 0 && strings.TrimSpace(target.GroupName) == "" {
-			return fmt.Errorf("target group requires group_id or group_name")
-		}
-		if strings.TrimSpace(target.ChannelID) != "" || strings.TrimSpace(target.ChannelName) != "" {
-			return fmt.Errorf("group target cannot include channel fields")
-		}
+	err := ValidateTargetShape(target, true)
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, ErrTargetChannelRequiresIdentifier):
+		return fmt.Errorf("target channel requires channel_id or channel_name")
+	case errors.Is(err, ErrTargetChannelHasGroupFields):
+		return fmt.Errorf("channel target cannot include group fields")
+	case errors.Is(err, ErrTargetGroupRequiresIdentifier):
+		return fmt.Errorf("target group requires group_id or group_name")
+	case errors.Is(err, ErrTargetGroupHasChannelFields):
+		return fmt.Errorf("group target cannot include channel fields")
 	default:
 		return fmt.Errorf("target.type must be channel or group")
 	}
-	return nil
 }

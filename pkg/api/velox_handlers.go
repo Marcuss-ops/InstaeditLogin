@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/deliveries"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // NOTE — handleCreateInternalDelivery lives in deliveries_handler.go.
@@ -116,11 +118,20 @@ func (m *VeloxModule) resolveDeliveryTarget(ctx context.Context, delivery *model
 		return target
 	}
 	destination, err := m.deps.ExternalDestinationStore.GetByID(ctx, delivery.ExternalDestinationID)
-	if err != nil || destination == nil {
-		slog.Warn("velox get delivery: destination lookup partial",
+	if err != nil {
+		// INFRA failure — logged at Error so alerting can distinguish
+		// "DB problem" from the tolerated "row missing" degradation
+		// below. The GET contract still degrades gracefully.
+		slog.Error("velox get delivery: destination lookup failed (infra)",
 			"social_delivery_id", delivery.ID,
 			"external_destination_id", delivery.ExternalDestinationID,
 			"err", err)
+		return target
+	}
+	if destination == nil {
+		slog.Warn("velox get delivery: destination row missing",
+			"social_delivery_id", delivery.ID,
+			"external_destination_id", delivery.ExternalDestinationID)
 		return target
 	}
 	target.PlatformAccountID = destination.PlatformAccountID
@@ -128,11 +139,17 @@ func (m *VeloxModule) resolveDeliveryTarget(ctx context.Context, delivery *model
 		return target
 	}
 	pa, err := m.deps.UserStore.FindPlatformAccountByID(target.PlatformAccountID)
-	if err != nil || pa == nil {
-		slog.Warn("velox get delivery: platform_account lookup partial",
+	if err != nil {
+		slog.Error("velox get delivery: platform_account lookup failed (infra)",
 			"social_delivery_id", delivery.ID,
 			"platform_account_id", target.PlatformAccountID,
 			"err", err)
+		return target
+	}
+	if pa == nil {
+		slog.Warn("velox get delivery: platform_account row missing",
+			"social_delivery_id", delivery.ID,
+			"platform_account_id", target.PlatformAccountID)
 		return target
 	}
 	target.ChannelID = pa.PlatformUserID
@@ -141,7 +158,16 @@ func (m *VeloxModule) resolveDeliveryTarget(ctx context.Context, delivery *model
 		return target
 	}
 	binding, err := m.deps.WorkspaceStore.FindChannel(ctx, destination.WorkspaceID, target.PlatformAccountID)
-	if err == nil && binding != nil {
+	if err != nil {
+		// Previously swallowed with no log at all: an Enabled=false
+		// projection here was indistinguishable from a healthy but
+		// unbound channel.
+		slog.Error("velox get delivery: workspace channel lookup failed (infra)",
+			"social_delivery_id", delivery.ID,
+			"workspace_id", destination.WorkspaceID,
+			"platform_account_id", target.PlatformAccountID,
+			"err", err)
+	} else if binding != nil {
 		target.Enabled = binding.Enabled
 	}
 	return target
@@ -293,6 +319,15 @@ func (m *VeloxModule) handleValidateInternalDestination(w http.ResponseWriter, r
 		DestID: id,
 	})
 	if err != nil {
+		// A typed missing-row miss from the destination store (wrapped
+		// by the resolver) maps to the canonical 404 body — identical
+		// to the nil-dest domain result below. A real infra failure
+		// keeps the redacted 500 instead of being collapsed into
+		// "not found".
+		if errors.Is(err, repository.ErrExternalDestinationNotFound) {
+			writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
+			return
+		}
 		slog.Error("velox validate: resolver failed",
 			"destination_id", id, "err", err)
 		writeError(w, http.StatusInternalServerError, "validation failed")

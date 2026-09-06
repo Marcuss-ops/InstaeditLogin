@@ -26,7 +26,7 @@ func TestPreparationManifestValidate(t *testing.T) {
 func TestPreparationManifestRejectsInvalidSHAAndDuplicateAsset(t *testing.T) {
 	manifest := PreparationManifest{
 		ContractVersion: CanonicalAssemblyContractV1,
-		JobID: "job-123", PreparationHash: strings.Repeat("a", 64), Revision: 1,
+		JobID:           "job-123", PreparationHash: strings.Repeat("a", 64), Revision: 1,
 		Assets: []AssemblyAsset{
 			{AssetID: "clip-1", Kind: AssemblyAssetSourceClip, SHA256: strings.Repeat("b", 64)},
 			{AssetID: "clip-1", Kind: AssemblyAssetSourceClip, SHA256: "BAD"},
@@ -63,10 +63,10 @@ func TestPreparationHashIsOrderIndependent(t *testing.T) {
 func TestFinalManifestDeltaValidateTimeline(t *testing.T) {
 	delta := FinalManifestDelta{
 		ContractVersion: CanonicalAssemblyContractV1,
-		JobID: "job-123", Revision: 2,
+		JobID:           "job-123", Revision: 2,
 		Timeline: &AssemblyTimeline{
 			Revision: TimelineRevision{Revision: 2, SHA256: strings.Repeat("c", 64)},
-			Data: json.RawMessage(`{"tracks":[]}`),
+			Data:     json.RawMessage(`{"tracks":[]}`),
 		},
 	}
 	if err := delta.Validate(); err != nil {

@@ -22,6 +22,7 @@
 package velox
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -97,6 +98,7 @@ var (
 type Deps struct {
 	Client         Client
 	JobRegistry    *veloxjobs.Registry
+	ResolveTarget  func(context.Context, int64, int64, PublicationTarget) (PublicationTarget, error)
 	AuthMiddleware func(http.Handler) http.Handler
 	CSRFMiddleware func(http.Handler) http.Handler
 }
@@ -109,6 +111,7 @@ type Deps struct {
 //
 //	GET    /api/v1/velox/jobs
 //	POST   /api/v1/jobs             (canonical velox.job.v1 path)
+//	POST   /api/v1/jobs/preview     (validate target without creating a job)
 //	GET    /api/v1/velox/jobs/{id}
 //	POST   /api/v1/velox/jobs/{id}/cancel
 //	GET    /api/v1/velox/jobs/{id}/deliveries
@@ -133,6 +136,7 @@ func Register(mux chi.Router, deps Deps) {
 
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs", wrap(b.listJobs))
 	mux.Method(http.MethodPost, "/api/v1/jobs", wrap(b.createCanonicalJob))
+	mux.Method(http.MethodPost, "/api/v1/jobs/preview", wrap(b.previewCanonicalJobTarget))
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs/{id}", wrap(b.getJob))
 	mux.Method(http.MethodPost, "/api/v1/velox/jobs/{id}/cancel", wrap(b.cancelJob))
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs/{id}/deliveries", wrap(b.listJobDeliveries))

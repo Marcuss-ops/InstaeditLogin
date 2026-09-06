@@ -1,9 +1,16 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/deliveries"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
+	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
 
 // Setup wires the application's route table.  Route registration is
@@ -48,6 +55,39 @@ func (r *Router) Setup() http.Handler {
 		JobRegistry:    r.veloxJobRegistry,
 		AuthMiddleware: r.veloxBFFAuthMiddleware,
 		CSRFMiddleware: r.veloxBFFCSRFMiddleware,
+		ResolveTarget: func(ctx context.Context, workspaceID, _ int64, target veloxapi.PublicationTarget) (veloxapi.PublicationTarget, error) {
+			if target.Type != "channel" {
+				// Defensive: createCanonicalJob only invokes this closure
+				// for channel targets. Fail with the shared taxonomy
+				// sentinel so no third copy of the type rule can drift.
+				return target, fmt.Errorf("%w: %s", veloxcontract.ErrTargetTypeUnsupported,
+					"only channel targets are supported for channel_name resolution")
+			}
+			resolved, err := r.veloxModule().resolver().Resolve(ctx, deliveries.ResolveRequest{
+				WorkspaceID: workspaceID,
+				Platform:    models.PlatformYouTube,
+				Target: deliveries.TargetDescriptor{
+					Type:              target.Type,
+					PlatformAccountID: target.PlatformAccountID,
+					ChannelID:         target.ChannelID,
+					ChannelName:       target.ChannelName,
+				},
+			})
+			if err != nil {
+				return target, err
+			}
+			if resolved == nil || !resolved.Valid || len(resolved.ResolvedTargets) != 1 {
+				if resolved != nil && resolved.Message != "" {
+					return target, fmt.Errorf("%s", resolved.Message)
+				}
+				return target, fmt.Errorf("target channel is not publishable")
+			}
+			entry := resolved.ResolvedTargets[0]
+			target.PlatformAccountID = entry.PlatformAccountID
+			target.ChannelID = entry.ChannelID
+			target.ChannelName = entry.ChannelName
+			return target, nil
+		},
 	}))
 	reg.Register(NewEditorBFFModule(EditorBFFModuleDeps{
 		Client:                r.editorBFFClient,

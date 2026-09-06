@@ -3,9 +3,11 @@ package config
 // AuthConfig holds OAuth credentials, JWT settings and security tokens.
 type AuthConfig struct {
 	// Meta OAuth — shared App ID and Secret.
-	MetaAppID       string
-	MetaAppSecret   string
-	MetaRedirectURI string // DEPRECATED
+	// (MetaRedirectURI was removed: it was loaded from META_REDIRECT_URI
+	// but never read by any OAuth flow — per-platform redirect URIs
+	// below are the canonical wiring.)
+	MetaAppID     string
+	MetaAppSecret string
 
 	// Per-platform redirect URIs.
 	InstagramRedirectURI string

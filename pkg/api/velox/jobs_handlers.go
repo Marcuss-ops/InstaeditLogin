@@ -104,6 +104,18 @@ func (b *bff) createCanonicalJob(w http.ResponseWriter, req *http.Request) {
 		}
 		return
 	}
+	if body.Target != nil && body.Target.Type == "channel" && strings.TrimSpace(body.Target.ChannelName) != "" {
+		if b.deps.ResolveTarget == nil {
+			writeError(w, http.StatusServiceUnavailable, "channel target resolver not configured")
+			return
+		}
+		resolved, resolveErr := b.deps.ResolveTarget(req.Context(), wsID, userID, *body.Target)
+		if resolveErr != nil {
+			writeError(w, http.StatusUnprocessableEntity, "validation: "+resolveErr.Error())
+			return
+		}
+		body.Target = &resolved
+	}
 	result, err := b.submission.SubmitCanonical(req.Context(), wsID, userID, body)
 	if err != nil {
 		if errors.Is(err, veloxjobs.ErrInvalidSubmission) {
@@ -132,6 +144,32 @@ func (b *bff) createCanonicalJob(w http.ResponseWriter, req *http.Request) {
 		"render_units", estimate.RenderUnits,
 		"estimated_duration_ms", estimate.EstimatedDurationMS)
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (b *bff) previewCanonicalJobTarget(w http.ResponseWriter, req *http.Request) {
+	wsID, userID, ok := b.requireIdentity(w, req)
+	if !ok {
+		return
+	}
+	var body struct {
+		Target PublicationTarget `json:"target"`
+	}
+	decoder := json.NewDecoder(req.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if b.deps.ResolveTarget == nil {
+		writeError(w, http.StatusServiceUnavailable, "channel target resolver not configured")
+		return
+	}
+	resolved, err := b.deps.ResolveTarget(req.Context(), wsID, userID, body.Target)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"valid": true, "target": resolved, "privacy_status": "private"})
 }
 
 // getJob implements GET /api/v1/velox/jobs/{id}.

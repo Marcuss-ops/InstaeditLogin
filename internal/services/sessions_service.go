@@ -362,20 +362,21 @@ func (s *SessionsService) Cleanup(ctx context.Context) (CleanupResult, error) {
 // cleanupOrphanSession best-effort-revokes an orphan session row
 // after the access-token signing step failed (C5 hardening).
 //
-// Contract: revoke-on-best-effort. Two attempts total (initial + one
-// retry) with bounded backoff:
+// Contract: revoke-on-best-effort. Two revoke attempts run INLINE (no
+// sleeps — a Retry against a churned pool either works immediately or
+// needs the bounded tail below):
 //
-//	attempt 1          → fail
-//	sleep 50ms         →
-//	attempt 2 (retry)  → fail
-//	sleep 100ms        →
-//	increment metric   → log at WARN, give up
+//	attempt 1 → fail
+//	attempt 2 → fail
+//	→ hand off to finishOrphanSessionCleanup (background goroutine)
 //
-// Total worst-case wall time: Revoke(50ms) × 2 + 150ms sleeps. The
-// cap keeps the caller from blocking on a single orphan forever
-// while still leaving a forgiving window for transient DB blips
-// (e.g. sql.ErrConnDone on connection pool churn) to clear. On final
-// failure the orphan row stays in the sessions table until the
+// The historical implementation slept 50ms+100ms INLINE on the auth
+// request path, adding up to 150ms of maintenance latency to the
+// tail of /auth/login and /auth/refresh. The bounded tail retry now
+// runs off the request path: same 100ms grace, same one-retry
+// envelope, zero added caller latency.
+//
+// On final failure the orphan row stays in the sessions table until the
 // periodic Cleanup() goroutine (cmd/worker sessions_cleanup, grace
 // windows 30d revoked / 7d expired) hard-deletes it; the metric
 // `session_orphan_revoke_failures_total` records every give-up so
@@ -393,28 +394,38 @@ func (s *SessionsService) cleanupOrphanSession(row *repository.Session, cause er
 			"active_id", evIDOrZero(row), "cause", cause)
 		return
 	}
-	// Two attempts; backoff sequence is consumed once per retry-fail.
+	// Two inline attempts: revoke either succeeds immediately (row is
+	// durably revoked) or the failure is carried to the tail handler.
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		if attempt > 0 {
-			time.Sleep(orphanRevokeBackoffs[attempt-1])
-		}
-		if err := s.repo.Revoke(row.ID, "access_sign_failed"); err == nil {
-			return // success on initial OR retry: row is durably revoked.
-		} else {
+		if err := s.repo.Revoke(row.ID, "access_sign_failed"); err != nil {
 			lastErr = err
+			continue
 		}
+		return // success on initial inline attempt: row durably revoked.
 	}
-	// Final 100ms grace before giving up — the spec says
-	// "50ms+100ms" backoff and we read the second slice as the
-	// post-retry-grace rather than a wasted gate. Operators can
-	// tune orphanRevokeBackoffs if a future load test shows longer
-	// pool-recovery tails than this 150ms envelope.
+	// Both inline attempts failed. Hand the bounded 100ms grace + one
+	// final retry to a background goroutine: the auth request path
+	// must never block on maintenance work, and the ultimate give-up
+	// signal (metric + WARN) still fires when the row truly lingers.
+	go s.finishOrphanSessionCleanup(row.ID, row.UserID, cause, lastErr)
+}
+
+// finishOrphanSessionCleanup completes the bounded orphan-revoke
+// envelope off the request path: one 100ms grace sleep (the historical
+// orphanRevokeBackoffs tail, kept for connection-pool churn to clear)
+// followed by one final revoke attempt. On success the row is durably
+// revoked and nothing more happens; on failure the metric increments
+// and the WARN records the give-up so operators can SLO on Cleanup lag.
+func (s *SessionsService) finishOrphanSessionCleanup(sessionID, userID int64, cause, lastErr error) {
 	time.Sleep(orphanRevokeBackoffs[len(orphanRevokeBackoffs)-1])
+	if err := s.repo.Revoke(sessionID, "access_sign_failed"); err == nil {
+		return
+	}
 	metrics.RecordSessionOrphanRevokeFailure()
 	slog.Default().Warn("orphan session revoke failed after bounded retry; row may linger until Cleanup",
-		"session_id", row.ID,
-		"user_id", row.UserID,
+		"session_id", sessionID,
+		"user_id", userID,
 		"cause", cause,
 		"last_err", lastErr,
 	)

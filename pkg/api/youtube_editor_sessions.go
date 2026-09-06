@@ -73,7 +73,7 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	if in.WorkspaceID <= 0 {
 		return nil, nil, ErrEditorSessionWorkspaceNotFound
 	}
-	if in.PlatformAccountID <= 0 {
+	if in.PlatformAccountID <= 0 && strings.TrimSpace(in.ChannelName) == "" {
 		return nil, nil, ErrEditorSessionAccountNotFound
 	}
 	if in.YouTubeVideoID == "" {
@@ -95,6 +95,31 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	}
 	if r.userRepo == nil {
 		return nil, nil, ErrEditorSessionAccountNotFound
+	}
+	if in.PlatformAccountID <= 0 {
+		accounts, listErr := r.userRepo.ListPlatformAccountsByUser(in.UserID, models.PlatformYouTube)
+		if listErr != nil {
+			return nil, nil, ErrEditorSessionAccountNotFound
+		}
+		wanted := strings.TrimSpace(in.ChannelName)
+		for _, candidate := range accounts {
+			if candidate == nil {
+				continue
+			}
+			name := strings.TrimSpace(candidate.Username)
+			if name == "" {
+				// publishing/targets exposes platform_user_id as the
+				// display fallback when YouTube did not return a title.
+				name = strings.TrimSpace(candidate.PlatformUserID)
+			}
+			if strings.EqualFold(name, wanted) {
+				in.PlatformAccountID = candidate.ID
+				break
+			}
+		}
+		if in.PlatformAccountID <= 0 {
+			return nil, nil, ErrEditorSessionAccountNotFound
+		}
 	}
 	account, err := r.userRepo.FindPlatformAccountByID(in.PlatformAccountID)
 	if err != nil || account == nil || account.Platform != models.PlatformYouTube {
@@ -313,8 +338,10 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if payload.WorkspaceID <= 0 || payload.PlatformAccountID <= 0 || payload.YouTubeVideoID == "" {
-		writeError(w, http.StatusBadRequest, "workspace_id, platform_account_id, youtube_video_id are required")
+	if payload.WorkspaceID <= 0 || payload.YouTubeVideoID == "" ||
+		(payload.PlatformAccountID <= 0 && strings.TrimSpace(payload.ChannelName) == "") ||
+		(payload.PlatformAccountID > 0 && strings.TrimSpace(payload.ChannelName) != "") {
+		writeError(w, http.StatusBadRequest, "workspace_id, youtube_video_id and exactly one of platform_account_id or channel_name are required")
 		return
 	}
 	if !apiKeyCanAccessWorkspace(identity, payload.WorkspaceID) {
@@ -352,6 +379,7 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 	edit, video, err := r.CreateEditorSession(req.Context(), CreateEditorSessionInput{
 		WorkspaceID:        payload.WorkspaceID,
 		PlatformAccountID:  payload.PlatformAccountID,
+		ChannelName:        payload.ChannelName,
 		YouTubeVideoID:     payload.YouTubeVideoID,
 		SourceThumbnailURL: payload.SourceThumbnailURL,
 		UserID:             identity.UserID(),

@@ -41,6 +41,7 @@ var (
 type CreateEditorSessionInput struct {
 	WorkspaceID        int64
 	PlatformAccountID  int64
+	ChannelName        string
 	YouTubeVideoID     string
 	SourceThumbnailURL string
 	UserID             int64
@@ -51,6 +52,7 @@ type CreateEditorSessionInput struct {
 type createYouTubeEditorSessionRequest struct {
 	WorkspaceID        int64  `json:"workspace_id"`
 	PlatformAccountID  int64  `json:"platform_account_id"`
+	ChannelName        string `json:"channel_name,omitempty"`
 	YouTubeVideoID     string `json:"youtube_video_id"`
 	SourceThumbnailURL string `json:"source_thumbnail_url,omitempty"`
 }

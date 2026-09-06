@@ -324,16 +324,27 @@ func isInvalidGrantError(err error) bool {
 
 // isGoogleTokenInfoRejection classifies a GetTokenInfo failure as
 // "Google said the token is bad" (HTTP 400 invalid_token) versus
-// "the request never reached Google" (network / decode). The
-// substring "400" matches the upstream's `fmt.Errorf("youtube
-// tokeninfo returned %d: %s", resp.StatusCode, string(body))`
-// shape. Same fragility pattern as isInvalidGrantError; same
-// long-term fix (typed sentinel `ErrGoogleTokenInfoInvalid`).
+// "the request never reached Google" (network / decode).
+//
+// The historical implementation substring-matched "400" in the error
+// text — the same fragile pattern this file's isInvalidGrantError doc
+// warns against — and misclassified any incidental "400" in a message
+// (byte counts, row ids, URLs) as a hard rejection, flipping healthy
+// accounts to reauth_required. The canonical signal is now the typed
+// services.ErrGoogleTokenInfoInvalid sentinel emitted by
+// GetTokenInfo on Google's documented HTTP 400 reply. The substring
+// fallback is intentionally narrowed to exact shapes of the
+// pre-sentinel message so test doubles that predate the sentinel still
+// classify correctly, without reintroducing incidental-"400" false
+// positives.
 func isGoogleTokenInfoRejection(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "400")
+	if errors.Is(err, services.ErrGoogleTokenInfoInvalid) {
+		return true
+	}
+	return strings.Contains(err.Error(), "youtube tokeninfo returned 400")
 }
 
 // handleReconnectAccount flags the account as needing reauth. The
