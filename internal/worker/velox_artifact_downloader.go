@@ -27,26 +27,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// VeloxDownloadJob is kept for backward compatibility with tests and
-// any code that imports the name. It is no longer used as a channel
-// payload; the worker now reads directly from the database queue.
-type VeloxDownloadJob struct {
-	ExternalDeliveryID  string
-	UserID              int64
-	WorkspaceID         int64
-	Title               string
-	Caption             string
-	DefaultPrivacyLevel string
-	ArtifactSHA256      string
-	SizeBytes           int64
-	MimeType            string
-	DownloadURL         string
-	PublishAt           *time.Time
-	Targets             []int64
-	DriveAccountID      *int64
-	FolderID            *string
-}
-
 // ExternalDeliveryClaimStore is the repository surface the worker
 // uses to claim rows and record retry / dead-letter outcomes.
 type ExternalDeliveryClaimStore interface {
@@ -231,11 +211,26 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, delivery *mode
 	// Drive destinations are OAuth resources, not workspace channels.
 	// The provider marker is destination-owned metadata and therefore
 	// cannot be forged by the Velox payload.
+	//
+	// Corrupt DefaultMetadata is surfaced, not silently swallowed: a
+	// silent fallback here would route a Drive destination through the
+	// channel-binding branch and surface a misleading "platform account
+	// not enabled" terminal error instead of the real data problem.
 	var destinationDefaults map[string]json.RawMessage
-	_ = json.Unmarshal(dest.DefaultMetadata, &destinationDefaults)
+	if uErr := json.Unmarshal(dest.DefaultMetadata, &destinationDefaults); uErr != nil && len(dest.DefaultMetadata) > 0 {
+		d.logger.Warn("velox downloader: corrupt destination DefaultMetadata — provider detection degraded",
+			"external_delivery_id", delivery.ID,
+			"destination_id", dest.ID,
+			"error", uErr)
+	}
 	var provider string
 	if raw, ok := destinationDefaults["provider"]; ok {
-		_ = json.Unmarshal(raw, &provider)
+		if uErr := json.Unmarshal(raw, &provider); uErr != nil {
+			d.logger.Warn("velox downloader: corrupt provider marker in destination DefaultMetadata",
+				"external_delivery_id", delivery.ID,
+				"destination_id", dest.ID,
+				"error", uErr)
+		}
 	}
 	if provider != "google_drive" {
 		binding, bindingErr := d.workspaceStore.FindChannel(ctx, dest.WorkspaceID, dest.PlatformAccountID)

@@ -150,7 +150,10 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 			slog.Info("YouTube: resuming upload from byte", "resumed_at", resumedAt)
 
 			resp.Body.Close()
-			req2, _ := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
+			req2, nErr := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
+			if nErr != nil {
+				return "", fmt.Errorf("failed to re-download from byte %d (build request): %w", resumedAt, nErr)
+			}
 			req2.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumedAt))
 			resp2, err2 := s.httpClient.Do(req2)
 			if err2 != nil {
