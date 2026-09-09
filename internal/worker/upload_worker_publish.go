@@ -151,14 +151,12 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 	// stole the lease (reaper release + peer's ClaimBatch
 	// re-claim) cannot overwrite a peer's terminal write.
 	if job.PublishAt != nil && job.PublishAt.After(time.Now()) {
-		if prepared, ok := w.jobRepo.(PreparedUploadJobStore); ok {
-			if err := prepared.MarkPrepared(ctx, job.ID, workerID, post.ID, assetID); err != nil {
-				return fmt.Errorf("mark job prepared: %w", err)
-			}
-		} else if err := w.jobRepo.MarkCompleted(ctx, job.ID, workerID, post.ID, assetID); err != nil {
-			// Compatibility fallback for legacy adapters. The post itself
-			// remains protected by publish_at.
-			return fmt.Errorf("mark scheduled job prepared: %w", err)
+		// MarkPrepared is part of UploadJobStore (the legacy optional
+		// PreparedUploadJobStore capability + type-assert fallback were
+		// retired once every store carried the method): a future job
+		// must NOT be reported publish_completed before publish_at.
+		if err := w.jobRepo.MarkPrepared(ctx, job.ID, workerID, post.ID, assetID); err != nil {
+			return fmt.Errorf("mark job prepared: %w", err)
 		}
 		w.logger.Info("upload worker: preparation done; publish scheduled",
 			"pool", "upload", "job_id", job.ID, "post_id", post.ID,
@@ -188,14 +186,42 @@ func (w *UploadWorker) materializeYouTubeDeliveries(
 	if w.ytPubStore == nil {
 		return nil
 	}
+	// Resolve the platform accounts in one shot for the whole fan-out:
+	// jobs with N targets used to issue one FindPlatformAccountByID per
+	// target (N+1) even though every target of a job usually maps to a
+	// handful of distinct accounts.
+	accountIDs := make([]int64, 0, len(targets))
+	seenAccounts := make(map[int64]bool, len(targets))
+	for _, target := range targets {
+		if target != nil && target.PlatformAccountID > 0 && !seenAccounts[target.PlatformAccountID] {
+			seenAccounts[target.PlatformAccountID] = true
+			accountIDs = append(accountIDs, target.PlatformAccountID)
+		}
+	}
+	accountsByID := make(map[int64]*models.PlatformAccount, len(accountIDs))
+	if batch, ok := w.userRepo.(interface {
+		FindPlatformAccountsByIDs(ctx context.Context, ids []int64) (map[int64]*models.PlatformAccount, error)
+	}); ok {
+		byID, err := batch.FindPlatformAccountsByIDs(ctx, accountIDs)
+		if err != nil {
+			return fmt.Errorf("batch resolve platform accounts during delivery materialization: %w", err)
+		}
+		accountsByID = byID
+	} else {
+		for _, id := range accountIDs {
+			account, err := w.userRepo.FindPlatformAccountByID(id)
+			if err != nil {
+				return fmt.Errorf("FindPlatformAccountByID(%d) during delivery materialization: %w", id, err)
+			}
+			accountsByID[id] = account
+		}
+	}
+
 	for _, target := range targets {
 		if target == nil {
 			continue
 		}
-		account, err := w.userRepo.FindPlatformAccountByID(target.PlatformAccountID)
-		if err != nil {
-			return fmt.Errorf("FindPlatformAccountByID(%d) during delivery materialization: %w", target.PlatformAccountID, err)
-		}
+		account := accountsByID[target.PlatformAccountID]
 		if account == nil {
 			return fmt.Errorf("nil platform account for id=%d during delivery materialization", target.PlatformAccountID)
 		}
@@ -465,10 +491,18 @@ func (w *UploadWorker) uploadVideoAsPrivateForDelivery(
 		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
 	}
 	if err != nil {
-		// Same transient-classify as publish_worker::prepareCredentials:
-		// retry via outer MarkRetry. The helper deliberately returns a
-		// token-free generic error for YouTube.
-		return fmt.Errorf("token refresh for platform_account=%d", account.ID)
+		// Classify through the canonical authority instead of erasing the
+		// error class. A permanent grant failure (invalid_grant / grant
+		// missing) is structural — the delivery must dead-letter into
+		// blocked_auth-style handling, not burn the full retry budget on
+		// attempts that can never succeed. Transient failures keep the
+		// retry path via the outer MarkRetry (same split as
+		// publish_worker::prepareCredentials).
+		if errors.Is(err, credentials.ErrYouTubeInvalidGrant) || errors.Is(err, credentials.ErrModernGrantMissing) {
+			return w.failYouTubeDelivery(ctx, delivery, workerID, "blocked_auth",
+				fmt.Sprintf("token refresh requires reauthorization for platform_account=%d", account.ID))
+		}
+		return fmt.Errorf("token refresh for platform_account=%d: %w", account.ID, err)
 	}
 
 	// Channel-binding check (channels.list mine=true verify) — same

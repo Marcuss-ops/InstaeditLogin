@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
@@ -28,6 +30,7 @@ type Router struct {
 	// intentionally per Router, so independent routers remain concurrent.
 	setupMu               sync.Mutex
 	mux                   *chi.Mux
+	logger                *slog.Logger
 	capabilities          *services.CapabilityRouter
 	userRepo              UserStore
 	workspaceStore        WorkspaceStore
@@ -36,17 +39,18 @@ type Router struct {
 	postStore             PostStore
 	storageProvider       StorageProvider
 	mediaStore            MediaStore
-	mediaPreviewCacheMu   sync.Mutex
-	mediaPreviewCache     map[string]mediaPreviewCacheEntry
-	mediaPreviewCacheTick uint64
-	mediaResolveCacheMu   sync.Mutex
-	mediaResolveCache     map[string]mediaPreviewCacheEntry
-	auditLogStore         AuditLogStore
-	auth                  *auth.Manager
-	apiKeyAuth            *auth.Authenticator
-	apiKeyStore           ApiKeyStore
-	idempotencyStore      IdempotencyStore
-	vault                 credentials.VaultAPI
+	// mediaPreviewCache / mediaResolveCache go through the single generic
+	// ttlCache authority (see pkg/api/ttl_cache.go); no per-cache mutex
+	// plumbing lives on the Router anymore. Value types: the zero value is
+	// a working cache, so struct-literal Routers (tests) need no wiring.
+	mediaPreviewCache ttlCache[string]
+	mediaResolveCache ttlCache[string]
+	auditLogStore     AuditLogStore
+	auth              *auth.Manager
+	apiKeyAuth        *auth.Authenticator
+	apiKeyStore       ApiKeyStore
+	idempotencyStore  IdempotencyStore
+	vault             credentials.VaultAPI
 	// authorizer (Task 1/10) is the SINGLE gate that flips a
 	// platform_account to status='active' AND writes the encrypted
 	// token row, atomically. Replaces the pre-atomic FinalizeAttach +
@@ -341,12 +345,12 @@ type Router struct {
 	metadataGenerationStore MetadataGenerationStore
 
 	// youtubeGroupVideosConfig controls the group-video read projection.
-	// It is immutable after construction; youtubeGroupVideosCache is
-	// protected by youtubeGroupVideosCacheMu because group fan-out runs
-	// concurrently.
-	youtubeGroupVideosConfig  YouTubeGroupVideosConfig
-	youtubeGroupVideosCacheMu sync.Mutex
-	youtubeGroupVideosCache   map[string]youtubeGroupVideosCacheEntry
+	// It is immutable after construction; youtubeGroupVideosCache goes
+	// through the single generic ttlCache authority (see
+	// pkg/api/ttl_cache.go) — the mutex plumbing it replaced lived on
+	// the Router.
+	youtubeGroupVideosConfig YouTubeGroupVideosConfig
+	youtubeGroupVideosCache  ttlCache[[]models.YouTubeVideoDetails]
 	// youtubeGroupVideosInflight is the router-local single-flight map for
 	// group-video cache misses: concurrent dashboard requests for the same
 	// account share one upstream YouTube fetch instead of multiplying
@@ -358,11 +362,10 @@ type Router struct {
 	// dashboardAnalyticsCache caches the full dashboard analytics
 	// response (aggregates + per-channel rows + top videos) per
 	// (user, days) so repeated dashboard loads skip both the DB
-	// metric-history read and the YouTube top-videos fan-out.
-	// Protected by dashboardAnalyticsCacheMu; entries expire after
+	// metric-history read and the YouTube top-videos fan-out. Goes
+	// through the single ttlCache authority; entries expire after
 	// dashboardAnalyticsCacheTTL.
-	dashboardAnalyticsCacheMu sync.Mutex
-	dashboardAnalyticsCache   map[string]dashboardAnalyticsCacheEntry
+	dashboardAnalyticsCache ttlCache[dashboardAnalyticsResponse]
 
 	// youtubeVideoEditStore persists thumbnail editor sessions for
 	// YouTube videos. Wired via WithYouTubeVideoEditStore.
@@ -469,6 +472,7 @@ func NewRouter(
 		capabilities: capRouter,
 		userRepo:     userRepo,
 		auth:         authMgr,
+		logger:       slog.Default(),
 
 		frontendURL:               frontendURL,
 		allowedOrigin:             allowedOrigins,
@@ -477,7 +481,12 @@ func NewRouter(
 		publishingInFlightTimeout: DefaultPublishingInFlightTimeout,
 		thumbnailDownloadClient:   services.NewHTTPClientWithTimeout(30 * time.Second),
 		driveImportUploadClient:   services.NewHTTPClientWithTimeout(30 * time.Minute),
-		thumbnailUploadClient:     services.NewHTTPClientWithTimeout(2 * time.Minute),
+		thumbnailUploadClient:     services.NewHTTPClientWithTimeout(2 * time.Minute), // All Router-level TTL caches go through the single generic
+		// ttlCache authority (see ttl_cache.go).
+		mediaPreviewCache:       makeTTLCache[string](mediaLibraryPreviewCacheMax),
+		mediaResolveCache:       makeTTLCache[string](mediaLibraryPreviewCacheMax),
+		dashboardAnalyticsCache: makeTTLCache[dashboardAnalyticsResponse](dashboardAnalyticsCacheMax),
+		youtubeGroupVideosCache: makeTTLCache[[]models.YouTubeVideoDetails](youtubeGroupVideosCacheMax),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -567,18 +576,3 @@ var _ ContentPipelineStore = (*repository.ContentPipelineRepository)(nil)
 // interface surfaces at go vet time rather than as a runtime nil
 // dereference.
 var _ BookingEventStore = (*repository.BookingEventRepository)(nil)
-
-// --- Module thin wrappers (test compatibility) -------------------------------
-//
-// The Router→module thin wrappers (veloxModule / integrationsModule /
-// registerInternalVeloxRoutes / registerUserVeloxDestinations and the
-// 9 handle* forwarders) live next to the modules they delegate to,
-// to keep this file focused on the Router struct + construction:
-//
-//	modules_velox.go        — VeloxModule wrappers (internal /internal/v1 routes)
-//	modules_integrations.go — IntegrationsModule wrappers (user /api/v1 routes)
-//
-// TODO: Those wrappers exist only for test compatibility. Migrate the
-// affected tests to use the typed VeloxModule / IntegrationsModule
-// constructors and then delete them. Do NOT add new production code
-// here; new routes should use the typed modules.

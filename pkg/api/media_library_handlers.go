@@ -72,9 +72,17 @@ const (
 	mediaLibraryPreviewCacheMax = 512
 )
 
-type mediaPreviewCacheEntry struct {
-	url       string
-	expiresAt time.Time
+// mediaPreviewURL and storeMediaPreviewURL keep a short-lived, bounded
+// cache for signed preview GET URLs, going through the single generic
+// ttlCache authority (see ttl_cache.go). The URL is never persisted and
+// expires before the provider signature, so a cache miss naturally
+// refreshes it without affecting correctness.
+func (r *Router) mediaPreviewURL(id string) (string, bool) {
+	return r.mediaPreviewCache.get(id)
+}
+
+func (r *Router) storeMediaPreviewURL(id, url string) {
+	r.mediaPreviewCache.store(id, url, mediaLibraryPreviewCacheTTL)
 }
 
 // handleListMediaAssets (GET /api/v1/media, protected) returns only the
@@ -205,44 +213,6 @@ func (r *Router) handleGetMediaAsset(w http.ResponseWriter, req *http.Request) {
 		logAndError(w, req, "failed to sign media preview", urlErr, "asset_id", id)
 	}
 	writeJSON(w, http.StatusOK, item)
-}
-
-func (r *Router) mediaPreviewURL(id string) (string, bool) {
-	r.mediaPreviewCacheMu.Lock()
-	defer r.mediaPreviewCacheMu.Unlock()
-	entry, ok := r.mediaPreviewCache[id]
-	if !ok {
-		return "", false
-	}
-	if time.Now().After(entry.expiresAt) {
-		delete(r.mediaPreviewCache, id)
-		return "", false
-	}
-	return entry.url, true
-}
-
-func (r *Router) storeMediaPreviewURL(id, url string) {
-	r.mediaPreviewCacheMu.Lock()
-	defer r.mediaPreviewCacheMu.Unlock()
-	if r.mediaPreviewCache == nil {
-		r.mediaPreviewCache = make(map[string]mediaPreviewCacheEntry)
-	}
-	now := time.Now()
-	for key, entry := range r.mediaPreviewCache {
-		if now.After(entry.expiresAt) {
-			delete(r.mediaPreviewCache, key)
-		}
-	}
-	if len(r.mediaPreviewCache) >= mediaLibraryPreviewCacheMax {
-		// Evict one arbitrary live entry. The cache is an optimization,
-		// not a correctness store; bounded memory is more important than
-		// perfect LRU bookkeeping here.
-		for key := range r.mediaPreviewCache {
-			delete(r.mediaPreviewCache, key)
-			break
-		}
-	}
-	r.mediaPreviewCache[id] = mediaPreviewCacheEntry{url: url, expiresAt: now.Add(mediaLibraryPreviewCacheTTL)}
 }
 
 func mediaAssetFilename(uploadKey string) string {

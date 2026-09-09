@@ -177,7 +177,7 @@ func buildDeliverRouter(dst ExternalDestinationStore, del ExternalDeliveryStore,
 func runDeliver(t *testing.T, dst ExternalDestinationStore, del ExternalDeliveryStore, token string, body []byte, authHeader string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := buildDeliverRouter(dst, del, token)
-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleCreateInternalDelivery))
+	handler := r.internalVeloxAuth(http.HandlerFunc(r.testVeloxModule().handleCreateInternalDelivery))
 	mux := chi.NewRouter()
 	mux.Method(http.MethodPost, "/internal/v1/deliveries", handler)
 
@@ -680,7 +680,7 @@ func TestDeliver_NilStore(t *testing.T) {
 		externalDeliveries:   nil,
 		veloxAPIToken:        testDeliverAPIToken,
 	}
-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleCreateInternalDelivery))
+	handler := r.internalVeloxAuth(http.HandlerFunc(r.testVeloxModule().handleCreateInternalDelivery))
 	mux := chi.NewRouter()
 	mux.Method(http.MethodPost, "/internal/v1/deliveries", handler)
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/deliveries",

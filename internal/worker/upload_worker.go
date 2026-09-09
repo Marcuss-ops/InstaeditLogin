@@ -36,6 +36,13 @@ type UploadJobStore interface {
 	ClaimBatchForPublish(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.UploadJob, error)
 	Heartbeat(ctx context.Context, jobID int64, workerID string, lease time.Duration) error
 	MarkCompleted(ctx context.Context, id int64, workerID string, postID int64, assetID string) error
+	// MarkPrepared records that a future-scheduled job (publish_at > now)
+	// is persisted + ready: the post exists but must NOT be surfaced as
+	// publish_completed before publish_at. Formerly the optional
+	// PreparedUploadJobStore capability; every store that satisfies
+	// UploadJobStore now carries it (single contract, no legacy
+	// type-assert fallback in the publish path).
+	MarkPrepared(ctx context.Context, id int64, workerID string, postID int64, assetID string) error
 	MarkFailed(ctx context.Context, id int64, workerID, errorCode, errMessage string) error
 	MarkRetry(ctx context.Context, id int64, workerID, errorCode, errMessage string, nextAttemptAt time.Time) error
 	MarkDeadLetter(ctx context.Context, id int64, workerID, errorCode, errMessage string) error
@@ -45,13 +52,6 @@ type UploadJobStore interface {
 	// (Save) and once at terminal-success / session-expired (Clear).
 	SaveYouTubeSession(ctx context.Context, id int64, workerID, sessionURI string, offset, chunkSize int64, expiresAt time.Time) error
 	ClearYouTubeSession(ctx context.Context, id int64, workerID string) error
-}
-
-// PreparedUploadJobStore is optional for compatibility with small test
-// doubles and legacy adapters. Production repositories implement it so a
-// future job is not reported as publish_completed before publish_at.
-type PreparedUploadJobStore interface {
-	MarkPrepared(ctx context.Context, id int64, workerID string, postID int64, assetID string) error
 }
 
 // UploadMediaStore is the narrow media asset repository interface.

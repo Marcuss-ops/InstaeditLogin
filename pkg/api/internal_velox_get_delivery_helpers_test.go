@@ -305,16 +305,16 @@ func wsKey(workspaceID, accountID int64) string {
 }
 
 // newVeloxTestRouter wires a Router with the deps the GET handler
-// needs AND initializes mux so registerInternalVeloxRoutes() can
-// mount the GET route on it. Mirrors the inline-construction
+// needs AND initializes mux so the VeloxModule can mount the GET
+// route on it. Mirrors the inline-construction
 // pattern from buildDeliverRouter in internal_velox_deliver_test.go
 // but adds mux: chi.NewRouter() — the runtime pkgs register routes
 // ONTO this mux.
 //
 // We DELIBERATELY skip MustNewRouter(, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second))) because the GET handler under
 // test does not depend on capRouter / auth.Manager / UserStore /
-// frontendURL. Calling registerInternalVeloxRoutes() preserves
-// the production route-guard semantics:
+// frontendURL. Building the module via r.testVeloxModule() + Register
+// preserves the production route-guard semantics:
 //   - externalDeliveries=nil OR veloxAPIToken=""  →  route NOT
 //     mounted → chi returns 404 on any request.
 //   - all deps configured → route mounted inside the
@@ -328,7 +328,7 @@ func newVeloxTestRouter(t *testing.T, deliveries ExternalDeliveryStore, token st
 		externalDeliveries:   deliveries,
 		veloxAPIToken:        token,
 	}
-	r.registerInternalVeloxRoutes()
+	r.testVeloxModule().Register(r.mux)
 	return r
 }
 
@@ -354,7 +354,7 @@ func newVeloxTestRouterWithDeps(
 		workspaceStore:       workspaceStore,
 		veloxAPIToken:        token,
 	}
-	r.registerInternalVeloxRoutes()
+	r.testVeloxModule().Register(r.mux)
 	return r
 }
 

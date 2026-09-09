@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -321,68 +320,21 @@ func TestRecordYouTubePublishChannelMismatch_EmptyProviderSkipped(t *testing.T) 
 }
 
 // ---------------------------------------------------------------------------
-// worker_id singleton tests
+// worker_id (DI path) tests
 // ---------------------------------------------------------------------------
 
-// TestWorkerID_DefaultIsUnset pins the defensive default.
-func TestWorkerID_DefaultIsUnset(t *testing.T) {
-	forceWorkerID("unset")
-	if got := WorkerID(); got != "unset" {
-		t.Errorf("WorkerID default: want %q, got %q", "unset", got)
+// TestNewWorkerID_Format pins the log-parseable DI identity contract:
+// "worker-<hostname>-<pid>-<uuid>". The deprecated global
+// SetWorkerID/WorkerID trio was removed — identity is threaded through
+// constructor arguments, so there is nothing process-global left to test.
+func TestNewWorkerID_Format(t *testing.T) {
+	id := NewWorkerID()
+	if !strings.HasPrefix(id, "worker-") {
+		t.Errorf("NewWorkerID: want prefix %q, got %q", "worker-", id)
 	}
-}
-
-// TestWorkerID_SetOnce pins the production path.
-func TestWorkerID_SetOnce(t *testing.T) {
-	forceWorkerID("unset")
-	SetWorkerID("worker-abc-123")
-	if got := WorkerID(); got != "worker-abc-123" {
-		t.Errorf("WorkerID after SetWorkerID: want %q, got %q", "worker-abc-123", got)
+	// worker-<host>-<pid>-<uuid>: the pid and uuid segments are dash-joined,
+	// so the id carries at least 4 dashes regardless of hostname content.
+	if strings.Count(id, "-") < 4 {
+		t.Errorf("NewWorkerID: want at least 4 dashes, got %q", id)
 	}
-}
-
-// TestWorkerID_SetOnceIsIdempotent pins the keep-first rule.
-func TestWorkerID_SetOnceIsIdempotent(t *testing.T) {
-	forceWorkerID("unset")
-	SetWorkerID("production-id")
-	SetWorkerID("late-call-should-be-ignored")
-	SetWorkerID("")
-	if got := WorkerID(); got != "production-id" {
-		t.Errorf("WorkerID after multiple SetWorkerID: want %q (first wins), got %q", "production-id", got)
-	}
-}
-
-// TestWorkerID_SetWorkerIDEmptyIsNoop covers the empty-input guard.
-func TestWorkerID_SetWorkerIDEmptyIsNoop(t *testing.T) {
-	forceWorkerID("unset")
-	SetWorkerID("")
-	if got := WorkerID(); got != "unset" {
-		t.Errorf("WorkerID after SetWorkerID(\"\"): want %q, got %q", "unset", got)
-	}
-}
-
-// TestWorkerID_ConcurrentReadsSafe exercises the RWMutex: many
-// concurrent WorkerID() callers read in parallel without blocking.
-// Run with -race for the full check.
-func TestWorkerID_ConcurrentReadsSafe(t *testing.T) {
-	forceWorkerID("unset")
-	SetWorkerID("concurrent-test-id")
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = WorkerID()
-		}()
-	}
-	wg.Wait()
-}
-
-// forceWorkerID resets the singleton to a known value (test setup).
-// Equivalent to the test-only Reset pattern; the production code never
-// calls this (prodcution code only writes once via SetWorkerID).
-func forceWorkerID(id string) {
-	workerIDMutex.Lock()
-	defer workerIDMutex.Unlock()
-	workerID = id
 }

@@ -169,7 +169,7 @@ func TestValidate_RateLimitExceeded(t *testing.T) {
 	r := buildVeloxTestRouter(dst, ws, user, testVeloxAPIToken)
 	WithVeloxValidateRateLimit(2, 60*time.Second)(r)
 
-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination))
+	handler := r.internalVeloxAuth(http.HandlerFunc(r.testVeloxModule().handleValidateInternalDestination))
 	mux := chi.NewRouter()
 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate", handler)
 
@@ -244,7 +244,7 @@ func TestValidate_RateLimitDisabledByZeroOption(t *testing.T) {
 	r := buildVeloxTestRouter(dst, ws, user, testVeloxAPIToken)
 	WithVeloxValidateRateLimit(0, 0)(r) // disables
 
-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination))
+	handler := r.internalVeloxAuth(http.HandlerFunc(r.testVeloxModule().handleValidateInternalDestination))
 	mux := chi.NewRouter()
 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate", handler)
 

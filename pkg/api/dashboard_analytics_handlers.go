@@ -94,6 +94,11 @@ const dashboardTopVideosMaxTotal = 20
 // top-videos fan-out bounded.
 const dashboardAnalyticsCacheTTL = time.Hour
 
+// dashboardAnalyticsCacheMax bounds the cached full-response entries.
+// The working set is (users × 5 allowed day windows); the bound keeps
+// memory flat on a large fleet while the TTL still absorbs repeat visits.
+const dashboardAnalyticsCacheMax = 512
+
 // dashboardVideoLister is the narrow optional capability the
 // dashboard fan-out needs to read per-video views. Defined as a local
 // interface (not added to the large YouTubeOAuthService surface) so
@@ -103,12 +108,11 @@ type dashboardVideoLister interface {
 	ListAccountContent(ctx context.Context, accessToken, platformUserID, cursor string, limit int, privacyFilter string) (*models.AccountContentPage, error)
 }
 
-// dashboardAnalyticsCacheEntry is the per-(user, days) cached full
-// dashboard response.
-type dashboardAnalyticsCacheEntry struct {
-	resp      dashboardAnalyticsResponse
-	expiresAt time.Time
-}
+// dashboardAnalyticsCacheEntry is retained only as a type alias so any
+// external reader of the former struct shape keeps compiling; the cache
+// itself now stores dashboardAnalyticsResponse values through the single
+// generic ttlCache authority.
+type dashboardAnalyticsCacheEntry = dashboardAnalyticsResponse
 
 // isAllowedDashboardDay reports whether days is one of the canonical
 // dashboard periods (1, 7, 14, 28, 90).
@@ -148,20 +152,13 @@ func (r *Router) handleGetDashboardAnalytics(w http.ResponseWriter, req *http.Re
 	// so a fresh entry for (user, days) short-circuits before any DB
 	// history read or YouTube fan-out.
 	cacheKey := fmt.Sprintf("%d|%d", identity.UserID(), days)
-	now := time.Now()
 	forceRefresh := req.URL.Query().Get("refresh") == "1" || req.URL.Query().Get("refresh") == "true"
-	r.dashboardAnalyticsCacheMu.Lock()
-	if r.dashboardAnalyticsCache == nil {
-		r.dashboardAnalyticsCache = make(map[string]dashboardAnalyticsCacheEntry)
-	}
 	if !forceRefresh {
-		if cached, hit := r.dashboardAnalyticsCache[cacheKey]; hit && cached.expiresAt.After(now) {
-			r.dashboardAnalyticsCacheMu.Unlock()
-			writeJSON(w, http.StatusOK, cached.resp)
+		if cached, hit := r.dashboardAnalyticsCache.get(cacheKey); hit {
+			writeJSON(w, http.StatusOK, cached)
 			return
 		}
 	}
-	r.dashboardAnalyticsCacheMu.Unlock()
 
 	accounts, err := r.userRepo.ListFilteredYouTubeAccounts(identity.UserID(), nil, "", "", "")
 	if err != nil {
@@ -252,9 +249,7 @@ func (r *Router) handleGetDashboardAnalytics(w http.ResponseWriter, req *http.Re
 	// NOT cached: a transient YouTube outage must not pin an empty or
 	// partial ranking for the full TTL.
 	if !fanoutDegraded {
-		r.dashboardAnalyticsCacheMu.Lock()
-		r.dashboardAnalyticsCache[cacheKey] = dashboardAnalyticsCacheEntry{resp: resp, expiresAt: now.Add(dashboardAnalyticsCacheTTL)}
-		r.dashboardAnalyticsCacheMu.Unlock()
+		r.dashboardAnalyticsCache.store(cacheKey, resp, dashboardAnalyticsCacheTTL)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

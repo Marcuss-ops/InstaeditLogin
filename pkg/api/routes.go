@@ -40,16 +40,22 @@ func (r *Router) Setup() http.Handler {
 		ConnectLinkNonceStore:      r.connectLinkNonceStore,
 		YouTubeOAuthClientRegistry: r.youtubeOAuthClientRegistry,
 	}))
-	reg.Register(NewVeloxModule(VeloxModuleDeps{
+	// Build the module once: the BFF ResolveTarget closure below shares
+	// the SAME pre-constructed TargetResolver the /internal/v1 routes
+	// use (single authority for target resolution — no second mapping
+	// of Router fields into module deps).
+	veloxModule := NewVeloxModule(VeloxModuleDeps{
 		ExternalDestinationStore: r.externalDestinations,
 		ExternalDeliveryStore:    r.externalDeliveries,
 		WorkspaceStore:           r.workspaceStore,
 		UserStore:                r.userRepo,
+		GroupStore:               r.groupStore,
 		YouTubeVideoEditStore:    r.youtubeVideoEditStore,
 		VeloxAPIToken:            r.veloxAPIToken,
 		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
 		EditorBaseURL:            r.editorURL,
-	}))
+	})
+	reg.Register(veloxModule)
 	reg.Register(NewVeloxBFFModule(VeloxBFFModuleDeps{
 		Client:         r.veloxBFFClient,
 		JobRegistry:    r.veloxJobRegistry,
@@ -63,7 +69,7 @@ func (r *Router) Setup() http.Handler {
 				return target, fmt.Errorf("%w: %s", veloxcontract.ErrTargetTypeUnsupported,
 					"only channel targets are supported for channel_name resolution")
 			}
-			resolved, err := r.veloxModule().resolver().Resolve(ctx, deliveries.ResolveRequest{
+			resolved, err := veloxModule.(*VeloxModule).resolver().Resolve(ctx, deliveries.ResolveRequest{
 				WorkspaceID: workspaceID,
 				Platform:    models.PlatformYouTube,
 				Target: deliveries.TargetDescriptor{

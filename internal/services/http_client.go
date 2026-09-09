@@ -344,6 +344,20 @@ func (lrt *loggingRoundTripper) RoundTrip(req *http.Request) (resp *http.Respons
 		metrics.RecordGoogleAPICall(googleOperation(req), statusCode, elapsed)
 	}
 
+	// The debug scaffolding below allocates (host/path strings,
+	// fmt.Sprintf("%T", err), slog attr slice) on EVERY outbound call
+	// in the process. This transport sits under the API server AND
+	// every worker's provider calls, so gate it behind slog.Enabled:
+	// when Debug is off the fast path is metric + return with zero log
+	// allocations. Metric recording stays unconditional (cheap, and it
+	// is the operator's SLO surface).
+	if !slog.Default().Enabled(req.Context(), slog.LevelDebug) {
+		if err != nil {
+			return nil, err
+		}
+		return resp, nil
+	}
+
 	if err != nil {
 		slog.Debug("http: request failed",
 			"method", req.Method,

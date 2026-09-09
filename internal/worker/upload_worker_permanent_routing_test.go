@@ -50,6 +50,9 @@ func (f *fakeUploadJobStoreForRouting) Heartbeat(context.Context, int64, string,
 func (f *fakeUploadJobStoreForRouting) MarkCompleted(context.Context, int64, string, int64, string) error {
 	return nil
 }
+func (f *fakeUploadJobStoreForRouting) MarkPrepared(context.Context, int64, string, int64, string) error {
+	return nil
+}
 func (f *fakeUploadJobStoreForRouting) MarkFailed(context.Context, int64, string, string, string) error {
 	return nil
 }

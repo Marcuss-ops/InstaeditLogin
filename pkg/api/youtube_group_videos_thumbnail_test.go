@@ -165,24 +165,15 @@ func TestPublishGroupVideoThumbnail_HappyPath(t *testing.T) {
 func TestPublishGroupVideoThumbnail_InvalidatesAccountCache(t *testing.T) {
 	rig := newThumbnailPublishRig(t, func(context.Context, string, string, string, io.Reader, int64) error { return nil }, nil, okVaultToken)
 	// Seed the account's cached editable videos as if a list had just run.
-	rig.r.youtubeGroupVideosCacheMu.Lock()
-	rig.r.youtubeGroupVideosCache = map[string]youtubeGroupVideosCacheEntry{
-		"42:UC123:50": {
-			items:     []models.YouTubeVideoDetails{{ID: "VID123", Title: "Stale title"}},
-			expiresAt: time.Now().Add(time.Hour),
-		},
-	}
-	rig.r.youtubeGroupVideosCacheMu.Unlock()
+	rig.r.youtubeGroupVideosCache.store("42:UC123:50", []models.YouTubeVideoDetails{{ID: "VID123", Title: "Stale title"}}, time.Hour)
 
 	w := publishThumbnailRequest(t, rig.r, 3, "VID123", `{"platform_account_id": 42, "thumbnail_media_id": "asset-uuid-123"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	rig.r.youtubeGroupVideosCacheMu.Lock()
-	defer rig.r.youtubeGroupVideosCacheMu.Unlock()
-	if len(rig.r.youtubeGroupVideosCache) != 0 {
-		t.Errorf("expected the account cache to be invalidated, still has %d entries", len(rig.r.youtubeGroupVideosCache))
+	if got := rig.r.youtubeGroupVideosCache.len(); got != 0 {
+		t.Errorf("expected the account cache to be invalidated, still has %d entries", got)
 	}
 }
 

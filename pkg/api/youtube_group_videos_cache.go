@@ -3,22 +3,21 @@ package api
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
-
-type youtubeGroupVideosCacheEntry struct {
-	items     []models.YouTubeVideoDetails
-	expiresAt time.Time
-}
 
 type youtubeGroupVideosInflightEntry struct {
 	done  chan struct{}
 	items []models.YouTubeVideoDetails
 	err   error
 }
+
+// youtubeGroupVideosCacheMax bounds the cached account-video pages. Each
+// entry holds up to MaxVideos details (title/description/thumbnail refs);
+// without a bound the cache grew with the account count for the cache
+// lifetime. 256 accounts' first pages is ample for one Router's working set.
+const youtubeGroupVideosCacheMax = 256
 
 // invalidateAccountCachedVideos drops the cached editable-videos entries
 // for one account. Called after an out-of-band metadata change (e.g.
@@ -27,13 +26,7 @@ type youtubeGroupVideosInflightEntry struct {
 func (r *Router) invalidateAccountCachedVideos(acc *models.PlatformAccount) {
 	// Cache keys are "%d:%s:%d" (account id : platform user id : max).
 	prefix := fmt.Sprintf("%d:%s:", acc.ID, acc.PlatformUserID)
-	r.youtubeGroupVideosCacheMu.Lock()
-	defer r.youtubeGroupVideosCacheMu.Unlock()
-	for key := range r.youtubeGroupVideosCache {
-		if strings.HasPrefix(key, prefix) {
-			delete(r.youtubeGroupVideosCache, key)
-		}
-	}
+	r.youtubeGroupVideosCache.deletePrefix(prefix)
 }
 
 // fetchCachedAccountEditableVideos renews the canonical YouTube bearer grant
@@ -50,16 +43,10 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 	// router; a %p pointer key there could be reused after a Router was
 	// freed, silently cross-joining two routers' fetches).
 	inflightKey := cacheKey
-	now := time.Now()
 	if !forceRefresh {
-		r.youtubeGroupVideosCacheMu.Lock()
-		cached, ok := r.youtubeGroupVideosCache[cacheKey]
-		if ok && cached.expiresAt.After(now) {
-			items := append([]models.YouTubeVideoDetails(nil), cached.items...)
-			r.youtubeGroupVideosCacheMu.Unlock()
-			return items, nil
+		if cached, ok := r.youtubeGroupVideosCache.get(cacheKey); ok {
+			return cached, nil
 		}
-		r.youtubeGroupVideosCacheMu.Unlock()
 	}
 
 	r.youtubeGroupVideosInflightMu.Lock()
@@ -70,7 +57,7 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 		r.youtubeGroupVideosInflightMu.Unlock()
 		select {
 		case <-pending.done:
-			return append([]models.YouTubeVideoDetails(nil), pending.items...), pending.err
+			return pending.items, pending.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -93,18 +80,15 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 		}()
 		return r.fetchAccountEditableVideos(ctx, acc, cfg.MaxVideos)
 	}()
-	pending.items = append([]models.YouTubeVideoDetails(nil), items...)
+	pending.items = items
 	pending.err = err
-	if err == nil && cfg.CacheTTL > 0 {
-		r.youtubeGroupVideosCacheMu.Lock()
-		if r.youtubeGroupVideosCache == nil {
-			r.youtubeGroupVideosCache = make(map[string]youtubeGroupVideosCacheEntry)
-		}
-		r.youtubeGroupVideosCache[cacheKey] = youtubeGroupVideosCacheEntry{
-			items:     append([]models.YouTubeVideoDetails(nil), items...),
-			expiresAt: time.Now().Add(cfg.CacheTTL),
-		}
-		r.youtubeGroupVideosCacheMu.Unlock()
+	// Cache the fetched page through the single ttlCache authority.
+	// Unlike the pre-refactor map-based cache this one is size-bounded
+	// (youtubeGroupVideosCacheMax entries): the value is shared as-is and
+	// treated as read-only, so the three defensive slice copies per fetch
+	// (plus one per cache hit) are gone.
+	if err == nil {
+		r.youtubeGroupVideosCache.store(cacheKey, items, cfg.CacheTTL)
 	}
 	return items, err
 }

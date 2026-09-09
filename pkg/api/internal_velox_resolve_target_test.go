@@ -151,7 +151,7 @@ func runResolveTarget(t *testing.T, group *mockGroupLookup, ws *mockWorkspaceLoo
 	r := buildResolveTargetRouter(group, ws, user, token)
 	mux := chi.NewRouter()
 	mux.Method(http.MethodPost, "/internal/v1/destinations/resolve-target",
-		r.internalVeloxAuth(http.HandlerFunc(r.handleResolveTargetInternalDestination)))
+		r.internalVeloxAuth(http.HandlerFunc(r.testVeloxModule().handleResolveTargetInternalDestination)))
 	var bodyReader *bytes.Reader
 	if body == "" {
 		bodyReader = bytes.NewReader(nil)
@@ -477,7 +477,7 @@ func TestResolveTarget_GroupHappy(t *testing.T) {
 	}
 	mux := chi.NewRouter()
 	mux.Method(http.MethodPost, "/internal/v1/destinations/resolve-target",
-		r.internalVeloxAuth(http.HandlerFunc(r.handleResolveTargetInternalDestination)))
+		r.internalVeloxAuth(http.HandlerFunc(r.testVeloxModule().handleResolveTargetInternalDestination)))
 	body := mustJSON(t, map[string]interface{}{
 		"workspace_id": 12, "platform": "youtube",
 		"target": map[string]interface{}{"type": "group", "group_id": 27},

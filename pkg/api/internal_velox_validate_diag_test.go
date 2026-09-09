@@ -84,7 +84,7 @@ func TestValidate_DiagnosticHeader(t *testing.T) {
 	}
 	// Custom httptest invocation with header.
 	r := buildVeloxTestRouter(dst, ws, user, testVeloxAPIToken)
-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination))
+	handler := r.internalVeloxAuth(http.HandlerFunc(r.testVeloxModule().handleValidateInternalDestination))
 	mux := chi.NewRouter()
 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate", handler)
 	req := httptest.NewRequest(http.MethodPost,

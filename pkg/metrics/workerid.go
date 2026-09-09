@@ -3,125 +3,35 @@ package metrics
 import (
 	"os"
 	"strconv"
-	"sync"
 
 	"github.com/google/uuid"
 )
 
-// workerID is the per-process identity for SPRINT 6.1 (Observability
-// with SLO). Set once at process startup by the canonical entrypoint
-// and read by:
+// NewWorkerID (commit DI refactor) generates a fresh per-process worker id
+// WITHOUT registering it as a process-wide global. The format matches the
+// historical InitWorkerID contract: "worker-<hostname>-<pid>-<uuid>" —
+// log-parseable, stable across the process lifetime, and unique across N
+// replicas / restarts.
 //
-//   - slog.With("worker_id", metrics.WorkerID()) on every structured
-//     log line emitted from a background goroutine (workers emit
-//     thousands of lines per hour; correlating them across replicas
-//     requires a worker_id in every line).
-//   - The Prometheus scrape job's `external_labels` block, which
-//     attaches worker_id to every metric exposed by this process.
-//     This is the canonical pattern — a label injected by the
-//     scraper, NOT by the application code, so it stays consistent
-//     across metric registrations.
-//
-// Why NOT a metric label:
-//
-//	Each application-emitted "worker_id" label would multiply the
-//	cardinality by N (N = number of worker replicas) for every
-//	metric. The scrape job's external_labels approach is "free" —
-//	applied by Prometheus at scrape time, applies uniformly, never
-//	appears in the application's source. This is the explicit
-//	choice documented at the top of observability.go.
-//
-// Thread safety:
-//
-//	SetWorkerID is called ONCE at process start (by main.go before
-//	the HTTP server starts accepting requests). After that point
-//	WorkerID() is the only consumer and reads must be cheap. The
-//	RWMutex allows concurrent reads from many goroutines without
-//	contention — the write-side critical section is held only
-//	during the single SetWorkerID call.
-//
-// Defensive default "unset":
-//
-//	If the application code reads WorkerID() BEFORE SetWorkerID has
-//	been called (e.g. in a test that doesn't call SetWorkerID), the
-//	default value of "unset" makes the missing-init obvious in
-//	dashboards / log queries. A panic would also be defensible
-//	(fail-fast) but the user's spec calls for structured logs that
-//	survive partial init, so we keep the soft default.
-var (
-	workerID      = "unset"
-	workerIDMutex sync.RWMutex
-)
-
-// SetWorkerID sets the per-process worker_id. Called once at process
-// start by the canonical worker entrypoint. Idempotent: calling it twice with
-// the same value is a no-op; calling it twice with different values
-// is a defensive keep-the-first pattern (the first wins — a later
-// SetWorkerID call is ignored). The keep-first rule guards against
-// a misconfigured test setup from clobbering the production ID.
-//
-// Returning an error is unnecessary: the input is always a fresh
-// UUID from crypto/rand or a test stub; validation would be over-
-// engineering. If the input is empty, we keep "unset" rather than
-// panicking (fail-open beats fail-closed for identity).
-func SetWorkerID(id string) {
-	if id == "" {
-		return
-	}
-	workerIDMutex.Lock()
-	defer workerIDMutex.Unlock()
-	if workerID != "unset" {
-		// Keep the first non-empty SetWorkerID call. A second call with
-		// a different value (e.g. from a verbose test) does NOT
-		// clobber the production ID.
-		return
-	}
-	workerID = id
-}
-
-// WorkerID returns the per-process worker_id set by SetWorkerID.
-// Returns "unset" if SetWorkerID was never called. Cheap — the
-// RWMutex's RLock/RUnlock pair is inlined and contention-free for
-// the hot read path (every background goroutine reads it on every
-// heartbeat / log line).
-func WorkerID() string {
-	workerIDMutex.RLock()
-	defer workerIDMutex.RUnlock()
-	return workerID
-}
-
-// NewWorkerID (commit DI refactor, replaces InitWorkerID) generates a
-// fresh per-process worker id WITHOUT registering it as a process-wide
-// global. The format matches the historical InitWorkerID contract:
-// "worker-<hostname>-<pid>-<uuid>" — log-parseable, stable across the
-// process lifetime, and unique across N replicas / restarts.
-//
-// Usage (explicit DI, the only supported path after commit 1 of the
-// bootstrap DI refactor):
+// Usage (explicit DI, the only supported path after the bootstrap DI
+// refactor):
 //
 //	workerID := metrics.NewWorkerID()
 //	slog.Info("worker_id initialised", "worker_id", workerID)
 //	pw := worker.NewPublishWorker(..., workerID, ...)
 //
 // The caller stores the value on its own struct (e.g. App.WorkerID) and
-// threads it into each worker constructor. No sync.Once + no
-// pkg/metrics.WorkerID() global reader — workers carry it as a struct
-// field. The legacy SetWorkerID / InitWorkerID / WorkerID trio is
-// deprecated and slated for removal in a future pkg/metrics cleanup
-// commit.
-//
-// Returns the generated id for callers that want to log it
-// prominently at startup ("worker_id=worker-abc-12345-<uuid> ...").
-// SetWorkerID's idempotent keep-first rule means re-running
-// InitWorkerID in the same process is a no-op — only the first
-// call wins, all subsequent ones return the same value.
+// threads it into each worker constructor. There is intentionally NO
+// pkg/metrics.WorkerID() global reader and NO SetWorkerID writer: a mutable
+// process-global identity read under an RWMutex on every heartbeat/log line
+// was the last remaining mutable-global state in this package, and the DI
+// refactor removed every production caller of it.
 //
 // Why a helper at all (vs callers inlining uuid.New().String()):
 //   - The format consistency ("worker-<host>-<pid>-<uuid>") lives in
 //     one place. A grep for `"worker-.*-"` matches every caller.
-//   - main.go doesn't import google/uuid itself; importing
-//     pkg/metrics + calling InitWorkerID keeps the dependency
-//     surface lean.
+//   - main.go doesn't import google/uuid itself; importing pkg/metrics
+//     keeps the dependency surface lean.
 //
 // Failure modes:
 //   - hostname lookup error → fallback to "unknown", log id
@@ -133,10 +43,10 @@ func WorkerID() string {
 //
 // SECURITY NOTE: hostname + pid are deliberately emitted into log
 // lines and metric external_labels (set by Prometheus scraper, not
-// stored in app source). Operators WANT to see host identity in
-// logs for cross-replica correlation. The "leak" framing is wrong:
-// this is the canonical ops-telemetry use case. Operator workstations
-// that need to redact this can run a log-rewriter at the collector.
+// stored in app source). Operators WANT to see host identity in logs
+// for cross-replica correlation. The "leak" framing is wrong: this is
+// the canonical ops-telemetry use case. Operator workstations that
+// need to redact this can run a log-rewriter at the collector.
 func NewWorkerID() string {
 	hostname, _ := os.Hostname()
 	if hostname == "" {
@@ -144,18 +54,3 @@ func NewWorkerID() string {
 	}
 	return "worker-" + hostname + "-" + strconv.Itoa(os.Getpid()) + "-" + uuid.NewString()
 }
-
-// InitWorkerID (SPRINT 6.1 / Phase 2) generates a unique per-process
-// worker_id and stamps it via SetWorkerID. Deprecated: use NewWorkerID
-// and thread the value through App.WorkerID into worker constructors.
-// Kept for backwards compat with existing tests; will be removed in a
-// future pkg/metrics cleanup commit.
-//
-//   - hostname is from os.Hostname(); "unknown" fallback handles
-//     chrooted / networkless test envs where hostname lookup errors.
-//   - pid disambiguates fast restarts on the same host where the
-//     UUID alone would not tell you "process P2" from "process P3".
-//   - uuid (crypto-random, 36-char hex-with-dashes) makes the id
-//     unique across the rest of the cluster even if two hosts
-//     coincidentally share hostname + pid at exactly the same
-//     nanosecond (impractical but the cheap guarantee).

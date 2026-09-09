@@ -1,10 +1,13 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -158,4 +161,55 @@ func (r *UserRepository) DeletePlatformAccount(id int64) error {
 		return fmt.Errorf("%w: id=%d", ErrUserNotFound, id)
 	}
 	return nil
+}
+
+// FindPlatformAccountsByIDs fetches platform accounts by internal ids in ONE
+// query (SELECT ... WHERE id = ANY($1)), preserving the FindPlatformAccountByID
+// not-found convention: found rows map to their id key, missing/unknown ids
+// are simply absent from the map (never an error). A nil/empty input returns
+// an empty map without touching the database. Duplicate ids are collapsed by
+// the SQL engine. Used by fan-out paths (content-package preview, delivery
+// materialization) that previously issued one FindPlatformAccountByID per
+// target — the N+1 → batch remediation.
+func (r *UserRepository) FindPlatformAccountsByIDs(ctx context.Context, ids []int64) (map[int64]*models.PlatformAccount, error) {
+	byID := make(map[int64]*models.PlatformAccount, len(ids))
+	if len(ids) == 0 {
+		return byID, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
+		       last_validated_at, last_refresh_at, reauth_required_at,
+		       COALESCE(last_error_code, '') AS last_error_code,
+		       COALESCE(last_error_message, '') AS last_error_message,
+		       metadata, created_at, updated_at,
+		       COALESCE(oauth_connection_id, 0) AS oauth_connection_id
+		 FROM platform_accounts
+		 WHERE id = ANY($1::bigint[])`, pq.Array(ids))
+	if err != nil {
+		return nil, fmt.Errorf("failed to find platform accounts by ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		account := &models.PlatformAccount{}
+		var metadata []byte
+		var oauthConnectionID int64
+		if err := rows.Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
+			&account.Username, &account.Status, &account.ConnectedAt, &account.LastValidatedAt,
+			&account.LastRefreshAt, &account.ReauthRequiredAt, &account.LastErrorCode,
+			&account.LastErrorMessage, &metadata, &account.CreatedAt, &account.UpdatedAt,
+			&oauthConnectionID); err != nil {
+			return nil, fmt.Errorf("scan platform account (batch): %w", err)
+		}
+		account.Metadata = scanMetadata(metadata)
+		if oauthConnectionID != 0 {
+			account.OAuthConnectionID = &oauthConnectionID
+		}
+		account.Platform = models.NormalizePlatformIdentifier(account.Platform)
+		byID[account.ID] = account
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate platform accounts (batch): %w", err)
+	}
+	return byID, nil
 }

@@ -179,7 +179,7 @@ func buildVeloxTestRouter(dst ExternalDestinationStore, wsLookup *mockWorkspaceL
 func runValidate(t *testing.T, dst ExternalDestinationStore, wsLookup *mockWorkspaceLookup, userLookup *mockUserLookup, token, id, authHeader, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := buildVeloxTestRouter(dst, wsLookup, userLookup, token)
-	handler := r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination))
+	handler := r.internalVeloxAuth(http.HandlerFunc(r.testVeloxModule().handleValidateInternalDestination))
 	mux := chi.NewRouter()
 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate", handler)
 

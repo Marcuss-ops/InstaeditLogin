@@ -132,40 +132,14 @@ func (r *Router) handleResolveThumbnailProjectMedia(w http.ResponseWriter, req *
 }
 
 // mediaResolveURL and storeMediaResolveURL keep a short-lived, bounded
-// cache for temporary GET URLs. The URL is never persisted and expires
+// cache for temporary GET URLs, going through the single generic ttlCache
+// authority (see ttl_cache.go). The URL is never persisted and expires
 // before the provider's 15-minute signature, so a cache miss naturally
 // refreshes it without affecting correctness.
 func (r *Router) mediaResolveURL(id string) (string, bool) {
-	r.mediaResolveCacheMu.Lock()
-	defer r.mediaResolveCacheMu.Unlock()
-	entry, ok := r.mediaResolveCache[id]
-	if !ok {
-		return "", false
-	}
-	if time.Now().After(entry.expiresAt) {
-		delete(r.mediaResolveCache, id)
-		return "", false
-	}
-	return entry.url, true
+	return r.mediaResolveCache.get(id)
 }
 
 func (r *Router) storeMediaResolveURL(id, url string) {
-	r.mediaResolveCacheMu.Lock()
-	defer r.mediaResolveCacheMu.Unlock()
-	if r.mediaResolveCache == nil {
-		r.mediaResolveCache = make(map[string]mediaPreviewCacheEntry)
-	}
-	now := time.Now()
-	for key, entry := range r.mediaResolveCache {
-		if now.After(entry.expiresAt) {
-			delete(r.mediaResolveCache, key)
-		}
-	}
-	if len(r.mediaResolveCache) >= mediaLibraryPreviewCacheMax {
-		for key := range r.mediaResolveCache {
-			delete(r.mediaResolveCache, key)
-			break
-		}
-	}
-	r.mediaResolveCache[id] = mediaPreviewCacheEntry{url: url, expiresAt: now.Add(mediaTemporaryURLCacheTTL)}
+	r.mediaResolveCache.store(id, url, mediaTemporaryURLCacheTTL)
 }

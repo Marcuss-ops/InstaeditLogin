@@ -127,6 +127,9 @@ func (f *fakeJobRepo) Heartbeat(_ context.Context, _ int64, _ string, _ time.Dur
 func (f *fakeJobRepo) MarkCompleted(_ context.Context, _ int64, _ string, _ int64, _ string) error {
 	return nil
 }
+func (f *fakeJobRepo) MarkPrepared(_ context.Context, _ int64, _ string, _ int64, _ string) error {
+	return nil
+}
 func (f *fakeJobRepo) SaveYouTubeSession(_ context.Context, _ int64, _, _ string, _, _ int64, _ time.Time) error {
 	return nil
 }

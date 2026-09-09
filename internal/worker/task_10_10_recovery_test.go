@@ -93,6 +93,10 @@ func (s *stubReclaimUploadJobStore) Heartbeat(ctx context.Context, jobID int64, 
 func (s *stubReclaimUploadJobStore) MarkCompleted(ctx context.Context, id int64, workerID string, postID int64, assetID string) error {
 	panic("stubReclaimUploadJobStore.MarkCompleted: not invoked from runReclaimerTick path (regression caught)")
 }
+
+func (s *stubReclaimUploadJobStore) MarkPrepared(ctx context.Context, id int64, workerID string, postID int64, assetID string) error {
+	panic("stubReclaimUploadJobStore.MarkPrepared: not invoked from runReclaimerTick path (regression caught)")
+}
 func (s *stubReclaimUploadJobStore) MarkFailed(ctx context.Context, id int64, workerID, errorCode, errMessage string) error {
 	panic("stubReclaimUploadJobStore.MarkFailed: not invoked from runReclaimerTick path (regression caught)")
 }
