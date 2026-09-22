@@ -235,14 +235,18 @@ jobs:
           # scope. IDs in old repository docs may refer to a deleted project
           # or to a previous team, so they must not be treated as canonical.
           PROJECTS_JSON="$(npx --yes vercel@57.0.0 project ls \
-            --filter "$VERCEL_PROJECT_NAME" \
             --limit 100 \
             --format=json \
             --token "$VERCEL_TOKEN")"
-          PROJECT_INFO="$(printf '%s' "$PROJECTS_JSON" | jq -c --arg name "$VERCEL_PROJECT_NAME" \
-            '(.projects // .)[] | select(.name == $name)' | head -n 1)"
+          PROJECT_INFO="$(printf '%s' "$PROJECTS_JSON" | jq -c --arg name "$VERCEL_PROJECT_NAME" '
+            [(.projects // .)[] | select(.name == $name)] as $exact |
+            if ($exact | length) == 1 then $exact[0]
+            else
+              [(.projects // .)[] | select(.name | test("instaedit"; "i"))] as $candidates |
+              if ($candidates | length) == 1 then $candidates[0] else empty end
+            end' | head -n 1)"
           if [ -z "$PROJECT_INFO" ]; then
-            echo "::error::Vercel project '$VERCEL_PROJECT_NAME' is not visible to the configured token."
+            echo "::error::No unique InstaEdit Vercel project is visible to the configured token."
             printf '%s' "$PROJECTS_JSON" | jq -r '(.projects // .)[] | "visible project: \(.name)"' || true
             exit 1
           fi
