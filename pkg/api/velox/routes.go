@@ -136,10 +136,14 @@ func Register(mux chi.Router, deps Deps) {
 	wrap := deps.wrap
 
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs", wrap(b.listJobs))
+	// Canonical browser-facing aliases keep the implementation namespace
+	// behind the BFF boundary while POST /api/v1/jobs remains job creation.
+	mux.Method(http.MethodGet, "/api/v1/jobs", wrap(b.listJobs))
 	mux.Method(http.MethodPost, "/api/v1/jobs", wrap(b.createCanonicalJob))
 	mux.Method(http.MethodPost, "/api/v1/jobs/preview", wrap(b.previewCanonicalJobTarget))
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs/{id}", wrap(b.getJob))
 	mux.Method(http.MethodPost, "/api/v1/velox/jobs/{id}/cancel", wrap(b.cancelJob))
+	mux.Method(http.MethodPost, "/api/v1/jobs/{id}/cancel", wrap(b.cancelJob))
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs/{id}/deliveries", wrap(b.listJobDeliveries))
 	mux.Method(http.MethodGet, "/api/v1/velox/workers", wrap(b.listWorkers))
 	mux.Method(http.MethodGet, "/api/v1/velox/workers/{id}", wrap(b.getWorker))

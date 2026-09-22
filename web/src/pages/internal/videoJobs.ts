@@ -95,7 +95,7 @@ export function useVideoJobs() {
     setState((current) => (current.kind === "ready" ? current : { kind: "loading" }));
 
     try {
-      const response = await authedFetch("/api/v1/velox/jobs?limit=500", {
+      const response = await authedFetch("/api/v1/jobs?limit=500", {
         signal: controller.signal,
       });
       const data = (await response.json()) as { jobs?: VideoJob[] };
@@ -135,7 +135,7 @@ export function useVideoJobs() {
 }
 
 export async function cancelVideoJob(id: string): Promise<void> {
-  await authedFetch(`/api/v1/velox/jobs/${encodeURIComponent(id)}/cancel`, {
+  await authedFetch(`/api/v1/jobs/${encodeURIComponent(id)}/cancel`, {
     method: "POST",
   });
 }
