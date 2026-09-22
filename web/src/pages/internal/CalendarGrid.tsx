@@ -58,8 +58,8 @@ function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
       )}
     >
       <div className="flex items-start gap-1.5">
-        <div className="w-6 h-6 rounded bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center text-white shrink-0">
-          <span className="text-[10px] font-bold">
+        <div className="w-7 h-7 rounded-md bg-neutral-200 border border-neutral-300 flex items-center justify-center text-neutral-700 shrink-0">
+          <span className="text-[11px] font-bold">
             {(post.title ?? "?").slice(0, 1).toUpperCase()}
           </span>
         </div>
@@ -233,7 +233,7 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
           return (
             <div className="flex w-full items-center justify-between gap-1 px-1 py-0.5">
               <span>{arg.dayNumberText}</span>
-              {count > 0 && <span className="rounded-full bg-violet-500/20 px-1.5 py-0.5 text-[9px] font-bold text-violet-200">{count} video</span>}
+              {count > 0 && <span className="rounded-full border border-black/10 bg-black/[0.06] px-1.5 py-0.5 text-[9px] font-bold text-neutral-700">{count} video</span>}
             </div>
           );
         }}

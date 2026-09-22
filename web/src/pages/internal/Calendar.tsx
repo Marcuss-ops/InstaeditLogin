@@ -29,7 +29,7 @@ export function CalendarPage() {
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8 bg-[#030308] text-[#e8e8ef]">
-      <div className="max-w-[1600px] mx-auto h-[calc(100vh-64px-2rem)] flex flex-col">
+      <div className="w-full max-w-none h-[calc(100vh-64px-2rem)] flex flex-col">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6 shrink-0">
           <div>
             <h1 className="text-[24px] sm:text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
