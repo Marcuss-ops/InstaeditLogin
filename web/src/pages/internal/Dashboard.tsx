@@ -74,23 +74,23 @@ function KpiCard({
   return (
     <div
       className={cn(
-        "rounded-2xl p-5 border",
+        "app-kpi-card rounded-2xl p-5 border",
         variant === "success"
-          ? "bg-emerald-500/[0.08] border-emerald-500/20 text-emerald-400"
-          : "bg-[#1f1f2e] border-white/[0.12] text-white",
+          ? "app-kpi-card-success"
+          : "",
       )}
     >
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-[13px] font-medium text-[#9aa0aa] mb-1">{label}</p>
-          <p className="text-[28px] font-extrabold tracking-tight">{value}</p>
+          <p className="app-kpi-label text-[13px] font-medium mb-1">{label}</p>
+          <p className="app-kpi-value text-[28px] font-extrabold tracking-tight">{value}</p>
         </div>
         <div
           className={cn(
-            "w-10 h-10 rounded-xl flex items-center justify-center",
+            "app-kpi-icon w-10 h-10 rounded-xl flex items-center justify-center",
             variant === "success"
-              ? "bg-white/[0.08]"
-              : "bg-white/[0.04] border border-white/[0.08] text-[#9aa0aa]",
+              ? "app-kpi-icon-success"
+              : "",
           )}
         >
           <Icon size={20} />
@@ -102,8 +102,8 @@ function KpiCard({
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
-      <h2 className="text-[16px] font-bold text-white mb-4">{title}</h2>
+    <div className="app-card surface-card rounded-2xl p-6">
+      <h2 className="app-card-title text-[16px] font-bold mb-4">{title}</h2>
       {children}
     </div>
   );
@@ -241,19 +241,20 @@ export function InternalDashboard() {
   const { state, load } = useDashboardAnalytics(periodDays);
 
   return (
-    <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
+    <div className="app-page min-h-full p-5 sm:p-8">
       <div className="max-w-7xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
-              <BarChart3 size={28} className="text-white/40" />
+            <p className="app-eyebrow mb-2">Overview</p>
+            <h1 className="app-page-title text-[30px] font-extrabold tracking-[-0.03em] flex items-center gap-3">
+              <span className="app-page-icon"><BarChart3 size={18} /></span>
               Dashboard
             </h1>
-            <p className="text-[15px] text-[#9aa0aa] mt-1">
+            <p className="app-page-subtitle text-[15px] mt-2">
               Analytics totali di tutti i tuoi canali YouTube.
             </p>
             {state.kind === "ready" && (
-              <p className="text-[12px] text-[#6b7280] mt-0.5">
+              <p className="app-page-meta text-[12px] mt-1">
 				Ultimo dato salvato alle{" "}
 				{new Date(state.data.data_updated_at ?? state.data.generated_at).toLocaleString(undefined, {
 					hour: "2-digit",
@@ -273,8 +274,8 @@ export function InternalDashboard() {
                 className={cn(
                   "px-4 py-2 rounded-xl text-[13px] font-semibold border transition-all",
                   periodDays === p.days
-                    ? "bg-white text-black border-white"
-                    : "bg-white/[0.04] border-white/[0.08] text-[#9aa0aa] hover:text-white hover:bg-white/[0.08]",
+                    ? "app-period-active"
+                    : "app-period-button",
                 )}
               >
                 {p.label}
@@ -283,7 +284,7 @@ export function InternalDashboard() {
             <button
               type="button"
               onClick={() => void load(periodDays, { force: true })}
-              className="ml-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
+              className="app-refresh-button ml-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-semibold transition-colors"
             >
               <RefreshCw size={14} /> Refresh
             </button>
@@ -303,7 +304,7 @@ export function InternalDashboard() {
             title="Couldn't load dashboard analytics"
             message={state.message}
             onRetry={() => void load(periodDays, { force: true })}
-            className="mb-8 bg-[#1f1f2e] border-white/[0.12]"
+            className="app-card mb-8"
           />
         )}
 
@@ -341,8 +342,8 @@ export function InternalDashboard() {
             <section className="mb-8" aria-labelledby="publishing-analytics-title">
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <h2 id="publishing-analytics-title" className="text-[16px] font-bold text-white">Content operations</h2>
-                  <p className="text-[12px] text-[#9aa0aa] mt-0.5">Stato delle pubblicazioni negli ultimi {periodDays} giorni.</p>
+                  <h2 id="publishing-analytics-title" className="app-card-title text-[16px] font-bold">Content operations</h2>
+                  <p className="app-card-muted text-[12px] mt-0.5">Stato delle pubblicazioni negli ultimi {periodDays} giorni.</p>
                 </div>
               </div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

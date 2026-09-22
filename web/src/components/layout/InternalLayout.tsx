@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Outlet } from "react-router-dom";
+import { ChevronRight, Search } from "lucide-react";
+import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { AccountSwitcher } from "./AccountSwitcher";
 import { maybeRefreshSession } from "../../lib/session-refresh";
@@ -16,7 +17,20 @@ import { NotificationCenter } from "../../features/notifications/NotificationCen
 const HEARTBEAT_CHECK_MS = 60 * 1000;
 
 export function InternalLayout({ children }: { children?: ReactNode }) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
+  const location = useLocation();
+
+  const pageTitle =
+    location.pathname.includes("performance") ? "Performance" :
+    location.pathname.includes("calendar") ? "Calendar" :
+    location.pathname.includes("groups") ? "Groups" :
+    location.pathname.includes("covers") ? "Copertine" :
+    location.pathname.includes("livestream") ? "Live streaming" :
+    location.pathname.includes("linking") ? "Connessioni" :
+    location.pathname.includes("youtube") ? "YouTube Studio" :
+    location.pathname.includes("upload") ? "Upload" :
+    location.pathname.includes("admin") ? "Admin" :
+    "Dashboard";
 
   const handleToggle = useCallback(() => {
     setCollapsed((value) => !value);
@@ -30,14 +44,33 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
   }, []);
 
   return (
-    <div className="h-screen w-full flex bg-[#030308] text-[#e8e8ef] overflow-hidden">
+    <div className="app-theme h-screen w-full flex overflow-hidden">
       <Sidebar collapsed={collapsed} onToggle={handleToggle} />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#030308]">
-        <header className="h-16 flex-none flex items-center justify-end gap-3 px-6 border-b border-white/[0.08] bg-[#030308]/80 backdrop-blur-sm">
+      <div className="app-main flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="app-topbar h-16 flex-none flex items-center justify-between gap-4 px-5 sm:px-7">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="app-window-controls hidden sm:flex" aria-hidden="true">
+              <span className="app-window-dot app-window-dot-red" />
+              <span className="app-window-dot app-window-dot-yellow" />
+              <span className="app-window-dot app-window-dot-green" />
+            </div>
+            <div className="hidden min-w-0 items-center gap-1.5 text-[13px] sm:flex">
+              <span className="app-topbar-muted">Workspace</span>
+              <ChevronRight size={14} className="app-topbar-chevron" aria-hidden="true" />
+              <span className="truncate font-semibold app-topbar-title">{pageTitle}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <button type="button" className="app-command-button hidden md:flex" aria-label="Search workspace">
+              <Search size={15} aria-hidden="true" />
+              <span>Quick find</span>
+              <kbd>⌘ K</kbd>
+            </button>
           <NotificationCenter />
           <AccountSwitcher />
+          </div>
         </header>
-        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain bg-[#030308]">
+        <main className="app-content min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain">
           {children ?? <Outlet />}
         </main>
       </div>

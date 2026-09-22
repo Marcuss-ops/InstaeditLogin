@@ -59,15 +59,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className={cn(
-        "h-screen flex flex-col bg-[#030308] border-r border-white/[0.08] transition-[width] duration-300 ease-in-out shrink-0",
+        "app-sidebar h-screen flex flex-col transition-[width] duration-300 ease-in-out shrink-0",
         visualCollapsed ? "w-16" : "w-64",
       )}
     >
-      <div className="h-16 flex items-center justify-between px-4 border-b border-white/[0.08]">
+      <div className="app-sidebar-brand h-16 flex items-center justify-between px-4">
         <Link
           to="/app/dashboard"
           className={cn(
-            "flex items-center gap-2.5 font-bold text-[17px] tracking-[-0.3px] text-white no-underline transition-opacity overflow-hidden",
+            "app-brand flex items-center gap-2.5 font-bold text-[17px] tracking-[-0.3px] no-underline transition-opacity overflow-hidden",
             visualCollapsed && "opacity-0 pointer-events-none w-0",
           )}
         >
@@ -91,7 +91,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             onToggle();
           }}
           aria-label={visualCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="p-1.5 rounded-lg text-[#9aa0aa] hover:text-white hover:bg-white/[0.06] transition-colors"
+          className="app-sidebar-toggle p-1.5 rounded-lg transition-colors"
         >
           {visualCollapsed ? (
             <FUNCTIONAL_ICON_CATALOG.navigation.next size={18} />
@@ -101,7 +101,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </button>
       </div>
 
-      <nav className="flex-1 py-4 px-2 space-y-1 overflow-y-auto">
+      <nav className="flex-1 py-5 px-3 space-y-1 overflow-y-auto">
+        {!visualCollapsed && <p className="app-sidebar-label px-3 pb-2">Workspace</p>}
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = item.to === "/app/covers"
@@ -112,10 +113,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               key={item.to}
               to={item.to}
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all no-underline border",
+                "app-nav-item flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all no-underline border",
                 active
-                  ? "bg-white/[0.08] text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.1)] border-white/[0.08]"
-                  : "text-[#9aa0aa] hover:text-white hover:bg-white/[0.04] border-transparent",
+                  ? "app-nav-item-active"
+                  : "border-transparent",
                 visualCollapsed && "justify-center",
               )}
               title={visualCollapsed ? item.label : undefined}
@@ -140,12 +141,21 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         })}
       </nav>
 
-      <div className="p-2 border-t border-white/[0.08]">
+      <div className="app-sidebar-footer p-3">
+        {!visualCollapsed && (
+          <div className="app-plan-card mb-3 px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="app-status-dot" aria-hidden="true" />
+              <span className="text-[11px] font-semibold">Creator workspace</span>
+            </div>
+            <p className="mt-1 text-[11px]">Tutto sincronizzato</p>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => logout("/login")}
           className={cn(
-            "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-[#9aa0aa] hover:text-red-400 hover:bg-red-500/[0.08] transition-colors w-full",
+            "app-nav-item app-logout-item flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors w-full",
             visualCollapsed && "justify-center",
           )}
           title={visualCollapsed ? "Log out" : undefined}

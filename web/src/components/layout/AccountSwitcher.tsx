@@ -116,10 +116,10 @@ export function AccountSwitcher() {
         aria-controls="account-switcher-menu"
         title={displayName ?? undefined}
         className={cn(
-          "flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full border transition-colors",
+          "app-account-button flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full border transition-colors",
           isOpen
-            ? "bg-white/[0.08] border-white/[0.16]"
-            : "bg-transparent border-white/[0.08] hover:bg-white/[0.04] hover:border-white/[0.16]",
+            ? "app-account-button-open"
+            : "",
         )}
       >
         <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center text-white text-[11px] font-bold">
@@ -129,13 +129,13 @@ export function AccountSwitcher() {
             <User size={14} />
           )}
         </div>
-        <span className="hidden sm:inline text-[13px] font-medium text-white max-w-[120px] truncate">
+        <span className="hidden sm:inline text-[13px] font-medium max-w-[120px] truncate app-account-name">
           {displayName ?? "Account"}
         </span>
         <ChevronDown
           size={14}
           className={cn(
-            "text-[#9aa0aa] transition-transform duration-200",
+            "app-account-chevron transition-transform duration-200",
             isOpen && "rotate-180",
           )}
         />
@@ -146,10 +146,10 @@ export function AccountSwitcher() {
           id="account-switcher-menu"
           role="menu"
           aria-labelledby="account-switcher-button"
-          className="absolute right-0 top-full mt-2 w-72 bg-[#1f1f2e] border border-white/[0.12] rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.4)] overflow-hidden z-50"
+          className="app-account-menu absolute right-0 top-full mt-2 w-72 rounded-2xl overflow-hidden z-50"
         >
-          <div className="p-3 border-b border-white/[0.08]">
-            <p className="text-[11px] font-semibold text-[#9aa0aa] uppercase tracking-wider">
+          <div className="app-account-menu-header p-3">
+            <p className="app-account-muted text-[11px] font-semibold uppercase tracking-wider">
               Connected accounts
             </p>
           </div>
@@ -159,14 +159,14 @@ export function AccountSwitcher() {
               {Array.from({ length: 3 }).map((_, i) => (
                 <div
                   key={i}
-                  className="h-10 rounded-xl bg-white/[0.06] animate-pulse"
+                  className="app-account-skeleton h-10 rounded-xl animate-pulse"
                 />
               ))}
             </div>
           )}
 
           {state.kind === "error" && (
-            <div className="p-4 text-[13px] text-[#9aa0aa]">
+            <div className="p-4 text-[13px] app-account-muted">
               Unable to load accounts.
             </div>
           )}
@@ -174,7 +174,7 @@ export function AccountSwitcher() {
           {state.kind === "ready" && (
             <>
               {state.accounts.length === 0 ? (
-                <div className="p-4 text-[13px] text-[#9aa0aa]">
+                <div className="p-4 text-[13px] app-account-muted">
                   No accounts connected.
                 </div>
               ) : (
@@ -193,9 +193,7 @@ export function AccountSwitcher() {
                         aria-disabled={!publishable}
                         className={cn(
                           "flex items-center gap-3 w-full p-2.5 rounded-xl transition-colors text-left",
-                          isSelected
-                            ? "bg-white/[0.08]"
-                            : "hover:bg-white/[0.04]",
+                          isSelected ? "app-account-row-selected" : "app-account-row-hover",
                           !publishable && "cursor-not-allowed opacity-60",
                         )}
                       >
@@ -217,10 +215,10 @@ export function AccountSwitcher() {
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-[13px] font-semibold text-white truncate">
+                          <p className="app-account-name text-[13px] font-semibold truncate">
                             @{account.username}
                           </p>
-                          <p className="text-[11px] text-[#9aa0aa] truncate">
+                          <p className="app-account-muted text-[11px] truncate">
                             {provider?.name ?? account.platform} · {accountStateLabel(account)}
                           </p>
                         </div>
@@ -233,11 +231,11 @@ export function AccountSwitcher() {
             </>
           )}
 
-          <div className="p-2 border-t border-white/[0.08]">
+          <div className="app-account-menu-footer p-2">
             <Link
               to="/app/linking"
               onClick={() => setIsOpen(false)}
-              className="flex items-center justify-center gap-2 w-full px-4 py-2 rounded-xl text-[13px] font-semibold text-white bg-white/[0.04] hover:bg-white/[0.08] transition-colors no-underline"
+              className="app-account-manage flex items-center justify-center gap-2 w-full px-4 py-2 rounded-xl text-[13px] font-semibold transition-colors no-underline"
             >
               Manage accounts
             </Link>

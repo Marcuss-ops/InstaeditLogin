@@ -644,3 +644,436 @@ html:has(.donne-theme) #root {
   font-size: 0.75rem;
   font-weight: 500;
 }
+
+/* =====================================================================
+ * AUTHENTICATED APP THEME — quiet Notion surfaces with a macOS window
+ * rhythm. This is scoped to .app-theme so the public dark marketing site
+ * keeps its existing visual language.
+ * ================================================================== */
+.app-theme {
+  --app-canvas: #f7f7f5;
+  --app-sidebar: #efefed;
+  --app-surface: #ffffff;
+  --app-surface-muted: #fafaf8;
+  --app-border: #e6e6e1;
+  --app-border-strong: #d8d8d2;
+  --app-ink: #292927;
+  --app-muted: #7b7b76;
+  --app-faint: #a2a29b;
+  --app-accent: #5e5ce6;
+  --app-accent-soft: #eeedff;
+  --app-green: #34a853;
+  background: var(--app-canvas);
+  color: var(--app-ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif;
+}
+
+html:has(.app-theme),
+html:has(.app-theme) body,
+html:has(.app-theme) #root {
+  background: var(--app-canvas);
+}
+
+.app-main,
+.app-content {
+  background: var(--app-canvas);
+}
+
+.app-sidebar {
+  background: var(--app-sidebar);
+  border-right: 1px solid var(--app-border);
+  color: var(--app-ink);
+}
+
+.app-sidebar-brand {
+  border-bottom: 1px solid var(--app-border);
+}
+
+.app-brand {
+  color: var(--app-ink);
+}
+
+.app-sidebar-toggle {
+  color: var(--app-muted);
+}
+
+.app-sidebar-toggle:hover {
+  background: #e4e4e0;
+  color: var(--app-ink);
+}
+
+.app-sidebar-label {
+  color: var(--app-faint);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.app-nav-item {
+  color: var(--app-muted);
+}
+
+.app-nav-item:hover {
+  background: #e5e5e1;
+  color: var(--app-ink);
+}
+
+.app-nav-item-active {
+  background: var(--app-accent-soft);
+  border-color: #dfddff;
+  color: #4e4bb7;
+  box-shadow: none;
+}
+
+.app-nav-item-active:hover {
+  background: #e7e6ff;
+  color: #4e4bb7;
+}
+
+.app-sidebar-footer {
+  border-top: 1px solid var(--app-border);
+}
+
+.app-plan-card {
+  border: 1px solid var(--app-border);
+  border-radius: 0.8rem;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--app-ink);
+}
+
+.app-plan-card p {
+  color: var(--app-muted);
+}
+
+.app-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--app-green);
+  box-shadow: 0 0 0 3px rgba(52, 168, 83, 0.12);
+}
+
+.app-logout-item:hover {
+  background: #fff0ef;
+  color: #d14343;
+}
+
+.app-topbar {
+  background: rgba(255, 255, 255, 0.72);
+  border-bottom: 1px solid var(--app-border);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.app-window-controls {
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.app-window-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.07);
+}
+
+.app-window-dot-red { background: #ff5f57; }
+.app-window-dot-yellow { background: #febc2e; }
+.app-window-dot-green { background: #28c840; }
+
+.app-topbar-muted,
+.app-topbar-chevron {
+  color: var(--app-faint);
+}
+
+.app-topbar-title {
+  color: var(--app-ink);
+}
+
+.app-command-button {
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0 0.65rem 0 0.75rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.65rem;
+  background: rgba(247, 247, 245, 0.8);
+  color: var(--app-muted);
+  font-size: 0.75rem;
+}
+
+.app-command-button:hover {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface);
+  color: var(--app-ink);
+}
+
+.app-command-button kbd {
+  margin-left: 0.55rem;
+  padding: 0.12rem 0.35rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.35rem;
+  background: var(--app-surface);
+  color: var(--app-faint);
+  font-size: 0.65rem;
+}
+
+.app-account-button {
+  border-color: var(--app-border);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.app-account-button:hover,
+.app-account-button-open {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface);
+}
+
+.app-account-name {
+  color: var(--app-ink);
+}
+
+.app-account-chevron {
+  color: var(--app-muted);
+}
+
+.app-account-menu {
+  border: 1px solid var(--app-border);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 44px rgba(48, 48, 41, 0.14), 0 2px 8px rgba(48, 48, 41, 0.06);
+}
+
+.app-account-menu-header,
+.app-account-menu-footer {
+  border-color: var(--app-border);
+}
+
+.app-account-menu-header {
+  border-bottom: 1px solid var(--app-border);
+}
+
+.app-account-menu-footer {
+  border-top: 1px solid var(--app-border);
+}
+
+.app-account-muted {
+  color: var(--app-muted);
+}
+
+.app-account-skeleton {
+  background: #f0f0ec;
+}
+
+.app-account-row-hover:hover,
+.app-account-row-selected {
+  background: #f2f2ef;
+}
+
+.app-account-manage {
+  background: #f1f1ee;
+  color: var(--app-ink);
+}
+
+.app-account-manage:hover {
+  background: #e8e8e3;
+}
+
+/* Translate legacy internal-page utility classes into the new app palette.
+   Individual pages can keep their data/state logic while the shell feels
+   like one product during the redesign rollout. */
+.app-theme [class*="bg-[#030308]"],
+.app-theme [class*="bg-[#08080d]"],
+.app-theme [class*="bg-[#0d0f15]"],
+.app-theme [class*="bg-[#11131a]"],
+.app-theme [class*="bg-[#14141e]"],
+.app-theme [class*="bg-[#1a1a26]"],
+.app-theme [class*="bg-[#1f1f2e]"] {
+  background-color: var(--app-surface) !important;
+}
+
+.app-theme [class*="bg-white/[0.0"],
+.app-theme [class*="bg-white/[0.04]"],
+.app-theme [class*="bg-white/[0.05]"],
+.app-theme [class*="bg-white/[0.06]"],
+.app-theme [class*="bg-white/[0.08]"] {
+  background-color: var(--app-surface-muted) !important;
+}
+
+.app-theme [class*="border-white/[0."],
+.app-theme [class*="border-white/10"],
+.app-theme [class*="border-white/5"] {
+  border-color: var(--app-border) !important;
+}
+
+.app-theme [class*="text-[#e8e8ef]"],
+.app-theme [class*="text-[#e6e9ef]"],
+.app-theme [class*="text-[#cdd2da]"],
+.app-theme [class*="text-white"] {
+  color: var(--app-ink) !important;
+}
+
+.app-theme [class*="text-[#9aa0aa]"],
+.app-theme [class*="text-[#8a919d]"],
+.app-theme [class*="text-[#7f8591]"],
+.app-theme [class*="text-[#6b7280]"] {
+  color: var(--app-muted) !important;
+}
+
+.app-theme [class*="bg-violet-"][class*="text-white"],
+.app-theme [class*="bg-blue-"][class*="text-white"],
+.app-theme [class*="bg-red-"][class*="text-white"],
+.app-theme [class*="bg-gradient-"][class*="text-white"] {
+  color: #fff !important;
+}
+
+.app-theme input,
+.app-theme textarea,
+.app-theme select {
+  color: var(--app-ink);
+}
+
+.app-theme input::placeholder,
+.app-theme textarea::placeholder {
+  color: var(--app-faint);
+}
+
+.app-page {
+  color: var(--app-ink);
+}
+
+.app-eyebrow {
+  color: var(--app-accent);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.app-page-title {
+  color: var(--app-ink);
+}
+
+.app-page-icon {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dfddff;
+  border-radius: 0.65rem;
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
+}
+
+.app-page-subtitle,
+.app-card-muted {
+  color: var(--app-muted);
+}
+
+.app-page-meta {
+  color: var(--app-faint);
+}
+
+.app-kpi-card,
+.app-card {
+  border-color: var(--app-border) !important;
+  background: var(--app-surface) !important;
+  color: var(--app-ink);
+  box-shadow: 0 1px 2px rgba(45, 45, 38, 0.025);
+}
+
+.app-kpi-card:hover,
+.app-card:hover {
+  border-color: var(--app-border-strong) !important;
+}
+
+.app-kpi-card-success {
+  border-color: #cce9d3 !important;
+  background: #f4fbf5 !important;
+  color: #2d8545;
+}
+
+.app-kpi-label {
+  color: var(--app-muted);
+}
+
+.app-kpi-value,
+.app-card-title {
+  color: var(--app-ink);
+}
+
+.app-kpi-icon {
+  border: 1px solid var(--app-border);
+  background: var(--app-surface-muted);
+  color: var(--app-muted);
+}
+
+.app-kpi-icon-success {
+  border-color: #dcefe0;
+  background: #e8f7eb;
+  color: var(--app-green);
+}
+
+.app-period-button,
+.app-refresh-button {
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  color: var(--app-muted);
+}
+
+.app-period-button:hover,
+.app-refresh-button:hover {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface-muted);
+  color: var(--app-ink);
+}
+
+.app-period-active {
+  border: 1px solid var(--app-ink);
+  background: var(--app-ink);
+  color: #fff;
+}
+
+.app-page table thead tr {
+  border-color: var(--app-border) !important;
+}
+
+.app-page table tbody tr {
+  border-color: #f0f0ec !important;
+}
+
+.app-page table tbody tr:hover {
+  background: #fafaf8 !important;
+}
+
+@media (max-width: 720px) {
+  .app-sidebar {
+    width: 4.25rem !important;
+  }
+
+  .app-brand,
+  .app-sidebar-label,
+  .app-plan-card,
+  .app-nav-item span,
+  .app-sidebar-footer span:not(.app-status-dot) {
+    opacity: 0;
+    pointer-events: none;
+    width: 0;
+    overflow: hidden;
+  }
+
+  .app-nav-item {
+    justify-content: center;
+  }
+
+  .app-sidebar-brand {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .app-topbar {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
