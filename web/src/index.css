@@ -835,6 +835,24 @@ html:has(.app-theme) #root {
   font-size: 0.65rem;
 }
 
+.app-sidebar-reveal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--app-surface-muted) 82%, transparent);
+  color: var(--app-muted);
+}
+
+.app-sidebar-reveal:hover {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface);
+  color: var(--app-ink);
+}
+
 .app-account-button {
   border-color: var(--app-border);
   background: color-mix(in srgb, var(--app-surface) 72%, transparent);

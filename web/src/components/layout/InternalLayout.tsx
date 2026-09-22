@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ChevronRight, Moon, Search, Sun } from "lucide-react";
+import { ChevronRight, Moon, PanelLeftOpen, Search, Sun } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { AccountSwitcher } from "./AccountSwitcher";
@@ -22,10 +22,12 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
     if (typeof window === "undefined") return "light";
     return window.localStorage.getItem("instaedit:app-theme") === "dark" ? "dark" : "light";
   });
+  const [calendarSidebarVisible, setCalendarSidebarVisible] = useState(false);
   const location = useLocation();
   const isCalendarRoute =
     location.pathname === "/app/calendar" ||
     location.pathname === "/app/uploads/calendar";
+  const showSidebar = !isCalendarRoute || calendarSidebarVisible;
 
   const pageTitle =
     location.pathname.includes("performance") ? "Performance" :
@@ -54,12 +56,27 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
     window.localStorage.setItem("instaedit:app-theme", theme);
   }, [theme]);
 
+  useEffect(() => {
+    if (!isCalendarRoute) setCalendarSidebarVisible(false);
+  }, [isCalendarRoute]);
+
   return (
     <div className="app-theme h-screen w-full flex overflow-hidden" data-theme={theme}>
-      {!isCalendarRoute && <Sidebar collapsed={collapsed} onToggle={handleToggle} />}
+      {showSidebar && <Sidebar collapsed={collapsed} onToggle={handleToggle} />}
       <div className="app-main flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="app-topbar h-16 flex-none flex items-center justify-between gap-4 px-5 sm:px-7">
           <div className="flex min-w-0 items-center gap-3">
+            {isCalendarRoute && !calendarSidebarVisible && (
+              <button
+                type="button"
+                className="app-sidebar-reveal"
+                onClick={() => setCalendarSidebarVisible(true)}
+                aria-label="Mostra sidebar"
+                title="Mostra sidebar"
+              >
+                <PanelLeftOpen size={17} aria-hidden="true" />
+              </button>
+            )}
             <div className="app-window-controls hidden sm:flex" aria-hidden="true">
               <span className="app-window-dot app-window-dot-red" />
               <span className="app-window-dot app-window-dot-yellow" />
