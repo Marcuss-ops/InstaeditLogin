@@ -1,21 +1,5 @@
-import type { ElementType } from "react";
-import {
-  Calendar as CalendarIcon,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  LayoutGrid,
-  X,
-} from "lucide-react";
-import { cn } from "../../lib/utils";
-import { type CalendarViewMode } from "./CalendarGrid";
+import { X } from "lucide-react";
 import type { CalendarGroup } from "./calendarTypes";
-
-const viewTabs: { id: CalendarViewMode; label: string; icon: ElementType }[] = [
-  { id: "month", label: "Mese", icon: CalendarIcon },
-  { id: "week", label: "Settimana", icon: LayoutGrid },
-  { id: "day", label: "Giorno", icon: Clock },
-];
 
 const statusOptions = [
   { value: "all", label: "Tutti gli stati" },
@@ -27,10 +11,6 @@ const statusOptions = [
 ];
 
 export function CalendarToolbar({
-  view,
-  setView,
-  shiftDate,
-  setCurrentDate,
   formattedDate,
   statusFilter,
   setStatusFilter,
@@ -40,10 +20,6 @@ export function CalendarToolbar({
   hasActiveFilters,
   clearFilters,
 }: {
-  view: CalendarViewMode;
-  setView: (view: CalendarViewMode) => void;
-  shiftDate: (delta: number) => void;
-  setCurrentDate: (date: Date) => void;
   formattedDate: string;
   statusFilter: string;
   setStatusFilter: (value: string) => void;
@@ -56,58 +32,13 @@ export function CalendarToolbar({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 shrink-0">
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => shiftDate(-1)}
-          className="p-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white hover:bg-white/[0.08] transition-colors"
-          aria-label="Precedente"
-        >
-          <ChevronLeft size={18} />
-        </button>
-        <button
-          type="button"
-          onClick={() => setCurrentDate(new Date())}
-          className="px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
-        >
-          Oggi
-        </button>
-        <button
-          type="button"
-          onClick={() => shiftDate(1)}
-          className="p-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white hover:bg-white/[0.08] transition-colors"
-          aria-label="Successivo"
-        >
-          <ChevronRight size={18} />
-        </button>
-        <h2 className="ml-2 text-[16px] sm:text-[18px] font-bold text-white min-w-[140px]">
-          {formattedDate}
-        </h2>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8f9299]">Settimana corrente</p>
+          <h2 className="mt-1 text-[16px] sm:text-[18px] font-bold text-white">{formattedDate}</h2>
+        </div>
       </div>
 
       <div className="flex items-center gap-2">
-        <div className="inline-flex p-1 rounded-xl bg-white/[0.04] border border-white/[0.08]">
-          {viewTabs.map((tab) => {
-            const Icon = tab.icon;
-            const active = view === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setView(tab.id)}
-                className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all",
-                  active
-                    ? "bg-white/[0.08] text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.1)]"
-                    : "text-[#9aa0aa] hover:text-white hover:bg-white/[0.04]",
-                )}
-              >
-                <Icon size={14} />
-                <span className="hidden sm:inline">{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
         <div className="flex items-center gap-2">
           <select
             data-testid="calendar-filter-status"

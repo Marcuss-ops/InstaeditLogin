@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Calendar as CalendarIcon, Plus } from "lucide-react";
 import { type CalendarViewMode } from "./CalendarGrid";
@@ -7,25 +7,22 @@ import { CalendarToolbar } from "./CalendarToolbar";
 import { CalendarPostsPanel } from "./CalendarPostsPanel";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 
+function startOfCurrentWeek(date: Date): Date {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const day = start.getDay();
+  start.setDate(start.getDate() + (day === 0 ? -6 : 1 - day));
+  return start;
+}
+
 export function CalendarPage() {
-  const [view, setView] = useState<CalendarViewMode>("month");
-  const [currentDate, setCurrentDate] = useState(new Date());
+  const view: CalendarViewMode = "week";
+  const currentDate = useMemo(() => new Date(), []);
   const posts = useCalendarPosts();
-
-  function shiftDate(delta: number) {
-    setCurrentDate((prev) => {
-      const next = new Date(prev);
-      if (view === "month") next.setMonth(next.getMonth() + delta);
-      else if (view === "week") next.setDate(next.getDate() + delta * 7);
-      else next.setDate(next.getDate() + delta);
-      return next;
-    });
-  }
-
-  const formattedDate = currentDate.toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-  });
+  const weekStart = startOfCurrentWeek(currentDate);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  const formattedDate = `${weekStart.toLocaleDateString(undefined, { day: "numeric", month: "short" })} – ${weekEnd.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8 bg-[#030308] text-[#e8e8ef]">
@@ -52,10 +49,6 @@ export function CalendarPage() {
         </div>
 
         <CalendarToolbar
-            view={view}
-            setView={setView}
-            shiftDate={shiftDate}
-            setCurrentDate={setCurrentDate}
             formattedDate={formattedDate}
             statusFilter={posts.statusFilter}
             setStatusFilter={posts.setStatusFilter}

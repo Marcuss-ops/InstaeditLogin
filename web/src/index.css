@@ -517,7 +517,7 @@ html {
 
 .fc .fc-timegrid-event {
   border-radius: 0.375rem;
-  margin-bottom: 2px;
+  margin: 0.35rem 0.35rem 0.5rem;
 }
 
 .fc .fc-daygrid-event {
@@ -532,6 +532,37 @@ html {
 
 .fc .fc-bg-event {
   opacity: 0.25;
+}
+
+/* Notion-style weekly canvas: the schedule is separated by whitespace and
+ * floating cards, not by a spreadsheet grid. */
+.fc .fc-scrollgrid,
+.fc .fc-scrollgrid-section > td,
+.fc .fc-scrollgrid-section-liquid > td,
+.fc .fc-timegrid-divider,
+.fc .fc-col-header-cell,
+.fc .fc-timegrid-axis,
+.fc .fc-timegrid-slot,
+.fc .fc-timegrid-slot-label,
+.fc .fc-timegrid-col {
+  border-color: transparent !important;
+}
+
+.fc .fc-scrollgrid {
+  border: 0 !important;
+}
+
+.fc .fc-timegrid-slot,
+.fc .fc-timegrid-slot-label {
+  border-top: 0 !important;
+}
+
+.fc .fc-col-header-cell {
+  background: transparent;
+}
+
+.fc .fc-timegrid-event-harness {
+  margin-inline: 0.2rem;
 }
 
 /* =====================================================================

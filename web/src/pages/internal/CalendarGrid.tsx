@@ -14,6 +14,16 @@ type PostStatus = "draft" | "queued" | "publishing" | "published" | "failed";
 
 type CalendarPost = Post & { status: PostStatus | string };
 
+function getCurrentWeekRange(date: Date): { start: Date; end: Date } {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const day = start.getDay();
+  start.setDate(start.getDate() + (day === 0 ? -6 : 1 - day));
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return { start, end };
+}
+
 const STATUS_META: Record<string, { label: string; dot: string; bg: string; text: string; border: string }> = {
   draft: { label: "Draft", dot: "bg-[#9aa0aa]", bg: "bg-white/[0.04]", text: "text-[#9aa0aa]", border: "border-white/[0.08]" },
   queued: { label: "Scheduled", dot: "bg-amber-400", bg: "bg-amber-500/[0.08]", text: "text-amber-400", border: "border-amber-500/[0.15]" },
@@ -52,8 +62,8 @@ function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
   return (
     <div
       className={cn(
-        "relative h-full w-full rounded-md border border-white/[0.12] bg-[#1f1f2e] p-1.5 text-left shadow-sm",
-        "hover:border-white/[0.30] hover:bg-[#252536] transition-colors cursor-grab active:cursor-grabbing overflow-visible",
+        "relative h-full w-full rounded-2xl border border-white/[0.10] bg-[#242424]/95 p-2.5 text-left shadow-[0_8px_24px_rgba(0,0,0,0.16)]",
+        "hover:border-white/[0.22] hover:bg-[#2a2a2a] transition-all cursor-grab active:cursor-grabbing overflow-visible",
         busy && "opacity-60",
       )}
     >
@@ -113,28 +123,39 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
   const calendarRef = useRef<FullCalendar>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
+  const currentWeek = useMemo(() => getCurrentWeekRange(currentDate), [currentDate]);
+  const historyFloor = useMemo(() => {
+    const floor = new Date(currentDate);
+    floor.setDate(floor.getDate() - 5);
+    return floor;
+  }, [currentDate]);
 
   const events: EventInput[] = useMemo(() => {
     return posts
-      .filter((p): p is CalendarPost & { scheduled_at: string } => Boolean(p.scheduled_at))
+      .filter((p): p is CalendarPost & { scheduled_at: string } => {
+        if (!p.scheduled_at) return false;
+        const scheduledAt = new Date(p.scheduled_at);
+        return scheduledAt >= historyFloor && scheduledAt < currentWeek.end;
+      })
       .map((p) => ({
         id: `${p.source ?? "post"}-${p.id}`,
         start: p.scheduled_at,
         allDay: false,
         extendedProps: p,
       }));
-  }, [posts]);
+  }, [currentWeek.end, historyFloor, posts]);
 
   const scheduledVideoCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const post of posts) {
       if (post.source !== "upload" || !post.scheduled_at) continue;
       const date = new Date(post.scheduled_at);
+      if (date < historyFloor || date >= currentWeek.end) continue;
       const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     return counts;
-  }, [posts]);
+  }, [currentWeek.end, historyFloor, posts]);
 
   useEffect(() => {
     const api = calendarRef.current?.getApi();
@@ -211,7 +232,10 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
       <FullCalendar
         ref={calendarRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-        initialView="dayGridMonth"
+        initialView="timeGridWeek"
+        initialDate={currentDate}
+        firstDay={1}
+        validRange={{ start: currentWeek.start, end: currentWeek.end }}
         headerToolbar={false}
         editable={true}
         events={events}
