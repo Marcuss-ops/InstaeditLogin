@@ -45,6 +45,19 @@ type VeloxConfig struct {
 	VeloxWebhookSecret string
 }
 
+// JobMasterConfig is the generic remote execution-plane connection. The
+// control plane (InstaEdit) owns channels and scheduling; the job master and
+// its workers own execution. Credentials are server-only and never reach the
+// browser.
+type JobMasterConfig struct {
+	URL                 string
+	M2MSecret           string
+	ClientID            string
+	TimeoutSeconds      int
+	PollIntervalSeconds int
+	PollTimeoutSeconds  int
+}
+
 // AIConfig holds AI/ML provider secrets for metadata generation,
 // translations, and other AI-assisted features. These keys are
 // server-side only — NEVER exposed to the frontend bundle, logs,

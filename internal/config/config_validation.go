@@ -357,6 +357,9 @@ func (c *Config) validate() error {
 	if err := c.validateVelox(); err != nil {
 		return err
 	}
+	if err := c.validateJobMaster(); err != nil {
+		return err
+	}
 
 	return nil
 }

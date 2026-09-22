@@ -15,6 +15,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/jobmaster"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -268,6 +269,7 @@ type Router struct {
 	// veloxJobRegistry resolves the technical job_type definitions used by
 	// the canonical POST /api/v1/jobs boundary.
 	veloxJobRegistry *veloxjobs.Registry
+	jobMasterClient  jobmaster.API
 
 	// veloxBFFCSRFMiddleware (P2 Velox BFF) wraps the user-facing
 	// /api/v1/velox/* routes with the project's canonical CSRF

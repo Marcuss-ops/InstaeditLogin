@@ -22,6 +22,17 @@ func Load() (*Config, error) {
 			EditorLaunchTokenSecret:      getEnv("INSTAEDITOR_LAUNCH_TOKEN_SECRET", ""),
 			VeloxWebhookSecret:           getEnv("VELOX_WEBHOOK_SECRET", ""),
 		},
+		JobMaster: JobMasterConfig{
+			// JOB_MASTER_* is the provider-neutral contract. The VELOX_* aliases
+			// keep compatibility with the current Velox Master deployment while
+			// allowing the execution service to be replaced later.
+			URL:                 firstNonEmptyEnv("JOB_MASTER_URL", "VELOX_M2M_URL", "VELOX_MASTER_URL"),
+			M2MSecret:           firstNonEmptyEnv("JOB_MASTER_M2M_SECRET", "VELOX_M2M_SECRET"),
+			ClientID:            firstNonEmptyEnv("JOB_MASTER_CLIENT_ID", "VELOX_M2M_CLIENT_ID", "VELOX_CLIENT_ID"),
+			TimeoutSeconds:      getEnvInt("JOB_MASTER_HTTP_TIMEOUT_SECONDS", 30),
+			PollIntervalSeconds: getEnvInt("JOB_MASTER_POLL_INTERVAL_SECONDS", 3),
+			PollTimeoutSeconds:  getEnvInt("JOB_MASTER_POLL_TIMEOUT_SECONDS", 1800),
+		},
 		Monitoring: MonitoringConfig{
 			MetricsBasicAuthUser: getEnv("METRICS_BASIC_AUTH_USER", ""),
 			MetricsBasicAuthPass: getEnv("METRICS_BASIC_AUTH_PASS", ""),

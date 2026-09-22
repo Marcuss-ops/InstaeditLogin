@@ -10,6 +10,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/editorlaunch"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/jobmaster"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -46,6 +47,17 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 	analyticsClock := analytics.RealClock{}
 
 	veloxControlClient := veloxclient.New(s.cfg.Velox.VeloxControlURL, s.cfg.Velox.VeloxControlJWTSecret)
+	jobMasterClient, jobMasterErr := jobmaster.New(jobmaster.Config{
+		BaseURL:      s.cfg.JobMaster.URL,
+		Secret:       s.cfg.JobMaster.M2MSecret,
+		ClientID:     s.cfg.JobMaster.ClientID,
+		Timeout:      time.Duration(s.cfg.JobMaster.TimeoutSeconds) * time.Second,
+		PollInterval: time.Duration(s.cfg.JobMaster.PollIntervalSeconds) * time.Second,
+		PollTimeout:  time.Duration(s.cfg.JobMaster.PollTimeoutSeconds) * time.Second,
+	})
+	if jobMasterErr != nil {
+		return nil, nil, fmt.Errorf("build job master client: %w", jobMasterErr)
+	}
 	var editorLaunchIssuer editor.LaunchTokenIssuer
 	if s.cfg.Velox.EditorLaunchTokenSecret != "" {
 		issuer, issuerErr := editorlaunch.New(s.cfg.Velox.EditorLaunchTokenSecret)
@@ -62,6 +74,11 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		slog.Info("velox control client not configured — jobs and project-scoped editor bridges remain unmounted")
 	} else {
 		slog.Info("velox control client configured", "control_url", s.cfg.Velox.VeloxControlURL)
+	}
+	if jobMasterClient == nil {
+		slog.Info("remote job master not configured — automation routes remain unmounted")
+	} else {
+		slog.Info("remote job master configured", "url", s.cfg.JobMaster.URL, "client_id", s.cfg.JobMaster.ClientID)
 	}
 
 	// Booking-event repo backing POST /api/v1/booking_events
@@ -122,6 +139,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		// /api/v1/velox/* chain is: auth → CSRF → handler.
 		api.WithVeloxJobRegistry(veloxjobs.NewDefaultRegistry()),
 		api.WithVeloxBFFClient(veloxControlClient),
+		api.WithJobMasterClient(jobMasterClient),
 		api.WithEditorBFFClient(veloxControlClient),
 		api.WithEditorLaunchTokenIssuer(editorLaunchIssuer),
 		api.WithEditorService(editorService),

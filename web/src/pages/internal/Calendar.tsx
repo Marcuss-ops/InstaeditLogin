@@ -1,11 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Calendar as CalendarIcon, Plus } from "lucide-react";
+import { Calendar as CalendarIcon, Cpu, Plus } from "lucide-react";
 import { type CalendarViewMode } from "./CalendarGrid";
 import { useCalendarPosts } from "./useCalendarPosts";
 import { CalendarToolbar } from "./CalendarToolbar";
 import { CalendarPostsPanel } from "./CalendarPostsPanel";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
+import { RemoteJobDialog } from "./RemoteJobDialog";
 
 function startOfCurrentWeek(date: Date): Date {
   const start = new Date(date);
@@ -18,6 +19,7 @@ function startOfCurrentWeek(date: Date): Date {
 export function CalendarPage() {
   const view: CalendarViewMode = "week";
   const currentDate = useMemo(() => new Date(), []);
+  const [jobDialogOpen, setJobDialogOpen] = useState(false);
   const posts = useCalendarPosts();
   const weekStart = startOfCurrentWeek(currentDate);
   const weekEnd = new Date(weekStart);
@@ -39,6 +41,13 @@ export function CalendarPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setJobDialogOpen(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-white/[0.12] bg-white/[0.04] text-white text-[13px] font-semibold hover:bg-white/[0.08] transition-colors"
+            >
+              <Cpu size={16} /> Invia job
+            </button>
             <Link
               to="/app/compose"
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
@@ -75,6 +84,7 @@ export function CalendarPage() {
           </div>
         )}
       </div>
+      <RemoteJobDialog open={jobDialogOpen} onClose={() => setJobDialogOpen(false)} />
     </div>
   );
 }

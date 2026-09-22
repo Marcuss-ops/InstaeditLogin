@@ -60,7 +60,7 @@ unchanged.
 | YouTube worker policy | `YOUTUBE_UPLOAD_*`, `YOUTUBE_DAILY_UPLOAD_LIMIT`, `YOUTUBE_SEARCH_QUOTA_LIMIT`, `YOUTUBE_GENERAL_QUOTA_LIMIT`, `YOUTUBE_GROUP_VIDEOS_*`, `PUBLISH_HORIZON_DAYS`, `VIDEO_RETENTION_BUFFER_DAYS` | 16 MiB chunks, 5 retries, 1s/5m backoff; 2026 quota buckets 100 uploads / 100 searches / 10000 general units per day; horizon 30d, buffer 7d | chunk multiple, retry/backoff ordering, positive limits; legacy `YOUTUBE_DAILY_QUOTA_LIMIT` honoured as uploads fallback |
 | Sweeps | `TOKEN_REFRESH_SWEEP_*`, `SNAPSHOT_REFRESH_SWEEP_INTERVAL_SECONDS` | 900s/120d and 60s | token sweep positive when Google OAuth is enabled; snapshot zero normalizes to 60 |
 | Observability | `METRICS_*`, `SENTRY_*` | metrics listener disabled at port 0; Sentry disabled with empty DSN | production metrics credentials; DSN URL shape and HTTPS in production |
-| Integrations | `VELOX_*`, `NVIDIA_API_KEY`, `STRIPE_*` | optional; Stripe URLs derive from `FRONTEND_URL` | Velox control URL/secret must be paired; AI remains optional |
+| Integrations | `VELOX_*`, `JOB_MASTER_*`, `NVIDIA_API_KEY`, `STRIPE_*` | optional; Stripe URLs derive from `FRONTEND_URL`; job master is disabled when URL/secret are empty | Velox control URL/secret and job-master URL/M2M secret must be paired; job-master URL must be absolute HTTP(S); AI remains optional |
 | Encryption | `ENCRYPTION_KEY`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID` | legacy single key or explicit multi-key | exactly one mode; base64 32-byte keys and active ID present |
 
 ## Complete loader key list
@@ -72,6 +72,7 @@ Docker, Vercel, or entrypoint scripts):
 ```text
 NVIDIA_API_KEY
 VELOX_API_TOKEN VELOX_CONTROL_URL VELOX_CONTROL_JWT_SECRET VELOX_WEBHOOK_SECRET
+JOB_MASTER_URL JOB_MASTER_M2M_SECRET JOB_MASTER_CLIENT_ID JOB_MASTER_HTTP_TIMEOUT_SECONDS JOB_MASTER_POLL_INTERVAL_SECONDS JOB_MASTER_POLL_TIMEOUT_SECONDS
 METRICS_BASIC_AUTH_USER METRICS_BASIC_AUTH_PASS METRICS_HOST METRICS_PORT
 SENTRY_DSN SENTRY_ENVIRONMENT SENTRY_RELEASE
 META_APP_ID META_APP_SECRET META_REDIRECT_URI

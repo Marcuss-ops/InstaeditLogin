@@ -42,6 +42,9 @@ type Config struct {
 	// Velox integration secrets.
 	Velox VeloxConfig
 
+	// Generic remote job execution-plane connection.
+	JobMaster JobMasterConfig
+
 	// AI/ML provider secrets (NVIDIA, etc.).
 	AI AIConfig
 

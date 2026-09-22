@@ -98,6 +98,11 @@ func (r *Router) Setup() http.Handler {
 		ResolveDestination: resolveDestination,
 		ResolveTarget:      resolveTarget,
 	}))
+	reg.Register(NewJobMasterModule(JobMasterModuleDeps{
+		Client:         r.jobMasterClient,
+		AuthMiddleware: r.veloxBFFAuthMiddleware,
+		CSRFMiddleware: r.veloxBFFCSRFMiddleware,
+	}))
 	reg.Register(NewEditorBFFModule(EditorBFFModuleDeps{
 		Client:                r.editorBFFClient,
 		AuthMiddleware:        r.editorBFFAuthMiddleware,

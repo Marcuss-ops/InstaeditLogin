@@ -9,6 +9,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/jobmaster"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -19,6 +20,12 @@ import (
 // *sql.DB into unit tests).
 func WithDB(db *sql.DB) RouterOption {
 	return func(r *Router) { r.dbForReady = db }
+}
+
+// WithJobMasterClient wires the server-side M2M execution-plane adapter.
+// When nil, the authenticated automation routes are not mounted.
+func WithJobMasterClient(client jobmaster.API) RouterOption {
+	return func(r *Router) { r.jobMasterClient = client }
 }
 
 // WithConnectionStateStore wires *repository.ConnectionStateRepository
