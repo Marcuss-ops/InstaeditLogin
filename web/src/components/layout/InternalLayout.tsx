@@ -23,6 +23,9 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
     return window.localStorage.getItem("instaedit:app-theme") === "dark" ? "dark" : "light";
   });
   const location = useLocation();
+  const isCalendarRoute =
+    location.pathname === "/app/calendar" ||
+    location.pathname === "/app/uploads/calendar";
 
   const pageTitle =
     location.pathname.includes("performance") ? "Performance" :
@@ -53,7 +56,7 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
 
   return (
     <div className="app-theme h-screen w-full flex overflow-hidden" data-theme={theme}>
-      <Sidebar collapsed={collapsed} onToggle={handleToggle} />
+      {!isCalendarRoute && <Sidebar collapsed={collapsed} onToggle={handleToggle} />}
       <div className="app-main flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="app-topbar h-16 flex-none flex items-center justify-between gap-4 px-5 sm:px-7">
           <div className="flex min-w-0 items-center gap-3">
