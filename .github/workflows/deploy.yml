@@ -54,11 +54,11 @@
 # deploy --prod` from a workflow runner we control makes the loop
 # durable.
 #
-# Required GitHub repo secrets (Settings → Secrets and variables →
-# Actions → New repository secret). FAIL-FAST if any is missing:
+# Required GitHub repo secret:
 #   VERCEL_TOKEN     vercel.com/account/tokens → Create Token (Full Account)
-#   VERCEL_ORG_ID    /v2/teams → id of team owning the project (or /v2/user for personal account)
-#   VERCEL_PROJECT_ID /v9/projects → id of the InstaEdit project
+# The org/project IDs are public Vercel linkage values for the production
+# `instaedit-login-267l` project. Keeping them explicit prevents an outdated
+# repository secret from silently targeting a deleted Vercel project.
 #
 # ⚠️ DEPLOY-DUPLICATION NOTE:
 # If the Vercel-for-Git integration is STILL partially active in
@@ -219,8 +219,8 @@ jobs:
       - name: Deploy web/app to Vercel (production, prebuilt)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ekM71HTZxivI7VJK8n2kWiZJ
+          VERCEL_PROJECT_ID: prj_YqO5G5jSkFpMrgTQqPShOIaGQhar
         run: |
           set -euo pipefail
 
