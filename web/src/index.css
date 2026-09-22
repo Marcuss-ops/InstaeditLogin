@@ -1085,8 +1085,6 @@ html:has(.app-theme) #root {
 .app-job-status-active { border-color: var(--app-accent); color: var(--app-accent); }
 .app-job-status-done { border-color: color-mix(in srgb, var(--app-green) 45%, var(--app-border)); color: var(--app-green); }
 .app-job-status-failed { color: #c65b5b; }
-.app-calendar-job { border: 1px solid var(--app-border); background: var(--app-surface-muted); }
-.app-calendar-job:hover { border-color: var(--app-border-strong); background: var(--app-surface); }
 .app-notice { border: 1px solid var(--app-border); border-radius: 0.75rem; background: var(--app-surface); color: var(--app-muted); padding: 0.7rem 0.85rem; font-size: 0.78rem; }
 .app-form-error { color: #c65b5b; font-size: 0.75rem; }
 .app-spinner { width: 0.8rem; height: 0.8rem; border: 2px solid var(--app-border); border-top-color: var(--app-accent); border-radius: 999px; animation: app-spin 700ms linear infinite; }

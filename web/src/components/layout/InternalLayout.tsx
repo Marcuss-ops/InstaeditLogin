@@ -27,7 +27,6 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
   const pageTitle =
     location.pathname.includes("performance") ? "Performance" :
     location.pathname.includes("calendar") ? "Calendar" :
-    location.pathname.includes("jobs") ? "AI Jobs" :
     location.pathname.includes("groups") ? "Groups" :
     location.pathname.includes("covers") ? "Copertine" :
     location.pathname.includes("livestream") ? "Live streaming" :
