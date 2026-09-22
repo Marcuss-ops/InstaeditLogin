@@ -56,9 +56,9 @@
 #
 # Required GitHub repo secret:
 #   VERCEL_TOKEN     vercel.com/account/tokens → Create Token (Full Account)
-# The org/project IDs are public Vercel linkage values for the production
-# `instaedit-login-267l` project. Keeping them explicit prevents an outdated
-# repository secret from silently targeting a deleted Vercel project.
+# The production project is resolved by name at deploy time. This keeps the
+# workflow correct if Vercel migrates the project between teams or regenerates
+# its public linkage IDs; only the token remains a repository secret.
 #
 # ⚠️ DEPLOY-DUPLICATION NOTE:
 # If the Vercel-for-Git integration is STILL partially active in
@@ -219,8 +219,7 @@ jobs:
       - name: Deploy web/app to Vercel (production, prebuilt)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ekM71HTZxivI7VJK8n2kWiZJ
-          VERCEL_PROJECT_ID: prj_YqO5G5jSkFpMrgTQqPShOIaGQhar
+          VERCEL_PROJECT_NAME: instaedit-login-267l
         run: |
           set -euo pipefail
 
@@ -232,7 +231,29 @@ jobs:
             cp -r /tmp/web-dist/. .vercel/output/static/
           fi
 
-          # Project linkage (matches the secrets the old action used)
+          # Resolve the live project linkage from the token's current Vercel
+          # scope. IDs in old repository docs may refer to a deleted project
+          # or to a previous team, so they must not be treated as canonical.
+          PROJECTS_JSON="$(npx --yes vercel@57.0.0 project ls \
+            --filter "$VERCEL_PROJECT_NAME" \
+            --limit 100 \
+            --format=json \
+            --token "$VERCEL_TOKEN")"
+          PROJECT_INFO="$(printf '%s' "$PROJECTS_JSON" | jq -c --arg name "$VERCEL_PROJECT_NAME" \
+            '(.projects // .)[] | select(.name == $name)' | head -n 1)"
+          if [ -z "$PROJECT_INFO" ]; then
+            echo "::error::Vercel project '$VERCEL_PROJECT_NAME' is not visible to the configured token."
+            printf '%s' "$PROJECTS_JSON" | jq -r '(.projects // .)[] | "visible project: \(.name)"' || true
+            exit 1
+          fi
+          VERCEL_PROJECT_ID="$(printf '%s' "$PROJECT_INFO" | jq -r '.id')"
+          VERCEL_ORG_ID="$(printf '%s' "$PROJECT_INFO" | jq -r '.accountId // .teamId // .userId')"
+          if [ -z "$VERCEL_PROJECT_ID" ] || [ "$VERCEL_PROJECT_ID" = "null" ] || \
+             [ -z "$VERCEL_ORG_ID" ] || [ "$VERCEL_ORG_ID" = "null" ]; then
+            echo "::error::Vercel project metadata did not contain project and account IDs."
+            exit 1
+          fi
+          echo "Deploying Vercel project '$VERCEL_PROJECT_NAME' (IDs resolved at runtime)."
           printf '{"projectId":"%s","orgId":"%s"}\n' \
             "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID" > .vercel/project.json
 

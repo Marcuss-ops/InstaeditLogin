@@ -96,8 +96,9 @@ VITE_API_BASE_URL=https://api.instaedit.org npm --prefix web run build
 # 2) Assembla l'output prebuilt (project instaedit-login-267l)
 mkdir -p .vercel/output/static && rm -rf .vercel/output/static/*
 cp -r web/dist/. .vercel/output/static/
-# .vercel/project.json deve contenere:
-#   {"projectId":"prj_YqO5G5jSkFpMrgTQqPShOIaGQhar","orgId":"ekM71HTZxivI7VJK8n2kWiZJ"}
+# collega la directory al progetto attuale; il comando aggiorna gli ID se il
+# progetto è stato migrato tra team o se Vercel li ha rigenerati
+npx --yes vercel@latest link --yes --project instaedit-login-267l
 
 # 3) config.json già presente in .vercel/output/ (redirect + proxy /api + SPA)
 
