@@ -219,7 +219,7 @@ jobs:
       - name: Deploy web/app to Vercel (production, prebuilt)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_PROJECT_NAME: instaedit-login-267l
+          VERCEL_PROJECT_NAME: instaedit-login
         run: |
           set -euo pipefail
 
