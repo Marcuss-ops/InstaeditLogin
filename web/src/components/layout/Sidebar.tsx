@@ -18,6 +18,7 @@ const baseNavItems: NavItem[] = [
   { to: "/app/dashboard", label: "Dashboard", icon: FUNCTIONAL_ICON_CATALOG.product.dashboard },
   { to: "/app/performance", label: "Performance", icon: FUNCTIONAL_ICON_CATALOG.product.analytics },
   { to: "/app/calendar", label: "Calendar", icon: FUNCTIONAL_ICON_CATALOG.product.calendar },
+  { to: "/app/jobs", label: "AI Jobs", icon: FUNCTIONAL_ICON_CATALOG.product.video },
   { to: "/app/groups", label: "Groups", icon: FUNCTIONAL_ICON_CATALOG.product.folder },
   { to: "/app/covers", label: "Copertine", icon: FUNCTIONAL_ICON_CATALOG.product.image },
   { to: "/app/livestreams", label: "Live streaming", icon: FUNCTIONAL_ICON_CATALOG.product.live, liveCountBadge: true },
@@ -77,7 +78,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="28" y2="28">
                 <stop stopColor="#0A84FF" />
-                <stop offset="1" stopColor="#7B61FF" />
+                <stop offset="1" stopColor="#1f2937" />
               </linearGradient>
             </defs>
           </svg>

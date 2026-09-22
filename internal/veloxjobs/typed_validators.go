@@ -66,7 +66,18 @@ func decodeTypedSpec(spec json.RawMessage, target any) error {
 
 // typedSceneSpec is shared by composite, stock-clip and image-scene jobs.
 type typedSceneSpec struct {
-	Scenes *[]*typedScene `json:"scenes"`
+	Scenes     *[]*typedScene   `json:"scenes"`
+	Automation *typedAutomation `json:"automation,omitempty"`
+}
+
+// typedAutomation carries the editorial pipeline intent to the worker. The
+// worker may execute these stages asynchronously; keeping the shape in the
+// canonical spec lets the UI submit autonomous jobs without a second API.
+type typedAutomation struct {
+	Autonomous    bool     `json:"autonomous,omitempty"`
+	NoSupervision bool     `json:"no_supervision,omitempty"`
+	BatchSize     int      `json:"batch_size,omitempty"`
+	Stages        []string `json:"stages,omitempty"`
 }
 
 type typedScene struct {

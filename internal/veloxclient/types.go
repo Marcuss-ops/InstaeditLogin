@@ -55,6 +55,7 @@ type jobResponse struct {
 	RenderStatus      string    `json:"render_status" validate:"required,min=1"`
 	PublicationStatus string    `json:"publication_status,omitempty"`
 	OverallStatus     string    `json:"overall_status,omitempty"`
+	PublishAt         string    `json:"publish_at,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }

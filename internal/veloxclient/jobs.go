@@ -59,6 +59,7 @@ func (c *Client) ListJobsPage(ctx context.Context, workspaceID, userID int64, fi
 			RenderStatus:      j.RenderStatus,
 			PublicationStatus: j.PublicationStatus,
 			OverallStatus:     j.OverallStatus,
+			PublishAt:         j.PublishAt,
 			CreatedAt:         j.CreatedAt,
 			UpdatedAt:         j.UpdatedAt,
 		})
@@ -107,12 +108,15 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 		return nil, err
 	}
 	return &veloxapi.Job{
-		ID:           resp.ID,
-		WorkspaceID:  resp.WorkspaceID,
-		ProjectID:    resp.ProjectID,
-		RenderStatus: resp.RenderStatus,
-		CreatedAt:    resp.CreatedAt,
-		UpdatedAt:    resp.UpdatedAt,
+		ID:                resp.ID,
+		WorkspaceID:       resp.WorkspaceID,
+		ProjectID:         resp.ProjectID,
+		RenderStatus:      resp.RenderStatus,
+		PublicationStatus: resp.PublicationStatus,
+		OverallStatus:     resp.OverallStatus,
+		PublishAt:         resp.PublishAt,
+		CreatedAt:         resp.CreatedAt,
+		UpdatedAt:         resp.UpdatedAt,
 	}, nil
 }
 
@@ -129,12 +133,15 @@ func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID st
 	}
 	detail := &veloxapi.JobDetail{
 		Job: veloxapi.Job{
-			ID:           resp.Job.ID,
-			WorkspaceID:  resp.Job.WorkspaceID,
-			ProjectID:    resp.Job.ProjectID,
-			RenderStatus: resp.Job.RenderStatus,
-			CreatedAt:    resp.Job.CreatedAt,
-			UpdatedAt:    resp.Job.UpdatedAt,
+			ID:                resp.Job.ID,
+			WorkspaceID:       resp.Job.WorkspaceID,
+			ProjectID:         resp.Job.ProjectID,
+			RenderStatus:      resp.Job.RenderStatus,
+			PublicationStatus: resp.Job.PublicationStatus,
+			OverallStatus:     resp.Job.OverallStatus,
+			PublishAt:         resp.Job.PublishAt,
+			CreatedAt:         resp.Job.CreatedAt,
+			UpdatedAt:         resp.Job.UpdatedAt,
 		},
 		Deliveries: make([]veloxapi.Delivery, 0, len(resp.Deliveries)),
 	}

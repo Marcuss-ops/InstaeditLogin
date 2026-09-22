@@ -660,12 +660,27 @@ html:has(.donne-theme) #root {
   --app-ink: #292927;
   --app-muted: #7b7b76;
   --app-faint: #a2a29b;
-  --app-accent: #5e5ce6;
-  --app-accent-soft: #eeedff;
+  --app-accent: #315c8f;
+  --app-accent-soft: #eef2f5;
   --app-green: #34a853;
   background: var(--app-canvas);
   color: var(--app-ink);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif;
+}
+
+.app-theme[data-theme="dark"] {
+  --app-canvas: #171717;
+  --app-sidebar: #202020;
+  --app-surface: #242424;
+  --app-surface-muted: #1e1e1e;
+  --app-border: #363636;
+  --app-border-strong: #4b4b4b;
+  --app-ink: #f5f5f5;
+  --app-muted: #a3a3a3;
+  --app-faint: #737373;
+  --app-accent: #b9cce0;
+  --app-accent-soft: #303942;
+  --app-green: #55c878;
 }
 
 html:has(.app-theme),
@@ -698,7 +713,7 @@ html:has(.app-theme) #root {
 }
 
 .app-sidebar-toggle:hover {
-  background: #e4e4e0;
+  background: var(--app-surface-muted);
   color: var(--app-ink);
 }
 
@@ -715,20 +730,20 @@ html:has(.app-theme) #root {
 }
 
 .app-nav-item:hover {
-  background: #e5e5e1;
+  background: var(--app-surface-muted);
   color: var(--app-ink);
 }
 
 .app-nav-item-active {
   background: var(--app-accent-soft);
-  border-color: #dfddff;
-  color: #4e4bb7;
+  border-color: var(--app-border);
+  color: var(--app-accent);
   box-shadow: none;
 }
 
 .app-nav-item-active:hover {
-  background: #e7e6ff;
-  color: #4e4bb7;
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
 }
 
 .app-sidebar-footer {
@@ -738,7 +753,7 @@ html:has(.app-theme) #root {
 .app-plan-card {
   border: 1px solid var(--app-border);
   border-radius: 0.8rem;
-  background: rgba(255, 255, 255, 0.58);
+  background: color-mix(in srgb, var(--app-surface) 70%, transparent);
   color: var(--app-ink);
 }
 
@@ -760,7 +775,7 @@ html:has(.app-theme) #root {
 }
 
 .app-topbar {
-  background: rgba(255, 255, 255, 0.72);
+  background: color-mix(in srgb, var(--app-surface) 82%, transparent);
   border-bottom: 1px solid var(--app-border);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
@@ -798,7 +813,7 @@ html:has(.app-theme) #root {
   padding: 0 0.65rem 0 0.75rem;
   border: 1px solid var(--app-border);
   border-radius: 0.65rem;
-  background: rgba(247, 247, 245, 0.8);
+  background: color-mix(in srgb, var(--app-surface-muted) 82%, transparent);
   color: var(--app-muted);
   font-size: 0.75rem;
 }
@@ -821,7 +836,7 @@ html:has(.app-theme) #root {
 
 .app-account-button {
   border-color: var(--app-border);
-  background: rgba(255, 255, 255, 0.7);
+  background: color-mix(in srgb, var(--app-surface) 72%, transparent);
 }
 
 .app-account-button:hover,
@@ -840,7 +855,7 @@ html:has(.app-theme) #root {
 
 .app-account-menu {
   border: 1px solid var(--app-border);
-  background: rgba(255, 255, 255, 0.96);
+  background: color-mix(in srgb, var(--app-surface) 96%, transparent);
   box-shadow: 0 18px 44px rgba(48, 48, 41, 0.14), 0 2px 8px rgba(48, 48, 41, 0.06);
 }
 
@@ -862,21 +877,21 @@ html:has(.app-theme) #root {
 }
 
 .app-account-skeleton {
-  background: #f0f0ec;
+  background: var(--app-surface-muted);
 }
 
 .app-account-row-hover:hover,
 .app-account-row-selected {
-  background: #f2f2ef;
+  background: var(--app-surface-muted);
 }
 
 .app-account-manage {
-  background: #f1f1ee;
+  background: var(--app-surface-muted);
   color: var(--app-ink);
 }
 
 .app-account-manage:hover {
-  background: #e8e8e3;
+  background: var(--app-border);
 }
 
 /* Translate legacy internal-page utility classes into the new app palette.
@@ -960,11 +975,152 @@ html:has(.app-theme) #root {
   height: 2rem;
   align-items: center;
   justify-content: center;
-  border: 1px solid #dfddff;
+  border: 1px solid var(--app-border);
   border-radius: 0.65rem;
   background: var(--app-accent-soft);
   color: var(--app-accent);
 }
+
+.app-theme-toggle,
+.app-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.15rem;
+  height: 2.15rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.65rem;
+  background: var(--app-surface);
+  color: var(--app-muted);
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.app-theme-toggle:hover,
+.app-icon-button:hover {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface-muted);
+  color: var(--app-ink);
+}
+
+.app-primary-button,
+.app-quiet-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.25rem;
+  border-radius: 0.7rem;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.app-primary-button {
+  border: 1px solid var(--app-ink);
+  background: var(--app-ink);
+  color: var(--app-canvas);
+}
+
+.app-primary-button:hover:not(:disabled) {
+  opacity: 0.86;
+}
+
+.app-primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.app-quiet-button {
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  color: var(--app-muted);
+}
+
+.app-quiet-button:hover {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface-muted);
+  color: var(--app-ink);
+}
+
+.app-inline-link {
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--app-accent);
+}
+
+.app-inline-link:hover { color: var(--app-ink); }
+
+.app-pipeline-node {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-surface-muted);
+  color: var(--app-faint);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.app-pipeline-node.is-current { border-color: var(--app-accent); color: var(--app-accent); }
+.app-pipeline-node.is-done { border-color: var(--app-green); background: var(--app-green); color: #fff; }
+.app-pipeline-line { background: var(--app-border); }
+.app-pipeline-line-done { background: var(--app-green); }
+.app-progress-track { height: 0.3rem; overflow: hidden; border-radius: 999px; background: var(--app-border); }
+.app-progress-value { height: 100%; border-radius: inherit; background: var(--app-accent); transition: width 300ms ease; }
+
+.app-job-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  padding: 0.22rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+.app-job-status-active { border-color: var(--app-accent); color: var(--app-accent); }
+.app-job-status-done { border-color: color-mix(in srgb, var(--app-green) 45%, var(--app-border)); color: var(--app-green); }
+.app-job-status-failed { color: #c65b5b; }
+.app-calendar-job { border: 1px solid var(--app-border); background: var(--app-surface-muted); }
+.app-calendar-job:hover { border-color: var(--app-border-strong); background: var(--app-surface); }
+.app-notice { border: 1px solid var(--app-border); border-radius: 0.75rem; background: var(--app-surface); color: var(--app-muted); padding: 0.7rem 0.85rem; font-size: 0.78rem; }
+.app-form-error { color: #c65b5b; font-size: 0.75rem; }
+.app-spinner { width: 0.8rem; height: 0.8rem; border: 2px solid var(--app-border); border-top-color: var(--app-accent); border-radius: 999px; animation: app-spin 700ms linear infinite; }
+@keyframes app-spin { to { transform: rotate(360deg); } }
+
+.app-field { display: grid; gap: 0.4rem; color: var(--app-muted); font-size: 0.75rem; font-weight: 650; }
+.app-field input, .app-field select { width: 100%; min-height: 2.5rem; border: 1px solid var(--app-border); border-radius: 0.7rem; background: var(--app-surface-muted); padding: 0.55rem 0.7rem; font-size: 0.82rem; outline: none; }
+.app-field input:focus, .app-field select:focus { border-color: var(--app-border-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent) 16%, transparent); }
+.app-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--app-border); border-radius: 0.8rem; padding: 0.75rem; font-size: 0.78rem; }
+.app-switch-row strong, .app-switch-row small { display: block; }
+.app-switch-row small { margin-top: 0.2rem; color: var(--app-muted); font-size: 0.7rem; font-weight: 400; }
+.app-switch-row input { width: 2.2rem; height: 1.2rem; accent-color: var(--app-ink); }
+.app-modal-backdrop { position: fixed; z-index: 50; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.42); padding: 1rem; }
+.app-modal { max-height: calc(100vh - 2rem); overflow-y: auto; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2); }
+
+/* Authenticated legacy pages are being migrated incrementally. Keep every
+   violet/purple utility neutral inside the app while the public site keeps
+   its separate marketing palette. */
+.app-theme [class*="violet"],
+.app-theme [class*="purple"] { color: var(--app-muted) !important; border-color: var(--app-border) !important; }
+.app-theme [class*="bg-violet-"],
+.app-theme [class*="bg-purple-"],
+.app-theme [class*="from-violet-"],
+.app-theme [class*="to-violet-"],
+.app-theme [class*="from-purple-"],
+.app-theme [class*="to-purple-"] { background-color: var(--app-surface-muted) !important; background-image: none !important; }
+.app-theme [class*="hover:bg-violet-"]:hover,
+.app-theme [class*="hover:bg-purple-"]:hover { background-color: var(--app-surface-muted) !important; }
+.app-theme [class*="hover:border-violet-"]:hover,
+.app-theme [class*="hover:border-purple-"]:hover { border-color: var(--app-border-strong) !important; }
+
+.app-theme[data-theme="dark"] .app-account-menu { box-shadow: 0 18px 44px rgba(0, 0, 0, 0.36), 0 2px 8px rgba(0, 0, 0, 0.2); }
+.app-theme[data-theme="dark"] .app-page table tbody tr { border-color: var(--app-border) !important; }
+.app-theme[data-theme="dark"] .app-page table tbody tr:hover { background: var(--app-surface-muted) !important; }
 
 .app-page-subtitle,
 .app-card-muted {
@@ -1045,6 +1201,20 @@ html:has(.app-theme) #root {
 
 .app-page table tbody tr:hover {
   background: #fafaf8 !important;
+}
+
+.app-theme[data-theme="dark"] .app-kpi-card-success {
+  border-color: #315d3d !important;
+  background: #203126 !important;
+  color: var(--app-green);
+}
+
+.app-theme[data-theme="dark"] .app-page table tbody tr {
+  border-color: var(--app-border) !important;
+}
+
+.app-theme[data-theme="dark"] .app-page table tbody tr:hover {
+  background: var(--app-surface-muted) !important;
 }
 
 @media (max-width: 720px) {

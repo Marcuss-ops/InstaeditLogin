@@ -13,11 +13,12 @@ import (
 // VeloxBFFModuleDeps is the narrow set of dependencies the Velox
 // BFF module needs to mount its routes.
 type VeloxBFFModuleDeps struct {
-	Client         veloxapi.Client
-	JobRegistry    *veloxjobs.Registry
-	ResolveTarget  func(context.Context, int64, int64, veloxapi.PublicationTarget) (veloxapi.PublicationTarget, error)
-	AuthMiddleware func(http.Handler) http.Handler
-	CSRFMiddleware func(http.Handler) http.Handler
+	Client             veloxapi.Client
+	JobRegistry        *veloxjobs.Registry
+	ResolveTarget      func(context.Context, int64, int64, veloxapi.PublicationTarget) (veloxapi.PublicationTarget, error)
+	ResolveDestination func(context.Context, int64, int64, veloxapi.PublicationTarget) (veloxapi.PublicationTarget, string, error)
+	AuthMiddleware     func(http.Handler) http.Handler
+	CSRFMiddleware     func(http.Handler) http.Handler
 }
 
 // VeloxBFFModule mounts the user-facing /api/v1/velox/* BFF routes
@@ -40,11 +41,12 @@ func (m *VeloxBFFModule) Register(mux chi.Router) {
 		return
 	}
 	veloxapi.Register(mux, veloxapi.Deps{
-		Client:         m.deps.Client,
-		JobRegistry:    m.deps.JobRegistry,
-		ResolveTarget:  m.deps.ResolveTarget,
-		AuthMiddleware: m.deps.AuthMiddleware,
-		CSRFMiddleware: m.deps.CSRFMiddleware,
+		Client:             m.deps.Client,
+		JobRegistry:        m.deps.JobRegistry,
+		ResolveTarget:      m.deps.ResolveTarget,
+		ResolveDestination: m.deps.ResolveDestination,
+		AuthMiddleware:     m.deps.AuthMiddleware,
+		CSRFMiddleware:     m.deps.CSRFMiddleware,
 	})
 }
 

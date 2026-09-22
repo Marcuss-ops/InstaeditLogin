@@ -116,6 +116,19 @@ func (b *bff) createCanonicalJob(w http.ResponseWriter, req *http.Request) {
 		}
 		body.Target = &resolved
 	}
+	if body.Target != nil && len(body.DeliveryPlan.Destinations) == 0 && b.deps.ResolveDestination != nil {
+		resolved, destinationID, resolveErr := b.deps.ResolveDestination(req.Context(), wsID, userID, *body.Target)
+		if resolveErr != nil {
+			writeError(w, http.StatusUnprocessableEntity, "validation: "+resolveErr.Error())
+			return
+		}
+		if strings.TrimSpace(destinationID) == "" {
+			writeError(w, http.StatusUnprocessableEntity, "validation: target has no publishing destination")
+			return
+		}
+		body.Target = &resolved
+		body.DeliveryPlan.Destinations = []DeliveryDestination{{ExternalDestinationID: destinationID}}
+	}
 	result, err := b.submission.SubmitCanonical(req.Context(), wsID, userID, body)
 	if err != nil {
 		if errors.Is(err, veloxjobs.ErrInvalidSubmission) {

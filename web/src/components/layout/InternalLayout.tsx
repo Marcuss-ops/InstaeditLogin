@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ChevronRight, Search } from "lucide-react";
+import { ChevronRight, Moon, Search, Sun } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { AccountSwitcher } from "./AccountSwitcher";
@@ -18,11 +18,16 @@ const HEARTBEAT_CHECK_MS = 60 * 1000;
 
 export function InternalLayout({ children }: { children?: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof window === "undefined") return "light";
+    return window.localStorage.getItem("instaedit:app-theme") === "dark" ? "dark" : "light";
+  });
   const location = useLocation();
 
   const pageTitle =
     location.pathname.includes("performance") ? "Performance" :
     location.pathname.includes("calendar") ? "Calendar" :
+    location.pathname.includes("jobs") ? "AI Jobs" :
     location.pathname.includes("groups") ? "Groups" :
     location.pathname.includes("covers") ? "Copertine" :
     location.pathname.includes("livestream") ? "Live streaming" :
@@ -43,8 +48,12 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    window.localStorage.setItem("instaedit:app-theme", theme);
+  }, [theme]);
+
   return (
-    <div className="app-theme h-screen w-full flex overflow-hidden">
+    <div className="app-theme h-screen w-full flex overflow-hidden" data-theme={theme}>
       <Sidebar collapsed={collapsed} onToggle={handleToggle} />
       <div className="app-main flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="app-topbar h-16 flex-none flex items-center justify-between gap-4 px-5 sm:px-7">
@@ -67,6 +76,15 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
               <kbd>⌘ K</kbd>
             </button>
           <NotificationCenter />
+          <button
+            type="button"
+            className="app-theme-toggle"
+            onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}
+            aria-label={theme === "light" ? "Attiva tema scuro" : "Attiva tema chiaro"}
+            title={theme === "light" ? "Tema scuro" : "Tema chiaro"}
+          >
+            {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
+          </button>
           <AccountSwitcher />
           </div>
         </header>

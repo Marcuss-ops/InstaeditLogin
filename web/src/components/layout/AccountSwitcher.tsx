@@ -122,7 +122,7 @@ export function AccountSwitcher() {
             : "",
         )}
       >
-        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center text-white text-[11px] font-bold">
+        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#0A84FF] to-[#1f2937] flex items-center justify-center text-white text-[11px] font-bold">
           {displayInitial ? (
             displayInitial
           ) : (

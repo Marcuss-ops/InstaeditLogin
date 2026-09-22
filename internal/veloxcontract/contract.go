@@ -39,6 +39,7 @@ type Job struct {
 	RenderStatus      string    `json:"render_status"`
 	PublicationStatus string    `json:"publication_status"`
 	OverallStatus     string    `json:"overall_status"`
+	PublishAt         string    `json:"publish_at,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }

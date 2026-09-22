@@ -96,11 +96,12 @@ var (
 // Register. nil Client = routes not mounted (nil-guard pattern
 // matching AdminModule / VeloxModule).
 type Deps struct {
-	Client         Client
-	JobRegistry    *veloxjobs.Registry
-	ResolveTarget  func(context.Context, int64, int64, PublicationTarget) (PublicationTarget, error)
-	AuthMiddleware func(http.Handler) http.Handler
-	CSRFMiddleware func(http.Handler) http.Handler
+	Client             Client
+	JobRegistry        *veloxjobs.Registry
+	ResolveTarget      func(context.Context, int64, int64, PublicationTarget) (PublicationTarget, error)
+	ResolveDestination func(context.Context, int64, int64, PublicationTarget) (PublicationTarget, string, error)
+	AuthMiddleware     func(http.Handler) http.Handler
+	CSRFMiddleware     func(http.Handler) http.Handler
 }
 
 // Register mounts the user-facing BFF Velox routes on mux. No-op when

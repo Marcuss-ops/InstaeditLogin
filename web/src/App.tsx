@@ -58,6 +58,11 @@ const CalendarPage = lazy(() =>
     default: m.CalendarPage,
   })),
 );
+const JobsPage = lazy(() =>
+  import("./pages/internal/Jobs").then((m) => ({
+    default: m.JobsPage,
+  })),
+);
 const GroupsPage = lazy(() =>
   import("./pages/internal/Groups").then((m) => ({
     default: m.GroupsPage,
@@ -271,6 +276,14 @@ function App() {
                 element={
                   <LazyRoute>
                     <CalendarPage />
+                  </LazyRoute>
+                }
+              />
+              <Route
+                path="jobs"
+                element={
+                  <LazyRoute>
+                    <JobsPage />
                   </LazyRoute>
                 }
               />
