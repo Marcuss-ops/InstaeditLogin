@@ -34,3 +34,24 @@ func TestCatalogSupportsPlainTypeArray(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogPreservesRemoteSchemaReferencesAndArtifacts(t *testing.T) {
+	raw := json.RawMessage(`{"types":[{"type":"script.generate","input_schema":"script.generate.v1","result_schema":"script.generate.result.v1","artifact_kinds":["script"],"estimated_resource_class":"llm"}]}`)
+	got, err := NewCatalog().Available(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range got {
+		if definition.Name != "content.generate_script" {
+			continue
+		}
+		if !definition.Available || definition.InputSchema != "script.generate.v1" || definition.ResultSchema != "script.generate.result.v1" || definition.ResourceClass != "llm" {
+			t.Fatalf("remote schema metadata not projected: %+v", definition)
+		}
+		if len(definition.ArtifactKinds) != 1 || definition.ArtifactKinds[0] != "script" {
+			t.Fatalf("artifact kinds not projected: %+v", definition.ArtifactKinds)
+		}
+		return
+	}
+	t.Fatal("content.generate_script missing from catalog")
+}

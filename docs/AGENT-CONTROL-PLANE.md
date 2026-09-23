@@ -116,6 +116,20 @@ The plan is a control-plane contract and idempotency-key generator. The
 execution-plane implementations of `video.create` and `video.assemble` remain
 deferred until PipelineGen exposes them through the catalog.
 
+The live Master catalog observed on 2026-09-23 advertises these generic M2M
+types: `script.generate` (`script.generate.v1` →
+`script.generate.result.v1`), `youtube_clip.extract` (`youtube_clip.extract.v1`
+→ `youtube_clip.extract.result.v1`), `media.stock` (`media.stock.v1` →
+`media.stock.result.v1`), `voiceover.generate` (`voiceover.generate.v1` →
+`voiceover.generate.result.v1`), `clip.render` (`clip.render.v1` →
+`clip.render.result.v1`), and `image.generate.google`
+(`image.generate.google.v1` → `image.generate.google.result.v1`). The BFF now
+preserves these schema references, artifact kinds and resource classes in
+`GET /api/v1/agent/tools`. The Master currently returns identifiers, not the
+JSON Schema bodies; common `/openapi.json` and schema-registry URL candidates
+returned 404 during discovery. The exact payload/result schemas must be
+provided by the execution-plane contract owner before composing these jobs.
+
 ## Calendar to scheduled publication
 
 The Calendar's **Crea e programma video** dialog creates a durable run and

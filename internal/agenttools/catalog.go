@@ -13,12 +13,25 @@ import (
 const PermissionAutomation = "automation"
 
 type Definition struct {
-	Name               string `json:"name"`
-	RemoteType         string `json:"remote_type"`
-	Description        string `json:"description"`
-	RequiredPermission string `json:"required_permission"`
-	Submit             bool   `json:"submit"`
-	Available          bool   `json:"available"`
+	Name               string   `json:"name"`
+	RemoteType         string   `json:"remote_type"`
+	Description        string   `json:"description"`
+	RequiredPermission string   `json:"required_permission"`
+	Submit             bool     `json:"submit"`
+	Available          bool     `json:"available"`
+	InputSchema        string   `json:"input_schema,omitempty"`
+	ResultSchema       string   `json:"result_schema,omitempty"`
+	ArtifactKinds      []string `json:"artifact_kinds,omitempty"`
+	ResourceClass      string   `json:"estimated_resource_class,omitempty"`
+}
+
+type remoteTypeMetadata struct {
+	Type                   string   `json:"type"`
+	Name                   string   `json:"name"`
+	InputSchema            string   `json:"input_schema"`
+	ResultSchema           string   `json:"result_schema"`
+	ArtifactKinds          []string `json:"artifact_kinds"`
+	EstimatedResourceClass string   `json:"estimated_resource_class"`
 }
 
 type Catalog struct {
@@ -65,9 +78,16 @@ func (c Catalog) Available(remoteTypes json.RawMessage) ([]Definition, error) {
 	if err != nil {
 		return nil, err
 	}
+	metadata := decodeRemoteTypeMetadata(remoteTypes)
 	out := make([]Definition, 0, len(c.definitions))
 	for _, d := range c.definitions {
 		d.Available = set[d.RemoteType]
+		if remote, ok := metadata[d.RemoteType]; ok {
+			d.InputSchema = remote.InputSchema
+			d.ResultSchema = remote.ResultSchema
+			d.ArtifactKinds = append([]string(nil), remote.ArtifactKinds...)
+			d.ResourceClass = remote.EstimatedResourceClass
+		}
 		if d.Name == "content.create_video" {
 			// The production scene-composite lane is exposed on PREPARE / FINALIZE
 			// and does not advertise a generic type. Require both the script and
@@ -77,6 +97,33 @@ func (c Catalog) Available(remoteTypes json.RawMessage) ([]Definition, error) {
 		out = append(out, d)
 	}
 	return out, nil
+}
+
+func decodeRemoteTypeMetadata(raw json.RawMessage) map[string]remoteTypeMetadata {
+	var values []json.RawMessage
+	var envelope struct {
+		Types []json.RawMessage `json:"types"`
+	}
+	if json.Unmarshal(raw, &envelope) == nil && envelope.Types != nil {
+		values = envelope.Types
+	} else if json.Unmarshal(raw, &values) != nil {
+		return nil
+	}
+	result := make(map[string]remoteTypeMetadata, len(values))
+	for _, value := range values {
+		var item remoteTypeMetadata
+		if json.Unmarshal(value, &item) != nil {
+			continue
+		}
+		name := item.Type
+		if name == "" {
+			name = item.Name
+		}
+		if strings.TrimSpace(name) != "" {
+			result[name] = item
+		}
+	}
+	return result
 }
 
 // DecodeRemoteTypes accepts both the current {"types":[...]} envelope and
