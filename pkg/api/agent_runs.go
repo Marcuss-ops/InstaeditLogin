@@ -769,6 +769,19 @@ func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.R
 		writeError(w, http.StatusInternalServerError, "create scheduled calendar event: "+reserveErr.Error())
 		return
 	}
+	markStartFailed := func(code string, cause error) {
+		completedAt := time.Now().UTC()
+		failed := *step
+		failed.Status, failed.ErrorCode, failed.ErrorMessage, failed.CompletedAt = "failed", code, cause.Error(), &completedAt
+		_ = m.deps.Store.CompleteStepOwned(req.Context(), workspaceID, runID, &failed)
+		_ = m.deps.Store.UpdateRunOwned(req.Context(), workspaceID, runID, "failed", "content.create_video", &completedAt)
+		if projector, ok := m.deps.VideoPublisher.(interface {
+			UpdateProgress(context.Context, int64, string, repository.AgentRunStep, string, *int, []byte) error
+		}); ok {
+			snapshot, _ := json.Marshal(map[string]any{"phase": "FAILED", "error_code": code, "error": cause.Error()})
+			_ = projector.UpdateProgress(req.Context(), workspaceID, runID, *step, "FAILED", nil, snapshot)
+		}
+	}
 	pre, err := withJSONFields(plan.Pre, map[string]any{"idempotency_key": body.IdempotencyKey + "-prepare", "copy_only": true})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid pre payload: "+err.Error())
@@ -782,13 +795,13 @@ func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.R
 	if step.RemoteJobID == "" {
 		result, submitErr := m.deps.JobMaster.PrepareVideo(req.Context(), pre)
 		if submitErr != nil {
-			_ = m.deps.Store.CompleteStepOwned(req.Context(), workspaceID, runID, &repository.AgentRunStep{ID: step.ID, Status: "failed", ErrorCode: "VIDEO_PREPARE_FAILED", ErrorMessage: submitErr.Error()})
+			markStartFailed("VIDEO_PREPARE_FAILED", submitErr)
 			writeError(w, http.StatusBadGateway, "prepare video: "+submitErr.Error())
 			return
 		}
 		remoteID := remoteJobID(result)
 		if remoteID == "" {
-			_ = m.deps.Store.CompleteStepOwned(req.Context(), workspaceID, runID, &repository.AgentRunStep{ID: step.ID, Status: "failed", ErrorCode: "REMOTE_JOB_ID_MISSING", ErrorMessage: "prepare response returned no job id"})
+			markStartFailed("REMOTE_JOB_ID_MISSING", errors.New("prepare response returned no job id"))
 			writeError(w, http.StatusBadGateway, "prepare response returned no job id")
 			return
 		}
@@ -805,6 +818,7 @@ func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.R
 	}
 	if strings.EqualFold(step.RemoteStatus, "PREPARED") || step.RemoteStatus == "" {
 		if _, err := m.deps.JobMaster.FinalizeVideo(req.Context(), step.RemoteJobID, finalize); err != nil {
+			markStartFailed("VIDEO_FINALIZE_FAILED", err)
 			writeError(w, http.StatusBadGateway, "finalize video (retry with the same idempotency key): "+err.Error())
 			return
 		}
