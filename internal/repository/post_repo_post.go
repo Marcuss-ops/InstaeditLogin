@@ -420,15 +420,17 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 	var posts []models.Post
 	for rows.Next() {
 		p := models.Post{}
+		var metadata []byte
 		// P1 (migration 053) — also read the two new privacy columns; order
 		// matches qSelectPostsByWorkspace's column list.
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 			&p.IngestAfter, &p.PublishAt, &p.Status,
 			&p.PrivacyLevel, &p.DefaultPrivacyLevel,
 			&p.CreatedAt, &p.UploadJobID,
-			&p.MediaAssetID, &p.StorageObjectKey, &p.Bucket); err != nil {
+			&p.MediaAssetID, &p.StorageObjectKey, &p.Bucket, &metadata); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
+		p.Metadata = metadata
 		posts = append(posts, p)
 	}
 	return posts, nil

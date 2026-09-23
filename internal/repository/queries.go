@@ -87,7 +87,7 @@ const qSelectPostByUploadJobID = `SELECT id, workspace_id, title, caption, media
  FROM posts
  WHERE upload_job_id = $1`
 
-const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
+const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket, COALESCE(metadata,'{}'::jsonb)
  FROM posts
  WHERE workspace_id = $1
  ORDER BY created_at DESC`

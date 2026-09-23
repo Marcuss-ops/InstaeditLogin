@@ -91,7 +91,17 @@ export function useCalendarPosts() {
         const groupsData = (await groupsResp.json()) as { groups?: CalendarGroup[] };
         groups = groupsData.groups ?? [];
       }
-      const posts = (data.posts ?? []).map((post) => ({ ...post, copyright_alerts: alertsByPost.get(post.id) }));
+      const posts = (data.posts ?? []).map((post) => {
+        const metadata = post.metadata ?? {};
+        return {
+          ...post,
+          generation_status: post.generation_status ?? (typeof metadata.generation_status === "string" ? metadata.generation_status : undefined),
+          generation_progress: post.generation_progress ?? (typeof metadata.generation_progress === "number" ? metadata.generation_progress : undefined),
+          generation_phase: post.generation_phase ?? (typeof metadata.generation_phase === "string" ? metadata.generation_phase : undefined),
+          generation_snapshot: post.generation_snapshot ?? (metadata.generation_snapshot && typeof metadata.generation_snapshot === "object" ? metadata.generation_snapshot as Record<string, unknown> : undefined),
+          copyright_alerts: alertsByPost.get(post.id),
+        };
+      });
       setState({ kind: "ready", posts: [...posts, ...scheduledUploads], workspaces, groups });
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -108,6 +118,14 @@ export function useCalendarPosts() {
     void load();
     return () => abortRef.current?.abort();
   }, [load]);
+
+  useEffect(() => {
+    if (state.kind !== "ready") return;
+    const active = state.posts.some((post) => post.generation_status && !["CONTENT_READY", "FAILED", "completed", "failed"].includes(post.generation_status));
+    if (!active) return;
+    const timer = window.setInterval(() => { void load(); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [state, load]);
 
   const filteredPosts =
     state.kind === "ready"

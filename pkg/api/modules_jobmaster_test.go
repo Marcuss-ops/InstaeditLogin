@@ -21,6 +21,12 @@ type fakeJobMaster struct {
 func (f *fakeJobMaster) ListTypes(context.Context) (json.RawMessage, error) {
 	return json.RawMessage(`{"types":["script.generate"]}`), nil
 }
+func (f *fakeJobMaster) SearchMedia(context.Context, string, int) (json.RawMessage, error) {
+	return json.RawMessage(`{"items":[]}`), nil
+}
+func (f *fakeJobMaster) GetMediaAsset(context.Context, string) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
 
 func (f *fakeJobMaster) Submit(_ context.Context, input jobmaster.SubmitRequest) (json.RawMessage, error) {
 	f.lastSubmit = input

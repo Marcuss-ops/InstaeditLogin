@@ -80,3 +80,23 @@ func TestClientRejectsPathTraversalJobID(t *testing.T) {
 		t.Fatalf("error = %v, want ErrInvalidJobID", err)
 	}
 }
+
+func TestClientReadsMediaCatalogWithEscapedSearch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/media/assets" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+		if r.URL.Query().Get("source") != "youtube" || r.URL.Query().Get("search") != "Mike Tyson & training" || r.URL.Query().Get("limit") != "12" {
+			t.Fatalf("query = %v", r.URL.Query())
+		}
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer server.Close()
+	c, err := New(Config{BaseURL: server.URL, Secret: "test-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SearchMedia(context.Background(), "Mike Tyson & training", 12); err != nil {
+		t.Fatal(err)
+	}
+}

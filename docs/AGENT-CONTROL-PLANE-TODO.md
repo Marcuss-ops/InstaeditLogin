@@ -34,9 +34,14 @@ Scope: this checklist applies only to the `InstaeditLogin` control plane (the
       final artifact preview/link on the event card.
 - [x] Expose the next 30 days in a rolling Calendar view; scheduled posts can
       be rescheduled by drag, started immediately or cancelled from card detail.
+- [x] Add topic search against PipelineGen's read-only media catalog and build
+      a scene-composite PREPARE manifest from matching ready Drive-backed clips.
 - [ ] Add a separate 30-day calendar-intent dispatcher (scheduled topic,
       channel, timezone, run-now/reschedule/cancel) and project live remote
       pipeline phases on those intent cards.
+- [ ] Connect script/voiceover/stock/extraction/overlay/thumbnail jobs into the
+      parent workflow; current render consumes registered video clips and the
+      live M2M catalog has no thumbnail or final-audio job.
 - [x] Add focused unit/HTTP/repository tests for all new contracts.
 - [x] Update the control-plane architecture and M2M documentation.
 - [x] Run formatter, focused tests, full Go tests, frontend tests/build, and

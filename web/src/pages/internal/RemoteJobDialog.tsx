@@ -11,6 +11,7 @@ type RemoteJobDialogProps = {
 };
 
 const TERMINAL_STATUSES = new Set([
+	"ready",
   "completed",
   "complete",
   "succeeded",
@@ -108,6 +109,9 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [videoTitle, setVideoTitle] = useState("");
+  const [videoTopic, setVideoTopic] = useState("");
+  const [videoDuration, setVideoDuration] = useState("180");
+  const [planning, setPlanning] = useState(false);
   const [videoCaption, setVideoCaption] = useState("");
   const [videoSchedule, setVideoSchedule] = useState(() => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
   const [videoTarget, setVideoTarget] = useState("");
@@ -244,6 +248,10 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
         setError("PREPARE e FINALIZE devono essere JSON validi.");
         return;
       }
+      if (!Array.isArray(asObject(pre).scenes) || (asObject(pre).scenes as unknown[]).length === 0) {
+        setError("Cerca prima il topic per generare il piano media e le scene.");
+        return;
+      }
       if (!videoTitle.trim() || !Number.isSafeInteger(targetID) || targetID <= 0 || !Number.isFinite(scheduledAt.getTime())) {
         setError("Inserisci titolo, account ID valido e data di pubblicazione.");
         return;
@@ -258,7 +266,7 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
         if (!createdRunID) throw new Error("Il control plane non ha restituito il run_id.");
         setRunID(createdRunID);
         setJob({ status: "starting", run_id: createdRunID });
-        await responseJSON(await authedFetch(`/api/v1/agent/runs/${encodeURIComponent(createdRunID)}/tools/content.create_video`, {
+        const accepted = asObject(await responseJSON(await authedFetch(`/api/v1/agent/runs/${encodeURIComponent(createdRunID)}/tools/content.create_video`, {
           method: "POST",
           body: JSON.stringify({
             project: project || `workspace-${run.workspace_id ?? "video"}`,
@@ -273,8 +281,9 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
               },
             },
           }),
-        }));
-        setJob({ status: "running", run_id: createdRunID, phase: "PREPARE / FINALIZE" });
+        })));
+        onCalendarRefresh?.();
+        setJob({ status: "running", run_id: createdRunID, phase: "PREPARE / FINALIZE", calendar_post_id: accepted.calendar_post_id });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Avvio creazione video fallito.");
         setRunID("");
@@ -307,6 +316,23 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
     }
   }
 
+  async function planVideo() {
+    setError("");
+    if (videoTopic.trim().length < 3) { setError("Inserisci un topic di almeno 3 caratteri."); return; }
+    setPlanning(true);
+    try {
+      const body = asObject(await responseJSON(await authedFetch("/api/v1/agent/video-plan", {
+        method: "POST",
+        body: JSON.stringify({ topic: videoTopic.trim(), title: videoTitle.trim(), target_duration_seconds: Number(videoDuration) }),
+      })));
+      setVideoPre(JSON.stringify(body.pre ?? {}, null, 2));
+      setVideoFinalize(JSON.stringify(body.finalize ?? {}, null, 2));
+      setJob({ status: "ready", scene_count: body.scene_count, estimated_source_seconds: body.estimated_source_seconds, selected_assets: body.selected_assets });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ricerca media e pianificazione video fallite.");
+    } finally { setPlanning(false); }
+  }
+
   if (!open) return null;
 
   return (
@@ -328,6 +354,8 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
             </label>
             {mode === "video" ? <>
               <label className="block text-xs font-semibold text-white/60">Titolo<input value={videoTitle} onChange={(event) => setVideoTitle(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
+              <label className="block text-xs font-semibold text-white/60">Topic / brief<input value={videoTopic} onChange={(event) => setVideoTopic(event.target.value)} placeholder="Mike Tyson training interview" className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
+              <div className="flex gap-3"><label className="block flex-1 text-xs font-semibold text-white/60">Durata target (secondi)<input type="number" min={30} max={600} value={videoDuration} onChange={(event) => setVideoDuration(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label><button type="button" onClick={() => void planVideo()} disabled={planning || videoTopic.trim().length < 3} className="mt-5 inline-flex items-center gap-2 self-start rounded-xl border border-white/15 bg-white/[0.06] px-3 py-2.5 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-45">{planning ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Cerca media</button></div>
               <label className="block text-xs font-semibold text-white/60">Descrizione<textarea value={videoCaption} onChange={(event) => setVideoCaption(event.target.value)} rows={2} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-xs font-semibold text-white/60">Pubblica il<input type="datetime-local" value={videoSchedule} onChange={(event) => setVideoSchedule(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
@@ -336,7 +364,7 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
                 </label>
               </div>
               <label className="block text-xs font-semibold text-white/60">Privacy<select value={videoPrivacy} onChange={(event) => setVideoPrivacy(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white"><option value="unlisted">Non in elenco</option><option value="private">Privato</option><option value="public">Pubblico</option></select></label>
-              <label className="block text-xs font-semibold text-white/60">PREPARE JSON (scene, clip, script e delivery)<textarea value={videoPre} onChange={(event) => setVideoPre(event.target.value)} rows={7} spellCheck={false} className="mt-1.5 w-full resize-y rounded-xl border border-white/[0.12] bg-black/20 px-3 py-2.5 font-mono text-[11px] leading-5 text-white" /></label>
+              <label className="block text-xs font-semibold text-white/60">Piano scene generato dalla media catalog (modificabile)<textarea value={videoPre} onChange={(event) => setVideoPre(event.target.value)} rows={7} spellCheck={false} className="mt-1.5 w-full resize-y rounded-xl border border-white/[0.12] bg-black/20 px-3 py-2.5 font-mono text-[11px] leading-5 text-white" /></label>
               <label className="block text-xs font-semibold text-white/60">FINALIZE JSON (overlay e audio opzionali)<textarea value={videoFinalize} onChange={(event) => setVideoFinalize(event.target.value)} rows={3} spellCheck={false} className="mt-1.5 w-full resize-y rounded-xl border border-white/[0.12] bg-black/20 px-3 py-2.5 font-mono text-[11px] leading-5 text-white" /></label>
             </> : <>
             <label className="block text-xs font-semibold text-white/60">Tipo job

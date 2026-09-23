@@ -23,7 +23,16 @@ import (
 // the existing publish worker owns the actual platform upload and statuses.
 type AgentVideoPublisher interface {
 	Validate(context.Context, auth.Identity, int64, json.RawMessage) error
+	Reserve(context.Context, auth.Identity, int64, string, repository.AgentRunStep) (json.RawMessage, error)
 	Publish(context.Context, auth.Identity, int64, string, repository.AgentRunStep, json.RawMessage) (json.RawMessage, error)
+}
+
+type agentVideoCalendarProjection interface {
+	UpdateAgentVideoProgress(context.Context, int64, int64, string, string, string, *int, []byte) error
+}
+
+type agentVideoCalendarFinalizer interface {
+	FinalizeAgentVideoEvent(*models.Post, []*models.PostTarget) error
 }
 
 type agentVideoAssetStore interface {
@@ -55,7 +64,7 @@ type agentVideoPublisher struct {
 func newAgentVideoPublisher(assets MediaStore, storage StorageProvider, posts PostStore, workspaces WorkspaceStore, teams TeamStore, idempotency IdempotencyStore, maxBytes int64, horizonDays int) AgentVideoPublisher {
 	assetStore, ok := assets.(agentVideoAssetStore)
 	videoStorage, storageOK := storage.(generatedVideoStorage)
-	if !ok || !storageOK || posts == nil || workspaces == nil {
+	if !ok || !storageOK || posts == nil || workspaces == nil || idempotency == nil {
 		return nil
 	}
 	if maxBytes <= 0 {
@@ -65,6 +74,24 @@ func newAgentVideoPublisher(assets MediaStore, storage StorageProvider, posts Po
 		horizonDays = 30
 	}
 	return &agentVideoPublisher{assets: assetStore, storage: videoStorage, posts: posts, workspaces: workspaces, teams: teams, idempotency: idempotency, maxBytes: maxBytes, retentionDays: 7, horizonDays: horizonDays}
+}
+
+func (p *agentVideoPublisher) UpdateProgress(ctx context.Context, workspaceID int64, runID string, step repository.AgentRunStep, status string, progress *int, snapshot []byte) error {
+	if p.idempotency == nil {
+		return errors.New("calendar event idempotency store is unavailable")
+	}
+	rec, err := p.idempotency.FindActiveByKey(workspaceID, "agent-video-event-"+step.ID, time.Now())
+	if err != nil {
+		return fmt.Errorf("find calendar event progress target: %w", err)
+	}
+	if rec == nil || rec.ResourceType != "post" {
+		return errors.New("calendar event for video generation is missing")
+	}
+	store, ok := p.posts.(agentVideoCalendarProjection)
+	if !ok {
+		return errors.New("post store does not support generated video progress")
+	}
+	return store.UpdateAgentVideoProgress(ctx, workspaceID, rec.ResourceID, runID, step.ID, status, progress, snapshot)
 }
 
 type videoPublicationRequest struct {
@@ -208,6 +235,84 @@ func (p *agentVideoPublisher) Validate(ctx context.Context, identity auth.Identi
 	return nil
 }
 
+// Reserve creates the scheduled calendar event before remote work starts.
+// It intentionally has no targets, so the publication outbox cannot dispatch
+// until the final artifact has been imported and attached.
+func (p *agentVideoPublisher) Reserve(_ context.Context, identity auth.Identity, workspaceID int64, runID string, step repository.AgentRunStep) (json.RawMessage, error) {
+	if identity == nil || identity.UserID() <= 0 || identity.WorkspaceID() != workspaceID {
+		return nil, errors.New("agent video identity does not own the run workspace")
+	}
+	var saved struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(step.InputJSON, &saved); err != nil {
+		return nil, fmt.Errorf("decode persisted video request: %w", err)
+	}
+	var plan createVideoPayload
+	if err := json.Unmarshal(saved.Payload, &plan); err != nil {
+		return nil, fmt.Errorf("decode persisted video plan: %w", err)
+	}
+	var publish videoPublicationRequest
+	if err := json.Unmarshal(plan.Publish, &publish); err != nil {
+		return nil, fmt.Errorf("decode publish plan: %w", err)
+	}
+	scheduledAt, err := time.Parse(time.RFC3339, publish.ScheduledAt)
+	if err != nil {
+		return nil, errors.New("publish.scheduled_at must be RFC3339")
+	}
+	workspace, err := p.workspaces.FindByID(workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("find calendar workspace: %w", err)
+	}
+	if !workspaceRoleAllowed(identity.UserID(), workspace, p.teams, workspaceRoleEditor) {
+		return nil, errors.New("agent identity is not permitted to schedule in this workspace")
+	}
+	requestHash := sha256.Sum256(step.InputJSON)
+	eventKey := "agent-video-event-" + step.ID
+	if p.idempotency != nil {
+		rec, findErr := p.idempotency.FindActiveByKey(workspaceID, eventKey, time.Now())
+		if findErr != nil {
+			return nil, fmt.Errorf("find calendar event replay: %w", findErr)
+		}
+		if rec != nil {
+			if rec.ResourceType != "post" || !equalBytes(rec.RequestHash, requestHash[:]) {
+				return nil, repository.ErrIdempotencyConflict
+			}
+			post, postErr := p.posts.FindByID(rec.ResourceID)
+			if postErr != nil {
+				return nil, fmt.Errorf("read calendar event replay: %w", postErr)
+			}
+			if post == nil || post.WorkspaceID != workspaceID {
+				return nil, errors.New("calendar event replay is missing or belongs to another workspace")
+			}
+			return json.Marshal(map[string]any{"post_id": post.ID, "post": post})
+		}
+	}
+	privacy := strings.TrimSpace(publish.Privacy)
+	if privacy == "" {
+		privacy = "unlisted"
+	}
+	metadata, _ := json.Marshal(map[string]any{
+		"agent_run_id": runID, "agent_step_id": step.ID,
+		"generation_status": "QUEUED", "generation_progress": 0,
+		"generation_phase": "QUEUED", "generation_snapshot": map[string]any{"phase": "QUEUED"},
+	})
+	event := &models.Post{
+		WorkspaceID: workspaceID, Title: strings.TrimSpace(publish.Title), Caption: publish.Caption,
+		PrivacyLevel: privacy, DefaultPrivacyLevel: privacy, PublishAt: &scheduledAt,
+		Status: models.PostStatusDraft, Metadata: metadata,
+	}
+	if err := p.posts.Create(event, nil); err != nil {
+		return nil, fmt.Errorf("create video calendar event: %w", err)
+	}
+	if p.idempotency != nil {
+		if err := p.idempotency.Insert(&models.IdempotencyRecord{WorkspaceID: workspaceID, IdempotencyKey: eventKey, ResourceType: "post", ResourceID: event.ID, RequestHash: requestHash[:], ResponseStatus: http.StatusCreated, ExpiresAt: time.Now().Add(365 * 24 * time.Hour)}); err != nil {
+			return nil, fmt.Errorf("persist calendar event idempotency: %w", err)
+		}
+	}
+	return json.Marshal(map[string]any{"post_id": event.ID, "post": event})
+}
+
 // The remote downloader is passed in request context by AgentRunsModule so
 // the publisher remains independent of the Job Master implementation.
 type artifactDownloaderContextKey struct{}
@@ -298,14 +403,35 @@ func (p *agentVideoPublisher) importAndSchedule(ctx context.Context, identity au
 	}
 
 	mediaID, objectKey, bucket := asset.ID, asset.UploadKey, asset.Bucket
-	post := &models.Post{WorkspaceID: workspaceID, Title: strings.TrimSpace(publish.Title), Caption: publish.Caption, MediaURL: p.storage.AssetURL(asset.UploadKey), MediaAssetID: &mediaID, StorageObjectKey: &objectKey, Bucket: &bucket, PrivacyLevel: privacy, DefaultPrivacyLevel: privacy, PublishAt: &scheduledAt, Status: models.PostStatusQueued, IdempotencyKey: &workflowKey}
-	post.Metadata, _ = json.Marshal(map[string]any{"source_language": publish.Language, "agent_run_id": runID, "agent_step_id": step.ID})
+	eventRec, err := p.idempotency.FindActiveByKey(workspaceID, "agent-video-event-"+step.ID, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("find reserved calendar event: %w", err)
+	}
+	if eventRec == nil || eventRec.ResourceType != "post" {
+		return nil, errors.New("reserved calendar event is missing")
+	}
+	post, err := p.posts.FindByID(eventRec.ResourceID)
+	if err != nil {
+		return nil, fmt.Errorf("load reserved calendar event: %w", err)
+	}
+	if post == nil || post.WorkspaceID != workspaceID {
+		return nil, errors.New("reserved calendar event is missing or outside workspace")
+	}
+	post.Title, post.Caption, post.MediaURL = strings.TrimSpace(publish.Title), publish.Caption, p.storage.AssetURL(asset.UploadKey)
+	post.MediaAssetID, post.StorageObjectKey, post.Bucket = &mediaID, &objectKey, &bucket
+	post.PrivacyLevel, post.DefaultPrivacyLevel, post.PublishAt = privacy, privacy, &scheduledAt
+	post.Status, post.IdempotencyKey = models.PostStatusQueued, &workflowKey
+	post.Metadata, _ = json.Marshal(map[string]any{"source_language": publish.Language, "agent_run_id": runID, "agent_step_id": step.ID, "generation_status": "CONTENT_READY", "generation_progress": 100, "generation_phase": "CONTENT_READY", "generation_snapshot": map[string]any{"phase": "CONTENT_READY", "progress": 100}})
 	targets := make([]*models.PostTarget, 0, len(publish.Targets))
 	for _, target := range publish.Targets {
 		targets = append(targets, &models.PostTarget{PlatformAccountID: target.PlatformAccountID, Status: models.PostStatusQueued})
 	}
-	if err := p.posts.Create(post, targets); err != nil {
-		return nil, fmt.Errorf("create scheduled generated video post: %w", err)
+	finalizer, ok := p.posts.(agentVideoCalendarFinalizer)
+	if !ok {
+		return nil, errors.New("post store does not support atomic calendar event finalization")
+	}
+	if err := finalizer.FinalizeAgentVideoEvent(post, targets); err != nil {
+		return nil, fmt.Errorf("finalize scheduled generated video event: %w", err)
 	}
 	if p.idempotency != nil {
 		p.idempotency.Insert(&models.IdempotencyRecord{WorkspaceID: workspaceID, IdempotencyKey: "agent-video-" + step.ID, ResourceType: "post", ResourceID: post.ID, RequestHash: requestHash, ResponseStatus: http.StatusCreated, ExpiresAt: time.Now().Add(24 * time.Hour)})

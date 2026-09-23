@@ -24,6 +24,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -93,6 +94,9 @@ func (m *AgentRunsModule) Register(mux chi.Router) {
 	}
 	mux.Mount("/api/v1/agent/runs", r)
 	mux.Get("/api/v1/agent/tools", agentProtect(m.handleListTools))
+	if m.deps.JobMaster != nil {
+		mux.Post("/api/v1/agent/video-plan", agentProtect(m.handleVideoPlan))
+	}
 }
 
 // createRunRequest is the body accepted by POST /api/v1/agent/runs.
@@ -411,6 +415,16 @@ func (m *AgentRunsModule) handleRecovery(w http.ResponseWriter, req *http.Reques
 			}
 			step.RemoteStatus, step.RemoteProgress, step.ProgressJSON = remoteState, remoteProgress, progressSnapshot
 			item.Step = step
+			if step.ToolName == "content.create_video" && m.deps.VideoPublisher != nil {
+				if projector, ok := m.deps.VideoPublisher.(interface {
+					UpdateProgress(context.Context, int64, string, repository.AgentRunStep, string, *int, []byte) error
+				}); ok {
+					if err := projector.UpdateProgress(req.Context(), identity.WorkspaceID(), runID, step, remoteState, remoteProgress, progressSnapshot); err != nil {
+						writeError(w, http.StatusInternalServerError, "persist calendar progress: "+err.Error())
+						return
+					}
+				}
+			}
 			if terminal, ok := terminalStepStatus(status); ok && step.Status == "running" {
 				updated := step
 				updated.Status = terminal
@@ -750,6 +764,11 @@ func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.R
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	calendarEvent, reserveErr := m.deps.VideoPublisher.Reserve(req.Context(), identity, workspaceID, runID, *step)
+	if reserveErr != nil {
+		writeError(w, http.StatusInternalServerError, "create scheduled calendar event: "+reserveErr.Error())
+		return
+	}
 	pre, err := withJSONFields(plan.Pre, map[string]any{"idempotency_key": body.IdempotencyKey + "-prepare", "copy_only": true})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid pre payload: "+err.Error())
@@ -795,7 +814,11 @@ func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.R
 			return
 		}
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"step_id": step.ID, "tool": "content.create_video", "remote_job_id": step.RemoteJobID, "idempotency_key": body.IdempotencyKey, "status": "running", "phase": "FINALIZE_QUEUED"})
+	var event struct {
+		PostID int64 `json:"post_id"`
+	}
+	_ = json.Unmarshal(calendarEvent, &event)
+	writeJSON(w, http.StatusAccepted, map[string]any{"step_id": step.ID, "tool": "content.create_video", "remote_job_id": step.RemoteJobID, "calendar_post_id": event.PostID, "idempotency_key": body.IdempotencyKey, "status": "running", "phase": "FINALIZE_QUEUED"})
 }
 
 type videoPublishTarget struct {

@@ -15,15 +15,15 @@ func TestPostListByWorkspace_OK(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket, COALESCE(metadata,'{}'::jsonb)
  FROM posts
 	 WHERE workspace_id = $1
 	 ORDER BY created_at DESC`,
 	).WithArgs(int64(1)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket"},
-		).AddRow(2, 1, "B", "", "", now, nil, models.PostStatusDraft, "", "", now, nil, nil, nil, nil).
-			AddRow(1, 1, "A", "", "", now, nil, models.PostStatusDraft, "", "", now, nil, nil, nil, nil))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket", "metadata"},
+		).AddRow(2, 1, "B", "", "", now, nil, models.PostStatusDraft, "", "", now, nil, nil, nil, nil, `{}`).
+			AddRow(1, 1, "A", "", "", now, nil, models.PostStatusDraft, "", "", now, nil, nil, nil, nil, `{}`))
 
 	got, err := repo.ListByWorkspace(1)
 	if err != nil {

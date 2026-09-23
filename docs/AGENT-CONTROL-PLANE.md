@@ -132,7 +132,27 @@ delivery plan; `finalize` carries optional overlay/audio parameters; `publish`
 has title, caption, language, future RFC3339 `scheduled_at`, privacy and
 workspace `platform_account_id` targets.
 
+The Calendar dialog can create `pre` from a topic through
+`POST /api/v1/agent/video-plan`. The BFF uses the Master's read-only
+`GET /api/v1/media/assets?source=youtube&search=…` catalog and its asset detail
+route, then includes only ready Drive-backed clips with a SHA-256 reference in
+the returned scene manifest. The operator can review/edit this manifest before
+submitting. This discovers and reuses registered clips; it does not initiate
+new YouTube downloads, write a narration script, or generate a thumbnail.
+
 The Calendar workflow is currently a single scheduled video run. The separate
-30-day intent/dispatcher model and natural-language media discovery still need
-dedicated PipelineGen capabilities and are not claimed as completed by this
+30-day intent/dispatcher model and source acquisition still need further
+orchestration. Topic search is read-only catalog discovery; it is not a
+source-download operation. The live Master catalog does
+not advertise a parent `video.create`, `video.assemble`, final-audio or
+thumbnail job, so those phases are not claimed as completed by this
 integration.
+
+Starting that workflow first reserves its scheduled draft post, so the Calendar
+shows a card before rendering begins. The recovery worker projects the latest
+remote status, numeric progress and current phase into that post's metadata;
+the Calendar refreshes these active cards every five seconds. At completion,
+the same post is atomically populated with the imported MP4, targets and
+outbox events. Opening the card exposes the playable asset and an `Apri video
+finale` link. This is one scheduled item per submitted workflow, not a durable
+30-day schedule generator.

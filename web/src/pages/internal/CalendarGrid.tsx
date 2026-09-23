@@ -86,6 +86,12 @@ function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
           </p>
           <div className="mt-1">
             <StatusBadge status={post.status} />
+            {post.generation_status && post.generation_status !== "CONTENT_READY" && (
+              <div className="mt-1.5" aria-label={`Generazione ${post.generation_status} ${post.generation_progress ?? 0}%`}>
+                <div className="flex justify-between gap-1 text-[9px] text-sky-200"><span className="truncate">{post.generation_phase || post.generation_status}</span><span>{post.generation_progress ?? 0}%</span></div>
+                <div className="mt-0.5 h-1 overflow-hidden rounded bg-white/10"><div className="h-full rounded bg-sky-400 transition-all" style={{ width: `${Math.max(0, Math.min(100, post.generation_progress ?? 0))}%` }} /></div>
+              </div>
+            )}
             {post.source === "upload" && post.targets && post.targets.length > 0 && (
               <span className="ml-1.5 text-[10px] text-[#9aa0aa]">{post.targets.length} canal{post.targets.length === 1 ? "e" : "i"}</span>
             )}
@@ -133,6 +139,9 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
   const [selectedPost, setSelectedPost] = useState<CalendarPost | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  const selectedCalendarPost = selectedPost
+    ? posts.find((post) => post.id === selectedPost.id && (post.source ?? "post") === (selectedPost.source ?? "post")) ?? selectedPost
+    : null;
   const calendarRange = useMemo(() => getCalendarRange(currentDate, view), [currentDate, view]);
 
   const events: EventInput[] = useMemo(() => {
@@ -298,23 +307,24 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
         }}
         dayHeaderFormat={{ weekday: "short", day: "numeric" }}
       />
-      {selectedPost && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={`Dettaglio video ${selectedPost.title ?? ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedPost(null); }}>
+      {selectedCalendarPost && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={`Dettaglio video ${selectedCalendarPost.title ?? ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedPost(null); }}>
           <div className="w-full max-w-3xl overflow-hidden rounded-2xl border border-white/15 bg-[#17171b] text-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 border-b border-white/10 p-5">
-              <div><StatusBadge status={selectedPost.status} /><h2 className="mt-2 text-xl font-bold">{selectedPost.title || "Video programmato"}</h2><p className="mt-1 text-sm text-white/55">{selectedPost.scheduled_at ? new Date(selectedPost.scheduled_at).toLocaleString() : "Data non impostata"}</p></div>
+              <div><StatusBadge status={selectedCalendarPost.status} /><h2 className="mt-2 text-xl font-bold">{selectedCalendarPost.title || "Video programmato"}</h2><p className="mt-1 text-sm text-white/55">{selectedCalendarPost.scheduled_at ? new Date(selectedCalendarPost.scheduled_at).toLocaleString() : "Data non impostata"}</p></div>
               <button type="button" onClick={() => setSelectedPost(null)} className="rounded-lg p-2 text-white/55 hover:bg-white/10 hover:text-white" aria-label="Chiudi dettaglio"><X size={18} /></button>
             </div>
             <div className="space-y-4 p-5">
-              {selectedPost.caption && <p className="whitespace-pre-wrap text-sm leading-6 text-white/75">{selectedPost.caption}</p>}
+              {selectedCalendarPost.caption && <p className="whitespace-pre-wrap text-sm leading-6 text-white/75">{selectedCalendarPost.caption}</p>}
               {actionError && <p role="alert" className="rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm text-red-200">{actionError}</p>}
-              {selectedPost.source !== "upload" && (selectedPost.status === "queued" || selectedPost.status === "draft") && <div className="flex flex-wrap gap-2">
-                {selectedPost.status === "queued" && <button type="button" disabled={actionBusy} onClick={() => void runPostNow()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-black disabled:opacity-50">{actionBusy ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}Pubblica ora</button>}
+              {selectedCalendarPost.generation_status && selectedCalendarPost.generation_status !== "CONTENT_READY" && <div className="rounded-xl border border-sky-400/20 bg-sky-400/[0.06] p-4"><div className="flex justify-between text-sm"><span>{selectedCalendarPost.generation_phase || selectedCalendarPost.generation_status}</span><span>{selectedCalendarPost.generation_progress ?? 0}%</span></div><div className="mt-2 h-1.5 overflow-hidden rounded bg-white/10"><div className="h-full bg-sky-400" style={{ width: `${Math.max(0, Math.min(100, selectedCalendarPost.generation_progress ?? 0))}%` }} /></div>{selectedCalendarPost.generation_status === "FAILED" && <p className="mt-2 text-sm text-red-200">Generazione fallita. Dettagli: {JSON.stringify(selectedCalendarPost.generation_snapshot ?? {})}</p>}</div>}
+              {selectedCalendarPost.source !== "upload" && (selectedCalendarPost.status === "queued" || selectedCalendarPost.status === "draft") && <div className="flex flex-wrap gap-2">
+                {selectedCalendarPost.status === "queued" && <button type="button" disabled={actionBusy} onClick={() => void runPostNow()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-black disabled:opacity-50">{actionBusy ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}Pubblica ora</button>}
                 <button type="button" disabled={actionBusy} onClick={() => void cancelScheduledPost()} className="rounded-lg border border-white/15 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/10 disabled:opacity-50">Annulla programmazione</button>
               </div>}
-              {selectedPost.media_url ? <>
-                <video className="max-h-[55vh] w-full rounded-xl bg-black" controls preload="metadata" src={selectedPost.media_url}>Il browser non supporta la riproduzione video.</video>
-                <a href={selectedPost.media_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-white/90"><ExternalLink size={15} />Apri video finale</a>
+              {selectedCalendarPost.media_url ? <>
+                <video className="max-h-[55vh] w-full rounded-xl bg-black" controls preload="metadata" src={selectedCalendarPost.media_url}>Il browser non supporta la riproduzione video.</video>
+                <a href={selectedCalendarPost.media_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-white/90"><ExternalLink size={15} />Apri video finale</a>
               </> : <p className="rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Il video finale non è ancora disponibile. La card si aggiornerà quando la generazione terminerà.</p>}
             </div>
           </div>

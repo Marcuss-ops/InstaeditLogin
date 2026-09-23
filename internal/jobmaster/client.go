@@ -42,6 +42,8 @@ type Config struct {
 // API is the narrow contract consumed by the authenticated BFF routes.
 type API interface {
 	ListTypes(context.Context) (json.RawMessage, error)
+	SearchMedia(context.Context, string, int) (json.RawMessage, error)
+	GetMediaAsset(context.Context, string) (json.RawMessage, error)
 	Submit(context.Context, SubmitRequest) (json.RawMessage, error)
 	PrepareVideo(context.Context, json.RawMessage) (json.RawMessage, error)
 	FinalizeVideo(context.Context, string, json.RawMessage) (json.RawMessage, error)
@@ -119,6 +121,32 @@ func New(cfg Config) (*Client, error) {
 
 func (c *Client) ListTypes(ctx context.Context) (json.RawMessage, error) {
 	return c.do(ctx, http.MethodGet, typesPath, nil, "")
+}
+
+// SearchMedia reads PipelineGen's media catalogue using the media.read M2M
+// scope. It is intentionally read-only; generated plans reference only assets
+// already available to the execution plane.
+func (c *Client) SearchMedia(ctx context.Context, query string, limit int) (json.RawMessage, error) {
+	query = strings.TrimSpace(query)
+	if len(query) < 3 || len(query) > 300 {
+		return nil, errors.New("media search query must be between 3 and 300 characters")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	values := url.Values{}
+	values.Set("source", "youtube")
+	values.Set("search", query)
+	values.Set("limit", fmt.Sprint(limit))
+	return c.do(ctx, http.MethodGet, "/api/v1/media/assets?"+values.Encode(), nil, "")
+}
+
+func (c *Client) GetMediaAsset(ctx context.Context, assetID string) (json.RawMessage, error) {
+	assetID = strings.TrimSpace(assetID)
+	if assetID == "" || len(assetID) > 256 || strings.ContainsAny(assetID, "/\\\r\n") {
+		return nil, errors.New("invalid media asset id")
+	}
+	return c.do(ctx, http.MethodGet, "/api/v1/media/assets/"+url.PathEscape(assetID), nil, "")
 }
 
 func (c *Client) Submit(ctx context.Context, input SubmitRequest) (json.RawMessage, error) {

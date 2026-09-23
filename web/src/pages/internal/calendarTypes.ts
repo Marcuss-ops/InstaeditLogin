@@ -11,6 +11,11 @@ export type Post = {
   targets?: number[];
   source_type?: string;
   copyright_alerts?: YouTubeCopyrightAlert[];
+  generation_status?: string;
+  generation_progress?: number;
+  generation_phase?: string;
+  generation_snapshot?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 };
 
 export type YouTubeCopyrightAlert = {

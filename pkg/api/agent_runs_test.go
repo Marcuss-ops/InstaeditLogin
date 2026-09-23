@@ -291,6 +291,12 @@ type fakeAgentJobMaster struct{}
 func (fakeAgentJobMaster) ListTypes(context.Context) (json.RawMessage, error) {
 	return json.RawMessage(`{"types":["script.generate","clip.render"]}`), nil
 }
+func (fakeAgentJobMaster) SearchMedia(context.Context, string, int) (json.RawMessage, error) {
+	return json.RawMessage(`{"items":[]}`), nil
+}
+func (fakeAgentJobMaster) GetMediaAsset(context.Context, string) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
 
 type stagedVideoJobMaster struct {
 	prePayload      json.RawMessage
@@ -303,12 +309,21 @@ type fakeAgentVideoPublisher struct{}
 func (fakeAgentVideoPublisher) Validate(context.Context, auth.Identity, int64, json.RawMessage) error {
 	return nil
 }
+func (fakeAgentVideoPublisher) Reserve(context.Context, auth.Identity, int64, string, repository.AgentRunStep) (json.RawMessage, error) {
+	return json.RawMessage(`{"post_id":1}`), nil
+}
 func (fakeAgentVideoPublisher) Publish(context.Context, auth.Identity, int64, string, repository.AgentRunStep, json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(`{"post_id":1}`), nil
 }
 
 func (s *stagedVideoJobMaster) ListTypes(context.Context) (json.RawMessage, error) {
 	return json.RawMessage(`{"types":["script.generate","clip.render"]}`), nil
+}
+func (s *stagedVideoJobMaster) SearchMedia(context.Context, string, int) (json.RawMessage, error) {
+	return json.RawMessage(`{"items":[]}`), nil
+}
+func (s *stagedVideoJobMaster) GetMediaAsset(context.Context, string) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
 }
 func (s *stagedVideoJobMaster) Submit(context.Context, jobmaster.SubmitRequest) (json.RawMessage, error) {
 	return nil, errors.New("generic submit should not be used for complete video")
@@ -389,6 +404,12 @@ type progressAgentJobMaster struct{}
 
 func (progressAgentJobMaster) ListTypes(context.Context) (json.RawMessage, error) {
 	return json.RawMessage(`{"types":["script.generate"]}`), nil
+}
+func (progressAgentJobMaster) SearchMedia(context.Context, string, int) (json.RawMessage, error) {
+	return json.RawMessage(`{"items":[]}`), nil
+}
+func (progressAgentJobMaster) GetMediaAsset(context.Context, string) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
 }
 func (progressAgentJobMaster) Submit(context.Context, jobmaster.SubmitRequest) (json.RawMessage, error) {
 	return json.RawMessage(`{"job_id":"remote-progress","status":"queued"}`), nil
