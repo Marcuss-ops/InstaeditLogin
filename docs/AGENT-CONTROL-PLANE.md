@@ -127,8 +127,9 @@ types: `script.generate` (`script.generate.v1` →
 preserves these schema references, artifact kinds and resource classes in
 `GET /api/v1/agent/tools`. The Master currently returns identifiers, not the
 JSON Schema bodies; common `/openapi.json` and schema-registry URL candidates
-returned 404 during discovery. The exact payload/result schemas must be
-provided by the execution-plane contract owner before composing these jobs.
+returned 404 during discovery. The PipelineGen source on the compute defines
+typed Go payload contracts for these job types, but the catalog itself does
+not expose them as machine-readable JSON Schemas.
 
 ## Calendar to scheduled publication
 
@@ -178,3 +179,10 @@ the same post is atomically populated with the imported MP4, targets and
 outbox events. Opening the card exposes the playable asset and an `Apri video
 finale` link. This is one scheduled item per submitted workflow, not a durable
 30-day schedule generator.
+
+For each recovery read, the control plane merges the Job Master's nested `job`
+row with its outer progress envelope, preserving `current_stage`,
+`current_step`, `stage_progress`, `timeline`, `events` and error details.
+Persisted event histories are bounded. The Calendar detail card shows the
+available stage progress and recent timeline/events; displayed phases are
+limited to phases the remote job actually emits.

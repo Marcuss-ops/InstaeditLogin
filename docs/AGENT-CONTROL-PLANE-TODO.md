@@ -42,8 +42,11 @@ Scope: this checklist applies only to the `InstaeditLogin` control plane (the
 - [ ] Add bulk creation of daily calendar intents. Single intents now store
       their IANA timezone and publish instant, then dispatch 30 minutes before
       publication.
-- [ ] Project all remote pipeline phases on intent cards. Current cards show
-      status/progress snapshots emitted by the connected control-plane run.
+- [x] Project remote current stage, stage progress, timeline and events on the
+      Calendar detail card. Snapshot extraction retains fields from the Job
+      Master's outer response envelope and bounds persisted event history.
+- [ ] Make the execution plane emit and complete every required generation
+      phase. The Calendar can display only phases the remote job actually emits.
 - [ ] Connect script/voiceover/stock/extraction/overlay/thumbnail jobs into the
       parent workflow; current render consumes registered video clips and the
       live M2M catalog has no thumbnail or final-audio job.

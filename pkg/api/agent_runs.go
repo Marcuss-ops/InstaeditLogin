@@ -27,6 +27,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"reflect"
 	"strings"
@@ -554,7 +555,19 @@ func remoteProgressSnapshot(raw json.RawMessage) (string, *int, json.RawMessage)
 		return "", nil, json.RawMessage(`{}`)
 	}
 	if nested, ok := value["job"]; ok {
-		return remoteProgressSnapshot(nested)
+		var jobValue map[string]json.RawMessage
+		if json.Unmarshal(nested, &jobValue) == nil {
+			// The Job Master wraps its durable job row under `job` but keeps
+			// live projection fields (current_stage, events, timeline, error)
+			// on the outer response. Merge instead of recursing so those fields
+			// reach the Calendar snapshot.
+			for key, rawValue := range value {
+				if key != "job" {
+					jobValue[key] = rawValue
+				}
+			}
+			value = jobValue
+		}
 	}
 	state := ""
 	for _, key := range []string{"status", "state", "overall_status"} {
@@ -565,21 +578,57 @@ func remoteProgressSnapshot(raw json.RawMessage) (string, *int, json.RawMessage)
 		}
 	}
 	var progress *int
-	var number int
+	var number float64
 	if json.Unmarshal(value["progress"], &number) == nil {
-		progress = &number
+		bounded := int(math.Round(number))
+		if bounded < 0 {
+			bounded = 0
+		} else if bounded > 100 {
+			bounded = 100
+		}
+		progress = &bounded
 	}
 	snapshot := make(map[string]json.RawMessage)
 	for _, key := range []string{"status", "state", "overall_status", "progress", "phase", "current_phase", "current_stage", "current_step", "stage_progress", "timeline", "events", "error", "steps"} {
 		if rawValue, ok := value[key]; ok {
-			snapshot[key] = rawValue
+			snapshot[key] = compactRemoteProgressField(key, rawValue)
 		}
 	}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
 		return state, progress, json.RawMessage(`{}`)
 	}
+	if len(encoded) > 64*1024 {
+		for key := range snapshot {
+			switch key {
+			case "status", "state", "overall_status", "progress", "phase", "current_phase", "current_stage", "current_step":
+			default:
+				delete(snapshot, key)
+			}
+		}
+		encoded, err = json.Marshal(snapshot)
+		if err != nil {
+			return state, progress, json.RawMessage(`{}`)
+		}
+	}
 	return state, progress, encoded
+}
+
+// compactRemoteProgressField retains the newest part of the Master event
+// history. A long-running job must not grow a Calendar row without bound.
+func compactRemoteProgressField(key string, raw json.RawMessage) json.RawMessage {
+	if key != "events" && key != "timeline" {
+		return raw
+	}
+	var entries []json.RawMessage
+	if json.Unmarshal(raw, &entries) != nil || len(entries) <= 50 {
+		return raw
+	}
+	encoded, err := json.Marshal(entries[len(entries)-50:])
+	if err != nil {
+		return json.RawMessage(`[]`)
+	}
+	return encoded
 }
 
 func (m *AgentRunsModule) handleListTools(w http.ResponseWriter, req *http.Request) {

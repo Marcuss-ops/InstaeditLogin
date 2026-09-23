@@ -9,6 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
 import { AlertCircle, ExternalLink, Loader2, Play, X } from "lucide-react";
 import type { Post } from "./calendarTypes";
+import { getCalendarProgressRows } from "./calendarProgress";
 
 type PostStatus = "draft" | "queued" | "publishing" | "published" | "failed";
 
@@ -119,6 +120,24 @@ function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
         </div>
       )}
     </div>
+  );
+}
+
+function GenerationProgressDetails({ post }: { post: CalendarPost }) {
+  const rows = getCalendarProgressRows(post.generation_snapshot);
+  if (rows.length === 0) return null;
+  return (
+    <ol aria-label="Fasi di generazione" className="mt-3 space-y-1.5 border-l border-sky-200/20 pl-3">
+      {rows.map((row) => (
+        <li key={row.key} className="flex items-center justify-between gap-3 text-xs">
+          <span className="min-w-0 truncate text-white/75">{row.label}</span>
+          <span className="shrink-0 text-white/45">
+            {row.status || (row.progress !== undefined ? `${row.progress}%` : "In corso")}
+            {row.status && row.progress !== undefined ? ` · ${row.progress}%` : ""}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -328,7 +347,21 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
               {selectedCalendarPost.caption && <p className="whitespace-pre-wrap text-sm leading-6 text-white/75">{selectedCalendarPost.caption}</p>}
               {selectedCalendarPost.generation_status === "SCHEDULED" && selectedCalendarPost.generation_at && <p className="text-sm text-sky-100/75">Generazione automatica: {new Date(selectedCalendarPost.generation_at).toLocaleString(undefined, selectedCalendarPost.generation_timezone ? { timeZone: selectedCalendarPost.generation_timezone } : undefined)}{selectedCalendarPost.generation_timezone ? ` · ${selectedCalendarPost.generation_timezone}` : ""}</p>}
               {actionError && <p role="alert" className="rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm text-red-200">{actionError}</p>}
-              {selectedCalendarPost.generation_status && selectedCalendarPost.generation_status !== "CONTENT_READY" && <div className="rounded-xl border border-sky-400/20 bg-sky-400/[0.06] p-4"><div className="flex justify-between text-sm"><span>{selectedCalendarPost.generation_phase || selectedCalendarPost.generation_status}</span><span>{selectedCalendarPost.generation_progress ?? 0}%</span></div><div className="mt-2 h-1.5 overflow-hidden rounded bg-white/10"><div className="h-full bg-sky-400" style={{ width: `${Math.max(0, Math.min(100, selectedCalendarPost.generation_progress ?? 0))}%` }} /></div>{selectedCalendarPost.generation_status === "FAILED" && <p className="mt-2 text-sm text-red-200">Generazione fallita. Dettagli: {JSON.stringify(selectedCalendarPost.generation_snapshot ?? {})}</p>}</div>}
+              {selectedCalendarPost.generation_status && selectedCalendarPost.generation_status !== "CONTENT_READY" && (
+                <div className="rounded-xl border border-sky-400/20 bg-sky-400/[0.06] p-4">
+                  <div className="flex justify-between text-sm">
+                    <span>{selectedCalendarPost.generation_phase || selectedCalendarPost.generation_status}</span>
+                    <span>{selectedCalendarPost.generation_progress ?? 0}%</span>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded bg-white/10">
+                    <div className="h-full bg-sky-400" style={{ width: `${Math.max(0, Math.min(100, selectedCalendarPost.generation_progress ?? 0))}%` }} />
+                  </div>
+                  <GenerationProgressDetails post={selectedCalendarPost} />
+                  {selectedCalendarPost.generation_status === "FAILED" && (
+                    <p className="mt-2 text-sm text-red-200">Generazione fallita. Dettagli: {JSON.stringify(selectedCalendarPost.generation_snapshot ?? {})}</p>
+                  )}
+                </div>
+              )}
               {selectedCalendarPost.source !== "upload" && (selectedCalendarPost.status === "queued" || (selectedCalendarPost.status === "draft" && !["CANCELLED", "FAILED"].includes(selectedCalendarPost.generation_status ?? ""))) && <div className="flex flex-wrap gap-2">
                 {(selectedCalendarPost.status === "queued" || selectedCalendarPost.generation_status === "SCHEDULED") && <button type="button" disabled={actionBusy} onClick={() => void runPostNow()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-black disabled:opacity-50">{actionBusy ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}{selectedCalendarPost.generation_status === "SCHEDULED" ? "Genera ora" : "Pubblica ora"}</button>}
                 <button type="button" disabled={actionBusy} onClick={() => void cancelScheduledPost()} className="rounded-lg border border-white/15 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/10 disabled:opacity-50">{selectedCalendarPost.generation_status === "SCHEDULED" ? "Annulla generazione" : "Annulla programmazione"}</button>

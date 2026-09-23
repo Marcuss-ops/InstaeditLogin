@@ -422,7 +422,7 @@ func (progressAgentJobMaster) FinalizeVideo(context.Context, string, json.RawMes
 	return json.RawMessage(`{"status":"queued"}`), nil
 }
 func (progressAgentJobMaster) Get(context.Context, string) (json.RawMessage, error) {
-	return json.RawMessage(`{"job_id":"remote-progress","status":"RUNNING","progress":42,"stage_progress":{"script":{"status":"running","completed":2,"total":5}}}`), nil
+	return json.RawMessage(`{"job":{"job_id":"remote-progress","status":"RUNNING","progress":42},"status":"RUNNING","progress":42,"current_stage":"script_generation","current_step":"script.generate_item","stage_progress":{"script":{"status":"running","completed":2,"total":5}},"timeline":[{"stage":"script_generation","status":"running"}],"events":[{"type":"phase.started","stage":"script_generation"}]}`), nil
 }
 
 func TestAgentRuns_TypedToolPersistsRemoteReferenceAndRecoveryIsOwned(t *testing.T) {
@@ -509,11 +509,59 @@ func TestAgentRuns_RecoveryPersistsIntermediateProgress(t *testing.T) {
 		t.Fatalf("recovery: %d %s", w.Code, w.Body.String())
 	}
 	for _, step := range store.steps {
-		if step.RemoteStatus != "RUNNING" || step.RemoteProgress == nil || *step.RemoteProgress != 42 || !strings.Contains(string(step.ProgressJSON), "stage_progress") {
+		if step.RemoteStatus != "RUNNING" || step.RemoteProgress == nil || *step.RemoteProgress != 42 || !strings.Contains(string(step.ProgressJSON), "stage_progress") || !strings.Contains(string(step.ProgressJSON), "current_stage") || !strings.Contains(string(step.ProgressJSON), "events") {
 			t.Fatalf("progress not persisted: %+v", step)
 		}
 	}
 	if store.runs[run.RunID].Status != "running" {
 		t.Fatalf("run status=%q, want running", store.runs[run.RunID].Status)
+	}
+}
+
+func TestRemoteProgressSnapshotPreservesMasterOuterEnvelope(t *testing.T) {
+	raw := json.RawMessage(`{"job":{"id":"remote-1","status":"RUNNING","progress":41},"status":"RUNNING","progress":41.4,"current_stage":"voiceover_generation","current_step":"voiceover.render","stage_progress":{"script":{"status":"completed"},"voiceover":{"status":"running"}},"timeline":[{"stage":"script","status":"completed"}],"events":[{"type":"phase.started","stage":"voiceover_generation"}],"error":null,"result":{"private":"large result must not be copied"}}`)
+	state, progress, snapshot := remoteProgressSnapshot(raw)
+	if state != "RUNNING" || progress == nil || *progress != 41 {
+		t.Fatalf("state/progress = %q/%v, want RUNNING/41", state, progress)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(snapshot, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"current_stage", "current_step", "stage_progress", "timeline", "events"} {
+		if len(got[key]) == 0 {
+			t.Errorf("snapshot lost outer Master field %q: %s", key, snapshot)
+		}
+	}
+	if _, exists := got["result"]; exists {
+		t.Fatalf("snapshot must omit final result payload: %s", snapshot)
+	}
+}
+
+func TestRemoteProgressSnapshotBoundsProgressAndEventHistory(t *testing.T) {
+	events := make([]map[string]any, 75)
+	for i := range events {
+		events[i] = map[string]any{"n": i}
+	}
+	raw, err := json.Marshal(map[string]any{"status": "RUNNING", "progress": 130, "events": events})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, progress, snapshot := remoteProgressSnapshot(raw)
+	if progress == nil || *progress != 100 {
+		t.Fatalf("progress = %v, want clamped 100", progress)
+	}
+	var got struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(snapshot, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 50 {
+		t.Fatalf("event history count = %d, want newest 50", len(got.Events))
+	}
+	var newest map[string]int
+	if err := json.Unmarshal(got.Events[len(got.Events)-1], &newest); err != nil || newest["n"] != 74 {
+		t.Fatalf("last retained event = %v, want newest event 74", newest)
 	}
 }
