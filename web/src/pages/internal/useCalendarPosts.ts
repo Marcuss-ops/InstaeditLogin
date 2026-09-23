@@ -97,9 +97,11 @@ export function useCalendarPosts() {
         return {
           ...post,
           generation_status: post.generation_status ?? (typeof metadata.generation_status === "string" ? metadata.generation_status : undefined),
+          generation_at: post.generation_at ?? (typeof metadata.generation_at === "string" ? metadata.generation_at : undefined),
           generation_progress: post.generation_progress ?? (typeof metadata.generation_progress === "number" ? metadata.generation_progress : undefined),
           generation_phase: post.generation_phase ?? (typeof metadata.generation_phase === "string" ? metadata.generation_phase : undefined),
           generation_snapshot: post.generation_snapshot ?? (metadata.generation_snapshot && typeof metadata.generation_snapshot === "object" ? metadata.generation_snapshot as Record<string, unknown> : undefined),
+          targets: post.targets ?? (Array.isArray(metadata.agent_target_ids) ? metadata.agent_target_ids.filter((id): id is number => typeof id === "number") : undefined),
           copyright_alerts: alertsByPost.get(post.id),
         };
       });
@@ -123,7 +125,7 @@ export function useCalendarPosts() {
 
   useEffect(() => {
     if (state.kind !== "ready") return;
-    const active = state.posts.some((post) => post.generation_status && !["CONTENT_READY", "FAILED", "completed", "failed"].includes(post.generation_status));
+    const active = state.posts.some((post) => post.generation_status && !["SCHEDULED", "CANCELLED", "CONTENT_READY", "FAILED", "completed", "failed"].includes(post.generation_status));
     if (!active) return;
     const timer = window.setInterval(() => { void load(); }, 5000);
     return () => window.clearInterval(timer);

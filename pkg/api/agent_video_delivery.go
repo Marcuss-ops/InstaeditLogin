@@ -22,6 +22,7 @@ import (
 // Media Library asset and a scheduled post. The post is the calendar event;
 // the existing publish worker owns the actual platform upload and statuses.
 type AgentVideoPublisher interface {
+	Authorize(context.Context, auth.Identity, int64) error
 	Validate(context.Context, auth.Identity, int64, json.RawMessage) error
 	Reserve(context.Context, auth.Identity, int64, string, repository.AgentRunStep) (json.RawMessage, error)
 	Publish(context.Context, auth.Identity, int64, string, repository.AgentRunStep, json.RawMessage) (json.RawMessage, error)
@@ -95,12 +96,13 @@ func (p *agentVideoPublisher) UpdateProgress(ctx context.Context, workspaceID in
 }
 
 type videoPublicationRequest struct {
-	Title       string               `json:"title"`
-	Caption     string               `json:"caption"`
-	Language    string               `json:"language"`
-	ScheduledAt string               `json:"scheduled_at"`
-	Privacy     string               `json:"privacy"`
-	Targets     []videoPublishTarget `json:"targets"`
+	CalendarPostID int64                `json:"calendar_post_id,omitempty"`
+	Title          string               `json:"title"`
+	Caption        string               `json:"caption"`
+	Language       string               `json:"language"`
+	ScheduledAt    string               `json:"scheduled_at"`
+	Privacy        string               `json:"privacy"`
+	Targets        []videoPublishTarget `json:"targets"`
 }
 
 func (p *agentVideoPublisher) Publish(ctx context.Context, identity auth.Identity, workspaceID int64, runID string, step repository.AgentRunStep, remote json.RawMessage) (json.RawMessage, error) {
@@ -176,7 +178,6 @@ func (p *agentVideoPublisher) Publish(ctx context.Context, identity auth.Identit
 			return json.Marshal(map[string]any{"media_asset_id": post.MediaAssetID, "post": post, "post_id": post.ID, "scheduled_at": post.PublishAt})
 		}
 	}
-
 	artifactURL, expectedSize, err := artifactReference(remote)
 	if err != nil {
 		return nil, err
@@ -210,12 +211,8 @@ func (p *agentVideoPublisher) Validate(ctx context.Context, identity auth.Identi
 	if privacy != "" && privacy != "public" && privacy != "unlisted" && privacy != "private" {
 		return errors.New("publish.privacy must be public, unlisted, or private")
 	}
-	workspace, err := p.workspaces.FindByID(workspaceID)
-	if err != nil {
-		return fmt.Errorf("find publish workspace: %w", err)
-	}
-	if !workspaceRoleAllowed(identity.UserID(), workspace, p.teams, workspaceRoleEditor) {
-		return errors.New("agent identity is not permitted to publish in this workspace")
+	if err := p.Authorize(ctx, identity, workspaceID); err != nil {
+		return err
 	}
 	channels, err := p.workspaces.ListChannels(ctx, workspaceID)
 	if err != nil {
@@ -235,10 +232,24 @@ func (p *agentVideoPublisher) Validate(ctx context.Context, identity auth.Identi
 	return nil
 }
 
+func (p *agentVideoPublisher) Authorize(_ context.Context, identity auth.Identity, workspaceID int64) error {
+	if identity == nil || identity.UserID() <= 0 || identity.WorkspaceID() != workspaceID {
+		return errors.New("agent video identity does not own the run workspace")
+	}
+	workspace, err := p.workspaces.FindByID(workspaceID)
+	if err != nil {
+		return fmt.Errorf("find publish workspace: %w", err)
+	}
+	if !workspaceRoleAllowed(identity.UserID(), workspace, p.teams, workspaceRoleEditor) {
+		return errors.New("agent identity is not permitted to publish in this workspace")
+	}
+	return nil
+}
+
 // Reserve creates the scheduled calendar event before remote work starts.
 // It intentionally has no targets, so the publication outbox cannot dispatch
 // until the final artifact has been imported and attached.
-func (p *agentVideoPublisher) Reserve(_ context.Context, identity auth.Identity, workspaceID int64, runID string, step repository.AgentRunStep) (json.RawMessage, error) {
+func (p *agentVideoPublisher) Reserve(ctx context.Context, identity auth.Identity, workspaceID int64, runID string, step repository.AgentRunStep) (json.RawMessage, error) {
 	if identity == nil || identity.UserID() <= 0 || identity.WorkspaceID() != workspaceID {
 		return nil, errors.New("agent video identity does not own the run workspace")
 	}
@@ -287,6 +298,23 @@ func (p *agentVideoPublisher) Reserve(_ context.Context, identity auth.Identity,
 			}
 			return json.Marshal(map[string]any{"post_id": post.ID, "post": post})
 		}
+	}
+	if publish.CalendarPostID > 0 {
+		intentStore := agentVideoIntentStoreFrom(p.posts)
+		if intentStore == nil {
+			return nil, errors.New("post store does not support scheduled video intents")
+		}
+		if err := intentStore.LinkAgentVideoIntent(ctx, workspaceID, publish.CalendarPostID, runID, step.ID); err != nil {
+			return nil, fmt.Errorf("link scheduled calendar event: %w", err)
+		}
+		post, err := p.posts.FindByID(publish.CalendarPostID)
+		if err != nil || post == nil || post.WorkspaceID != workspaceID {
+			return nil, errors.New("scheduled calendar event was not found in workspace")
+		}
+		if err := p.idempotency.Insert(&models.IdempotencyRecord{WorkspaceID: workspaceID, IdempotencyKey: eventKey, ResourceType: "post", ResourceID: post.ID, RequestHash: requestHash[:], ResponseStatus: http.StatusOK, ExpiresAt: time.Now().Add(365 * 24 * time.Hour)}); err != nil {
+			return nil, fmt.Errorf("persist scheduled event reference: %w", err)
+		}
+		return json.Marshal(map[string]any{"post_id": post.ID, "post": post})
 	}
 	privacy := strings.TrimSpace(publish.Privacy)
 	if privacy == "" {

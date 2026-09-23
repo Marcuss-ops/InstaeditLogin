@@ -306,6 +306,7 @@ type stagedVideoJobMaster struct {
 
 type fakeAgentVideoPublisher struct{}
 
+func (fakeAgentVideoPublisher) Authorize(context.Context, auth.Identity, int64) error { return nil }
 func (fakeAgentVideoPublisher) Validate(context.Context, auth.Identity, int64, json.RawMessage) error {
 	return nil
 }

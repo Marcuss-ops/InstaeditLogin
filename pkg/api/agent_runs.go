@@ -37,6 +37,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/agenttools"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/jobmaster"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
@@ -48,6 +49,8 @@ type AgentRunsModuleDeps struct {
 	Catalog                 agenttools.Catalog
 	JobMaster               jobmaster.API
 	VideoPublisher          AgentVideoPublisher
+	VideoIntents            AgentVideoIntentStore
+	Workspaces              WorkspaceStore
 }
 
 // AgentRunsModule mounts the /api/v1/agent/runs* routes. When Store is
@@ -97,6 +100,25 @@ func (m *AgentRunsModule) Register(mux chi.Router) {
 	if m.deps.JobMaster != nil {
 		mux.Post("/api/v1/agent/video-plan", agentProtect(m.handleVideoPlan))
 	}
+	if m.deps.VideoPublisher != nil && m.deps.VideoIntents != nil {
+		mux.Post("/api/v1/agent/video-intents", agentProtect(m.handleCreateVideoIntent))
+		mux.Patch("/api/v1/agent/video-intents/{id}", agentProtect(m.handleRescheduleVideoIntent))
+		mux.Post("/api/v1/agent/video-intents/{id}/run-now", agentProtect(m.handleRunVideoIntentNow))
+		mux.Delete("/api/v1/agent/video-intents/{id}", agentProtect(m.handleCancelVideoIntent))
+	}
+}
+
+type AgentVideoIntentStore interface {
+	CreateAgentVideoIntent(*models.Post) error
+	FindAgentVideoIntentByKey(context.Context, int64, string) (*models.Post, error)
+	FindAgentVideoIntentByID(context.Context, int64, int64) (*models.Post, error)
+	ListDueAgentVideoIntents(context.Context, time.Time, int) ([]models.Post, error)
+	ClaimAgentVideoIntent(context.Context, int64, int64, time.Time) (bool, error)
+	LinkAgentVideoIntent(context.Context, int64, int64, string, string) error
+	UpdateAgentVideoIntentSchedule(context.Context, int64, int64, time.Time, time.Time, []byte) error
+	RunAgentVideoIntentNow(context.Context, int64, int64, time.Time) error
+	CancelAgentVideoIntent(context.Context, int64, int64) error
+	FailAgentVideoIntent(context.Context, int64, int64, string) error
 }
 
 // createRunRequest is the body accepted by POST /api/v1/agent/runs.

@@ -234,7 +234,7 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
   const progress = getProgress(job);
   const terminal = TERMINAL_STATUSES.has(status.toLowerCase());
 
-  async function submit() {
+  async function submit(asDurableIntent = false) {
     setError("");
     if (mode === "video") {
       let pre: unknown;
@@ -258,6 +258,24 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
       }
       setSubmitting(true);
       try {
+        const workflowPayload = {
+          pre,
+          finalize,
+          publish: {
+            title: videoTitle.trim(), caption: videoCaption, language: "it",
+            scheduled_at: scheduledAt.toISOString(), privacy: videoPrivacy,
+            targets: [{ platform_account_id: targetID }],
+          },
+        };
+        if (asDurableIntent) {
+          const intent = asObject(await responseJSON(await authedFetch("/api/v1/agent/video-intents", {
+            method: "POST",
+            body: JSON.stringify({ idempotency_key: idempotencyKey, payload: workflowPayload }),
+          })));
+          onCalendarRefresh?.();
+          setJob({ status: "scheduled", phase: "SCHEDULED", intent_id: intent.intent_id, generation_at: intent.generation_at });
+          return;
+        }
         const run = asObject(await responseJSON(await authedFetch("/api/v1/agent/runs", {
           method: "POST",
           body: JSON.stringify({ goal: `Crea e pubblica: ${videoTitle.trim()}`, idempotency_key: `${idempotencyKey}-run` }),
@@ -271,15 +289,7 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
           body: JSON.stringify({
             project: project || `workspace-${run.workspace_id ?? "video"}`,
             idempotency_key: idempotencyKey,
-            payload: {
-              pre,
-              finalize,
-              publish: {
-                title: videoTitle.trim(), caption: videoCaption, language: "it",
-                scheduled_at: scheduledAt.toISOString(), privacy: videoPrivacy,
-                targets: [{ platform_account_id: targetID }],
-              },
-            },
+            payload: workflowPayload,
           }),
         })));
         onCalendarRefresh?.();
@@ -387,8 +397,11 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
             <label className="block text-xs font-semibold text-white/60">Idempotency key
               <input value={idempotencyKey} onChange={(event) => setIdempotencyKey(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 font-mono text-xs text-white outline-none focus:border-white/30" />
             </label>
+            {mode === "video" && <button type="button" onClick={() => void submit(true)} disabled={submitting || !idempotencyKey} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/35 bg-sky-300/10 px-4 py-2.5 text-sm font-semibold text-sky-100 transition-colors hover:bg-sky-300/20 disabled:cursor-not-allowed disabled:opacity-40">
+              {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Programma e genera in automatico
+            </button>}
             <button type="button" onClick={() => void submit()} disabled={submitting || !idempotencyKey || (mode === "remote" && (!type || !project))} className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40">
-              {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} {mode === "video" ? "Crea e programma video" : "Invia job"}
+              {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} {mode === "video" ? "Genera subito" : "Invia job"}
             </button>
           </div>
 

@@ -31,6 +31,8 @@ func (r *Router) NewAgentRunRecoveryWorker(interval time.Duration) *AgentRunReco
 		Catalog:        agenttoolsCatalog(),
 		JobMaster:      r.jobMasterClient,
 		VideoPublisher: newAgentVideoPublisher(r.mediaStore, r.storageProvider, r.postStore, r.workspaceStore, r.teamStore, r.idempotencyStore, r.maxUploadBytes, r.publishHorizonDays()),
+		VideoIntents:   agentVideoIntentStoreFrom(r.postStore),
+		Workspaces:     r.workspaceStore,
 	}}
 	if interval <= 0 {
 		interval = 3 * time.Second
@@ -45,6 +47,9 @@ func agenttoolsCatalog() agenttools.Catalog { return agenttools.NewCatalog() }
 func (w *AgentRunRecoveryWorker) RunOnce(ctx context.Context) error {
 	if w == nil || w.module == nil {
 		return nil
+	}
+	if err := w.module.dispatchDueVideoIntents(ctx); err != nil {
+		return err
 	}
 	runs, err := w.module.deps.Store.ListRecoverableRuns(ctx, 100)
 	if err != nil {

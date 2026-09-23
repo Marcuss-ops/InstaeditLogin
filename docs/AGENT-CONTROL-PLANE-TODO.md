@@ -34,11 +34,16 @@ Scope: this checklist applies only to the `InstaeditLogin` control plane (the
       final artifact preview/link on the event card.
 - [x] Expose the next 30 days in a rolling Calendar view; scheduled posts can
       be rescheduled by drag, started immediately or cancelled from card detail.
+- [x] Persist an individual scheduled generation intent as a Calendar draft
+      with a workspace-unique idempotency key; dispatch it from the recovery
+      worker and support run-now, reschedule and cancel.
 - [x] Add topic search against PipelineGen's read-only media catalog and build
       a scene-composite PREPARE manifest from matching ready Drive-backed clips.
-- [ ] Add a separate 30-day calendar-intent dispatcher (scheduled topic,
-      channel, timezone, run-now/reschedule/cancel) and project live remote
-      pipeline phases on those intent cards.
+- [ ] Add bulk creation of daily calendar intents and explicit timezone
+      handling; single intents currently store their publish instant and
+      dispatch 30 minutes before it.
+- [ ] Project all remote pipeline phases on intent cards. Current cards show
+      status/progress snapshots emitted by the connected control-plane run.
 - [ ] Connect script/voiceover/stock/extraction/overlay/thumbnail jobs into the
       parent workflow; current render consumes registered video clips and the
       live M2M catalog has no thumbnail or final-audio job.
@@ -46,8 +51,9 @@ Scope: this checklist applies only to the `InstaeditLogin` control plane (the
 - [x] Update the control-plane architecture and M2M documentation.
 - [x] Run formatter, focused tests, full Go tests, frontend tests/build, and
       confirm no generated artifacts or diff errors in the previous agent run.
-- [ ] Re-run verification after the current idempotency/recovery fixes and
-      verify migrations and authenticated flow against the running database/API.
+- [x] Re-run verification after the current idempotency/recovery fixes.
+- [ ] Verify migration 136 and authenticated calendar intent flow against the
+      running database/API.
 
 ## Explicitly deferred to the execution plane
 

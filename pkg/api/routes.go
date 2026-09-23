@@ -147,6 +147,8 @@ func (r *Router) Setup() http.Handler {
 		Catalog:                 agenttools.NewCatalog(),
 		JobMaster:               r.jobMasterClient,
 		VideoPublisher:          newAgentVideoPublisher(r.mediaStore, r.storageProvider, r.postStore, r.workspaceStore, r.teamStore, r.idempotencyStore, r.maxUploadBytes, r.publishHorizonDays()),
+		VideoIntents:            agentVideoIntentStoreFrom(r.postStore),
+		Workspaces:              r.workspaceStore,
 	}))
 
 	// Public / health probes are mounted before the auth module so the

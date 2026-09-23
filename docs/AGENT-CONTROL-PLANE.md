@@ -140,10 +140,16 @@ the returned scene manifest. The operator can review/edit this manifest before
 submitting. This discovers and reuses registered clips; it does not initiate
 new YouTube downloads, write a narration script, or generate a thumbnail.
 
-The Calendar workflow is currently a single scheduled video run. The separate
-30-day intent/dispatcher model and source acquisition still need further
-orchestration. Topic search is read-only catalog discovery; it is not a
-source-download operation. The live Master catalog does
+The Calendar can persist an individual scheduled generation intent as a draft
+post. Its workspace-scoped idempotency key prevents duplicate cards. The
+recovery worker leases due intents, creates or reuses a stable agent run and
+dispatches the saved `content.create_video` payload. Users can reschedule,
+start now, or cancel a not-yet-dispatched intent. Generation is scheduled for
+30 minutes before publish time, or immediately when that point has passed.
+Bulk 30-day plan creation and explicit timezone handling are not implemented.
+
+Topic search is read-only catalog discovery; it is not a source-download
+operation. The live Master catalog does
 not advertise a parent `video.create`, `video.assemble`, final-audio or
 thumbnail job, so those phases are not claimed as completed by this
 integration.

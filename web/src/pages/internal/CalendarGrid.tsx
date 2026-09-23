@@ -92,7 +92,7 @@ function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
                 <div className="mt-0.5 h-1 overflow-hidden rounded bg-white/10"><div className="h-full rounded bg-sky-400 transition-all" style={{ width: `${Math.max(0, Math.min(100, post.generation_progress ?? 0))}%` }} /></div>
               </div>
             )}
-            {post.source === "upload" && post.targets && post.targets.length > 0 && (
+            {post.targets && post.targets.length > 0 && (
               <span className="ml-1.5 text-[10px] text-[#9aa0aa]">{post.targets.length} canal{post.targets.length === 1 ? "e" : "i"}</span>
             )}
           </div>
@@ -202,12 +202,14 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
       setConflictMessage(null);
       setBusyId(eventKey);
       try {
-        const endpoint = source === "upload" ? `/api/v1/uploads/${id}/reschedule` : `/api/v1/posts/${id}`;
+        const endpoint = source === "upload"
+          ? `/api/v1/uploads/${id}/reschedule`
+          : movedPost.generation_status === "SCHEDULED" ? `/api/v1/agent/video-intents/${id}` : `/api/v1/posts/${id}`;
         await authedFetch(endpoint, {
           method: "PATCH",
           body: JSON.stringify(source === "upload"
             ? { publish_at: newDate.toISOString() }
-            : { scheduled_at: newDate.toISOString() }),
+            : movedPost.generation_status === "SCHEDULED" ? { publish_at: newDate.toISOString() } : { scheduled_at: newDate.toISOString() }),
         });
         onPostsChange?.();
       } catch (err) {
@@ -231,7 +233,11 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
     setActionBusy(true);
     setActionError("");
     try {
-      await authedFetch(`/api/v1/posts/${selectedPost.id}/publish`, { method: "POST" });
+      if (selectedPost.generation_status === "SCHEDULED") {
+        await authedFetch(`/api/v1/agent/video-intents/${selectedPost.id}/run-now`, { method: "POST" });
+      } else {
+        await authedFetch(`/api/v1/posts/${selectedPost.id}/publish`, { method: "POST" });
+      }
       setSelectedPost(null);
       onPostsChange?.();
     } catch (err) {
@@ -245,7 +251,11 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
     setActionBusy(true);
     setActionError("");
     try {
-      await authedFetch(`/api/v1/posts/${selectedPost.id}/cancel`, { method: "POST" });
+      if (selectedPost.generation_status === "SCHEDULED") {
+        await authedFetch(`/api/v1/agent/video-intents/${selectedPost.id}`, { method: "DELETE" });
+      } else {
+        await authedFetch(`/api/v1/posts/${selectedPost.id}/cancel`, { method: "POST" });
+      }
       setSelectedPost(null);
       onPostsChange?.();
     } catch (err) {
@@ -316,11 +326,12 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
             </div>
             <div className="space-y-4 p-5">
               {selectedCalendarPost.caption && <p className="whitespace-pre-wrap text-sm leading-6 text-white/75">{selectedCalendarPost.caption}</p>}
+              {selectedCalendarPost.generation_status === "SCHEDULED" && selectedCalendarPost.generation_at && <p className="text-sm text-sky-100/75">Generazione automatica: {new Date(selectedCalendarPost.generation_at).toLocaleString()}</p>}
               {actionError && <p role="alert" className="rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm text-red-200">{actionError}</p>}
               {selectedCalendarPost.generation_status && selectedCalendarPost.generation_status !== "CONTENT_READY" && <div className="rounded-xl border border-sky-400/20 bg-sky-400/[0.06] p-4"><div className="flex justify-between text-sm"><span>{selectedCalendarPost.generation_phase || selectedCalendarPost.generation_status}</span><span>{selectedCalendarPost.generation_progress ?? 0}%</span></div><div className="mt-2 h-1.5 overflow-hidden rounded bg-white/10"><div className="h-full bg-sky-400" style={{ width: `${Math.max(0, Math.min(100, selectedCalendarPost.generation_progress ?? 0))}%` }} /></div>{selectedCalendarPost.generation_status === "FAILED" && <p className="mt-2 text-sm text-red-200">Generazione fallita. Dettagli: {JSON.stringify(selectedCalendarPost.generation_snapshot ?? {})}</p>}</div>}
-              {selectedCalendarPost.source !== "upload" && (selectedCalendarPost.status === "queued" || selectedCalendarPost.status === "draft") && <div className="flex flex-wrap gap-2">
-                {selectedCalendarPost.status === "queued" && <button type="button" disabled={actionBusy} onClick={() => void runPostNow()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-black disabled:opacity-50">{actionBusy ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}Pubblica ora</button>}
-                <button type="button" disabled={actionBusy} onClick={() => void cancelScheduledPost()} className="rounded-lg border border-white/15 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/10 disabled:opacity-50">Annulla programmazione</button>
+              {selectedCalendarPost.source !== "upload" && (selectedCalendarPost.status === "queued" || (selectedCalendarPost.status === "draft" && !["CANCELLED", "FAILED"].includes(selectedCalendarPost.generation_status ?? ""))) && <div className="flex flex-wrap gap-2">
+                {(selectedCalendarPost.status === "queued" || selectedCalendarPost.generation_status === "SCHEDULED") && <button type="button" disabled={actionBusy} onClick={() => void runPostNow()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-black disabled:opacity-50">{actionBusy ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}{selectedCalendarPost.generation_status === "SCHEDULED" ? "Genera ora" : "Pubblica ora"}</button>}
+                <button type="button" disabled={actionBusy} onClick={() => void cancelScheduledPost()} className="rounded-lg border border-white/15 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/10 disabled:opacity-50">{selectedCalendarPost.generation_status === "SCHEDULED" ? "Annulla generazione" : "Annulla programmazione"}</button>
               </div>}
               {selectedCalendarPost.media_url ? <>
                 <video className="max-h-[55vh] w-full rounded-xl bg-black" controls preload="metadata" src={selectedCalendarPost.media_url}>Il browser non supporta la riproduzione video.</video>
