@@ -38,7 +38,42 @@ function rowFrom(label: string, value: unknown, key: string): CalendarProgressRo
 }
 
 function displayName(value: string): string {
-  return value.replace(/[._-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const normalized = value.trim().toLowerCase().replace(/[.\s-]+/g, "_");
+  const phaseLabels: Record<string, string> = {
+    scheduled: "SCHEDULED",
+    dispatching: "QUEUED",
+    queued: "QUEUED",
+    script_generation: "SCRIPTING",
+    script_generate: "SCRIPTING",
+    script_plan: "SCRIPTING",
+    media_search: "MEDIA SEARCH",
+    asset_search: "MEDIA SEARCH",
+    youtube_download: "MEDIA DOWNLOADING",
+    media_download: "MEDIA DOWNLOADING",
+    media_processing: "MEDIA PROCESSING",
+    stock_search: "STOCK SEARCH",
+    stock_download: "STOCK DOWNLOADING",
+    voiceover_generation: "VOICEOVER",
+    audio_generation: "VOICEOVER",
+    overlay_prepare: "OVERLAY PREPARE",
+    overlay_render: "RENDERING",
+    clip_render: "RENDERING",
+    video_render: "RENDERING",
+    video_assembly: "ASSEMBLING",
+    video_assemble: "ASSEMBLING",
+    thumbnail_generation: "THUMBNAIL",
+    content_ready: "CONTENT READY",
+    publishing: "PUBLISHING",
+    completed: "DONE",
+    succeeded: "DONE",
+    failed: "FAILED",
+  };
+  return phaseLabels[normalized]
+    ?? value.replace(/[._-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+export function getCalendarPhaseLabel(value?: string): string {
+  return value ? displayName(value) : "";
 }
 
 function rowsFromEvents(value: unknown, source: string): CalendarProgressRow[] {

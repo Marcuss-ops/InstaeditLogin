@@ -9,7 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
 import { AlertCircle, ExternalLink, Loader2, Play, X } from "lucide-react";
 import type { Post } from "./calendarTypes";
-import { getCalendarProgressRows } from "./calendarProgress";
+import { getCalendarPhaseLabel, getCalendarProgressRows } from "./calendarProgress";
 
 type PostStatus = "draft" | "queued" | "publishing" | "published" | "failed";
 
@@ -89,7 +89,7 @@ function EventCard({ post, busy }: { post: CalendarPost; busy?: boolean }) {
             <StatusBadge status={post.status} />
             {post.generation_status && post.generation_status !== "CONTENT_READY" && (
               <div className="mt-1.5" aria-label={`Generazione ${post.generation_status} ${post.generation_progress ?? 0}%`}>
-                <div className="flex justify-between gap-1 text-[9px] text-sky-200"><span className="truncate">{post.generation_phase || post.generation_status}</span><span>{post.generation_progress ?? 0}%</span></div>
+                <div className="flex justify-between gap-1 text-[9px] text-sky-200"><span className="truncate">{getCalendarPhaseLabel(post.generation_phase || post.generation_status)}</span><span>{post.generation_progress ?? 0}%</span></div>
                 <div className="mt-0.5 h-1 overflow-hidden rounded bg-white/10"><div className="h-full rounded bg-sky-400 transition-all" style={{ width: `${Math.max(0, Math.min(100, post.generation_progress ?? 0))}%` }} /></div>
               </div>
             )}
@@ -350,7 +350,7 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
               {selectedCalendarPost.generation_status && selectedCalendarPost.generation_status !== "CONTENT_READY" && (
                 <div className="rounded-xl border border-sky-400/20 bg-sky-400/[0.06] p-4">
                   <div className="flex justify-between text-sm">
-                    <span>{selectedCalendarPost.generation_phase || selectedCalendarPost.generation_status}</span>
+                    <span>{getCalendarPhaseLabel(selectedCalendarPost.generation_phase || selectedCalendarPost.generation_status)}</span>
                     <span>{selectedCalendarPost.generation_progress ?? 0}%</span>
                   </div>
                   <div className="mt-2 h-1.5 overflow-hidden rounded bg-white/10">
