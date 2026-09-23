@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -22,6 +23,7 @@ import (
 
 type createAgentVideoIntentRequest struct {
 	IdempotencyKey string          `json:"idempotency_key"`
+	Timezone       string          `json:"timezone,omitempty"`
 	Payload        json.RawMessage `json:"payload"`
 }
 
@@ -39,6 +41,14 @@ func (m *AgentRunsModule) handleCreateVideoIntent(w http.ResponseWriter, req *ht
 	body.IdempotencyKey = strings.TrimSpace(body.IdempotencyKey)
 	if body.IdempotencyKey == "" || len(body.IdempotencyKey) > 180 || !json.Valid(body.Payload) {
 		writeError(w, 400, "idempotency_key and valid payload are required")
+		return
+	}
+	body.Timezone = strings.TrimSpace(body.Timezone)
+	if body.Timezone == "" {
+		body.Timezone = "UTC"
+	}
+	if _, err := time.LoadLocation(body.Timezone); err != nil {
+		writeError(w, 400, "timezone must be a valid IANA timezone")
 		return
 	}
 	if err := m.deps.VideoPublisher.Validate(req.Context(), identity, identity.WorkspaceID(), body.Payload); err != nil {
@@ -60,22 +70,27 @@ func (m *AgentRunsModule) handleCreateVideoIntent(w http.ResponseWriter, req *ht
 	if generationAt.Before(time.Now().UTC()) {
 		generationAt = time.Now().UTC()
 	}
-	hash := sha256.Sum256(body.Payload)
+	hashInput, _ := json.Marshal(struct {
+		Timezone string          `json:"timezone"`
+		Payload  json.RawMessage `json:"payload"`
+	}{Timezone: body.Timezone, Payload: body.Payload})
+	hash := sha256.Sum256(hashInput)
 	scheduleKey := "agent-video-intent-" + body.IdempotencyKey
 	if existing, err := m.deps.VideoIntents.FindAgentVideoIntentByKey(req.Context(), identity.WorkspaceID(), scheduleKey); err != nil {
 		writeError(w, 500, "find existing video intent: "+err.Error())
 		return
 	} else if existing != nil {
-		if !videoIntentHashMatches(existing.Metadata, hash[:]) {
+		if !videoIntentHashMatchesRequest(existing.Metadata, body.Payload, body.Timezone) {
 			writeError(w, 409, repository.ErrIdempotencyConflict.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"intent_id": existing.ID, "post_id": existing.ID, "status": "scheduled", "generation_at": videoIntentGenerationAt(existing.Metadata), "post": existing})
+		writeJSON(w, http.StatusOK, map[string]any{"intent_id": existing.ID, "post_id": existing.ID, "status": "scheduled", "generation_at": videoIntentGenerationAt(existing.Metadata), "timezone": videoIntentTimezone(existing.Metadata), "post": existing})
 		return
 	}
 	metadata, _ := json.Marshal(map[string]any{
 		"agent_video_intent": true, "agent_schedule_key": scheduleKey, "agent_schedule_hash": hex.EncodeToString(hash[:]),
 		"generation_payload": body.Payload, "generation_at": generationAt,
+		"schedule_timezone": body.Timezone,
 		"agent_target_ids": func() []int64 {
 			ids := make([]int64, 0, len(publish.Targets))
 			for _, target := range publish.Targets {
@@ -94,17 +109,17 @@ func (m *AgentRunsModule) handleCreateVideoIntent(w http.ResponseWriter, req *ht
 	if err := m.deps.VideoIntents.CreateAgentVideoIntent(post); err != nil {
 		// The partial unique index closes the concurrent idempotency race.
 		if existing, lookupErr := m.deps.VideoIntents.FindAgentVideoIntentByKey(req.Context(), identity.WorkspaceID(), scheduleKey); lookupErr == nil && existing != nil {
-			if !videoIntentHashMatches(existing.Metadata, hash[:]) {
+			if !videoIntentHashMatchesRequest(existing.Metadata, body.Payload, body.Timezone) {
 				writeError(w, 409, repository.ErrIdempotencyConflict.Error())
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"intent_id": existing.ID, "post_id": existing.ID, "status": "scheduled", "generation_at": videoIntentGenerationAt(existing.Metadata), "post": existing})
+			writeJSON(w, http.StatusOK, map[string]any{"intent_id": existing.ID, "post_id": existing.ID, "status": "scheduled", "generation_at": videoIntentGenerationAt(existing.Metadata), "timezone": videoIntentTimezone(existing.Metadata), "post": existing})
 			return
 		}
 		writeError(w, 500, "create scheduled video intent: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"intent_id": post.ID, "post_id": post.ID, "status": "scheduled", "generation_at": generationAt, "post": post})
+	writeJSON(w, http.StatusCreated, map[string]any{"intent_id": post.ID, "post_id": post.ID, "status": "scheduled", "generation_at": generationAt, "timezone": body.Timezone, "post": post})
 }
 
 func (m *AgentRunsModule) handleRescheduleVideoIntent(w http.ResponseWriter, req *http.Request) {
@@ -115,6 +130,7 @@ func (m *AgentRunsModule) handleRescheduleVideoIntent(w http.ResponseWriter, req
 	var body struct {
 		PublishAt   *time.Time `json:"publish_at"`
 		ScheduledAt *time.Time `json:"scheduled_at"`
+		Timezone    string     `json:"timezone,omitempty"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())
@@ -131,6 +147,17 @@ func (m *AgentRunsModule) handleRescheduleVideoIntent(w http.ResponseWriter, req
 	var meta map[string]json.RawMessage
 	if json.Unmarshal(post.Metadata, &meta) != nil {
 		writeError(w, 500, "invalid stored intent metadata")
+		return
+	}
+	timezone := strings.TrimSpace(body.Timezone)
+	if timezone == "" {
+		timezone = videoIntentTimezone(post.Metadata)
+	}
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	if _, err := time.LoadLocation(timezone); err != nil {
+		writeError(w, 400, "timezone must be a valid IANA timezone")
 		return
 	}
 	var payload json.RawMessage
@@ -159,11 +186,11 @@ func (m *AgentRunsModule) handleRescheduleVideoIntent(w http.ResponseWriter, req
 	if generationAt.Before(time.Now().UTC()) {
 		generationAt = time.Now().UTC()
 	}
-	if err := m.deps.VideoIntents.UpdateAgentVideoIntentSchedule(req.Context(), identity.WorkspaceID(), post.ID, publishAt.UTC(), generationAt, payload); err != nil {
+	if err := m.deps.VideoIntents.UpdateAgentVideoIntentSchedule(req.Context(), identity.WorkspaceID(), post.ID, publishAt.UTC(), generationAt, timezone, payload); err != nil {
 		writeError(w, 409, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"intent_id": post.ID, "status": "scheduled", "generation_at": generationAt, "publish_at": publishAt.UTC()})
+	writeJSON(w, 200, map[string]any{"intent_id": post.ID, "status": "scheduled", "generation_at": generationAt, "publish_at": publishAt.UTC(), "timezone": timezone})
 }
 
 func (m *AgentRunsModule) handleRunVideoIntentNow(w http.ResponseWriter, req *http.Request) {
@@ -237,12 +264,36 @@ func videoIntentHashMatches(raw []byte, expected []byte) bool {
 	_ = json.Unmarshal(m["agent_schedule_hash"], &got)
 	return got == hex.EncodeToString(expected)
 }
+func videoIntentHashMatchesRequest(raw, payload []byte, timezone string) bool {
+	if videoIntentTimezone(raw) == "" {
+		// Intents created before schedule_timezone was introduced hashed only
+		// the workflow payload. Keep their idempotent replay valid.
+		hash := sha256.Sum256(payload)
+		return videoIntentHashMatches(raw, hash[:])
+	}
+	encoded, err := json.Marshal(struct {
+		Timezone string          `json:"timezone"`
+		Payload  json.RawMessage `json:"payload"`
+	}{Timezone: timezone, Payload: payload})
+	if err != nil {
+		return false
+	}
+	hash := sha256.Sum256(encoded)
+	return videoIntentHashMatches(raw, hash[:])
+}
 func videoIntentGenerationAt(raw []byte) any {
 	var m map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &m)
 	var v any
 	_ = json.Unmarshal(m["generation_at"], &v)
 	return v
+}
+func videoIntentTimezone(raw []byte) string {
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &m)
+	var value string
+	_ = json.Unmarshal(m["schedule_timezone"], &value)
+	return value
 }
 
 func agentVideoIntentStoreFrom(posts PostStore) AgentVideoIntentStore {

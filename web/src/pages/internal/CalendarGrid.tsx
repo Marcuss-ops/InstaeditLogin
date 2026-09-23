@@ -209,7 +209,7 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
           method: "PATCH",
           body: JSON.stringify(source === "upload"
             ? { publish_at: newDate.toISOString() }
-            : movedPost.generation_status === "SCHEDULED" ? { publish_at: newDate.toISOString() } : { scheduled_at: newDate.toISOString() }),
+            : movedPost.generation_status === "SCHEDULED" ? { publish_at: newDate.toISOString(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } : { scheduled_at: newDate.toISOString() }),
         });
         onPostsChange?.();
       } catch (err) {
@@ -326,7 +326,7 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
             </div>
             <div className="space-y-4 p-5">
               {selectedCalendarPost.caption && <p className="whitespace-pre-wrap text-sm leading-6 text-white/75">{selectedCalendarPost.caption}</p>}
-              {selectedCalendarPost.generation_status === "SCHEDULED" && selectedCalendarPost.generation_at && <p className="text-sm text-sky-100/75">Generazione automatica: {new Date(selectedCalendarPost.generation_at).toLocaleString()}</p>}
+              {selectedCalendarPost.generation_status === "SCHEDULED" && selectedCalendarPost.generation_at && <p className="text-sm text-sky-100/75">Generazione automatica: {new Date(selectedCalendarPost.generation_at).toLocaleString(undefined, selectedCalendarPost.generation_timezone ? { timeZone: selectedCalendarPost.generation_timezone } : undefined)}{selectedCalendarPost.generation_timezone ? ` · ${selectedCalendarPost.generation_timezone}` : ""}</p>}
               {actionError && <p role="alert" className="rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm text-red-200">{actionError}</p>}
               {selectedCalendarPost.generation_status && selectedCalendarPost.generation_status !== "CONTENT_READY" && <div className="rounded-xl border border-sky-400/20 bg-sky-400/[0.06] p-4"><div className="flex justify-between text-sm"><span>{selectedCalendarPost.generation_phase || selectedCalendarPost.generation_status}</span><span>{selectedCalendarPost.generation_progress ?? 0}%</span></div><div className="mt-2 h-1.5 overflow-hidden rounded bg-white/10"><div className="h-full bg-sky-400" style={{ width: `${Math.max(0, Math.min(100, selectedCalendarPost.generation_progress ?? 0))}%` }} /></div>{selectedCalendarPost.generation_status === "FAILED" && <p className="mt-2 text-sm text-red-200">Generazione fallita. Dettagli: {JSON.stringify(selectedCalendarPost.generation_snapshot ?? {})}</p>}</div>}
               {selectedCalendarPost.source !== "upload" && (selectedCalendarPost.status === "queued" || (selectedCalendarPost.status === "draft" && !["CANCELLED", "FAILED"].includes(selectedCalendarPost.generation_status ?? ""))) && <div className="flex flex-wrap gap-2">

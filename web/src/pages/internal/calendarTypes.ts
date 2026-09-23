@@ -13,6 +13,7 @@ export type Post = {
   copyright_alerts?: YouTubeCopyrightAlert[];
   generation_status?: string;
   generation_at?: string;
+  generation_timezone?: string;
   generation_progress?: number;
   generation_phase?: string;
   generation_snapshot?: Record<string, unknown>;

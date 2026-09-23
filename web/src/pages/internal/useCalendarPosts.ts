@@ -98,6 +98,7 @@ export function useCalendarPosts() {
           ...post,
           generation_status: post.generation_status ?? (typeof metadata.generation_status === "string" ? metadata.generation_status : undefined),
           generation_at: post.generation_at ?? (typeof metadata.generation_at === "string" ? metadata.generation_at : undefined),
+          generation_timezone: post.generation_timezone ?? (typeof metadata.schedule_timezone === "string" ? metadata.schedule_timezone : undefined),
           generation_progress: post.generation_progress ?? (typeof metadata.generation_progress === "number" ? metadata.generation_progress : undefined),
           generation_phase: post.generation_phase ?? (typeof metadata.generation_phase === "string" ? metadata.generation_phase : undefined),
           generation_snapshot: post.generation_snapshot ?? (metadata.generation_snapshot && typeof metadata.generation_snapshot === "object" ? metadata.generation_snapshot as Record<string, unknown> : undefined),

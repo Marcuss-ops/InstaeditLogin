@@ -96,10 +96,10 @@ func (r *PostRepository) LinkAgentVideoIntent(ctx context.Context, workspaceID, 
 	return nil
 }
 
-func (r *PostRepository) UpdateAgentVideoIntentSchedule(ctx context.Context, workspaceID, postID int64, publishAt, generationAt time.Time, payload []byte) error {
+func (r *PostRepository) UpdateAgentVideoIntentSchedule(ctx context.Context, workspaceID, postID int64, publishAt, generationAt time.Time, timezone string, payload []byte) error {
 	result, err := r.db.ExecContext(ctx, `
-		UPDATE posts SET publish_at=$3, metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('generation_at',$4::timestamptz,'generation_payload',$5::jsonb)
-		WHERE id=$1 AND workspace_id=$2 AND status='draft' AND metadata->>'agent_video_intent'='true' AND metadata->>'generation_status'='SCHEDULED'`, postID, workspaceID, publishAt, generationAt, string(payload))
+		UPDATE posts SET publish_at=$3, metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('generation_at',$4::timestamptz,'schedule_timezone',$5,'generation_payload',$6::jsonb)
+		WHERE id=$1 AND workspace_id=$2 AND status='draft' AND metadata->>'agent_video_intent'='true' AND metadata->>'generation_status'='SCHEDULED'`, postID, workspaceID, publishAt, generationAt, timezone, string(payload))
 	if err != nil {
 		return fmt.Errorf("reschedule agent video intent: %w", err)
 	}

@@ -115,7 +115,7 @@ type AgentVideoIntentStore interface {
 	ListDueAgentVideoIntents(context.Context, time.Time, int) ([]models.Post, error)
 	ClaimAgentVideoIntent(context.Context, int64, int64, time.Time) (bool, error)
 	LinkAgentVideoIntent(context.Context, int64, int64, string, string) error
-	UpdateAgentVideoIntentSchedule(context.Context, int64, int64, time.Time, time.Time, []byte) error
+	UpdateAgentVideoIntentSchedule(context.Context, int64, int64, time.Time, time.Time, string, []byte) error
 	RunAgentVideoIntentNow(context.Context, int64, int64, time.Time) error
 	CancelAgentVideoIntent(context.Context, int64, int64) error
 	FailAgentVideoIntent(context.Context, int64, int64, string) error

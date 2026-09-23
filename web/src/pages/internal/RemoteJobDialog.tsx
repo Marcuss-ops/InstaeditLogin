@@ -270,7 +270,7 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
         if (asDurableIntent) {
           const intent = asObject(await responseJSON(await authedFetch("/api/v1/agent/video-intents", {
             method: "POST",
-            body: JSON.stringify({ idempotency_key: idempotencyKey, payload: workflowPayload }),
+            body: JSON.stringify({ idempotency_key: idempotencyKey, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, payload: workflowPayload }),
           })));
           onCalendarRefresh?.();
           setJob({ status: "scheduled", phase: "SCHEDULED", intent_id: intent.intent_id, generation_at: intent.generation_at });

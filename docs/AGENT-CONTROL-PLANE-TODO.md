@@ -39,9 +39,9 @@ Scope: this checklist applies only to the `InstaeditLogin` control plane (the
       worker and support run-now, reschedule and cancel.
 - [x] Add topic search against PipelineGen's read-only media catalog and build
       a scene-composite PREPARE manifest from matching ready Drive-backed clips.
-- [ ] Add bulk creation of daily calendar intents and explicit timezone
-      handling; single intents currently store their publish instant and
-      dispatch 30 minutes before it.
+- [ ] Add bulk creation of daily calendar intents. Single intents now store
+      their IANA timezone and publish instant, then dispatch 30 minutes before
+      publication.
 - [ ] Project all remote pipeline phases on intent cards. Current cards show
       status/progress snapshots emitted by the connected control-plane run.
 - [ ] Connect script/voiceover/stock/extraction/overlay/thumbnail jobs into the

@@ -160,7 +160,9 @@ recovery worker leases due intents, creates or reuses a stable agent run and
 dispatches the saved `content.create_video` payload. Users can reschedule,
 start now, or cancel a not-yet-dispatched intent. Generation is scheduled for
 30 minutes before publish time, or immediately when that point has passed.
-Bulk 30-day plan creation and explicit timezone handling are not implemented.
+The intent stores the supplied IANA timezone alongside its UTC publish instant;
+the Calendar displays the generation time in that stored timezone. Bulk
+30-day plan creation is not implemented.
 
 Topic search is read-only catalog discovery; it is not a source-download
 operation. The live Master catalog does

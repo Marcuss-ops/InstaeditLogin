@@ -51,12 +51,13 @@ func (f *fakeVideoIntentStore) ClaimAgentVideoIntent(context.Context, int64, int
 func (f *fakeVideoIntentStore) LinkAgentVideoIntent(context.Context, int64, int64, string, string) error {
 	return nil
 }
-func (f *fakeVideoIntentStore) UpdateAgentVideoIntentSchedule(_ context.Context, _ int64, id int64, publishAt, generationAt time.Time, payload []byte) error {
+func (f *fakeVideoIntentStore) UpdateAgentVideoIntentSchedule(_ context.Context, _ int64, id int64, publishAt, generationAt time.Time, timezone string, payload []byte) error {
 	p := f.byID[id]
 	p.PublishAt = &publishAt
 	var m map[string]any
 	_ = json.Unmarshal(p.Metadata, &m)
 	m["generation_at"] = generationAt
+	m["schedule_timezone"] = timezone
 	var workflow any
 	_ = json.Unmarshal(payload, &workflow)
 	m["generation_payload"] = workflow
@@ -90,7 +91,7 @@ func TestVideoIntentCreateReplayRescheduleAndCancel(t *testing.T) {
 		return req.WithContext(auth.WithIdentity(req.Context(), auth.NewApiKeyIdentity(9, 42, 7, []string{agenttools.PermissionAutomation})))
 	}
 	publishAt := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
-	body, _ := json.Marshal(map[string]any{"idempotency_key": "calendar-video-1", "payload": map[string]any{"pre": map[string]any{"scenes": []any{map[string]any{"scene_id": "s1"}}}, "finalize": map[string]any{}, "publish": map[string]any{"title": "Video", "scheduled_at": publishAt.Format(time.RFC3339), "targets": []any{map[string]any{"platform_account_id": 7}}}}})
+	body, _ := json.Marshal(map[string]any{"idempotency_key": "calendar-video-1", "timezone": "Europe/Rome", "payload": map[string]any{"pre": map[string]any{"scenes": []any{map[string]any{"scene_id": "s1"}}}, "finalize": map[string]any{}, "publish": map[string]any{"title": "Video", "scheduled_at": publishAt.Format(time.RFC3339), "targets": []any{map[string]any{"platform_account_id": 7}}}}})
 	request := func(method, path string, body []byte) *httptest.ResponseRecorder {
 		req := withID(httptest.NewRequest(method, path, bytes.NewReader(body)))
 		w := httptest.NewRecorder()
@@ -108,6 +109,9 @@ func TestVideoIntentCreateReplayRescheduleAndCancel(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.IntentID == 0 {
 		t.Fatalf("create response: %s (%v)", w.Body.String(), err)
 	}
+	if got := videoIntentTimezone(store.byID[created.IntentID].Metadata); got != "Europe/Rome" {
+		t.Fatalf("timezone not persisted: %q", got)
+	}
 	w = request(http.MethodPost, "/api/v1/agent/video-intents", body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("replay: %d %s", w.Code, w.Body.String())
@@ -119,10 +123,21 @@ func TestVideoIntentCreateReplayRescheduleAndCancel(t *testing.T) {
 	if replay.IntentID != created.IntentID {
 		t.Fatalf("replay duplicated intent: %+v vs %+v", created, replay)
 	}
+	var differentTimezone map[string]any
+	_ = json.Unmarshal(body, &differentTimezone)
+	differentTimezone["timezone"] = "UTC"
+	differentTimezoneBody, _ := json.Marshal(differentTimezone)
+	w = request(http.MethodPost, "/api/v1/agent/video-intents", differentTimezoneBody)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("same idempotency key with a different timezone: %d %s", w.Code, w.Body.String())
+	}
 	newTime := publishAt.Add(48 * time.Hour).Format(time.RFC3339)
 	w = request(http.MethodPatch, "/api/v1/agent/video-intents/1", []byte(`{"publish_at":"`+newTime+`"}`))
 	if w.Code != http.StatusOK {
 		t.Fatalf("reschedule: %d %s", w.Code, w.Body.String())
+	}
+	if got := videoIntentTimezone(store.byID[created.IntentID].Metadata); got != "Europe/Rome" {
+		t.Fatalf("reschedule lost timezone: %q", got)
 	}
 	w = request(http.MethodDelete, "/api/v1/agent/video-intents/1", nil)
 	if w.Code != http.StatusOK {
