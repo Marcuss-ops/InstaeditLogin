@@ -29,8 +29,20 @@ func TestCatalogSupportsPlainTypeArray(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, d := range got {
-		if d.Name == "content.create_video" && !d.Available {
-			t.Fatal("scene-composite video lane should be available")
+		if d.Name == "content.create_video" && d.Available {
+			t.Fatal("script and clip jobs alone must not imply a final-video assembler")
+		}
+	}
+}
+
+func TestCatalogHidesFullVideoUntilMasterAdvertisesAssembler(t *testing.T) {
+	got, err := NewCatalog().Available(json.RawMessage(`{"types":[{"type":"script.generate"},{"type":"clip.render"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range got {
+		if d.Name == "content.create_video" && d.Available {
+			t.Fatal("content.create_video must stay unavailable without a supported full-video endpoint")
 		}
 	}
 }

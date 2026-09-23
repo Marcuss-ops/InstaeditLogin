@@ -33,6 +33,31 @@ func (m *AgentRunsModule) handleCreateVideoIntent(w http.ResponseWriter, req *ht
 		writeError(w, 401, "missing identity")
 		return
 	}
+	if m.deps.JobMaster == nil {
+		writeError(w, http.StatusServiceUnavailable, "remote video generation is not configured")
+		return
+	}
+	remoteTypes, err := m.deps.JobMaster.ListTypes(req.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "list remote tools: "+err.Error())
+		return
+	}
+	available, err := m.deps.Catalog.Available(remoteTypes)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "read remote video capabilities: "+err.Error())
+		return
+	}
+	videoReady := false
+	for _, tool := range available {
+		if tool.Name == "content.create_video" {
+			videoReady = tool.Available
+			break
+		}
+	}
+	if !videoReady {
+		writeError(w, http.StatusUnprocessableEntity, "scheduled video creation is unavailable: the execution plane does not advertise a full-video assembler")
+		return
+	}
 	var body createAgentVideoIntentRequest
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())

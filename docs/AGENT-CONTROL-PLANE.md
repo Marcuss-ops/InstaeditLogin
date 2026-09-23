@@ -114,7 +114,13 @@ script → optional YouTube/stock acquisition → voiceover → clip render → 
 
 The plan is a control-plane contract and idempotency-key generator. The
 execution-plane implementations of `video.create` and `video.assemble` remain
-deferred until PipelineGen exposes them through the catalog.
+deferred until PipelineGen exposes them through the catalog. The control plane
+does not infer an assembler from script generation plus clip rendering. The
+configured Master also returns 404 for its legacy `/api/v1/jobs/pre` PREPARE
+endpoint. Accordingly, `content.create_video` is not advertised as available
+and new scheduled video intents are rejected before a calendar card is
+created. Once PipelineGen publishes a durable full-video contract in the M2M
+catalog, the control plane can enable scheduling against it.
 
 The live Master catalog observed on 2026-09-23 advertises these generic M2M
 types: `script.generate` (`script.generate.v1` →
@@ -133,13 +139,12 @@ not expose them as machine-readable JSON Schemas.
 
 ## Calendar to scheduled publication
 
-The Calendar's **Crea e programma video** dialog creates a durable run and
-invokes the specialized `content.create_video` PREPARE/FINALIZE workflow. On
-success, InstaEdit validates and downloads the final MP4, imports it into the
-Media Library, and creates a normal queued post with the selected channel(s)
-and future `scheduled_at`. Existing publisher workers publish that post at its
-scheduled time. Clicking its Calendar card opens the final video preview and a
-direct link to the stored artifact.
+The Calendar dialog contains the intended workflow, but generation is gated
+until a full-video assembler is available in the live M2M catalog. After that
+capability exists, InstaEdit can validate and download the final MP4, import it
+into the Media Library, and create a normal queued post with selected
+channel(s) and future `scheduled_at`. Calendar detail already opens a preview
+and direct link from the stored artifact's `media_url`.
 
 The input has `{pre, finalize, publish}` objects. `pre` carries scenes, clip
 references, script, output profile and the required `drive-production`

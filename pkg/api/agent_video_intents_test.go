@@ -82,9 +82,9 @@ func (f *fakeVideoIntentStore) FailAgentVideoIntent(context.Context, int64, int6
 	return nil
 }
 
-func TestVideoIntentCreateReplayRescheduleAndCancel(t *testing.T) {
+func TestVideoIntentRejectsSchedulingWithoutFullVideoAssembler(t *testing.T) {
 	store := newFakeVideoIntentStore()
-	module := NewAgentRunsModule(AgentRunsModuleDeps{Store: newFakeAgentRunStore(), Catalog: agenttools.NewCatalog(), VideoPublisher: fakeAgentVideoPublisher{}, VideoIntents: store, Protected: func(h http.HandlerFunc) http.HandlerFunc { return h }})
+	module := NewAgentRunsModule(AgentRunsModuleDeps{Store: newFakeAgentRunStore(), Catalog: agenttools.NewCatalog(), JobMaster: fakeAgentJobMaster{}, VideoPublisher: fakeAgentVideoPublisher{}, VideoIntents: store, Protected: func(h http.HandlerFunc) http.HandlerFunc { return h }})
 	mux := chi.NewRouter()
 	module.Register(mux)
 	withID := func(req *http.Request) *http.Request {
@@ -99,49 +99,11 @@ func TestVideoIntentCreateReplayRescheduleAndCancel(t *testing.T) {
 		return w
 	}
 	w := request(http.MethodPost, "/api/v1/agent/video-intents", body)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity || !bytes.Contains(w.Body.Bytes(), []byte("full-video assembler")) {
+		t.Fatalf("create without assembler: %d %s", w.Code, w.Body.String())
 	}
-	var created struct {
-		IntentID     int64     `json:"intent_id"`
-		GenerationAt time.Time `json:"generation_at"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.IntentID == 0 {
-		t.Fatalf("create response: %s (%v)", w.Body.String(), err)
-	}
-	if got := videoIntentTimezone(store.byID[created.IntentID].Metadata); got != "Europe/Rome" {
-		t.Fatalf("timezone not persisted: %q", got)
-	}
-	w = request(http.MethodPost, "/api/v1/agent/video-intents", body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("replay: %d %s", w.Code, w.Body.String())
-	}
-	var replay struct {
-		IntentID int64 `json:"intent_id"`
-	}
-	_ = json.Unmarshal(w.Body.Bytes(), &replay)
-	if replay.IntentID != created.IntentID {
-		t.Fatalf("replay duplicated intent: %+v vs %+v", created, replay)
-	}
-	var differentTimezone map[string]any
-	_ = json.Unmarshal(body, &differentTimezone)
-	differentTimezone["timezone"] = "UTC"
-	differentTimezoneBody, _ := json.Marshal(differentTimezone)
-	w = request(http.MethodPost, "/api/v1/agent/video-intents", differentTimezoneBody)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("same idempotency key with a different timezone: %d %s", w.Code, w.Body.String())
-	}
-	newTime := publishAt.Add(48 * time.Hour).Format(time.RFC3339)
-	w = request(http.MethodPatch, "/api/v1/agent/video-intents/1", []byte(`{"publish_at":"`+newTime+`"}`))
-	if w.Code != http.StatusOK {
-		t.Fatalf("reschedule: %d %s", w.Code, w.Body.String())
-	}
-	if got := videoIntentTimezone(store.byID[created.IntentID].Metadata); got != "Europe/Rome" {
-		t.Fatalf("reschedule lost timezone: %q", got)
-	}
-	w = request(http.MethodDelete, "/api/v1/agent/video-intents/1", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("cancel: %d %s", w.Code, w.Body.String())
+	if len(store.byID) != 0 {
+		t.Fatalf("unsupported workflow created a calendar intent: %+v", store.byID)
 	}
 }
 
@@ -157,7 +119,7 @@ func (s intentWorkspaceStore) FindByID(id int64) (*models.Workspace, error) {
 	return nil, nil
 }
 
-func TestVideoIntentDispatcherCreatesIdempotentAgentRunAndRemoteJob(t *testing.T) {
+func TestVideoIntentDispatcherFailsClosedWhenAssemblerIsUnavailable(t *testing.T) {
 	store := newFakeAgentRunStore()
 	intents := newFakeVideoIntentStore()
 	workflow := json.RawMessage(`{"pre":{"scenes":[{"scene_id":"s1"}]},"finalize":{},"publish":{"title":"Scheduled","scheduled_at":"2030-01-01T09:00:00Z","targets":[{"platform_account_id":7}]}}`)
@@ -168,17 +130,12 @@ func TestVideoIntentDispatcherCreatesIdempotentAgentRunAndRemoteJob(t *testing.T
 	if err := module.dispatchDueVideoIntents(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.runs) != 1 || len(store.steps) != 1 {
-		t.Fatalf("dispatch did not create exactly one run and step: runs=%d steps=%d", len(store.runs), len(store.steps))
+	if len(store.runs) != 1 || len(store.steps) != 0 {
+		t.Fatalf("unsupported dispatch unexpectedly submitted a job: runs=%d steps=%d", len(store.runs), len(store.steps))
 	}
 	for _, run := range store.runs {
-		if run.ActorUserID != 42 || run.WorkspaceID != 7 || run.Status != "running" {
+		if run.ActorUserID != 42 || run.WorkspaceID != 7 || run.Status != "failed" {
 			t.Fatalf("unexpected run: %+v", run)
-		}
-	}
-	for _, step := range store.steps {
-		if step.RemoteJobID != "remote-video" || step.Status != "running" {
-			t.Fatalf("remote job was not persisted: %+v", step)
 		}
 	}
 }

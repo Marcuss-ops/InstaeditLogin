@@ -341,7 +341,7 @@ func (s *stagedVideoJobMaster) Get(context.Context, string) (json.RawMessage, er
 	return json.RawMessage(`{"job_id":"remote-video","status":"RUNNING"}`), nil
 }
 
-func TestAgentRuns_CreateVideoPreparesAndFinalizesRemoteRender(t *testing.T) {
+func TestAgentRuns_RejectsVideoCompositionMissingFromRemoteCatalog(t *testing.T) {
 	store := newFakeAgentRunStore()
 	master := &stagedVideoJobMaster{}
 	module := NewAgentRunsModule(AgentRunsModuleDeps{Store: store, Catalog: agenttools.NewCatalog(), JobMaster: master, VideoPublisher: fakeAgentVideoPublisher{}, Protected: func(h http.HandlerFunc) http.HandlerFunc { return h }})
@@ -364,28 +364,11 @@ func TestAgentRuns_CreateVideoPreparesAndFinalizesRemoteRender(t *testing.T) {
 	req := withIdentity(httptest.NewRequest(http.MethodPost, "/api/v1/agent/runs/"+run.RunID+"/tools/content.create_video", strings.NewReader(body)))
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("invoke video: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "not available on the execution plane") {
+		t.Fatalf("invoke unavailable video composer: %d %s", w.Code, w.Body.String())
 	}
-	if master.finalizeJobID != "remote-video" {
-		t.Fatalf("finalized job %q", master.finalizeJobID)
-	}
-	var pre, finalize map[string]json.RawMessage
-	_ = json.Unmarshal(master.prePayload, &pre)
-	_ = json.Unmarshal(master.finalizePayload, &finalize)
-	var preKey, finalizeKey string
-	_ = json.Unmarshal(pre["idempotency_key"], &preKey)
-	_ = json.Unmarshal(finalize["idempotency_key"], &finalizeKey)
-	if preKey != "video-51-prepare" || finalizeKey != "video-51-finalize" {
-		t.Fatalf("phase keys = %q, %q", preKey, finalizeKey)
-	}
-	if len(store.steps) != 1 {
-		t.Fatalf("expected one durable video step, got %d", len(store.steps))
-	}
-	for _, step := range store.steps {
-		if step.RemoteJobID != "remote-video" || step.RemoteStatus != "FINALIZE_QUEUED" {
-			t.Fatalf("video stage not persisted: %+v", step)
-		}
+	if master.finalizeJobID != "" || master.prePayload != nil || master.finalizePayload != nil || len(store.steps) != 0 {
+		t.Fatalf("unsupported video workflow made side effects: master=%+v steps=%+v", master, store.steps)
 	}
 }
 func (fakeAgentJobMaster) Submit(context.Context, jobmaster.SubmitRequest) (json.RawMessage, error) {

@@ -29,9 +29,10 @@ Scope: this checklist applies only to the `InstaeditLogin` control plane (the
 - [ ] Execute the durable multi-step plan with dependency/result handoff,
       restart-safe scheduling, and failure/retry policy. Current remote catalog
       does not advertise every required video capability.
-- [x] Connect Calendar's single-video flow to durable run/recovery, Media
-      Library import, normal scheduled post publication, 30-day navigation and
-      final artifact preview/link on the event card.
+- [ ] Complete Calendar's single-video flow through remote full-video
+      assembly, recovery, Media Library import, scheduled publication and the
+      final artifact link. The preview/link UI exists; execution stays gated
+      because the configured Master has no supported assembler endpoint.
 - [x] Expose the next 30 days in a rolling Calendar view; scheduled posts can
       be rescheduled by drag, started immediately or cancelled from card detail.
 - [x] Persist an individual scheduled generation intent as a Calendar draft
