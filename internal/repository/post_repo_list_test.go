@@ -1,6 +1,7 @@
 package repository_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -74,6 +75,30 @@ func TestPostListByPost_OKWithNullablePublishedAt(t *testing.T) {
 	}
 	if got[2].ErrorMessage != "twitter error" {
 		t.Errorf("target[2].ErrorMessage: want twitter error, got %q", got[2].ErrorMessage)
+	}
+}
+
+func TestFinalizeAgentVideoEvent_AtomicallyQueuesExistingCard(t *testing.T) {
+	db, mock := newMockPostDB(t)
+	repo := repository.NewPostRepository(db)
+	mediaID, objectKey, bucket := "asset_42", "uploads/generated.mp4", "media"
+	scheduled := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	event := &models.Post{ID: 7, WorkspaceID: 3, Title: "Video", MediaURL: "https://cdn.example/video.mp4", MediaAssetID: &mediaID, StorageObjectKey: &objectKey, Bucket: &bucket, PublishAt: &scheduled, PrivacyLevel: "unlisted", DefaultPrivacyLevel: "unlisted", Metadata: json.RawMessage(`{"generation_status":"CONTENT_READY"}`)}
+	targets := []*models.PostTarget{{PlatformAccountID: 99}}
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT status FROM posts WHERE id=$1 AND workspace_id=$2 FOR UPDATE").WithArgs(int64(7), int64(3)).WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusDraft))
+	mock.ExpectExec("UPDATE posts SET title=$1, caption=$2, media_url=$3").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("INSERT INTO post_targets").WithArgs(int64(7), int64(99), models.PostStatusQueued).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(101))
+	mock.ExpectExec("INSERT INTO outbox_events").WithArgs("post_target", int64(101), "post_target.publish_requested", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	if err := repo.FinalizeAgentVideoEvent(event, targets); err != nil {
+		t.Fatalf("FinalizeAgentVideoEvent: %v", err)
+	}
+	if event.Status != models.PostStatusQueued || targets[0].ID != 101 || targets[0].PostID != event.ID {
+		t.Fatalf("finalized values: post=%+v target=%+v", event, targets[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
