@@ -8,6 +8,7 @@ export function useCalendarPosts() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const abortRef = useRef<AbortController | null>(null);
+  const hasLoadedRef = useRef(false);
   const [state, setState] = useState<FetchState>({ kind: "loading" });
 
   const statusFilter = searchParams.get("status") || "all";
@@ -18,7 +19,7 @@ export function useCalendarPosts() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    setState({ kind: "loading" });
+    if (!hasLoadedRef.current) setState({ kind: "loading" });
 
     try {
       const from = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
@@ -102,6 +103,7 @@ export function useCalendarPosts() {
           copyright_alerts: alertsByPost.get(post.id),
         };
       });
+      hasLoadedRef.current = true;
       setState({ kind: "ready", posts: [...posts, ...scheduledUploads], workspaces, groups });
     } catch (err) {
       if (controller.signal.aborted) return;
