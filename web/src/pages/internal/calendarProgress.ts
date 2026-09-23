@@ -54,6 +54,7 @@ function displayName(value: string): string {
     stock_search: "STOCK SEARCH",
     stock_download: "STOCK DOWNLOADING",
     voiceover_generation: "VOICEOVER",
+    voiceover_render: "VOICEOVER",
     audio_generation: "VOICEOVER",
     overlay_prepare: "OVERLAY PREPARE",
     overlay_render: "RENDERING",

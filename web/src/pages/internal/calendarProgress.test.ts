@@ -9,8 +9,8 @@ describe("getCalendarProgressRows", () => {
         voiceover_render: { status: "running", completed_count: 2, total_count: 5 },
       },
     })).toEqual([
-      { key: "stage-script_generation", label: "Script Generation", status: "completed", progress: 100 },
-      { key: "stage-voiceover_render", label: "Voiceover Render", status: "running", progress: undefined },
+      { key: "stage-script_generation", label: "SCRIPTING", status: "completed", progress: 100 },
+      { key: "stage-voiceover_render", label: "VOICEOVER", status: "running", progress: undefined },
     ]);
   });
 
