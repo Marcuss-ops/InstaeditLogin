@@ -95,7 +95,15 @@ func TestTick_ParallelBurst_SaturatesPoolAndProcessesAll(t *testing.T) {
 		select {
 		case <-started:
 		case <-done:
-			t.Fatal("tick finished before all targets started publishing")
+			// A send to started happens before its publish callback can
+			// finish. When done and buffered started notifications become
+			// ready together, select may choose done even though this target
+			// has already started; consume that queued notification first.
+			select {
+			case <-started:
+			default:
+				t.Fatal("tick finished before all targets started publishing")
+			}
 		}
 	}
 	select {
