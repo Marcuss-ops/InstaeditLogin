@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/agenttools"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/jobmaster"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
@@ -27,12 +31,15 @@ func newFakeAgentRunStore() *fakeAgentRunStore {
 }
 
 func (f *fakeAgentRunStore) CreateRun(ctx context.Context, run *repository.AgentRun) error {
-	// Idempotency: same workspace + key reuses the row.
+	// Idempotency: same request reuses the row; a changed request conflicts.
 	for _, existing := range f.runs {
 		if existing.WorkspaceID == run.WorkspaceID && existing.IdempotencyKey == run.IdempotencyKey {
+			if existing.Goal != run.Goal || existing.YouTubeVideoID != run.YouTubeVideoID || existing.EditorSessionID != run.EditorSessionID {
+				return repository.ErrAgentRunIdempotencyConflict
+			}
+			*run = *existing
 			run.ID = existing.ID
 			run.CreatedAt = existing.CreatedAt
-			run.UpdatedAt = time.Now()
 			return nil
 		}
 	}
@@ -72,6 +79,73 @@ func (f *fakeAgentRunStore) UpdateRun(ctx context.Context, runID, status, curren
 		existing.UpdatedAt = time.Now()
 	}
 	return nil
+}
+
+func (f *fakeAgentRunStore) GetRun(ctx context.Context, workspaceID int64, runID string) (*repository.AgentRun, error) {
+	run, ok := f.runs[runID]
+	if !ok || run.WorkspaceID != workspaceID {
+		return nil, repository.ErrAgentRunNotFound
+	}
+	return run, nil
+}
+func (f *fakeAgentRunStore) ListRecoverableRuns(context.Context, int) ([]*repository.AgentRun, error) {
+	return nil, nil
+}
+func (f *fakeAgentRunStore) ListSteps(ctx context.Context, workspaceID int64, runID string) ([]repository.AgentRunStep, error) {
+	if _, err := f.GetRun(ctx, workspaceID, runID); err != nil {
+		return nil, err
+	}
+	result := []repository.AgentRunStep{}
+	for _, step := range f.steps {
+		if step.RunID == runID {
+			result = append(result, *step)
+		}
+	}
+	return result, nil
+}
+func (f *fakeAgentRunStore) AppendStepOwned(ctx context.Context, workspaceID int64, step *repository.AgentRunStep) error {
+	if _, err := f.GetRun(ctx, workspaceID, step.RunID); err != nil {
+		return err
+	}
+	return f.AppendStep(ctx, step)
+}
+func (f *fakeAgentRunStore) CompleteStepOwned(ctx context.Context, workspaceID int64, runID string, step *repository.AgentRunStep) error {
+	if _, err := f.GetRun(ctx, workspaceID, runID); err != nil {
+		return err
+	}
+	existing, ok := f.steps[step.ID]
+	if !ok || existing.RunID != runID {
+		return repository.ErrAgentRunNotFound
+	}
+	return f.CompleteStep(ctx, step)
+}
+func (f *fakeAgentRunStore) SetStepRemoteJob(ctx context.Context, workspaceID int64, runID, stepID, remoteJobID, idempotencyKey string) error {
+	if _, err := f.GetRun(ctx, workspaceID, runID); err != nil {
+		return err
+	}
+	step, ok := f.steps[stepID]
+	if !ok || step.RunID != runID {
+		return repository.ErrAgentRunNotFound
+	}
+	step.RemoteJobID, step.IdempotencyKey = remoteJobID, idempotencyKey
+	return nil
+}
+func (f *fakeAgentRunStore) UpdateStepProgressOwned(ctx context.Context, workspaceID int64, runID, stepID, remoteStatus string, remoteProgress *int, progressJSON []byte) error {
+	if _, err := f.GetRun(ctx, workspaceID, runID); err != nil {
+		return err
+	}
+	step, ok := f.steps[stepID]
+	if !ok || step.RunID != runID {
+		return repository.ErrAgentRunNotFound
+	}
+	step.RemoteStatus, step.RemoteProgress, step.ProgressJSON = remoteStatus, remoteProgress, progressJSON
+	return nil
+}
+func (f *fakeAgentRunStore) UpdateRunOwned(ctx context.Context, workspaceID int64, runID, status, currentStep string, completedAt *time.Time) error {
+	if _, err := f.GetRun(ctx, workspaceID, runID); err != nil {
+		return err
+	}
+	return f.UpdateRun(ctx, runID, status, currentStep, completedAt)
 }
 
 // runAgentRunsRequest mounts the module with a passthrough protect and a
@@ -209,5 +283,215 @@ func TestAgentRuns_UpdateRunStatus(t *testing.T) {
 	w = runAgentRunsRequest(t, store, http.MethodPatch, "/api/v1/agent/runs/"+run.RunID, []byte(`{"status":"bogus"}`))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status: code = %d, want 400", w.Code)
+	}
+}
+
+type fakeAgentJobMaster struct{}
+
+func (fakeAgentJobMaster) ListTypes(context.Context) (json.RawMessage, error) {
+	return json.RawMessage(`{"types":["script.generate","clip.render"]}`), nil
+}
+
+type stagedVideoJobMaster struct {
+	prePayload      json.RawMessage
+	finalizePayload json.RawMessage
+	finalizeJobID   string
+}
+
+type fakeAgentVideoPublisher struct{}
+
+func (fakeAgentVideoPublisher) Validate(context.Context, auth.Identity, int64, json.RawMessage) error {
+	return nil
+}
+func (fakeAgentVideoPublisher) Publish(context.Context, auth.Identity, int64, string, repository.AgentRunStep, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{"post_id":1}`), nil
+}
+
+func (s *stagedVideoJobMaster) ListTypes(context.Context) (json.RawMessage, error) {
+	return json.RawMessage(`{"types":["script.generate","clip.render"]}`), nil
+}
+func (s *stagedVideoJobMaster) Submit(context.Context, jobmaster.SubmitRequest) (json.RawMessage, error) {
+	return nil, errors.New("generic submit should not be used for complete video")
+}
+func (s *stagedVideoJobMaster) PrepareVideo(_ context.Context, body json.RawMessage) (json.RawMessage, error) {
+	s.prePayload = body
+	return json.RawMessage(`{"job_id":"remote-video"}`), nil
+}
+func (s *stagedVideoJobMaster) FinalizeVideo(_ context.Context, id string, body json.RawMessage) (json.RawMessage, error) {
+	s.finalizeJobID, s.finalizePayload = id, body
+	return json.RawMessage(`{"status":"queued"}`), nil
+}
+func (s *stagedVideoJobMaster) Get(context.Context, string) (json.RawMessage, error) {
+	return json.RawMessage(`{"job_id":"remote-video","status":"RUNNING"}`), nil
+}
+
+func TestAgentRuns_CreateVideoPreparesAndFinalizesRemoteRender(t *testing.T) {
+	store := newFakeAgentRunStore()
+	master := &stagedVideoJobMaster{}
+	module := NewAgentRunsModule(AgentRunsModuleDeps{Store: store, Catalog: agenttools.NewCatalog(), JobMaster: master, VideoPublisher: fakeAgentVideoPublisher{}, Protected: func(h http.HandlerFunc) http.HandlerFunc { return h }})
+	mux := chi.NewRouter()
+	module.Register(mux)
+	withIdentity := func(req *http.Request) *http.Request {
+		return req.WithContext(auth.WithIdentity(req.Context(), auth.NewApiKeyIdentity(9, 42, 7, []string{agenttools.PermissionAutomation})))
+	}
+	create := withIdentity(httptest.NewRequest(http.MethodPost, "/api/v1/agent/runs", bytes.NewBufferString(`{"goal":"create and schedule video","idempotency_key":"video-run"}`)))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, create)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create run: %d %s", w.Code, w.Body.String())
+	}
+	var run createRunResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"project":"creator-51","idempotency_key":"video-51","payload":{"pre":{"job_type":"scene.composite.v1","copy_only":true,"script_text":"script","scenes":[{"scene_id":"s1","text":"scene"}],"output":{"format":"mp4"},"delivery_plan":[{"destination_id":"drive-production"}]},"finalize":{"overlays":[],"runtime_assets":[]},"publish":{"title":"Generated","caption":"caption","language":"it","scheduled_at":"2099-01-01T12:00:00Z","privacy":"unlisted","targets":[{"platform_account_id":51}]}}}`
+	req := withIdentity(httptest.NewRequest(http.MethodPost, "/api/v1/agent/runs/"+run.RunID+"/tools/content.create_video", strings.NewReader(body)))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("invoke video: %d %s", w.Code, w.Body.String())
+	}
+	if master.finalizeJobID != "remote-video" {
+		t.Fatalf("finalized job %q", master.finalizeJobID)
+	}
+	var pre, finalize map[string]json.RawMessage
+	_ = json.Unmarshal(master.prePayload, &pre)
+	_ = json.Unmarshal(master.finalizePayload, &finalize)
+	var preKey, finalizeKey string
+	_ = json.Unmarshal(pre["idempotency_key"], &preKey)
+	_ = json.Unmarshal(finalize["idempotency_key"], &finalizeKey)
+	if preKey != "video-51-prepare" || finalizeKey != "video-51-finalize" {
+		t.Fatalf("phase keys = %q, %q", preKey, finalizeKey)
+	}
+	if len(store.steps) != 1 {
+		t.Fatalf("expected one durable video step, got %d", len(store.steps))
+	}
+	for _, step := range store.steps {
+		if step.RemoteJobID != "remote-video" || step.RemoteStatus != "FINALIZE_QUEUED" {
+			t.Fatalf("video stage not persisted: %+v", step)
+		}
+	}
+}
+func (fakeAgentJobMaster) Submit(context.Context, jobmaster.SubmitRequest) (json.RawMessage, error) {
+	return json.RawMessage(`{"job_id":"remote-1","status":"queued"}`), nil
+}
+func (fakeAgentJobMaster) PrepareVideo(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{"job_id":"remote-video"}`), nil
+}
+func (fakeAgentJobMaster) FinalizeVideo(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{"status":"queued"}`), nil
+}
+func (fakeAgentJobMaster) Get(context.Context, string) (json.RawMessage, error) {
+	return json.RawMessage(`{"job_id":"remote-1","status":"completed"}`), nil
+}
+
+type progressAgentJobMaster struct{}
+
+func (progressAgentJobMaster) ListTypes(context.Context) (json.RawMessage, error) {
+	return json.RawMessage(`{"types":["script.generate"]}`), nil
+}
+func (progressAgentJobMaster) Submit(context.Context, jobmaster.SubmitRequest) (json.RawMessage, error) {
+	return json.RawMessage(`{"job_id":"remote-progress","status":"queued"}`), nil
+}
+func (progressAgentJobMaster) PrepareVideo(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{"job_id":"remote-progress"}`), nil
+}
+func (progressAgentJobMaster) FinalizeVideo(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{"status":"queued"}`), nil
+}
+func (progressAgentJobMaster) Get(context.Context, string) (json.RawMessage, error) {
+	return json.RawMessage(`{"job_id":"remote-progress","status":"RUNNING","progress":42,"stage_progress":{"script":{"status":"running","completed":2,"total":5}}}`), nil
+}
+
+func TestAgentRuns_TypedToolPersistsRemoteReferenceAndRecoveryIsOwned(t *testing.T) {
+	store := newFakeAgentRunStore()
+	module := NewAgentRunsModule(AgentRunsModuleDeps{Store: store, Catalog: agenttools.NewCatalog(), JobMaster: fakeAgentJobMaster{}, Protected: func(h http.HandlerFunc) http.HandlerFunc { return h }})
+	mux := chi.NewRouter()
+	module.Register(mux)
+	ctx := func(req *http.Request, ws int64) *http.Request {
+		return req.WithContext(auth.WithIdentity(req.Context(), auth.NewApiKeyIdentity(9, 42, ws, []string{agenttools.PermissionAutomation})))
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/runs", bytes.NewBufferString(`{"goal":"g","idempotency_key":"workflow-1"}`))
+	req = ctx(req, 7)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var run createRunResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &run)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/agent/runs/"+run.RunID+"/tools/content.generate_script", bytes.NewBufferString(`{"project":"p","idempotency_key":"workflow-1-script","payload":{}}`))
+	req = ctx(req, 7)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("invoke: %d %s", w.Code, w.Body.String())
+	}
+	if len(store.steps) != 1 {
+		t.Fatalf("steps=%d", len(store.steps))
+	}
+	for _, step := range store.steps {
+		if step.RemoteJobID != "remote-1" || step.IdempotencyKey != "workflow-1-script" {
+			t.Fatalf("remote ref not persisted: %+v", step)
+		}
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/agent/runs/"+run.RunID+"/recovery", nil)
+	req = ctx(req, 99)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-workspace recovery = %d, want 404", w.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/agent/runs/"+run.RunID+"/recovery", nil)
+	req = ctx(req, 7)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "completed") {
+		t.Fatalf("recovery: %d %s", w.Code, w.Body.String())
+	}
+	stepCompleted := false
+	for _, persistedStep := range store.steps {
+		stepCompleted = stepCompleted || persistedStep.Status == "completed"
+	}
+	if store.runs[run.RunID].Status != "completed" || !stepCompleted {
+		t.Fatalf("recovery did not persist terminal status: run=%q steps=%+v", store.runs[run.RunID].Status, store.steps)
+	}
+}
+
+func TestAgentRuns_RecoveryPersistsIntermediateProgress(t *testing.T) {
+	store := newFakeAgentRunStore()
+	module := NewAgentRunsModule(AgentRunsModuleDeps{Store: store, Catalog: agenttools.NewCatalog(), JobMaster: progressAgentJobMaster{}, Protected: func(h http.HandlerFunc) http.HandlerFunc { return h }})
+	mux := chi.NewRouter()
+	module.Register(mux)
+	withIdentity := func(req *http.Request) *http.Request {
+		return req.WithContext(auth.WithIdentity(req.Context(), auth.NewApiKeyIdentity(9, 42, 7, []string{agenttools.PermissionAutomation})))
+	}
+	req := withIdentity(httptest.NewRequest(http.MethodPost, "/api/v1/agent/runs", bytes.NewBufferString(`{"goal":"g","idempotency_key":"progress-run"}`)))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var run createRunResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &run)
+	req = withIdentity(httptest.NewRequest(http.MethodPost, "/api/v1/agent/runs/"+run.RunID+"/tools/content.generate_script", bytes.NewBufferString(`{"project":"p","idempotency_key":"progress-script","payload":{}}`)))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("invoke: %d %s", w.Code, w.Body.String())
+	}
+	req = withIdentity(httptest.NewRequest(http.MethodGet, "/api/v1/agent/runs/"+run.RunID+"/recovery", nil))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("recovery: %d %s", w.Code, w.Body.String())
+	}
+	for _, step := range store.steps {
+		if step.RemoteStatus != "RUNNING" || step.RemoteProgress == nil || *step.RemoteProgress != 42 || !strings.Contains(string(step.ProgressJSON), "stage_progress") {
+			t.Fatalf("progress not persisted: %+v", step)
+		}
+	}
+	if store.runs[run.RunID].Status != "running" {
+		t.Fatalf("run status=%q, want running", store.runs[run.RunID].Status)
 	}
 }

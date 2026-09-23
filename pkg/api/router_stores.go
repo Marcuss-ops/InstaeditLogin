@@ -294,6 +294,14 @@ type AgentRunStore interface {
 	AppendStep(ctx context.Context, step *repository.AgentRunStep) error
 	CompleteStep(ctx context.Context, step *repository.AgentRunStep) error
 	UpdateRun(ctx context.Context, runID, status, currentStep string, completedAt *time.Time) error
+	GetRun(ctx context.Context, workspaceID int64, runID string) (*repository.AgentRun, error)
+	ListRecoverableRuns(ctx context.Context, limit int) ([]*repository.AgentRun, error)
+	ListSteps(ctx context.Context, workspaceID int64, runID string) ([]repository.AgentRunStep, error)
+	AppendStepOwned(ctx context.Context, workspaceID int64, step *repository.AgentRunStep) error
+	CompleteStepOwned(ctx context.Context, workspaceID int64, runID string, step *repository.AgentRunStep) error
+	SetStepRemoteJob(ctx context.Context, workspaceID int64, runID, stepID, remoteJobID, idempotencyKey string) error
+	UpdateStepProgressOwned(ctx context.Context, workspaceID int64, runID, stepID, remoteStatus string, remoteProgress *int, progressJSON []byte) error
+	UpdateRunOwned(ctx context.Context, workspaceID int64, runID, status, currentStep string, completedAt *time.Time) error
 }
 
 // P2 — ops dashboard store. AdminStore is the read-side

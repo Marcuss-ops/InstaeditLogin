@@ -397,6 +397,24 @@ func (a *App) contentPreparationWorkerSpec() worker.WorkerSpec {
 	}
 }
 
+func (a *App) agentRunRecoveryWorkerSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
+		Name:     "agent_run_recovery",
+		Critical: false,
+		Run: func(ctx context.Context) error {
+			if a.Router == nil {
+				return fmt.Errorf("agent run recovery requires the wired API router")
+			}
+			interval := time.Duration(a.Cfg.JobMaster.PollIntervalSeconds) * time.Second
+			recovery := a.Router.NewAgentRunRecoveryWorker(interval)
+			if recovery == nil {
+				return fmt.Errorf("agent run recovery dependencies are not configured")
+			}
+			return recovery.Run(ctx)
+		},
+	}
+}
+
 func (a *App) tokenRefreshSweepWorkerSpec() worker.WorkerSpec {
 	return worker.WorkerSpec{
 		Name:     "token_refresh_sweep",

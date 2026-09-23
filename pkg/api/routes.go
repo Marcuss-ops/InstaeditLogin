@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/agenttools"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/deliveries"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
@@ -140,8 +141,12 @@ func (r *Router) Setup() http.Handler {
 	// the authenticated identity. When the store is nil the module
 	// registers no routes.
 	reg.Register(NewAgentRunsModule(AgentRunsModuleDeps{
-		Store:     r.agentRunStore,
-		Protected: r.protected,
+		Store:                   r.agentRunStore,
+		Protected:               r.protected,
+		ProtectedWithPermission: r.protectedWithAPIKeyPermission,
+		Catalog:                 agenttools.NewCatalog(),
+		JobMaster:               r.jobMasterClient,
+		VideoPublisher:          newAgentVideoPublisher(r.mediaStore, r.storageProvider, r.postStore, r.workspaceStore, r.teamStore, r.idempotencyStore, r.maxUploadBytes, r.publishHorizonDays()),
 	}))
 
 	// Public / health probes are mounted before the auth module so the

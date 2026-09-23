@@ -25,20 +25,28 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/agenttools"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/jobmaster"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // AgentRunsModuleDeps is the narrow contract required by the module.
 type AgentRunsModuleDeps struct {
-	Store     AgentRunStore
-	Protected func(http.HandlerFunc) http.HandlerFunc
+	Store                   AgentRunStore
+	Protected               func(http.HandlerFunc) http.HandlerFunc
+	ProtectedWithPermission func(string, http.HandlerFunc) http.HandlerFunc
+	Catalog                 agenttools.Catalog
+	JobMaster               jobmaster.API
+	VideoPublisher          AgentVideoPublisher
 }
 
 // AgentRunsModule mounts the /api/v1/agent/runs* routes. When Store is
@@ -65,13 +73,26 @@ func (m *AgentRunsModule) Register(mux chi.Router) {
 	if protect == nil {
 		protect = func(h http.HandlerFunc) http.HandlerFunc { return h }
 	}
+	agentProtect := protect
+	if m.deps.ProtectedWithPermission != nil {
+		agentProtect = func(h http.HandlerFunc) http.HandlerFunc {
+			return m.deps.ProtectedWithPermission(agenttools.PermissionAutomation, h)
+		}
+	}
 
 	r := chi.NewRouter()
-	r.Post("/", protect(m.handleCreateRun))
-	r.Post("/{id}/steps", protect(m.handleAppendStep))
-	r.Post("/{id}/steps/{stepId}/complete", protect(m.handleCompleteStep))
-	r.Patch("/{id}", protect(m.handleUpdateRun))
+	r.Post("/", agentProtect(m.handleCreateRun))
+	r.Get("/{id}", agentProtect(m.handleGetRun))
+	r.Get("/{id}/recovery", agentProtect(m.handleRecovery))
+	r.Get("/{id}/steps", agentProtect(m.handleListSteps))
+	r.Post("/{id}/steps", agentProtect(m.handleAppendStep))
+	r.Post("/{id}/steps/{stepId}/complete", agentProtect(m.handleCompleteStep))
+	r.Patch("/{id}", agentProtect(m.handleUpdateRun))
+	if m.deps.JobMaster != nil {
+		r.Post("/{id}/tools/{tool}", agentProtect(m.handleInvokeTool))
+	}
 	mux.Mount("/api/v1/agent/runs", r)
+	mux.Get("/api/v1/agent/tools", agentProtect(m.handleListTools))
 }
 
 // createRunRequest is the body accepted by POST /api/v1/agent/runs.
@@ -117,6 +138,7 @@ func (m *AgentRunsModule) handleCreateRun(w http.ResponseWriter, req *http.Reque
 
 	run := &repository.AgentRun{
 		WorkspaceID:     identity.WorkspaceID(),
+		ActorUserID:     identity.UserID(),
 		Goal:            payload.Goal,
 		YouTubeVideoID:  strings.TrimSpace(payload.YouTubeVideoID),
 		EditorSessionID: strings.TrimSpace(payload.EditorSessionID),
@@ -128,6 +150,10 @@ func (m *AgentRunsModule) handleCreateRun(w http.ResponseWriter, req *http.Reque
 		run.ActorKeyID = &keyID
 	}
 	if err := m.deps.Store.CreateRun(req.Context(), run); err != nil {
+		if errors.Is(err, repository.ErrAgentRunIdempotencyConflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "create run: "+err.Error())
 		return
 	}
@@ -167,6 +193,12 @@ func (m *AgentRunsModule) handleAppendStep(w http.ResponseWriter, req *http.Requ
 		writeError(w, http.StatusBadRequest, "tool_name is required")
 		return
 	}
+	if len(m.deps.Catalog.Names()) > 0 {
+		if _, ok := m.deps.Catalog.Resolve(payload.ToolName); !ok {
+			writeError(w, http.StatusUnprocessableEntity, "tool is not in the agent catalog")
+			return
+		}
+	}
 
 	step := &repository.AgentRunStep{
 		RunID:     runID,
@@ -174,7 +206,16 @@ func (m *AgentRunsModule) handleAppendStep(w http.ResponseWriter, req *http.Requ
 		Status:    "running",
 		InputJSON: payload.InputJSON,
 	}
-	if err := m.deps.Store.AppendStep(req.Context(), step); err != nil {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing identity")
+		return
+	}
+	if err := m.deps.Store.AppendStepOwned(req.Context(), identity.WorkspaceID(), step); err != nil {
+		if errors.Is(err, repository.ErrAgentRunNotFound) {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "append step: "+err.Error())
 		return
 	}
@@ -215,7 +256,17 @@ func (m *AgentRunsModule) handleCompleteStep(w http.ResponseWriter, req *http.Re
 		ErrorCode:    strings.TrimSpace(payload.ErrorCode),
 		ErrorMessage: strings.TrimSpace(payload.ErrorMessage),
 	}
-	if err := m.deps.Store.CompleteStep(req.Context(), step); err != nil {
+	runID := chi.URLParam(req, "id")
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing identity")
+		return
+	}
+	if err := m.deps.Store.CompleteStepOwned(req.Context(), identity.WorkspaceID(), runID, step); err != nil {
+		if errors.Is(err, repository.ErrAgentRunNotFound) {
+			writeError(w, http.StatusNotFound, "run or step not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "complete step: "+err.Error())
 		return
 	}
@@ -249,9 +300,543 @@ func (m *AgentRunsModule) handleUpdateRun(w http.ResponseWriter, req *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid status")
 		return
 	}
-	if err := m.deps.Store.UpdateRun(req.Context(), runID, payload.Status, payload.CurrentStep, payload.CompletedAt); err != nil {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing identity")
+		return
+	}
+	if err := m.deps.Store.UpdateRunOwned(req.Context(), identity.WorkspaceID(), runID, payload.Status, payload.CurrentStep, payload.CompletedAt); err != nil {
+		if errors.Is(err, repository.ErrAgentRunNotFound) {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "update run: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+type agentRunResponse struct {
+	Run   *repository.AgentRun      `json:"run"`
+	Steps []repository.AgentRunStep `json:"steps"`
+}
+
+func (m *AgentRunsModule) handleGetRun(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing identity")
+		return
+	}
+	run, err := m.deps.Store.GetRun(req.Context(), identity.WorkspaceID(), chi.URLParam(req, "id"))
+	if errors.Is(err, repository.ErrAgentRunNotFound) {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "get run: "+err.Error())
+		return
+	}
+	steps, err := m.deps.Store.ListSteps(req.Context(), identity.WorkspaceID(), run.ID)
+	if err != nil {
+		writeError(w, 500, "list steps: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, agentRunResponse{Run: run, Steps: steps})
+}
+
+func (m *AgentRunsModule) handleListSteps(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing identity")
+		return
+	}
+	if _, err := m.deps.Store.GetRun(req.Context(), identity.WorkspaceID(), chi.URLParam(req, "id")); err != nil {
+		if errors.Is(err, repository.ErrAgentRunNotFound) {
+			writeError(w, http.StatusNotFound, "run not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+		}
+		return
+	}
+	steps, err := m.deps.Store.ListSteps(req.Context(), identity.WorkspaceID(), chi.URLParam(req, "id"))
+	if err != nil {
+		writeError(w, 500, "list steps: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"steps": steps})
+}
+
+// handleRecovery is the restart path: it returns persisted steps and, when a
+// remote id exists, asks the execution plane for the latest status. The
+// control plane never reconstructs a workflow from process memory.
+func (m *AgentRunsModule) handleRecovery(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing identity")
+		return
+	}
+	runID := chi.URLParam(req, "id")
+	run, err := m.deps.Store.GetRun(req.Context(), identity.WorkspaceID(), runID)
+	if err != nil {
+		if errors.Is(err, repository.ErrAgentRunNotFound) {
+			writeError(w, http.StatusNotFound, "run not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+		}
+		return
+	}
+	steps, err := m.deps.Store.ListSteps(req.Context(), identity.WorkspaceID(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list steps: "+err.Error())
+		return
+	}
+	type remoteStep struct {
+		Step         repository.AgentRunStep `json:"step"`
+		RemoteStatus json.RawMessage         `json:"remote_status,omitempty"`
+	}
+	result := make([]remoteStep, 0, len(steps))
+	for _, step := range steps {
+		item := remoteStep{Step: step}
+		if step.RemoteJobID != "" && m.deps.JobMaster != nil {
+			status, getErr := m.deps.JobMaster.Get(req.Context(), step.RemoteJobID)
+			if getErr != nil {
+				writeError(w, http.StatusBadGateway, "read remote job: "+getErr.Error())
+				return
+			}
+			item.RemoteStatus = status
+			remoteState, remoteProgress, progressSnapshot := remoteProgressSnapshot(status)
+			if err := m.deps.Store.UpdateStepProgressOwned(req.Context(), identity.WorkspaceID(), runID, step.ID, remoteState, remoteProgress, progressSnapshot); err != nil {
+				writeError(w, http.StatusInternalServerError, "persist remote progress: "+err.Error())
+				return
+			}
+			step.RemoteStatus, step.RemoteProgress, step.ProgressJSON = remoteState, remoteProgress, progressSnapshot
+			item.Step = step
+			if terminal, ok := terminalStepStatus(status); ok && step.Status == "running" {
+				updated := step
+				updated.Status = terminal
+				updated.OutputJSON = status
+				if terminal == "completed" && step.ToolName == "content.create_video" {
+					if m.deps.VideoPublisher == nil {
+						writeError(w, http.StatusServiceUnavailable, "generated video delivery is not configured")
+						return
+					}
+					deliverCtx := req.Context()
+					if downloader, ok := m.deps.JobMaster.(artifactDownloader); ok {
+						deliverCtx = withArtifactDownloader(deliverCtx, downloader)
+					} else {
+						writeError(w, http.StatusServiceUnavailable, "job master artifact download is not available")
+						return
+					}
+					publication, publishErr := m.deps.VideoPublisher.Publish(deliverCtx, identity, identity.WorkspaceID(), runID, step, status)
+					if publishErr != nil {
+						writeError(w, http.StatusBadGateway, "import and schedule generated video: "+publishErr.Error())
+						return
+					}
+					updated.OutputJSON = publication
+				}
+				if terminal == "failed" {
+					updated.ErrorCode = "REMOTE_JOB_FAILED"
+				}
+				if err := m.deps.Store.CompleteStepOwned(req.Context(), identity.WorkspaceID(), runID, &updated); err != nil {
+					writeError(w, http.StatusInternalServerError, "persist remote status: "+err.Error())
+					return
+				}
+				step = updated
+				item.Step = updated
+			}
+		}
+		result = append(result, item)
+	}
+	allTerminal := len(result) > 0
+	anyFailed := false
+	currentStep := ""
+	for _, item := range result {
+		if item.Step.Status == "running" {
+			allTerminal = false
+			if currentStep == "" {
+				currentStep = item.Step.ToolName
+			}
+		}
+		if item.Step.Status == "failed" {
+			anyFailed = true
+		}
+	}
+	if len(result) > 0 {
+		if allTerminal {
+			status := "completed"
+			if anyFailed {
+				status = "failed"
+			}
+			completedAt := time.Now().UTC()
+			if err := m.deps.Store.UpdateRunOwned(req.Context(), identity.WorkspaceID(), runID, status, currentStep, &completedAt); err != nil {
+				writeError(w, http.StatusInternalServerError, "persist run status: "+err.Error())
+				return
+			}
+			run.Status, run.CompletedAt = status, &completedAt
+		} else {
+			if err := m.deps.Store.UpdateRunOwned(req.Context(), identity.WorkspaceID(), runID, "running", currentStep, nil); err != nil {
+				writeError(w, http.StatusInternalServerError, "persist run progress: "+err.Error())
+				return
+			}
+			run.Status, run.CurrentStep = "running", currentStep
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": run, "steps": result})
+}
+
+// terminalStepStatus normalizes execution-plane vocabulary without leaking
+// provider-specific states into the control-plane database.
+func terminalStepStatus(raw json.RawMessage) (string, bool) {
+	var value map[string]json.RawMessage
+	if json.Unmarshal(raw, &value) != nil {
+		return "", false
+	}
+	if nested, ok := value["job"]; ok {
+		return terminalStepStatus(nested)
+	}
+	var status string
+	for _, key := range []string{"status", "state", "overall_status"} {
+		if json.Unmarshal(value[key], &status) == nil && strings.TrimSpace(status) != "" {
+			break
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "complete", "succeeded", "success", "published":
+		return "completed", true
+	case "failed", "error", "cancelled", "canceled":
+		return "failed", true
+	default:
+		return "", false
+	}
+}
+
+// remoteProgressSnapshot keeps only status/progress/timeline-shaped fields,
+// never the potentially large final artifact/result payload.
+func remoteProgressSnapshot(raw json.RawMessage) (string, *int, json.RawMessage) {
+	var value map[string]json.RawMessage
+	if json.Unmarshal(raw, &value) != nil {
+		return "", nil, json.RawMessage(`{}`)
+	}
+	if nested, ok := value["job"]; ok {
+		return remoteProgressSnapshot(nested)
+	}
+	state := ""
+	for _, key := range []string{"status", "state", "overall_status"} {
+		var candidate string
+		if json.Unmarshal(value[key], &candidate) == nil && strings.TrimSpace(candidate) != "" {
+			state = strings.TrimSpace(candidate)
+			break
+		}
+	}
+	var progress *int
+	var number int
+	if json.Unmarshal(value["progress"], &number) == nil {
+		progress = &number
+	}
+	snapshot := make(map[string]json.RawMessage)
+	for _, key := range []string{"status", "state", "overall_status", "progress", "phase", "current_phase", "current_stage", "current_step", "stage_progress", "timeline", "events", "error", "steps"} {
+		if rawValue, ok := value[key]; ok {
+			snapshot[key] = rawValue
+		}
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return state, progress, json.RawMessage(`{}`)
+	}
+	return state, progress, encoded
+}
+
+func (m *AgentRunsModule) handleListTools(w http.ResponseWriter, req *http.Request) {
+	var remote json.RawMessage = json.RawMessage(`{"types":[]}`)
+	if m.deps.JobMaster != nil {
+		var err error
+		remote, err = m.deps.JobMaster.ListTypes(req.Context())
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "list remote tools: "+err.Error())
+			return
+		}
+	}
+	tools, err := m.deps.Catalog.Available(remote)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if m.deps.VideoPublisher == nil {
+		for i := range tools {
+			if tools[i].Name == "content.create_video" {
+				tools[i].Available = false
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
+}
+
+type invokeToolRequest struct {
+	Project        string          `json:"project"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	Payload        json.RawMessage `json:"payload"`
+}
+
+func (m *AgentRunsModule) handleInvokeTool(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing identity")
+		return
+	}
+	runID := chi.URLParam(req, "id")
+	toolName := strings.TrimSpace(chi.URLParam(req, "tool"))
+	if _, err := m.deps.Store.GetRun(req.Context(), identity.WorkspaceID(), runID); err != nil {
+		if errors.Is(err, repository.ErrAgentRunNotFound) {
+			writeError(w, http.StatusNotFound, "run not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+		}
+		return
+	}
+	definition, ok := m.deps.Catalog.Resolve(toolName)
+	if !ok || !definition.Submit {
+		writeError(w, http.StatusNotFound, "unknown agent tool")
+		return
+	}
+	var body invokeToolRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeError(w, 400, "invalid JSON: "+err.Error())
+		return
+	}
+	body.Project = strings.TrimSpace(body.Project)
+	body.IdempotencyKey = strings.TrimSpace(body.IdempotencyKey)
+	if body.Project == "" || body.IdempotencyKey == "" {
+		writeError(w, 400, "project and idempotency_key are required")
+		return
+	}
+	if len(body.Payload) == 0 {
+		body.Payload = json.RawMessage(`{}`)
+	}
+	if !json.Valid(body.Payload) {
+		writeError(w, 400, "payload must be valid JSON")
+		return
+	}
+	remoteTypes, err := m.deps.JobMaster.ListTypes(req.Context())
+	if err != nil {
+		writeError(w, 502, "list remote tools: "+err.Error())
+		return
+	}
+	available, err := m.deps.Catalog.Available(remoteTypes)
+	if err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	found := false
+	for _, d := range available {
+		if d.Name == toolName {
+			found = d.Available
+		}
+	}
+	if !found {
+		writeError(w, 422, "agent tool is not available on the execution plane")
+		return
+	}
+	input, _ := json.Marshal(map[string]any{"project": body.Project, "idempotency_key": body.IdempotencyKey, "payload": json.RawMessage(body.Payload)})
+	// Replays must recover the original local step as well as relying on the
+	// Master idempotency key. This also repairs the crash window where the
+	// Master accepted a job but the API process died before saving its ID.
+	existingSteps, err := m.deps.Store.ListSteps(req.Context(), identity.WorkspaceID(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list existing steps: "+err.Error())
+		return
+	}
+	var step *repository.AgentRunStep
+	for _, existing := range existingSteps {
+		if existing.IdempotencyKey != body.IdempotencyKey {
+			continue
+		}
+		if existing.ToolName != toolName || !sameJSON(existing.InputJSON, input) {
+			writeError(w, http.StatusConflict, "step idempotency key conflicts with an existing request")
+			return
+		}
+		if existing.RemoteJobID != "" {
+			if toolName == "content.create_video" {
+				if existing.Status != "running" {
+					writeJSON(w, http.StatusOK, map[string]any{"step_id": existing.ID, "tool": toolName, "remote_job_id": existing.RemoteJobID, "idempotency_key": body.IdempotencyKey, "status": existing.Status})
+					return
+				}
+				step = &existing
+				break
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"step_id": existing.ID, "tool": toolName, "remote_job_id": existing.RemoteJobID, "idempotency_key": body.IdempotencyKey, "status": existing.Status})
+			return
+		}
+		step = &existing
+		break
+	}
+	if step == nil {
+		step = &repository.AgentRunStep{RunID: runID, ToolName: toolName, Status: "running", InputJSON: input, IdempotencyKey: body.IdempotencyKey}
+		if err := m.deps.Store.AppendStepOwned(req.Context(), identity.WorkspaceID(), step); err != nil {
+			writeError(w, 500, "append step: "+err.Error())
+			return
+		}
+	}
+	if toolName == "content.create_video" {
+		m.submitVideoWorkflow(w, req, identity.WorkspaceID(), runID, body, step)
+		return
+	}
+	result, err := m.deps.JobMaster.Submit(req.Context(), jobmaster.SubmitRequest{Type: definition.RemoteType, Project: body.Project, IdempotencyKey: body.IdempotencyKey, Payload: body.Payload})
+	if err != nil {
+		_ = m.deps.Store.CompleteStepOwned(req.Context(), identity.WorkspaceID(), runID, &repository.AgentRunStep{ID: step.ID, Status: "failed", ErrorCode: "REMOTE_SUBMIT_FAILED", ErrorMessage: err.Error()})
+		writeError(w, 502, "submit remote tool: "+err.Error())
+		return
+	}
+	remoteID := remoteJobID(result)
+	if remoteID == "" {
+		_ = m.deps.Store.CompleteStepOwned(req.Context(), identity.WorkspaceID(), runID, &repository.AgentRunStep{ID: step.ID, Status: "failed", ErrorCode: "REMOTE_JOB_ID_MISSING", ErrorMessage: "remote submit returned no job id"})
+		writeError(w, 502, "remote submit returned no job id")
+		return
+	}
+	if err := m.deps.Store.SetStepRemoteJob(req.Context(), identity.WorkspaceID(), runID, step.ID, remoteID, body.IdempotencyKey); err != nil {
+		writeError(w, 500, "persist remote job: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"step_id": step.ID, "tool": toolName, "remote_job_id": remoteID, "idempotency_key": body.IdempotencyKey, "status": "running"})
+}
+
+type createVideoPayload struct {
+	Pre      json.RawMessage `json:"pre"`
+	Finalize json.RawMessage `json:"finalize"`
+	Publish  json.RawMessage `json:"publish"`
+}
+
+func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.Request, workspaceID int64, runID string, body invokeToolRequest, step *repository.AgentRunStep) {
+	if m.deps.VideoPublisher == nil {
+		writeError(w, http.StatusServiceUnavailable, "generated video delivery is not configured")
+		return
+	}
+	var plan createVideoPayload
+	if err := json.Unmarshal(body.Payload, &plan); err != nil || len(plan.Pre) == 0 || len(plan.Finalize) == 0 || len(plan.Publish) == 0 {
+		writeError(w, http.StatusBadRequest, "content.create_video payload requires pre, finalize, and publish objects")
+		return
+	}
+	if len(body.IdempotencyKey) > 180 {
+		writeError(w, http.StatusBadRequest, "idempotency_key must be at most 180 characters")
+		return
+	}
+	var publish struct {
+		Title       string               `json:"title"`
+		Caption     string               `json:"caption"`
+		Language    string               `json:"language"`
+		ScheduledAt string               `json:"scheduled_at"`
+		Privacy     string               `json:"privacy"`
+		Targets     []videoPublishTarget `json:"targets"`
+	}
+	if err := json.Unmarshal(plan.Publish, &publish); err != nil || strings.TrimSpace(publish.Title) == "" || len(publish.Targets) == 0 {
+		writeError(w, http.StatusBadRequest, "publish requires title and at least one target")
+		return
+	}
+	if _, err := time.Parse(time.RFC3339, publish.ScheduledAt); err != nil {
+		writeError(w, http.StatusBadRequest, "publish.scheduled_at must be RFC3339")
+		return
+	}
+	if publish.Privacy != "" && publish.Privacy != "public" && publish.Privacy != "unlisted" && publish.Privacy != "private" {
+		writeError(w, http.StatusBadRequest, "publish.privacy must be public, unlisted, or private")
+		return
+	}
+	for _, target := range publish.Targets {
+		if target.PlatformAccountID <= 0 {
+			writeError(w, http.StatusBadRequest, "publish target platform_account_id must be positive")
+			return
+		}
+	}
+	identity := auth.IdentityFromContext(req.Context())
+	if err := m.deps.VideoPublisher.Validate(req.Context(), identity, workspaceID, body.Payload); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	pre, err := withJSONFields(plan.Pre, map[string]any{"idempotency_key": body.IdempotencyKey + "-prepare", "copy_only": true})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid pre payload: "+err.Error())
+		return
+	}
+	finalize, err := withJSONFields(plan.Finalize, map[string]any{"idempotency_key": body.IdempotencyKey + "-finalize"})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid finalize payload: "+err.Error())
+		return
+	}
+	if step.RemoteJobID == "" {
+		result, submitErr := m.deps.JobMaster.PrepareVideo(req.Context(), pre)
+		if submitErr != nil {
+			_ = m.deps.Store.CompleteStepOwned(req.Context(), workspaceID, runID, &repository.AgentRunStep{ID: step.ID, Status: "failed", ErrorCode: "VIDEO_PREPARE_FAILED", ErrorMessage: submitErr.Error()})
+			writeError(w, http.StatusBadGateway, "prepare video: "+submitErr.Error())
+			return
+		}
+		remoteID := remoteJobID(result)
+		if remoteID == "" {
+			_ = m.deps.Store.CompleteStepOwned(req.Context(), workspaceID, runID, &repository.AgentRunStep{ID: step.ID, Status: "failed", ErrorCode: "REMOTE_JOB_ID_MISSING", ErrorMessage: "prepare response returned no job id"})
+			writeError(w, http.StatusBadGateway, "prepare response returned no job id")
+			return
+		}
+		if err := m.deps.Store.SetStepRemoteJob(req.Context(), workspaceID, runID, step.ID, remoteID, body.IdempotencyKey); err != nil {
+			writeError(w, http.StatusInternalServerError, "persist prepared video: "+err.Error())
+			return
+		}
+		step.RemoteJobID = remoteID
+		step.RemoteStatus = "PREPARED"
+		if err := m.deps.Store.UpdateStepProgressOwned(req.Context(), workspaceID, runID, step.ID, "PREPARED", nil, json.RawMessage(`{"phase":"PREPARE"}`)); err != nil {
+			writeError(w, http.StatusInternalServerError, "persist prepare phase: "+err.Error())
+			return
+		}
+	}
+	if strings.EqualFold(step.RemoteStatus, "PREPARED") || step.RemoteStatus == "" {
+		if _, err := m.deps.JobMaster.FinalizeVideo(req.Context(), step.RemoteJobID, finalize); err != nil {
+			writeError(w, http.StatusBadGateway, "finalize video (retry with the same idempotency key): "+err.Error())
+			return
+		}
+		phaseSnapshot := json.RawMessage(`{"phase":"FINALIZE","dispatch_status":"queued"}`)
+		if err := m.deps.Store.UpdateStepProgressOwned(req.Context(), workspaceID, runID, step.ID, "FINALIZE_QUEUED", nil, phaseSnapshot); err != nil {
+			writeError(w, http.StatusInternalServerError, "persist finalize phase: "+err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"step_id": step.ID, "tool": "content.create_video", "remote_job_id": step.RemoteJobID, "idempotency_key": body.IdempotencyKey, "status": "running", "phase": "FINALIZE_QUEUED"})
+}
+
+type videoPublishTarget struct {
+	PlatformAccountID int64 `json:"platform_account_id"`
+}
+
+func withJSONFields(raw json.RawMessage, fields map[string]any) (json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return nil, errors.New("expected a JSON object")
+	}
+	for key, value := range fields {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		obj[key] = encoded
+	}
+	encoded, err := json.Marshal(obj)
+	return json.RawMessage(encoded), err
+}
+
+func remoteJobID(raw json.RawMessage) string {
+	var v map[string]json.RawMessage
+	if json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	for _, key := range []string{"job_id", "id"} {
+		var s string
+		if json.Unmarshal(v[key], &s) == nil && s != "" {
+			return s
+		}
+	}
+	if nested, ok := v["job"]; ok {
+		return remoteJobID(nested)
+	}
+	return ""
+}
+
+// sameJSON compares persisted request envelopes independent of JSON object key order.
+func sameJSON(a, b []byte) bool {
+	var left, right any
+	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
 }

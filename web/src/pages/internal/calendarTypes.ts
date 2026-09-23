@@ -3,6 +3,7 @@ export type Post = {
   workspace_id: number;
   title?: string;
   caption?: string;
+  media_url?: string;
   scheduled_at?: string | null;
   status: string;
   created_at: string;

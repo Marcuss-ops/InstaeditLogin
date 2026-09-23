@@ -43,6 +43,8 @@ type Config struct {
 type API interface {
 	ListTypes(context.Context) (json.RawMessage, error)
 	Submit(context.Context, SubmitRequest) (json.RawMessage, error)
+	PrepareVideo(context.Context, json.RawMessage) (json.RawMessage, error)
+	FinalizeVideo(context.Context, string, json.RawMessage) (json.RawMessage, error)
 	Get(context.Context, string) (json.RawMessage, error)
 }
 
@@ -133,12 +135,74 @@ func (c *Client) Submit(ctx context.Context, input SubmitRequest) (json.RawMessa
 	return c.do(ctx, http.MethodPost, jobsPath, bytes.NewReader(body), input.IdempotencyKey)
 }
 
+// PrepareVideo creates a durable render job on the worker's PREPARE surface.
+// That surface is distinct from the generic job catalog: it binds a scene
+// manifest and deliberately waits for FINALIZE before the worker claims it.
+func (c *Client) PrepareVideo(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+	if len(payload) == 0 || !json.Valid(payload) {
+		return nil, fmt.Errorf("video prepare payload must be valid JSON")
+	}
+	return c.do(ctx, http.MethodPost, "/api/v1/jobs/pre", bytes.NewReader(payload), "")
+}
+
+// FinalizeVideo moves a prepared scene-composite job into the render queue.
+// Retrying the same body is safe only when its idempotency_key is unchanged.
+func (c *Client) FinalizeVideo(ctx context.Context, jobID string, payload json.RawMessage) (json.RawMessage, error) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" || len(jobID) > 256 || strings.ContainsAny(jobID, "/\\\r\n") {
+		return nil, ErrInvalidJobID
+	}
+	if len(payload) == 0 || !json.Valid(payload) {
+		return nil, fmt.Errorf("video finalize payload must be valid JSON")
+	}
+	var envelope struct {
+		IdempotencyKey string `json:"idempotency_key"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil || strings.TrimSpace(envelope.IdempotencyKey) == "" {
+		return nil, fmt.Errorf("video finalize payload requires idempotency_key")
+	}
+	return c.do(ctx, http.MethodPost, jobsPath+"/"+url.PathEscape(jobID)+"/finalize", bytes.NewReader(payload), envelope.IdempotencyKey)
+}
+
 func (c *Client) Get(ctx context.Context, jobID string) (json.RawMessage, error) {
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" || len(jobID) > 256 || strings.ContainsAny(jobID, "/\\\r\n") {
 		return nil, ErrInvalidJobID
 	}
 	return c.do(ctx, http.MethodGet, jobsPath+"/"+url.PathEscape(jobID), nil, "")
+}
+
+// DownloadArtifact streams a render artifact from the same execution-plane
+// origin as the configured Master. artifactURL comes from a Master job status;
+// origin pinning prevents a compromised or malformed status from turning the
+// server-side M2M credential into an arbitrary outbound request.
+func (c *Client) DownloadArtifact(ctx context.Context, artifactURL string) (*http.Response, error) {
+	if c == nil || c.http == nil {
+		return nil, ErrNotConfigured
+	}
+	u, err := url.Parse(strings.TrimSpace(artifactURL))
+	base, baseErr := url.Parse(c.baseURL)
+	if err != nil || baseErr != nil || u == nil || base == nil || u.Host == "" || !strings.EqualFold(u.Host, base.Host) || u.Scheme != base.Scheme || u.User != nil || u.Fragment != "" {
+		return nil, fmt.Errorf("job master artifact URL must use the configured origin")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build artifact request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.secret)
+	req.Header.Set("Accept", "video/mp4")
+	if c.clientID != "" {
+		req.Header.Set("X-Client-ID", c.clientID)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("job master artifact request failed: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		return nil, &HTTPError{StatusCode: resp.StatusCode}
+	}
+	return resp, nil
 }
 
 // Wait polls one job until the Master reports a terminal state or the caller

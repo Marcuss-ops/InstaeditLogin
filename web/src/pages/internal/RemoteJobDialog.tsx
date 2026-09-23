@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, CircleDot, Loader2, Send, X } from "lucide-react";
-import { authedFetch } from "../../lib/auth";
+import { authedFetch, fetchSession } from "../../lib/auth";
 
 type JsonObject = Record<string, unknown>;
 
 type RemoteJobDialogProps = {
   open: boolean;
   onClose: () => void;
+  onCalendarRefresh?: () => void;
 };
 
 const TERMINAL_STATUSES = new Set([
@@ -94,7 +95,8 @@ async function responseJSON(response: Response): Promise<unknown> {
   return body;
 }
 
-export function RemoteJobDialog({ open, onClose }: RemoteJobDialogProps) {
+export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobDialogProps) {
+  const [mode, setMode] = useState<"remote" | "video">("video");
   const [types, setTypes] = useState<string[]>([]);
   const [type, setType] = useState("");
   const [project, setProject] = useState("");
@@ -105,6 +107,55 @@ export function RemoteJobDialog({ open, onClose }: RemoteJobDialogProps) {
   const [loadingTypes, setLoadingTypes] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [videoTitle, setVideoTitle] = useState("");
+  const [videoCaption, setVideoCaption] = useState("");
+  const [videoSchedule, setVideoSchedule] = useState(() => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+  const [videoTarget, setVideoTarget] = useState("");
+  const [workspaceChannels, setWorkspaceChannels] = useState<Array<{ platform_account_id: number; enabled: boolean }>>([]);
+  const [workspaceID, setWorkspaceID] = useState<number | undefined>();
+  const [videoPrivacy, setVideoPrivacy] = useState("unlisted");
+  const [videoPre, setVideoPre] = useState('{\n  "video_name": "Nuovo video",\n  "script_text": "",\n  "scenes": [],\n  "output": {"width": 1920, "height": 1080, "fps": 24, "format": "mp4"},\n  "delivery_plan": [{"destination_id": "drive-production", "priority": 1, "retry_budget": 3}]\n}');
+  const [videoFinalize, setVideoFinalize] = useState("{} ");
+  const [runID, setRunID] = useState("");
+
+  useEffect(() => {
+    if (!open || !runID) return;
+    let active = true;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const body = asObject(await responseJSON(await authedFetch(`/api/v1/agent/runs/${encodeURIComponent(runID)}/recovery`)));
+        const steps = Array.isArray(body.steps) ? body.steps : [];
+        const item = asObject(steps[0]);
+        const current = asObject(item.step ?? item.Step);
+        const currentStatus = current.status ?? current.Status ?? "running";
+        const currentProgress = current.remote_progress ?? current.RemoteProgress;
+        const output = current.output_json ?? current.OutputJSON;
+        if (!active) return;
+        const outputObject = asObject(output);
+        setJob({ status: currentStatus, progress: currentProgress, remote_status: item.remote_status ?? item.RemoteStatus, phase: current.remote_status ?? current.RemoteStatus, post_id: outputObject.post_id, error: current.error_message ?? current.ErrorMessage });
+        if (currentStatus === "completed") {
+          onCalendarRefresh?.();
+          setRunID("");
+          setIdempotencyKey(`calendar-${Date.now()}`);
+          return;
+        }
+        if (currentStatus === "failed") {
+          setRunID("");
+          setIdempotencyKey(`calendar-${Date.now()}`);
+          return;
+        }
+        timer = window.setTimeout(() => void poll(), 3000);
+      } catch (err) {
+        if (active) {
+          setError(err instanceof Error ? err.message : "Polling del workflow fallito.");
+          timer = window.setTimeout(() => void poll(), 5000);
+        }
+      }
+    };
+    void poll();
+    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [runID, open, onCalendarRefresh]);
 
   useEffect(() => {
     if (!open) return;
@@ -127,6 +178,29 @@ export function RemoteJobDialog({ open, onClose }: RemoteJobDialogProps) {
       });
     return () => { active = false; };
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    void fetchSession().then((session) => { if (active) setWorkspaceID(session?.workspaceId); });
+    return () => { active = false; };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !workspaceID) return;
+    let active = true;
+    void authedFetch(`/api/v1/workspaces/${workspaceID}/channels`)
+      .then(responseJSON)
+      .then((body) => {
+        if (!active) return;
+        const list = Array.isArray(asObject(body).channels) ? asObject(body).channels as unknown[] : [];
+        const channels = list.map((entry) => asObject(entry)).filter((channel) => typeof channel.platform_account_id === "number" && channel.enabled === true) as Array<{ platform_account_id: number; enabled: boolean }>;
+        setWorkspaceChannels(channels);
+        if (channels[0]) setVideoTarget((current) => current || String(channels[0].platform_account_id));
+      })
+      .catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : "Impossibile caricare i canali del workspace."); });
+    return () => { active = false; };
+  }, [open, workspaceID]);
 
   useEffect(() => {
     if (!open || !jobID) return;
@@ -158,6 +232,58 @@ export function RemoteJobDialog({ open, onClose }: RemoteJobDialogProps) {
 
   async function submit() {
     setError("");
+    if (mode === "video") {
+      let pre: unknown;
+      let finalize: unknown;
+      const targetID = Number(videoTarget);
+      const scheduledAt = new Date(videoSchedule);
+      try {
+        pre = JSON.parse(videoPre);
+        finalize = JSON.parse(videoFinalize);
+      } catch {
+        setError("PREPARE e FINALIZE devono essere JSON validi.");
+        return;
+      }
+      if (!videoTitle.trim() || !Number.isSafeInteger(targetID) || targetID <= 0 || !Number.isFinite(scheduledAt.getTime())) {
+        setError("Inserisci titolo, account ID valido e data di pubblicazione.");
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const run = asObject(await responseJSON(await authedFetch("/api/v1/agent/runs", {
+          method: "POST",
+          body: JSON.stringify({ goal: `Crea e pubblica: ${videoTitle.trim()}`, idempotency_key: `${idempotencyKey}-run` }),
+        })));
+        const createdRunID = typeof run.run_id === "string" ? run.run_id : "";
+        if (!createdRunID) throw new Error("Il control plane non ha restituito il run_id.");
+        setRunID(createdRunID);
+        setJob({ status: "starting", run_id: createdRunID });
+        await responseJSON(await authedFetch(`/api/v1/agent/runs/${encodeURIComponent(createdRunID)}/tools/content.create_video`, {
+          method: "POST",
+          body: JSON.stringify({
+            project: project || `workspace-${run.workspace_id ?? "video"}`,
+            idempotency_key: idempotencyKey,
+            payload: {
+              pre,
+              finalize,
+              publish: {
+                title: videoTitle.trim(), caption: videoCaption, language: "it",
+                scheduled_at: scheduledAt.toISOString(), privacy: videoPrivacy,
+                targets: [{ platform_account_id: targetID }],
+              },
+            },
+          }),
+        }));
+        setJob({ status: "running", run_id: createdRunID, phase: "PREPARE / FINALIZE" });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Avvio creazione video fallito.");
+        setRunID("");
+        setIdempotencyKey(`calendar-${Date.now()}`);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
     let parsedPayload: unknown;
     try {
       parsedPayload = JSON.parse(payload);
@@ -184,19 +310,35 @@ export function RemoteJobDialog({ open, onClose }: RemoteJobDialogProps) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Invia job remoto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Crea video o invia job remoto">
       <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-white/[0.12] bg-[#1f1f1f] text-white shadow-[0_24px_80px_rgba(0,0,0,0.4)]">
         <div className="flex items-start justify-between border-b border-white/[0.08] px-6 py-5">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/45">Execution plane</p>
-            <h2 className="mt-1 text-xl font-bold">Invia job remoto</h2>
-            <p className="mt-1 text-sm text-white/50">Il Master seleziona il worker disponibile e aggiorna il risultato.</p>
+            <h2 className="mt-1 text-xl font-bold">{mode === "video" ? "Crea e programma video" : "Invia job remoto"}</h2>
+            <p className="mt-1 text-sm text-white/50">La run persistente aggiorna stato e progresso; al termine crea il post nel calendario.</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl p-2 text-white/50 hover:bg-white/[0.08] hover:text-white" aria-label="Chiudi"><X size={18} /></button>
         </div>
 
         <div className="grid gap-5 px-6 py-5 md:grid-cols-[minmax(0,1fr)_220px]">
           <div className="space-y-3">
+            <label className="block text-xs font-semibold text-white/60">Operazione
+              <select value={mode} onChange={(event) => setMode(event.target.value as "remote" | "video")} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white"><option value="video">Crea e programma video</option><option value="remote">Job remoto singolo</option></select>
+            </label>
+            {mode === "video" ? <>
+              <label className="block text-xs font-semibold text-white/60">Titolo<input value={videoTitle} onChange={(event) => setVideoTitle(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
+              <label className="block text-xs font-semibold text-white/60">Descrizione<textarea value={videoCaption} onChange={(event) => setVideoCaption(event.target.value)} rows={2} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs font-semibold text-white/60">Pubblica il<input type="datetime-local" value={videoSchedule} onChange={(event) => setVideoSchedule(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
+                <label className="block text-xs font-semibold text-white/60">Canale
+                  {workspaceChannels.length > 0 ? <select value={videoTarget} onChange={(event) => setVideoTarget(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white">{workspaceChannels.map((channel) => <option key={channel.platform_account_id} value={channel.platform_account_id}>Account {channel.platform_account_id}</option>)}</select> : <input inputMode="numeric" value={videoTarget} onChange={(event) => setVideoTarget(event.target.value)} placeholder="Platform account ID" className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" />}
+                </label>
+              </div>
+              <label className="block text-xs font-semibold text-white/60">Privacy<select value={videoPrivacy} onChange={(event) => setVideoPrivacy(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white"><option value="unlisted">Non in elenco</option><option value="private">Privato</option><option value="public">Pubblico</option></select></label>
+              <label className="block text-xs font-semibold text-white/60">PREPARE JSON (scene, clip, script e delivery)<textarea value={videoPre} onChange={(event) => setVideoPre(event.target.value)} rows={7} spellCheck={false} className="mt-1.5 w-full resize-y rounded-xl border border-white/[0.12] bg-black/20 px-3 py-2.5 font-mono text-[11px] leading-5 text-white" /></label>
+              <label className="block text-xs font-semibold text-white/60">FINALIZE JSON (overlay e audio opzionali)<textarea value={videoFinalize} onChange={(event) => setVideoFinalize(event.target.value)} rows={3} spellCheck={false} className="mt-1.5 w-full resize-y rounded-xl border border-white/[0.12] bg-black/20 px-3 py-2.5 font-mono text-[11px] leading-5 text-white" /></label>
+            </> : <>
             <label className="block text-xs font-semibold text-white/60">Tipo job
               <select value={type} onChange={(event) => setType(event.target.value)} disabled={loadingTypes || types.length === 0} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white outline-none focus:border-white/30">
                 {types.length === 0 && <option value="">{loadingTypes ? "Caricamento…" : "Nessun tipo disponibile"}</option>}
@@ -212,8 +354,13 @@ export function RemoteJobDialog({ open, onClose }: RemoteJobDialogProps) {
             <label className="block text-xs font-semibold text-white/60">Payload JSON
               <textarea value={payload} onChange={(event) => setPayload(event.target.value)} rows={6} spellCheck={false} className="mt-1.5 w-full resize-y rounded-xl border border-white/[0.12] bg-black/20 px-3 py-2.5 font-mono text-xs leading-5 text-white outline-none focus:border-white/30" />
             </label>
-            <button type="button" onClick={() => void submit()} disabled={submitting || !type || !project || !idempotencyKey} className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40">
-              {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Invia job
+            </>}
+            {mode === "video" && <label className="block text-xs font-semibold text-white/60">Progetto<input value={project} onChange={(event) => setProject(event.target.value)} placeholder="video-01" className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>}
+            <label className="block text-xs font-semibold text-white/60">Idempotency key
+              <input value={idempotencyKey} onChange={(event) => setIdempotencyKey(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 font-mono text-xs text-white outline-none focus:border-white/30" />
+            </label>
+            <button type="button" onClick={() => void submit()} disabled={submitting || !idempotencyKey || (mode === "remote" && (!type || !project))} className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40">
+              {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} {mode === "video" ? "Crea e programma video" : "Invia job"}
             </button>
           </div>
 

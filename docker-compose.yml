@@ -93,6 +93,11 @@ services:
       # renders even when the root-only secret file is absent.
       - path: ${INSTAEDIT_YOUTUBE_ENV_FILE:-./.env.youtube.local}
         required: false
+      # Optional provider-neutral Job Master credentials. The deployment may
+      # point this at a root-only external env file; the default local file is
+      # ignored by Git and is intentionally absent from fresh checkouts.
+      - path: ${INSTAEDIT_JOB_MASTER_ENV_FILE:-./.env.jobmaster.local}
+        required: false
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
       - PORT=8080
@@ -160,6 +165,10 @@ services:
       # See the matching API entry above: the optional root-only secret
       # file must never be required just to render or start the stack.
       - path: ${INSTAEDIT_YOUTUBE_ENV_FILE:-./.env.youtube.local}
+        required: false
+      # Remote agent-run recovery polls and finalizes generated videos through
+      # the same configured Job Master as the API.
+      - path: ${INSTAEDIT_JOB_MASTER_ENV_FILE:-./.env.jobmaster.local}
         required: false
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable

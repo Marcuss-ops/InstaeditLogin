@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Calendar as CalendarIcon, Cpu, Plus } from "lucide-react";
 import { type CalendarViewMode } from "./CalendarGrid";
@@ -8,23 +8,14 @@ import { CalendarPostsPanel } from "./CalendarPostsPanel";
 import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 import { RemoteJobDialog } from "./RemoteJobDialog";
 
-function startOfCurrentWeek(date: Date): Date {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  const day = start.getDay();
-  start.setDate(start.getDate() + (day === 0 ? -6 : 1 - day));
-  return start;
-}
-
 export function CalendarPage() {
-  const view: CalendarViewMode = "week";
-  const currentDate = useMemo(() => new Date(), []);
+  const view: CalendarViewMode = "month";
+  const [currentDate, setCurrentDate] = useState(() => new Date());
   const [jobDialogOpen, setJobDialogOpen] = useState(false);
   const posts = useCalendarPosts();
-  const weekStart = startOfCurrentWeek(currentDate);
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 6);
-  const formattedDate = `${weekStart.toLocaleDateString(undefined, { day: "numeric", month: "short" })} – ${weekEnd.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
+  const horizonEnd = new Date(currentDate);
+  horizonEnd.setDate(horizonEnd.getDate() + 29);
+  const formattedDate = `${currentDate.toLocaleDateString(undefined, { day: "numeric", month: "short" })} – ${horizonEnd.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8 bg-[#030308] text-[#e8e8ef]">
@@ -59,6 +50,9 @@ export function CalendarPage() {
 
         <CalendarToolbar
             formattedDate={formattedDate}
+            onPrevious={() => setCurrentDate((date) => { const next = new Date(date); next.setDate(next.getDate() - 30); return next; })}
+            onNext={() => setCurrentDate((date) => { const next = new Date(date); next.setDate(next.getDate() + 30); return next; })}
+            onToday={() => setCurrentDate(new Date())}
             statusFilter={posts.statusFilter}
             setStatusFilter={posts.setStatusFilter}
             groupFilter={posts.groupFilter}
@@ -84,7 +78,7 @@ export function CalendarPage() {
           </div>
         )}
       </div>
-      <RemoteJobDialog open={jobDialogOpen} onClose={() => setJobDialogOpen(false)} />
+      <RemoteJobDialog open={jobDialogOpen} onClose={() => setJobDialogOpen(false)} onCalendarRefresh={posts.load} />
     </div>
   );
 }

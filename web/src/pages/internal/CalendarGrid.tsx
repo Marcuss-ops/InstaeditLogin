@@ -7,20 +7,27 @@ import type { EventDropArg, EventInput } from "@fullcalendar/core";
 import { authedFetch, ApiError, AuthError } from "../../lib/auth";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, ExternalLink, Loader2, Play, X } from "lucide-react";
 import type { Post } from "./calendarTypes";
 
 type PostStatus = "draft" | "queued" | "publishing" | "published" | "failed";
 
 type CalendarPost = Post & { status: PostStatus | string };
 
-function getCurrentWeekRange(date: Date): { start: Date; end: Date } {
+function getCalendarRange(date: Date, view: CalendarViewMode): { start: Date; end: Date } {
+  if (view === "month") {
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 30);
+    return { start, end };
+  }
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
   const day = start.getDay();
   start.setDate(start.getDate() + (day === 0 ? -6 : 1 - day));
   const end = new Date(start);
-  end.setDate(end.getDate() + 7);
+  end.setDate(end.getDate() + (view === "week" ? 7 : 1));
   return { start, end };
 }
 
@@ -123,19 +130,17 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
   const calendarRef = useRef<FullCalendar>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
-  const currentWeek = useMemo(() => getCurrentWeekRange(currentDate), [currentDate]);
-  const historyFloor = useMemo(() => {
-    const floor = new Date(currentDate);
-    floor.setDate(floor.getDate() - 5);
-    return floor;
-  }, [currentDate]);
+  const [selectedPost, setSelectedPost] = useState<CalendarPost | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const calendarRange = useMemo(() => getCalendarRange(currentDate, view), [currentDate, view]);
 
   const events: EventInput[] = useMemo(() => {
     return posts
       .filter((p): p is CalendarPost & { scheduled_at: string } => {
         if (!p.scheduled_at) return false;
         const scheduledAt = new Date(p.scheduled_at);
-        return scheduledAt >= historyFloor && scheduledAt < currentWeek.end;
+        return scheduledAt >= calendarRange.start && scheduledAt < calendarRange.end;
       })
       .map((p) => ({
         id: `${p.source ?? "post"}-${p.id}`,
@@ -143,25 +148,25 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
         allDay: false,
         extendedProps: p,
       }));
-  }, [currentWeek.end, historyFloor, posts]);
+  }, [calendarRange.end, calendarRange.start, posts]);
 
   const scheduledVideoCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const post of posts) {
       if (post.source !== "upload" || !post.scheduled_at) continue;
       const date = new Date(post.scheduled_at);
-      if (date < historyFloor || date >= currentWeek.end) continue;
+      if (date < calendarRange.start || date >= calendarRange.end) continue;
       const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     return counts;
-  }, [currentWeek.end, historyFloor, posts]);
+  }, [calendarRange.end, calendarRange.start, posts]);
 
   useEffect(() => {
     const api = calendarRef.current?.getApi();
     if (!api) return;
     api.gotoDate(currentDate);
-    const fcView = view === "month" ? "dayGridMonth" : view === "week" ? "timeGridWeek" : "timeGridDay";
+    const fcView = view === "month" ? "calendar30" : view === "week" ? "timeGridWeek" : "timeGridDay";
     if (api.view.type !== fcView) {
       api.changeView(fcView);
     }
@@ -209,8 +214,36 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
         setBusyId((current) => (current === eventKey ? null : current));
       }
     },
-    [navigate, onPostsChange],
+    [navigate, onPostsChange, posts],
   );
+
+  const runPostNow = async () => {
+    if (!selectedPost || selectedPost.source === "upload") return;
+    setActionBusy(true);
+    setActionError("");
+    try {
+      await authedFetch(`/api/v1/posts/${selectedPost.id}/publish`, { method: "POST" });
+      setSelectedPost(null);
+      onPostsChange?.();
+    } catch (err) {
+      if (err instanceof AuthError) { navigate("/login", { replace: true }); return; }
+      setActionError(err instanceof ApiError ? err.message : "Impossibile avviare la pubblicazione.");
+    } finally { setActionBusy(false); }
+  };
+
+  const cancelScheduledPost = async () => {
+    if (!selectedPost || selectedPost.source === "upload") return;
+    setActionBusy(true);
+    setActionError("");
+    try {
+      await authedFetch(`/api/v1/posts/${selectedPost.id}/cancel`, { method: "POST" });
+      setSelectedPost(null);
+      onPostsChange?.();
+    } catch (err) {
+      if (err instanceof AuthError) { navigate("/login", { replace: true }); return; }
+      setActionError(err instanceof ApiError ? err.message : "Impossibile annullare il post.");
+    } finally { setActionBusy(false); }
+  };
 
 
 
@@ -232,10 +265,11 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
       <FullCalendar
         ref={calendarRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-        initialView="timeGridWeek"
+        initialView="calendar30"
+        views={{ calendar30: { type: "dayGrid", duration: { days: 30 }, buttonText: "30 giorni" } }}
         initialDate={currentDate}
         firstDay={1}
-        validRange={{ start: currentWeek.start, end: currentWeek.end }}
+        validRange={calendarRange}
         headerToolbar={false}
         editable={true}
         events={events}
@@ -243,6 +277,7 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
           const post = eventInfo.event.extendedProps as CalendarPost;
           return <EventCard post={post} busy={busyId === eventInfo.event.id} />;
         }}
+        eventClick={(info) => setSelectedPost(info.event.extendedProps as CalendarPost)}
         eventDrop={handleEventDrop}
         eventClassNames={() => "border-none bg-transparent"}
         slotMinTime="00:00:00"
@@ -263,6 +298,28 @@ export function CalendarGrid({ view, currentDate, posts, onPostsChange }: Calend
         }}
         dayHeaderFormat={{ weekday: "short", day: "numeric" }}
       />
+      {selectedPost && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={`Dettaglio video ${selectedPost.title ?? ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedPost(null); }}>
+          <div className="w-full max-w-3xl overflow-hidden rounded-2xl border border-white/15 bg-[#17171b] text-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 p-5">
+              <div><StatusBadge status={selectedPost.status} /><h2 className="mt-2 text-xl font-bold">{selectedPost.title || "Video programmato"}</h2><p className="mt-1 text-sm text-white/55">{selectedPost.scheduled_at ? new Date(selectedPost.scheduled_at).toLocaleString() : "Data non impostata"}</p></div>
+              <button type="button" onClick={() => setSelectedPost(null)} className="rounded-lg p-2 text-white/55 hover:bg-white/10 hover:text-white" aria-label="Chiudi dettaglio"><X size={18} /></button>
+            </div>
+            <div className="space-y-4 p-5">
+              {selectedPost.caption && <p className="whitespace-pre-wrap text-sm leading-6 text-white/75">{selectedPost.caption}</p>}
+              {actionError && <p role="alert" className="rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm text-red-200">{actionError}</p>}
+              {selectedPost.source !== "upload" && (selectedPost.status === "queued" || selectedPost.status === "draft") && <div className="flex flex-wrap gap-2">
+                {selectedPost.status === "queued" && <button type="button" disabled={actionBusy} onClick={() => void runPostNow()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-black disabled:opacity-50">{actionBusy ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}Pubblica ora</button>}
+                <button type="button" disabled={actionBusy} onClick={() => void cancelScheduledPost()} className="rounded-lg border border-white/15 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/10 disabled:opacity-50">Annulla programmazione</button>
+              </div>}
+              {selectedPost.media_url ? <>
+                <video className="max-h-[55vh] w-full rounded-xl bg-black" controls preload="metadata" src={selectedPost.media_url}>Il browser non supporta la riproduzione video.</video>
+                <a href={selectedPost.media_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-white/90"><ExternalLink size={15} />Apri video finale</a>
+              </> : <p className="rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Il video finale non è ancora disponibile. La card si aggiornerà quando la generazione terminerà.</p>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

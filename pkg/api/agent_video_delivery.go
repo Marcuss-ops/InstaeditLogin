@@ -1,0 +1,364 @@
+package api
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+)
+
+// AgentVideoPublisher turns a successful remote render into an InstaEdit
+// Media Library asset and a scheduled post. The post is the calendar event;
+// the existing publish worker owns the actual platform upload and statuses.
+type AgentVideoPublisher interface {
+	Validate(context.Context, auth.Identity, int64, json.RawMessage) error
+	Publish(context.Context, auth.Identity, int64, string, repository.AgentRunStep, json.RawMessage) (json.RawMessage, error)
+}
+
+type agentVideoAssetStore interface {
+	MediaStore
+	FindByUploadKey(context.Context, int64, string) (*models.MediaAsset, error)
+}
+
+type artifactDownloader interface {
+	DownloadArtifact(context.Context, string) (*http.Response, error)
+}
+
+type generatedVideoStorage interface {
+	StorageProvider
+	Upload(context.Context, io.Reader, string, string, int64) (int64, error)
+}
+
+type agentVideoPublisher struct {
+	assets        agentVideoAssetStore
+	storage       generatedVideoStorage
+	posts         PostStore
+	workspaces    WorkspaceStore
+	teams         TeamStore
+	idempotency   IdempotencyStore
+	maxBytes      int64
+	retentionDays int
+	horizonDays   int
+}
+
+func newAgentVideoPublisher(assets MediaStore, storage StorageProvider, posts PostStore, workspaces WorkspaceStore, teams TeamStore, idempotency IdempotencyStore, maxBytes int64, horizonDays int) AgentVideoPublisher {
+	assetStore, ok := assets.(agentVideoAssetStore)
+	videoStorage, storageOK := storage.(generatedVideoStorage)
+	if !ok || !storageOK || posts == nil || workspaces == nil {
+		return nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxUploadBytes
+	}
+	if horizonDays <= 0 {
+		horizonDays = 30
+	}
+	return &agentVideoPublisher{assets: assetStore, storage: videoStorage, posts: posts, workspaces: workspaces, teams: teams, idempotency: idempotency, maxBytes: maxBytes, retentionDays: 7, horizonDays: horizonDays}
+}
+
+type videoPublicationRequest struct {
+	Title       string               `json:"title"`
+	Caption     string               `json:"caption"`
+	Language    string               `json:"language"`
+	ScheduledAt string               `json:"scheduled_at"`
+	Privacy     string               `json:"privacy"`
+	Targets     []videoPublishTarget `json:"targets"`
+}
+
+func (p *agentVideoPublisher) Publish(ctx context.Context, identity auth.Identity, workspaceID int64, runID string, step repository.AgentRunStep, remote json.RawMessage) (json.RawMessage, error) {
+	if identity == nil || identity.UserID() <= 0 || identity.WorkspaceID() != workspaceID {
+		return nil, errors.New("agent video identity does not own the run workspace")
+	}
+	var saved struct {
+		IdempotencyKey string          `json:"idempotency_key"`
+		Payload        json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(step.InputJSON, &saved); err != nil {
+		return nil, fmt.Errorf("decode persisted video request: %w", err)
+	}
+	var plan createVideoPayload
+	if err := json.Unmarshal(saved.Payload, &plan); err != nil {
+		return nil, fmt.Errorf("decode persisted video plan: %w", err)
+	}
+	var publish videoPublicationRequest
+	if err := json.Unmarshal(plan.Publish, &publish); err != nil {
+		return nil, fmt.Errorf("decode publish plan: %w", err)
+	}
+	scheduledAt, err := time.Parse(time.RFC3339, publish.ScheduledAt)
+	if err != nil {
+		return nil, errors.New("publish.scheduled_at must be RFC3339")
+	}
+	workspace, err := p.workspaces.FindByID(workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("find publish workspace: %w", err)
+	}
+	if !workspaceRoleAllowed(identity.UserID(), workspace, p.teams, workspaceRoleEditor) {
+		return nil, errors.New("agent identity is not permitted to publish in this workspace")
+	}
+	channels, err := p.workspaces.ListChannels(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace channels: %w", err)
+	}
+	allowed := make(map[int64]bool, len(channels))
+	for _, channel := range channels {
+		allowed[channel.PlatformAccountID] = channel.Enabled
+	}
+	seen := map[int64]bool{}
+	for _, target := range publish.Targets {
+		if !allowed[target.PlatformAccountID] || seen[target.PlatformAccountID] {
+			return nil, fmt.Errorf("publish target %d is missing, disabled, or duplicated in the workspace", target.PlatformAccountID)
+		}
+		seen[target.PlatformAccountID] = true
+	}
+	privacy := strings.TrimSpace(publish.Privacy)
+	if privacy == "" {
+		privacy = "unlisted"
+	}
+	if privacy != "public" && privacy != "unlisted" && privacy != "private" {
+		return nil, errors.New("publish.privacy must be public, unlisted, or private")
+	}
+	postKey := "agent-video-" + step.ID
+	requestHash := sha256.Sum256(step.InputJSON)
+	if p.idempotency != nil {
+		rec, lookupErr := p.idempotency.FindActiveByKey(workspaceID, postKey, time.Now())
+		if lookupErr != nil {
+			return nil, fmt.Errorf("find generated post replay: %w", lookupErr)
+		}
+		if rec != nil {
+			if rec.ResourceType != "post" || !equalBytes(rec.RequestHash, requestHash[:]) {
+				return nil, repository.ErrIdempotencyConflict
+			}
+			post, findErr := p.posts.FindByID(rec.ResourceID)
+			if findErr != nil {
+				return nil, fmt.Errorf("read generated post replay: %w", findErr)
+			}
+			if post == nil || post.WorkspaceID != workspaceID {
+				return nil, errors.New("generated post replay is missing or belongs to another workspace")
+			}
+			return json.Marshal(map[string]any{"media_asset_id": post.MediaAssetID, "post": post, "post_id": post.ID, "scheduled_at": post.PublishAt})
+		}
+	}
+
+	artifactURL, expectedSize, err := artifactReference(remote)
+	if err != nil {
+		return nil, err
+	}
+	return p.importAndSchedule(ctx, identity, workspaceID, runID, step, saved.IdempotencyKey, requestHash[:], scheduledAt, privacy, publish, artifactURL, expectedSize)
+}
+
+func (p *agentVideoPublisher) Validate(ctx context.Context, identity auth.Identity, workspaceID int64, payload json.RawMessage) error {
+	if identity == nil || identity.UserID() <= 0 || identity.WorkspaceID() != workspaceID {
+		return errors.New("agent video identity does not own the run workspace")
+	}
+	var plan createVideoPayload
+	if err := json.Unmarshal(payload, &plan); err != nil || len(plan.Publish) == 0 {
+		return errors.New("video payload must include publish details")
+	}
+	var publish videoPublicationRequest
+	if err := json.Unmarshal(plan.Publish, &publish); err != nil {
+		return fmt.Errorf("decode publish plan: %w", err)
+	}
+	if strings.TrimSpace(publish.Title) == "" || len(publish.Targets) == 0 {
+		return errors.New("publish requires title and at least one target")
+	}
+	scheduledAt, err := time.Parse(time.RFC3339, publish.ScheduledAt)
+	if err != nil || !scheduledAt.After(time.Now().Add(5*time.Second)) {
+		return errors.New("publish.scheduled_at must be a future RFC3339 timestamp")
+	}
+	if scheduledAt.After(time.Now().Add(time.Duration(p.horizonDays) * 24 * time.Hour)) {
+		return fmt.Errorf("publish.scheduled_at exceeds the %d day scheduling horizon", p.horizonDays)
+	}
+	privacy := strings.TrimSpace(publish.Privacy)
+	if privacy != "" && privacy != "public" && privacy != "unlisted" && privacy != "private" {
+		return errors.New("publish.privacy must be public, unlisted, or private")
+	}
+	workspace, err := p.workspaces.FindByID(workspaceID)
+	if err != nil {
+		return fmt.Errorf("find publish workspace: %w", err)
+	}
+	if !workspaceRoleAllowed(identity.UserID(), workspace, p.teams, workspaceRoleEditor) {
+		return errors.New("agent identity is not permitted to publish in this workspace")
+	}
+	channels, err := p.workspaces.ListChannels(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("list workspace channels: %w", err)
+	}
+	allowed := make(map[int64]bool, len(channels))
+	for _, channel := range channels {
+		allowed[channel.PlatformAccountID] = channel.Enabled
+	}
+	seen := map[int64]bool{}
+	for _, target := range publish.Targets {
+		if target.PlatformAccountID <= 0 || !allowed[target.PlatformAccountID] || seen[target.PlatformAccountID] {
+			return fmt.Errorf("publish target %d is missing, disabled, or duplicated in the workspace", target.PlatformAccountID)
+		}
+		seen[target.PlatformAccountID] = true
+	}
+	return nil
+}
+
+// The remote downloader is passed in request context by AgentRunsModule so
+// the publisher remains independent of the Job Master implementation.
+type artifactDownloaderContextKey struct{}
+
+func withArtifactDownloader(ctx context.Context, downloader artifactDownloader) context.Context {
+	return context.WithValue(ctx, artifactDownloaderContextKey{}, downloader)
+}
+
+func remoteDownloaderFromContext(ctx context.Context) (artifactDownloader, bool) {
+	d, ok := ctx.Value(artifactDownloaderContextKey{}).(artifactDownloader)
+	return d, ok
+}
+
+func (p *agentVideoPublisher) importAndSchedule(ctx context.Context, identity auth.Identity, workspaceID int64, runID string, step repository.AgentRunStep, workflowKey string, requestHash []byte, scheduledAt time.Time, privacy string, publish videoPublicationRequest, artifactURL string, expectedSize int64) (json.RawMessage, error) {
+	downloader, ok := remoteDownloaderFromContext(ctx)
+	if !ok {
+		return nil, errors.New("job master artifact download is unavailable")
+	}
+	filename := "generated-" + step.ID + ".mp4"
+	key := fmt.Sprintf("uploads/%d/agent-generated/%s/%s.mp4", identity.UserID(), runID, step.ID)
+	asset, err := p.assets.FindByUploadKey(ctx, workspaceID, key)
+	if err != nil {
+		return nil, fmt.Errorf("find imported video asset: %w", err)
+	}
+	if asset == nil || asset.Status != models.MediaAssetStatusReady {
+		resp, err := downloader.DownloadArtifact(ctx, artifactURL)
+		if err != nil {
+			return nil, fmt.Errorf("download generated video artifact: %w", err)
+		}
+		defer resp.Body.Close()
+		if expectedSize > 0 && resp.ContentLength >= 0 && resp.ContentLength != expectedSize {
+			return nil, fmt.Errorf("artifact size mismatch: master=%d response=%d", expectedSize, resp.ContentLength)
+		}
+		tmp, err := os.CreateTemp("", "instaedit-agent-video-*.mp4")
+		if err != nil {
+			return nil, fmt.Errorf("create artifact staging file: %w", err)
+		}
+		tmpName := tmp.Name()
+		defer os.Remove(tmpName)
+		hasher := sha256.New()
+		written, copyErr := io.Copy(io.MultiWriter(tmp, hasher), io.LimitReader(resp.Body, p.maxBytes+1))
+		if copyErr == nil && written > p.maxBytes {
+			copyErr = fmt.Errorf("generated video exceeds %d byte limit", p.maxBytes)
+		}
+		if copyErr == nil && expectedSize > 0 && written != expectedSize {
+			copyErr = fmt.Errorf("artifact size mismatch: master=%d downloaded=%d", expectedSize, written)
+		}
+		if copyErr == nil {
+			var header [12]byte
+			if _, seekErr := tmp.Seek(0, io.SeekStart); seekErr != nil {
+				copyErr = seekErr
+			} else if _, readErr := io.ReadFull(tmp, header[:]); readErr != nil || string(header[4:8]) != "ftyp" {
+				copyErr = errors.New("generated artifact is not an MP4 video")
+			}
+		}
+		if copyErr != nil {
+			_ = tmp.Close()
+			return nil, fmt.Errorf("verify generated video artifact: %w", copyErr)
+		}
+		bucket := storageBucket(p.storage)
+		asset = &models.MediaAsset{UserID: identity.UserID(), UploadKey: key, Bucket: bucket, ContentType: "video/mp4", SizeBytes: written, Status: models.MediaAssetStatusPending, ExpiresAt: scheduledAt.Add(time.Duration(p.retentionDays) * 24 * time.Hour)}
+		if existing, findErr := p.assets.FindByUploadKey(ctx, workspaceID, key); findErr != nil {
+			_ = tmp.Close()
+			return nil, findErr
+		} else if existing != nil {
+			asset = existing
+		} else if err := p.assets.Create(asset); err != nil {
+			_ = tmp.Close()
+			return nil, fmt.Errorf("create generated media asset: %w", err)
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			_ = tmp.Close()
+			return nil, err
+		}
+		uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		_, uploadErr := p.storage.Upload(uploadCtx, tmp, key, "video/mp4", written)
+		cancel()
+		_ = tmp.Close()
+		if uploadErr != nil {
+			_ = p.assets.MarkFailedWithReason(asset.ID, "generated video storage upload failed", uploadErr)
+			return nil, fmt.Errorf("store generated video: %w", uploadErr)
+		}
+		sha := hex.EncodeToString(hasher.Sum(nil))
+		if err := p.assets.MarkReady(asset.ID, sha, written, "video/mp4"); err != nil {
+			return nil, fmt.Errorf("mark generated video ready: %w", err)
+		}
+		asset.SHA256, asset.SizeBytes, asset.Status = sha, written, models.MediaAssetStatusReady
+	}
+
+	mediaID, objectKey, bucket := asset.ID, asset.UploadKey, asset.Bucket
+	post := &models.Post{WorkspaceID: workspaceID, Title: strings.TrimSpace(publish.Title), Caption: publish.Caption, MediaURL: p.storage.AssetURL(asset.UploadKey), MediaAssetID: &mediaID, StorageObjectKey: &objectKey, Bucket: &bucket, PrivacyLevel: privacy, DefaultPrivacyLevel: privacy, PublishAt: &scheduledAt, Status: models.PostStatusQueued, IdempotencyKey: &workflowKey}
+	post.Metadata, _ = json.Marshal(map[string]any{"source_language": publish.Language, "agent_run_id": runID, "agent_step_id": step.ID})
+	targets := make([]*models.PostTarget, 0, len(publish.Targets))
+	for _, target := range publish.Targets {
+		targets = append(targets, &models.PostTarget{PlatformAccountID: target.PlatformAccountID, Status: models.PostStatusQueued})
+	}
+	if err := p.posts.Create(post, targets); err != nil {
+		return nil, fmt.Errorf("create scheduled generated video post: %w", err)
+	}
+	if p.idempotency != nil {
+		p.idempotency.Insert(&models.IdempotencyRecord{WorkspaceID: workspaceID, IdempotencyKey: "agent-video-" + step.ID, ResourceType: "post", ResourceID: post.ID, RequestHash: requestHash, ResponseStatus: http.StatusCreated, ExpiresAt: time.Now().Add(24 * time.Hour)})
+	}
+	return json.Marshal(map[string]any{"filename": filename, "media_asset_id": asset.ID, "post": post, "post_id": post.ID, "scheduled_at": scheduledAt})
+}
+
+func artifactReference(raw json.RawMessage) (string, int64, error) {
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", 0, fmt.Errorf("decode remote job result: %w", err)
+	}
+	var urlValue string
+	var size int64
+	for _, key := range []string{"artifact_url", "download_url"} {
+		if json.Unmarshal(value[key], &urlValue) == nil && strings.TrimSpace(urlValue) != "" {
+			break
+		}
+	}
+	for _, key := range []string{"artifact_size_bytes", "size_bytes"} {
+		if json.Unmarshal(value[key], &size) == nil && size > 0 {
+			break
+		}
+	}
+	if nested, ok := value["job"]; ok {
+		return artifactReference(nested)
+	}
+	if nested, ok := value["result"]; ok {
+		nestedURL, nestedSize, err := artifactReference(nested)
+		if err != nil {
+			return "", 0, err
+		}
+		if urlValue == "" {
+			urlValue = nestedURL
+		}
+		if size == 0 {
+			size = nestedSize
+		}
+	}
+	if urlValue == "" {
+		return "", 0, errors.New("completed render has no artifact_url")
+	}
+	return urlValue, size, nil
+}
+
+func equalBytes(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

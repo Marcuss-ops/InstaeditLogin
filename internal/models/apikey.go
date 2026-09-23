@@ -43,6 +43,10 @@ const (
 
 	// PermissionAdmin — every route, including key minting and revoking.
 	PermissionAdmin = "admin"
+
+	// PermissionAutomation — submit and inspect agent-safe automation tools.
+	// It is deliberately separate from generic write/media/publish permissions.
+	PermissionAutomation = "automation"
 )
 
 // DefaultApiKeyPermissions is the permission set assigned to a freshly
@@ -58,6 +62,7 @@ var AllKnownApiKeyPermissionValues = map[string]struct{}{
 	PermissionMedia:          {},
 	PermissionAccountsManage: {},
 	PermissionAdmin:          {},
+	PermissionAutomation:     {},
 }
 
 // ValidateApiKeyPermissions reports whether every perm is in the known set.

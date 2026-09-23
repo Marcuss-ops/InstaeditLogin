@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { CalendarGroup } from "./calendarTypes";
 
 const statusOptions = [
@@ -12,6 +12,9 @@ const statusOptions = [
 
 export function CalendarToolbar({
   formattedDate,
+  onPrevious,
+  onNext,
+  onToday,
   statusFilter,
   setStatusFilter,
   groupFilter,
@@ -21,6 +24,9 @@ export function CalendarToolbar({
   clearFilters,
 }: {
   formattedDate: string;
+  onPrevious: () => void;
+  onNext: () => void;
+  onToday: () => void;
   statusFilter: string;
   setStatusFilter: (value: string) => void;
   groupFilter: string;
@@ -33,8 +39,13 @@ export function CalendarToolbar({
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 shrink-0">
       <div className="flex items-center gap-2">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8f9299]">Settimana corrente</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8f9299]">Calendario · prossimi 30 giorni</p>
           <h2 className="mt-1 text-[16px] sm:text-[18px] font-bold text-white">{formattedDate}</h2>
+        </div>
+        <div className="ml-2 flex items-center rounded-xl border border-white/[0.08] bg-white/[0.04]">
+          <button type="button" onClick={onPrevious} aria-label="Mese precedente" className="rounded-l-xl p-2 text-white/65 hover:bg-white/10 hover:text-white"><ChevronLeft size={16} /></button>
+          <button type="button" onClick={onToday} className="border-x border-white/[0.08] px-3 py-2 text-xs font-semibold text-white/70 hover:bg-white/10 hover:text-white">Oggi</button>
+          <button type="button" onClick={onNext} aria-label="Mese successivo" className="rounded-r-xl p-2 text-white/65 hover:bg-white/10 hover:text-white"><ChevronRight size={16} /></button>
         </div>
       </div>
 

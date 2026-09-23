@@ -13,7 +13,7 @@ import (
 // existing worker.WorkerSpec values rather than introducing another registry:
 // RunWorkers registers these specs on App.WorkerRegistry in this exact order.
 func (a *App) workerSpecs() []worker.WorkerSpec {
-	return []worker.WorkerSpec{
+	specs := []worker.WorkerSpec{
 		a.publishWorkerSpec(),
 		a.reconcileWorkerSpec(),
 		a.outboxWorkerSpec(),
@@ -31,6 +31,10 @@ func (a *App) workerSpecs() []worker.WorkerSpec {
 		a.tokenRefreshSweepWorkerSpec(),
 		a.snapshotRefreshSweepWorkerSpec(),
 	}
+	if a.Cfg != nil && a.Cfg.JobMaster.URL != "" && a.Cfg.JobMaster.M2MSecret != "" {
+		specs = append(specs, a.agentRunRecoveryWorkerSpec())
+	}
+	return specs
 }
 
 // registerWorkerSpecs registers the lifecycle plan on the shared registry.
@@ -73,7 +77,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 	// dependency is constructed before StartAll invokes it.
 	a.registerWorkerSpecs()
 
-	slog.Info("16 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / asset_cleanup / velox_downloader / upload / content_preparation / drive_batch_crawler / youtube_processing_reconciler / youtube_copyright_checker / metadata_generation / token_refresh_sweep / snapshot_refresh_sweep")
+	slog.Info("background workers registered")
 
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 

@@ -27,6 +27,14 @@ func (f *fakeJobMaster) Submit(_ context.Context, input jobmaster.SubmitRequest)
 	return json.RawMessage(`{"job_id":"job_1","status":"queued"}`), nil
 }
 
+func (f *fakeJobMaster) PrepareVideo(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{"job_id":"job_1"}`), nil
+}
+
+func (f *fakeJobMaster) FinalizeVideo(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{"status":"queued"}`), nil
+}
+
 func (f *fakeJobMaster) Get(context.Context, string) (json.RawMessage, error) {
 	return json.RawMessage(`{"job_id":"job_1","status":"completed","result":{"asset_id":"asset_1"}}`), nil
 }
