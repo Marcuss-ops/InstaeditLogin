@@ -34,6 +34,7 @@ func (a *App) workerSpecs() []worker.WorkerSpec {
 	}
 	if a.Cfg != nil && a.Cfg.JobMaster.URL != "" && a.Cfg.JobMaster.M2MSecret != "" {
 		specs = append(specs, a.agentRunRecoveryWorkerSpec())
+		specs = append(specs, a.workerCalendarJobReconcileSpec())
 	}
 	return specs
 }

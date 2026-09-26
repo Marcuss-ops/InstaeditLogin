@@ -81,6 +81,27 @@ func TestClientRejectsPathTraversalJobID(t *testing.T) {
 	}
 }
 
+func TestClientCancelUsesScopedJobControlRoute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/jobs/job-42/cancel" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-secret" {
+			t.Errorf("authorization = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-42","status":"CANCELLED"}`))
+	}))
+	defer server.Close()
+	c, err := New(Config{BaseURL: server.URL, Secret: "test-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Cancel(context.Background(), "job-42"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientReadsMediaCatalogWithEscapedSearch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/media/assets" {

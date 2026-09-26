@@ -2,11 +2,14 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/jobmaster"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/outbox"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/outbox/processors"
@@ -508,6 +511,96 @@ func (a *App) workerCalendarStaleSweepSpec() worker.WorkerSpec {
 				}
 			}
 		},
+	}
+}
+
+func (a *App) workerCalendarJobReconcileSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{Name: "worker_calendar_job_reconcile", Critical: false, Run: func(ctx context.Context) error {
+		client, err := jobmaster.New(jobmaster.Config{BaseURL: a.Cfg.JobMaster.URL, Secret: a.Cfg.JobMaster.M2MSecret, ClientID: a.Cfg.JobMaster.ClientID, Timeout: time.Duration(a.Cfg.JobMaster.TimeoutSeconds) * time.Second})
+		if err != nil {
+			return err
+		}
+		repo := repository.NewPostRepository(a.DB)
+		tick := time.NewTicker(20 * time.Second)
+		defer tick.Stop()
+		for {
+			refs, err := repo.ListActiveWorkerCalendarEvents(ctx, 500)
+			if err != nil {
+				slog.Error("worker calendar reconcile list failed", "error", err)
+			} else {
+				for _, ref := range refs {
+					if ctx.Err() != nil {
+						return nil
+					}
+					reconcileWorkerCalendarJob(ctx, client, repo, ref)
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-tick.C:
+			}
+		}
+	}}
+}
+
+func reconcileWorkerCalendarJob(ctx context.Context, client jobmaster.API, repo *repository.PostRepository, ref repository.WorkerCalendarEventRef) {
+	raw, err := client.Get(ctx, ref.JobID)
+	if err != nil {
+		slog.Warn("worker calendar job poll failed", "event_key", ref.EventKey, "job_id", ref.JobID, "error", err)
+		return
+	}
+	var state struct {
+		Status       string     `json:"status"`
+		Progress     int        `json:"progress"`
+		CurrentStage string     `json:"current_stage"`
+		Error        string     `json:"error"`
+		WorkerID     string     `json:"worker_id"`
+		LeaseExpiry  *time.Time `json:"lease_expiry"`
+	}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		slog.Warn("worker calendar job status invalid", "job_id", ref.JobID, "error", err)
+		return
+	}
+	status := strings.ToUpper(state.Status)
+	switch status {
+	case "QUEUED", "PENDING", "RETRY_WAIT":
+		status = "QUEUED"
+	case "RUNNING", "LEASED", "FINALIZING", "PROCESSING":
+		status = "RUNNING"
+		if state.LeaseExpiry != nil && time.Now().UTC().After(state.LeaseExpiry.Add(30*time.Second)) {
+			status = "FAILED"
+			state.Error = "Job Master lease expired; worker stopped renewing its lease"
+		}
+	case "SUCCEEDED", "COMPLETED":
+		status = "COMPLETED"
+	case "FAILED", "DEAD_LETTER":
+		status = "FAILED"
+	case "CANCELLED", "CANCELED":
+		status = "CANCELLED"
+	default:
+		return
+	}
+	var progress *int
+	if state.Progress >= 0 && state.Progress <= 100 {
+		progress = &state.Progress
+	}
+	phase := state.CurrentStage
+	if phase == "" {
+		phase = status
+	}
+	snapshot := json.RawMessage(raw)
+	if status == "FAILED" {
+		code := "REMOTE_JOB_FAILED"
+		phase = "FAILED"
+		if state.LeaseExpiry != nil && time.Now().UTC().After(state.LeaseExpiry.Add(30*time.Second)) {
+			code = "WORKER_LEASE_EXPIRED"
+			phase = "TIMEOUT"
+		}
+		snapshot, _ = json.Marshal(map[string]any{"job": json.RawMessage(raw), "error": map[string]any{"error_code": code, "reason": state.Error}})
+	}
+	if err := repo.UpdateWorkerCalendarEventProgress(ctx, ref.WorkspaceID, ref.EventKey, ref.Kind, status, phase, progress, snapshot, false); err != nil {
+		slog.Warn("worker calendar reconcile update failed", "event_key", ref.EventKey, "error", err)
 	}
 }
 

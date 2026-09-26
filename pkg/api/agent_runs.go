@@ -60,9 +60,11 @@ type AgentRunsModuleDeps struct {
 type WorkerCalendarEventStore interface {
 	CreateWorkerCalendarEvent(*models.Post) (*models.Post, bool, error)
 	FindWorkerCalendarEvent(context.Context, int64, string) (*models.Post, error)
+	FindWorkerCalendarEventByJobID(context.Context, int64, string) (*models.Post, error)
 	UpdateWorkerCalendarEvent(context.Context, int64, string, *string, *time.Time) error
 	DeleteWorkerCalendarEvent(context.Context, int64, string) error
-	UpdateWorkerCalendarEventProgress(context.Context, int64, string, string, string, string, *int, json.RawMessage) error
+	CancelWorkerCalendarEvent(context.Context, int64, string) error
+	UpdateWorkerCalendarEventProgress(context.Context, int64, string, string, string, string, *int, json.RawMessage, bool) error
 	MarkStaleWorkerCalendarEvents(context.Context, time.Duration) (int64, error)
 }
 
@@ -98,6 +100,9 @@ func (m *AgentRunsModule) Register(mux chi.Router) {
 		mux.Patch("/api/v1/agent/calendar/events/{eventKey}", agentProtect(m.handleEditWorkerCalendarEvent))
 		mux.Delete("/api/v1/agent/calendar/events/{eventKey}", agentProtect(m.handleDeleteWorkerCalendarEvent))
 		mux.Patch("/api/v1/agent/calendar/events/{eventKey}/progress", agentProtect(m.handleUpdateWorkerCalendarEventProgress))
+		mux.Get("/api/v1/agent/calendar/events/{eventKey}", agentProtect(m.handleGetWorkerCalendarEvent))
+		mux.Get("/api/v1/agent/calendar/events/by-job/{jobID}", agentProtect(m.handleGetWorkerCalendarEventByJob))
+		mux.Post("/api/v1/agent/calendar/events/{eventKey}/cancel", agentProtect(m.handleCancelWorkerCalendarEvent))
 	}
 	if m.deps.Store == nil {
 		return

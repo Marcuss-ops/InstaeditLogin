@@ -3,6 +3,15 @@
 The canonical protocol document is mirrored in the InstaEdit and PipelineGen
 repositories as `docs/WORKER-CALENDAR-EVENTS.md`.
 
+## v1.1.0
+
+- Added native Calendar event upsert, job-linked event lookup, edit and cancel
+  signals.
+- Added server reconciliation against Job Master status and lease expiry.
+- Added worker disk outbox with non-blocking enqueue, lease heartbeat and
+  terminal structured error reporting.
+- Added owner-scoped M2M cancel and dynamic schedule polling before delivery.
+
 ## v1.0.1
 
 - Worker progress clients serialize structured failures as `error_code`,

@@ -200,6 +200,16 @@ func (c *Client) Get(ctx context.Context, jobID string) (json.RawMessage, error)
 	return c.do(ctx, http.MethodGet, jobsPath+"/"+url.PathEscape(jobID), nil, "")
 }
 
+// Cancel requests cooperative cancellation for an execution-plane job.
+func (c *Client) Cancel(ctx context.Context, jobID string) error {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" || len(jobID) > 256 || strings.ContainsAny(jobID, "/\\\r\n") {
+		return ErrInvalidJobID
+	}
+	_, err := c.do(ctx, http.MethodPost, jobsPath+"/"+url.PathEscape(jobID)+"/cancel", nil, "")
+	return err
+}
+
 // DownloadArtifact streams a render artifact from the same execution-plane
 // origin as the configured Master. artifactURL comes from a Master job status;
 // origin pinning prevents a compromised or malformed status from turning the

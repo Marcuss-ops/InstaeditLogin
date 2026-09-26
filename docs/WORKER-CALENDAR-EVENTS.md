@@ -25,7 +25,8 @@ authenticated key; it is never accepted from the request body.
 
 The batch accepts 1–20 unique event keys. `scheduled_at` is optional; when
 omitted the card is placed on the current day. Retrying an identical request
-returns the same post. Reusing a key with different event data returns `409`.
+returns the same post ID through a native PostgreSQL upsert. A replay with a
+different linked job resets the progress snapshot for that new job.
 Each item becomes a draft post with no publication targets, so creating a
 worker event cannot enqueue a social upload.
 
@@ -67,3 +68,10 @@ not erase one another. `RUNNING` updates write `worker_heartbeat_at`. A worker
 that sends `FAILED` must include `error: {"error_code":"...", "reason":"...",
 "output_tail":"..."}`; the sweep marks jobs with a heartbeat older than
 15 minutes as `FAILED` / `TIMEOUT`.
+
+The external Job Master worker writes updates to a mode-0600 disk outbox and
+drains it in the background. Lease renewal reports heartbeats; a second
+control-plane reconciler polls the linked job and marks it failed if the
+Job Master lease expires. Before final delivery, `video.create` reads the
+current `scheduled_at` and polls while a future schedule is pending so edits
+and cancellation take effect before upload.

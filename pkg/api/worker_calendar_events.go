@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -213,7 +214,7 @@ func (m *AgentRunsModule) handleUpdateWorkerCalendarEventProgress(w http.Respons
 		writeError(w, http.StatusBadRequest, "phase must be no longer than 120 characters")
 		return
 	}
-	if err := m.deps.CalendarEvents.UpdateWorkerCalendarEventProgress(req.Context(), identity.WorkspaceID(), eventKey, body.Kind, body.Status, body.Phase, body.Progress, body.Snapshot); err != nil {
+	if err := m.deps.CalendarEvents.UpdateWorkerCalendarEventProgress(req.Context(), identity.WorkspaceID(), eventKey, body.Kind, body.Status, body.Phase, body.Progress, body.Snapshot, true); err != nil {
 		if errors.Is(err, repository.ErrAgentRunNotFound) {
 			writeError(w, http.StatusNotFound, "calendar event not found")
 		} else {
@@ -294,6 +295,37 @@ func (m *AgentRunsModule) handleDeleteWorkerCalendarEvent(w http.ResponseWriter,
 		writeError(w, http.StatusBadRequest, "invalid event key")
 		return
 	}
+	post, err := m.deps.CalendarEvents.FindWorkerCalendarEvent(req.Context(), identity.WorkspaceID(), key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read calendar event: "+err.Error())
+		return
+	}
+	if post == nil {
+		writeError(w, http.StatusNotFound, "deletable calendar event not found")
+		return
+	}
+	var metadata map[string]json.RawMessage
+	_ = json.Unmarshal(post.Metadata, &metadata)
+	var jobID, generationStatus string
+	_ = json.Unmarshal(metadata["worker_remote_job_id"], &jobID)
+	_ = json.Unmarshal(metadata["generation_status"], &generationStatus)
+	if jobID != "" && generationStatus != "SUCCEEDED" && generationStatus != "COMPLETED" && generationStatus != "FAILED" && generationStatus != "CANCELLED" {
+		canceller, ok := m.deps.JobMaster.(interface {
+			Cancel(context.Context, string) error
+		})
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "job master cancellation is not configured")
+			return
+		}
+		if err := canceller.Cancel(req.Context(), jobID); err != nil {
+			writeError(w, http.StatusBadGateway, "cancel execution-plane job before deleting card: "+err.Error())
+			return
+		}
+		if err := m.deps.CalendarEvents.CancelWorkerCalendarEvent(req.Context(), identity.WorkspaceID(), key); err != nil && !errors.Is(err, repository.ErrAgentRunNotFound) {
+			writeError(w, http.StatusInternalServerError, "record cancellation before delete: "+err.Error())
+			return
+		}
+	}
 	if err := m.deps.CalendarEvents.DeleteWorkerCalendarEvent(req.Context(), identity.WorkspaceID(), key); err != nil {
 		if errors.Is(err, repository.ErrAgentRunNotFound) {
 			writeError(w, http.StatusNotFound, "deletable calendar event not found")
@@ -303,4 +335,109 @@ func (m *AgentRunsModule) handleDeleteWorkerCalendarEvent(w http.ResponseWriter,
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *AgentRunsModule) handleGetWorkerCalendarEvent(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing workspace identity")
+		return
+	}
+	key := strings.TrimSpace(chi.URLParam(req, "eventKey"))
+	if key == "" || len(key) > 180 || strings.ContainsAny(key, "/\\\r\n") {
+		writeError(w, http.StatusBadRequest, "invalid event key")
+		return
+	}
+	post, err := m.deps.CalendarEvents.FindWorkerCalendarEvent(req.Context(), identity.WorkspaceID(), key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read calendar event: "+err.Error())
+		return
+	}
+	if post == nil {
+		writeError(w, http.StatusNotFound, "calendar event not found")
+		return
+	}
+	var metadata map[string]json.RawMessage
+	_ = json.Unmarshal(post.Metadata, &metadata)
+	var generationStatus, remoteJobID string
+	_ = json.Unmarshal(metadata["generation_status"], &generationStatus)
+	_ = json.Unmarshal(metadata["worker_remote_job_id"], &remoteJobID)
+	writeJSON(w, http.StatusOK, map[string]any{"event_key": key, "post_id": post.ID, "title": post.Title, "scheduled_at": post.PublishAt, "status": generationStatus, "job_id": remoteJobID, "cancelled": generationStatus == "CANCELLED"})
+}
+
+func (m *AgentRunsModule) handleGetWorkerCalendarEventByJob(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing workspace identity")
+		return
+	}
+	jobID := strings.TrimSpace(chi.URLParam(req, "jobID"))
+	if jobID == "" || len(jobID) > 256 || strings.ContainsAny(jobID, "/\\\r\n") {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	post, err := m.deps.CalendarEvents.FindWorkerCalendarEventByJobID(req.Context(), identity.WorkspaceID(), jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read calendar event: "+err.Error())
+		return
+	}
+	if post == nil {
+		writeError(w, http.StatusNotFound, "calendar event not found")
+		return
+	}
+	var metadata map[string]json.RawMessage
+	_ = json.Unmarshal(post.Metadata, &metadata)
+	var key, generationStatus, remoteJobID string
+	_ = json.Unmarshal(metadata["worker_event_key"], &key)
+	_ = json.Unmarshal(metadata["generation_status"], &generationStatus)
+	_ = json.Unmarshal(metadata["worker_remote_job_id"], &remoteJobID)
+	writeJSON(w, http.StatusOK, map[string]any{"event_key": key, "post_id": post.ID, "title": post.Title, "scheduled_at": post.PublishAt, "status": generationStatus, "job_id": remoteJobID, "cancelled": generationStatus == "CANCELLED"})
+}
+
+func (m *AgentRunsModule) handleCancelWorkerCalendarEvent(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.WorkspaceID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing workspace identity")
+		return
+	}
+	key := strings.TrimSpace(chi.URLParam(req, "eventKey"))
+	if key == "" || len(key) > 180 || strings.ContainsAny(key, "/\\\r\n") {
+		writeError(w, http.StatusBadRequest, "invalid event key")
+		return
+	}
+	event, err := m.deps.CalendarEvents.FindWorkerCalendarEvent(req.Context(), identity.WorkspaceID(), key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read calendar event: "+err.Error())
+		return
+	}
+	if event == nil {
+		writeError(w, http.StatusNotFound, "calendar event not found")
+		return
+	}
+	var metadata map[string]json.RawMessage
+	_ = json.Unmarshal(event.Metadata, &metadata)
+	var jobID string
+	_ = json.Unmarshal(metadata["worker_remote_job_id"], &jobID)
+	if jobID != "" {
+		canceller, ok := m.deps.JobMaster.(interface {
+			Cancel(context.Context, string) error
+		})
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "job master cancellation is not configured")
+			return
+		}
+		if err := canceller.Cancel(req.Context(), jobID); err != nil {
+			writeError(w, http.StatusBadGateway, "cancel execution-plane job: "+err.Error())
+			return
+		}
+	}
+	if err := m.deps.CalendarEvents.CancelWorkerCalendarEvent(req.Context(), identity.WorkspaceID(), key); err != nil {
+		if errors.Is(err, repository.ErrAgentRunNotFound) {
+			writeError(w, http.StatusConflict, "calendar event is already terminal")
+		} else {
+			writeError(w, http.StatusInternalServerError, "cancel calendar event: "+err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"event_key": key, "job_id": jobID, "status": "CANCELLED"})
 }
