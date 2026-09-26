@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -302,6 +301,7 @@ type stagedVideoJobMaster struct {
 	prePayload      json.RawMessage
 	finalizePayload json.RawMessage
 	finalizeJobID   string
+	submitRequest   jobmaster.SubmitRequest
 }
 
 type fakeAgentVideoPublisher struct{}
@@ -318,7 +318,7 @@ func (fakeAgentVideoPublisher) Publish(context.Context, auth.Identity, int64, st
 }
 
 func (s *stagedVideoJobMaster) ListTypes(context.Context) (json.RawMessage, error) {
-	return json.RawMessage(`{"types":["script.generate","clip.render"]}`), nil
+	return json.RawMessage(`{"types":["video.create"]}`), nil
 }
 func (s *stagedVideoJobMaster) SearchMedia(context.Context, string, int) (json.RawMessage, error) {
 	return json.RawMessage(`{"items":[]}`), nil
@@ -326,8 +326,9 @@ func (s *stagedVideoJobMaster) SearchMedia(context.Context, string, int) (json.R
 func (s *stagedVideoJobMaster) GetMediaAsset(context.Context, string) (json.RawMessage, error) {
 	return json.RawMessage(`{}`), nil
 }
-func (s *stagedVideoJobMaster) Submit(context.Context, jobmaster.SubmitRequest) (json.RawMessage, error) {
-	return nil, errors.New("generic submit should not be used for complete video")
+func (s *stagedVideoJobMaster) Submit(_ context.Context, request jobmaster.SubmitRequest) (json.RawMessage, error) {
+	s.submitRequest = request
+	return json.RawMessage(`{"job_id":"remote-video","status":"QUEUED"}`), nil
 }
 func (s *stagedVideoJobMaster) PrepareVideo(_ context.Context, body json.RawMessage) (json.RawMessage, error) {
 	s.prePayload = body
@@ -341,7 +342,7 @@ func (s *stagedVideoJobMaster) Get(context.Context, string) (json.RawMessage, er
 	return json.RawMessage(`{"job_id":"remote-video","status":"RUNNING"}`), nil
 }
 
-func TestAgentRuns_RejectsVideoCompositionMissingFromRemoteCatalog(t *testing.T) {
+func TestAgentRuns_SubmitsSingleVideoCreateJobAndPersistsReference(t *testing.T) {
 	store := newFakeAgentRunStore()
 	master := &stagedVideoJobMaster{}
 	module := NewAgentRunsModule(AgentRunsModuleDeps{Store: store, Catalog: agenttools.NewCatalog(), JobMaster: master, VideoPublisher: fakeAgentVideoPublisher{}, Protected: func(h http.HandlerFunc) http.HandlerFunc { return h }})
@@ -360,15 +361,23 @@ func TestAgentRuns_RejectsVideoCompositionMissingFromRemoteCatalog(t *testing.T)
 	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"project":"creator-51","idempotency_key":"video-51","payload":{"pre":{"job_type":"scene.composite.v1","copy_only":true,"script_text":"script","scenes":[{"scene_id":"s1","text":"scene"}],"output":{"format":"mp4"},"delivery_plan":[{"destination_id":"drive-production"}]},"finalize":{"overlays":[],"runtime_assets":[]},"publish":{"title":"Generated","caption":"caption","language":"it","scheduled_at":"2099-01-01T12:00:00Z","privacy":"unlisted","targets":[{"platform_account_id":51}]}}}`
+	body := `{"project":"creator-51","idempotency_key":"video-51","payload":{"generation":{"topic":"Mike Tyson training","language":"it","duration_seconds":180,"media_sources":["youtube","stock"],"voiceover":true,"overlays":true},"publish":{"title":"Generated","caption":"caption","language":"it","scheduled_at":"2099-01-01T12:00:00Z","privacy":"unlisted","targets":[{"platform_account_id":51}]}}}`
 	req := withIdentity(httptest.NewRequest(http.MethodPost, "/api/v1/agent/runs/"+run.RunID+"/tools/content.create_video", strings.NewReader(body)))
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "not available on the execution plane") {
-		t.Fatalf("invoke unavailable video composer: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("invoke video.create: %d %s", w.Code, w.Body.String())
 	}
-	if master.finalizeJobID != "" || master.prePayload != nil || master.finalizePayload != nil || len(store.steps) != 0 {
-		t.Fatalf("unsupported video workflow made side effects: master=%+v steps=%+v", master, store.steps)
+	if master.submitRequest.Type != "video.create" || master.submitRequest.IdempotencyKey != "video-51" || !strings.Contains(string(master.submitRequest.Payload), "Mike Tyson training") {
+		t.Fatalf("unexpected remote submit request: %+v", master.submitRequest)
+	}
+	if master.finalizeJobID != "" || master.prePayload != nil || master.finalizePayload != nil || len(store.steps) != 1 {
+		t.Fatalf("workflow did not use a single root job: master=%+v steps=%+v", master, store.steps)
+	}
+	for _, step := range store.steps {
+		if step.RemoteJobID != "remote-video" || step.RemoteStatus != "QUEUED" {
+			t.Fatalf("remote root reference not persisted: %+v", step)
+		}
 	}
 }
 func (fakeAgentJobMaster) Submit(context.Context, jobmaster.SubmitRequest) (json.RawMessage, error) {

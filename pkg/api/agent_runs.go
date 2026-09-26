@@ -785,9 +785,8 @@ func (m *AgentRunsModule) handleInvokeTool(w http.ResponseWriter, req *http.Requ
 }
 
 type createVideoPayload struct {
-	Pre      json.RawMessage `json:"pre"`
-	Finalize json.RawMessage `json:"finalize"`
-	Publish  json.RawMessage `json:"publish"`
+	Generation json.RawMessage `json:"generation"`
+	Publish    json.RawMessage `json:"publish"`
 }
 
 func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.Request, workspaceID int64, runID string, body invokeToolRequest, step *repository.AgentRunStep) {
@@ -796,8 +795,12 @@ func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.R
 		return
 	}
 	var plan createVideoPayload
-	if err := json.Unmarshal(body.Payload, &plan); err != nil || len(plan.Pre) == 0 || len(plan.Finalize) == 0 || len(plan.Publish) == 0 {
-		writeError(w, http.StatusBadRequest, "content.create_video payload requires pre, finalize, and publish objects")
+	if err := json.Unmarshal(body.Payload, &plan); err != nil || len(plan.Generation) == 0 || len(plan.Publish) == 0 {
+		writeError(w, http.StatusBadRequest, "content.create_video payload requires generation and publish objects")
+		return
+	}
+	if err := validateVideoGeneration(plan.Generation); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if len(body.IdempotencyKey) > 180 {
@@ -853,49 +856,29 @@ func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.R
 			_ = projector.UpdateProgress(req.Context(), workspaceID, runID, *step, "FAILED", nil, snapshot)
 		}
 	}
-	pre, err := withJSONFields(plan.Pre, map[string]any{"idempotency_key": body.IdempotencyKey + "-prepare", "copy_only": true})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid pre payload: "+err.Error())
-		return
-	}
-	finalize, err := withJSONFields(plan.Finalize, map[string]any{"idempotency_key": body.IdempotencyKey + "-finalize"})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid finalize payload: "+err.Error())
-		return
-	}
 	if step.RemoteJobID == "" {
-		result, submitErr := m.deps.JobMaster.PrepareVideo(req.Context(), pre)
+		result, submitErr := m.deps.JobMaster.Submit(req.Context(), jobmaster.SubmitRequest{
+			Type: "video.create", Project: body.Project, IdempotencyKey: body.IdempotencyKey, Payload: plan.Generation,
+		})
 		if submitErr != nil {
-			markStartFailed("VIDEO_PREPARE_FAILED", submitErr)
-			writeError(w, http.StatusBadGateway, "prepare video: "+submitErr.Error())
+			markStartFailed("VIDEO_CREATE_SUBMIT_FAILED", submitErr)
+			writeError(w, http.StatusBadGateway, "submit video.create: "+submitErr.Error())
 			return
 		}
 		remoteID := remoteJobID(result)
 		if remoteID == "" {
-			markStartFailed("REMOTE_JOB_ID_MISSING", errors.New("prepare response returned no job id"))
-			writeError(w, http.StatusBadGateway, "prepare response returned no job id")
+			markStartFailed("REMOTE_JOB_ID_MISSING", errors.New("video.create response returned no job id"))
+			writeError(w, http.StatusBadGateway, "video.create response returned no job id")
 			return
 		}
 		if err := m.deps.Store.SetStepRemoteJob(req.Context(), workspaceID, runID, step.ID, remoteID, body.IdempotencyKey); err != nil {
-			writeError(w, http.StatusInternalServerError, "persist prepared video: "+err.Error())
+			writeError(w, http.StatusInternalServerError, "persist video.create job: "+err.Error())
 			return
 		}
 		step.RemoteJobID = remoteID
-		step.RemoteStatus = "PREPARED"
-		if err := m.deps.Store.UpdateStepProgressOwned(req.Context(), workspaceID, runID, step.ID, "PREPARED", nil, json.RawMessage(`{"phase":"PREPARE"}`)); err != nil {
-			writeError(w, http.StatusInternalServerError, "persist prepare phase: "+err.Error())
-			return
-		}
-	}
-	if strings.EqualFold(step.RemoteStatus, "PREPARED") || step.RemoteStatus == "" {
-		if _, err := m.deps.JobMaster.FinalizeVideo(req.Context(), step.RemoteJobID, finalize); err != nil {
-			markStartFailed("VIDEO_FINALIZE_FAILED", err)
-			writeError(w, http.StatusBadGateway, "finalize video (retry with the same idempotency key): "+err.Error())
-			return
-		}
-		phaseSnapshot := json.RawMessage(`{"phase":"FINALIZE","dispatch_status":"queued"}`)
-		if err := m.deps.Store.UpdateStepProgressOwned(req.Context(), workspaceID, runID, step.ID, "FINALIZE_QUEUED", nil, phaseSnapshot); err != nil {
-			writeError(w, http.StatusInternalServerError, "persist finalize phase: "+err.Error())
+		step.RemoteStatus = "QUEUED"
+		if err := m.deps.Store.UpdateStepProgressOwned(req.Context(), workspaceID, runID, step.ID, "QUEUED", nil, json.RawMessage(`{"phase":"QUEUED"}`)); err != nil {
+			writeError(w, http.StatusInternalServerError, "persist queued phase: "+err.Error())
 			return
 		}
 	}
@@ -903,7 +886,7 @@ func (m *AgentRunsModule) submitVideoWorkflow(w http.ResponseWriter, req *http.R
 		PostID int64 `json:"post_id"`
 	}
 	_ = json.Unmarshal(calendarEvent, &event)
-	writeJSON(w, http.StatusAccepted, map[string]any{"step_id": step.ID, "tool": "content.create_video", "remote_job_id": step.RemoteJobID, "calendar_post_id": event.PostID, "idempotency_key": body.IdempotencyKey, "status": "running", "phase": "FINALIZE_QUEUED"})
+	writeJSON(w, http.StatusAccepted, map[string]any{"step_id": step.ID, "tool": "content.create_video", "remote_job_id": step.RemoteJobID, "calendar_post_id": event.PostID, "idempotency_key": body.IdempotencyKey, "status": "running", "phase": "QUEUED"})
 }
 
 type videoPublishTarget struct {

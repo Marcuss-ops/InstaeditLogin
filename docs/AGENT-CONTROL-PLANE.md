@@ -106,21 +106,22 @@ is the authority for workflow state.
 
 ## Complete-video contract
 
-`internal/agentworkflow` defines a deterministic `content.create_video` plan:
+`content.create_video` now submits one durable PipelineGen `video.create` root
+job using `POST /api/v1/jobs`; the BFF does not orchestrate child jobs. Its
+request is split into a generation payload owned by PipelineGen and publication
+instructions owned by InstaEdit:
 
 ```text
-script → optional YouTube/stock acquisition → voiceover → clip render → assemble
+{ generation: { topic, language, duration_seconds, media_sources, ... },
+  publish: { title, caption, scheduled_at, privacy, targets } }
 ```
 
-The plan is a control-plane contract and idempotency-key generator. The
-execution-plane implementations of `video.create` and `video.assemble` remain
-deferred until PipelineGen exposes them through the catalog. The control plane
-does not infer an assembler from script generation plus clip rendering. The
-configured Master also returns 404 for its legacy `/api/v1/jobs/pre` PREPARE
-endpoint. Accordingly, `content.create_video` is not advertised as available
-and new scheduled video intents are rejected before a calendar card is
-created. Once PipelineGen publishes a durable full-video contract in the M2M
-catalog, the control plane can enable scheduling against it.
+The Master owns script, media discovery/acquisition, voiceover, clip rendering,
+assembly, audio mux and final artifact production. The BFF persists the root
+job ID, polls its progress, then imports `result.final_video.media_url` and
+creates the scheduled post. Artifact downloads remain pinned to the configured
+Master origin. `content.create_video` becomes available only when `/api/v1/jobs/types`
+advertises `video.create`; primitive script or render jobs do not enable it.
 
 The live Master catalog observed on 2026-09-23 advertises these generic M2M
 types: `script.generate` (`script.generate.v1` →
@@ -139,26 +140,15 @@ not expose them as machine-readable JSON Schemas.
 
 ## Calendar to scheduled publication
 
-The Calendar dialog contains the intended workflow, but generation is gated
-until a full-video assembler is available in the live M2M catalog. After that
-capability exists, InstaEdit can validate and download the final MP4, import it
-into the Media Library, and create a normal queued post with selected
-channel(s) and future `scheduled_at`. Calendar detail already opens a preview
-and direct link from the stored artifact's `media_url`.
+The Calendar dialog prepares the generation request without selecting or
+downloading media itself. When `video.create` is advertised, InstaEdit submits
+that root job, imports its final MP4 into the Media Library, and creates a
+normal queued post with selected channel(s) and future `scheduled_at`. Calendar
+detail opens a preview and direct link from the stored artifact's `media_url`.
 
-The input has `{pre, finalize, publish}` objects. `pre` carries scenes, clip
-references, script, output profile and the required `drive-production`
-delivery plan; `finalize` carries optional overlay/audio parameters; `publish`
-has title, caption, language, future RFC3339 `scheduled_at`, privacy and
-workspace `platform_account_id` targets.
-
-The Calendar dialog can create `pre` from a topic through
-`POST /api/v1/agent/video-plan`. The BFF uses the Master's read-only
-`GET /api/v1/media/assets?source=youtube&search=…` catalog and its asset detail
-route, then includes only ready Drive-backed clips with a SHA-256 reference in
-the returned scene manifest. The operator can review/edit this manifest before
-submitting. This discovers and reuses registered clips; it does not initiate
-new YouTube downloads, write a narration script, or generate a thumbnail.
+`POST /api/v1/agent/video-plan` now returns the typed `generation` request from
+the topic, language, duration and production options. Media discovery happens
+inside PipelineGen so it can acquire new sources without manual asset picking.
 
 The Calendar can persist an individual scheduled generation intent as a draft
 post. Its workspace-scoped idempotency key prevents duplicate cards. The
@@ -170,11 +160,10 @@ The intent stores the supplied IANA timezone alongside its UTC publish instant;
 the Calendar displays the generation time in that stored timezone. Bulk
 30-day plan creation is not implemented.
 
-Topic search is read-only catalog discovery; it is not a source-download
-operation. The live Master catalog does
-not advertise a parent `video.create`, `video.assemble`, final-audio or
-thumbnail job, so those phases are not claimed as completed by this
-integration.
+As of the last live catalog check, the Master had not yet advertised
+`video.create`. Therefore the Calendar continues to reject new production
+intents until the PipelineGen parent and its production child handlers are
+deployed and the type appears in the M2M catalog.
 
 Starting that workflow first reserves its scheduled draft post, so the Calendar
 shows a card before rendering begins. The recovery worker projects the latest

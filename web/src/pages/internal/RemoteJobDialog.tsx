@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, CircleDot, Loader2, Send, X } from "lucide-react";
 import { authedFetch, fetchSession } from "../../lib/auth";
+import { listAllAccounts } from "../../features/channels/api/channelsApi";
+import { isPublishableAccount, type PlatformAccount } from "../../types/uploads";
 
 type JsonObject = Record<string, unknown>;
 
@@ -74,6 +76,46 @@ function getTimeline(value: unknown): Array<{ label: string; status: string }> {
   });
 }
 
+function stageLabel(value: string): string {
+  const labels: Record<string, string> = {
+    "content.generate_script": "Script", "content.extract_youtube_clip": "Acquisizione clip YouTube",
+    "content.acquire_stock": "Acquisizione media stock", "content.generate_voiceover": "Voiceover",
+    "content.render_clip": "Render clip", "content.assemble_video": "Assemblaggio video",
+    "content.create_video": "Produzione video", "media.upload": "Upload media",
+    "content.publish": "Pubblicazione sui canali",
+  };
+  return labels[value] ?? value.replace(/^content\./, "").replace(/[._]/g, " ");
+}
+
+function statusLabel(value: string): string {
+  const labels: Record<string, string> = {
+    queued: "in coda", pending: "in attesa", running: "in corso", processing: "in elaborazione",
+    completed: "completato", complete: "completato", succeeded: "completato", success: "completato",
+    failed: "non riuscito", error: "errore", cancelled: "annullato", canceled: "annullato",
+    ready: "pronto", scheduled: "programmato",
+  };
+  return labels[value.toLowerCase()] ?? value.replace(/_/g, " ");
+}
+
+function timelineFromSnapshot(value: unknown): Array<{ label: string; status: string }> {
+  const object = asObject(value);
+  const direct = getTimeline(object);
+  if (direct.length) return direct;
+  const progress = asObject(object.progress_json ?? object.ProgressJSON);
+  const persisted = getTimeline(progress);
+  if (persisted.length) return persisted;
+  const remote = asObject(object.remote_status ?? object.RemoteStatus);
+  const remoteTimeline = getTimeline(remote);
+  if (remoteTimeline.length) return remoteTimeline;
+  const steps = Array.isArray(object.steps) ? object.steps : [];
+  return steps.flatMap((entry) => {
+    const item = asObject(entry);
+    const step = asObject(item.step ?? item.Step ?? item);
+    const name = typeof step.tool_name === "string" ? step.tool_name : typeof step.ToolName === "string" ? step.ToolName : "";
+    return name ? [{ label: stageLabel(name), status: String(step.status ?? step.Status ?? "queued") }] : [];
+  });
+}
+
 function normalizeTypes(value: unknown): string[] {
   const object = asObject(value);
   const list = Array.isArray(value) ? value : Array.isArray(object.types) ? object.types : [];
@@ -111,15 +153,15 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
   const [videoTitle, setVideoTitle] = useState("");
   const [videoTopic, setVideoTopic] = useState("");
   const [videoDuration, setVideoDuration] = useState("180");
+  const [videoLanguage, setVideoLanguage] = useState("it");
   const [planning, setPlanning] = useState(false);
   const [videoCaption, setVideoCaption] = useState("");
   const [videoSchedule, setVideoSchedule] = useState(() => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
-  const [videoTarget, setVideoTarget] = useState("");
-  const [workspaceChannels, setWorkspaceChannels] = useState<Array<{ platform_account_id: number; enabled: boolean }>>([]);
+  const [videoTargets, setVideoTargets] = useState<string[]>([]);
+  const [workspaceChannels, setWorkspaceChannels] = useState<Array<{ platform_account_id: number; enabled: boolean; account?: PlatformAccount }>>([]);
   const [workspaceID, setWorkspaceID] = useState<number | undefined>();
   const [videoPrivacy, setVideoPrivacy] = useState("unlisted");
-  const [videoPre, setVideoPre] = useState('{\n  "video_name": "Nuovo video",\n  "script_text": "",\n  "scenes": [],\n  "output": {"width": 1920, "height": 1080, "fps": 24, "format": "mp4"},\n  "delivery_plan": [{"destination_id": "drive-production", "priority": 1, "retry_budget": 3}]\n}');
-  const [videoFinalize, setVideoFinalize] = useState("{} ");
+  const [videoGeneration, setVideoGeneration] = useState<JsonObject | null>(null);
   const [runID, setRunID] = useState("");
 
   useEffect(() => {
@@ -137,7 +179,7 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
         const output = current.output_json ?? current.OutputJSON;
         if (!active) return;
         const outputObject = asObject(output);
-        setJob({ status: currentStatus, progress: currentProgress, remote_status: item.remote_status ?? item.RemoteStatus, phase: current.remote_status ?? current.RemoteStatus, post_id: outputObject.post_id, error: current.error_message ?? current.ErrorMessage });
+        setJob({ status: currentStatus, progress: currentProgress, remote_status: item.remote_status ?? item.RemoteStatus, progress_json: current.progress_json ?? current.ProgressJSON, phase: current.remote_status ?? current.RemoteStatus, post_id: outputObject.post_id, error: current.error_message ?? current.ErrorMessage });
         if (currentStatus === "completed") {
           onCalendarRefresh?.();
           setRunID("");
@@ -195,12 +237,18 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
     let active = true;
     void authedFetch(`/api/v1/workspaces/${workspaceID}/channels`)
       .then(responseJSON)
-      .then((body) => {
+      .then(async (body) => {
         if (!active) return;
         const list = Array.isArray(asObject(body).channels) ? asObject(body).channels as unknown[] : [];
-        const channels = list.map((entry) => asObject(entry)).filter((channel) => typeof channel.platform_account_id === "number" && channel.enabled === true) as Array<{ platform_account_id: number; enabled: boolean }>;
+        const accounts = await listAllAccounts();
+        if (!active) return;
+        const accountByID = new Map(accounts.map((account) => [account.id, account]));
+        const channels = list.map((entry) => asObject(entry))
+          .filter((channel) => typeof channel.platform_account_id === "number" && channel.enabled === true)
+          .map((channel) => ({ platform_account_id: Number(channel.platform_account_id), enabled: true, account: accountByID.get(Number(channel.platform_account_id)) }))
+          .filter((channel) => channel.account && isPublishableAccount(channel.account));
         setWorkspaceChannels(channels);
-        if (channels[0]) setVideoTarget((current) => current || String(channels[0].platform_account_id));
+        setVideoTargets((current) => current.filter((id) => channels.some((channel) => String(channel.platform_account_id) === id)));
       })
       .catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : "Impossibile caricare i canali del workspace."); });
     return () => { active = false; };
@@ -229,7 +277,7 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
     };
   }, [jobID, open]);
 
-  const timeline = useMemo(() => getTimeline(job), [job]);
+  const timeline = useMemo(() => timelineFromSnapshot(job), [job]);
   const status = getStatus(job);
   const progress = getProgress(job);
   const terminal = TERMINAL_STATUSES.has(status.toLowerCase());
@@ -237,34 +285,24 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
   async function submit(asDurableIntent = false) {
     setError("");
     if (mode === "video") {
-      let pre: unknown;
-      let finalize: unknown;
-      const targetID = Number(videoTarget);
+      const targetIDs = [...new Set(videoTargets.map(Number))];
       const scheduledAt = new Date(videoSchedule);
-      try {
-        pre = JSON.parse(videoPre);
-        finalize = JSON.parse(videoFinalize);
-      } catch {
-        setError("PREPARE e FINALIZE devono essere JSON validi.");
+      if (!videoGeneration || typeof videoGeneration.topic !== "string") {
+        setError("Prepara prima la richiesta completa del video.");
         return;
       }
-      if (!Array.isArray(asObject(pre).scenes) || (asObject(pre).scenes as unknown[]).length === 0) {
-        setError("Cerca prima il topic per generare il piano media e le scene.");
-        return;
-      }
-      if (!videoTitle.trim() || !Number.isSafeInteger(targetID) || targetID <= 0 || !Number.isFinite(scheduledAt.getTime())) {
-        setError("Inserisci titolo, account ID valido e data di pubblicazione.");
+      if ((!videoTitle.trim() && !videoTopic.trim()) || targetIDs.length === 0 || targetIDs.some((id) => !Number.isSafeInteger(id) || id <= 0) || !Number.isFinite(scheduledAt.getTime())) {
+        setError("Inserisci titolo, almeno un canale valido e data di pubblicazione.");
         return;
       }
       setSubmitting(true);
       try {
         const workflowPayload = {
-          pre,
-          finalize,
+          generation: videoGeneration,
           publish: {
-            title: videoTitle.trim(), caption: videoCaption, language: "it",
+            title: videoTitle.trim() || videoTopic.trim(), caption: videoCaption, language: videoLanguage,
             scheduled_at: scheduledAt.toISOString(), privacy: videoPrivacy,
-            targets: [{ platform_account_id: targetID }],
+            targets: targetIDs.map((platform_account_id) => ({ platform_account_id })),
           },
         };
         if (asDurableIntent) {
@@ -293,7 +331,7 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
           }),
         })));
         onCalendarRefresh?.();
-        setJob({ status: "running", run_id: createdRunID, phase: "PREPARE / FINALIZE", calendar_post_id: accepted.calendar_post_id });
+        setJob({ status: "running", run_id: createdRunID, phase: "QUEUED", calendar_post_id: accepted.calendar_post_id });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Avvio creazione video fallito.");
         setRunID("");
@@ -333,11 +371,11 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
     try {
       const body = asObject(await responseJSON(await authedFetch("/api/v1/agent/video-plan", {
         method: "POST",
-        body: JSON.stringify({ topic: videoTopic.trim(), title: videoTitle.trim(), target_duration_seconds: Number(videoDuration) }),
+        body: JSON.stringify({ topic: videoTopic.trim(), title: videoTitle.trim() || videoTopic.trim(), target_duration_seconds: Number(videoDuration), language: videoLanguage, aspect_ratio: "16:9", voiceover: true, overlays: true }),
       })));
-      setVideoPre(JSON.stringify(body.pre ?? {}, null, 2));
-      setVideoFinalize(JSON.stringify(body.finalize ?? {}, null, 2));
-      setJob({ status: "ready", scene_count: body.scene_count, estimated_source_seconds: body.estimated_source_seconds, selected_assets: body.selected_assets });
+      const generation = asObject(body.generation);
+      setVideoGeneration(generation);
+      setJob({ status: "ready", topic: generation.topic, duration_seconds: generation.duration_seconds, media_sources: generation.media_sources });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ricerca media e pianificazione video fallite.");
     } finally { setPlanning(false); }
@@ -364,18 +402,21 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
             </label>
             {mode === "video" ? <>
               <label className="block text-xs font-semibold text-white/60">Titolo<input value={videoTitle} onChange={(event) => setVideoTitle(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
-              <label className="block text-xs font-semibold text-white/60">Topic / brief<input value={videoTopic} onChange={(event) => setVideoTopic(event.target.value)} placeholder="Mike Tyson training interview" className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
-              <div className="flex gap-3"><label className="block flex-1 text-xs font-semibold text-white/60">Durata target (secondi)<input type="number" min={30} max={600} value={videoDuration} onChange={(event) => setVideoDuration(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label><button type="button" onClick={() => void planVideo()} disabled={planning || videoTopic.trim().length < 3} className="mt-5 inline-flex items-center gap-2 self-start rounded-xl border border-white/15 bg-white/[0.06] px-3 py-2.5 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-45">{planning ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Cerca media</button></div>
+              <label className="block text-xs font-semibold text-white/60">Topic / brief<input value={videoTopic} onChange={(event) => { setVideoTopic(event.target.value); setVideoGeneration(null); }} placeholder="Mike Tyson training interview" className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
+              <div className="grid grid-cols-[1fr_110px_auto] gap-3"><label className="block text-xs font-semibold text-white/60">Durata target (secondi)<input type="number" min={30} max={1800} value={videoDuration} onChange={(event) => { setVideoDuration(event.target.value); setVideoGeneration(null); }} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label><label className="block text-xs font-semibold text-white/60">Lingua<select value={videoLanguage} onChange={(event) => { setVideoLanguage(event.target.value); setVideoGeneration(null); }} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-[#2a2a2a] px-3 py-2.5 text-sm text-white"><option value="it">Italiano</option><option value="en">English</option></select></label><button type="button" onClick={() => void planVideo()} disabled={planning || videoTopic.trim().length < 3} className="mt-5 inline-flex items-center gap-2 self-start rounded-xl border border-white/15 bg-white/[0.06] px-3 py-2.5 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-45">{planning ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Prepara richiesta</button></div>
               <label className="block text-xs font-semibold text-white/60">Descrizione<textarea value={videoCaption} onChange={(event) => setVideoCaption(event.target.value)} rows={2} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-xs font-semibold text-white/60">Pubblica il<input type="datetime-local" value={videoSchedule} onChange={(event) => setVideoSchedule(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" /></label>
-                <label className="block text-xs font-semibold text-white/60">Canale
-                  {workspaceChannels.length > 0 ? <select value={videoTarget} onChange={(event) => setVideoTarget(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white">{workspaceChannels.map((channel) => <option key={channel.platform_account_id} value={channel.platform_account_id}>Account {channel.platform_account_id}</option>)}</select> : <input inputMode="numeric" value={videoTarget} onChange={(event) => setVideoTarget(event.target.value)} placeholder="Platform account ID" className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white" />}
-                </label>
+                <fieldset className="block text-xs font-semibold text-white/60"><legend>Canali destinatari</legend>
+                  {workspaceChannels.length > 0 ? <div className="mt-1.5 max-h-32 space-y-1 overflow-auto rounded-xl border border-white/[0.12] bg-white/[0.04] p-2">{workspaceChannels.map((channel) => <label key={channel.platform_account_id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-white/75 hover:bg-white/[0.06]"><input type="checkbox" checked={videoTargets.includes(String(channel.platform_account_id))} onChange={(event) => setVideoTargets((current) => event.target.checked ? [...current, String(channel.platform_account_id)] : current.filter((id) => id !== String(channel.platform_account_id)))} /><span>{channel.account?.platform ?? "Canale"} · {channel.account?.username ? `@${channel.account.username}` : `Account ${channel.platform_account_id}`}</span><span className="ml-auto text-white/35">ID {channel.platform_account_id}</span></label>)}</div> : <p className="mt-1.5 rounded-xl border border-white/[0.08] bg-black/15 px-3 py-2.5 text-xs text-white/45">Nessun canale pubblicabile collegato a questo workspace.</p>}
+                </fieldset>
               </div>
+              {videoGeneration && <div className="rounded-xl border border-emerald-300/15 bg-emerald-300/[0.05] px-3 py-2 text-xs leading-5 text-emerald-100/75">
+                <p className="font-semibold">Piano preparato · {String(videoGeneration.duration_seconds ?? "durata n/d")}s · {String(videoGeneration.aspect_ratio ?? "formato n/d")}</p>
+                <p>Fonti media: {Array.isArray(videoGeneration.media_sources) ? (videoGeneration.media_sources as unknown[]).join(", ") : "non indicate"} · Voiceover: {videoGeneration.voiceover === true ? "richiesto" : videoGeneration.voiceover === false ? "disattivato" : "non indicato"}</p>
+              </div>}
               <label className="block text-xs font-semibold text-white/60">Privacy<select value={videoPrivacy} onChange={(event) => setVideoPrivacy(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white"><option value="unlisted">Non in elenco</option><option value="private">Privato</option><option value="public">Pubblico</option></select></label>
-              <label className="block text-xs font-semibold text-white/60">Piano scene generato dalla media catalog (modificabile)<textarea value={videoPre} onChange={(event) => setVideoPre(event.target.value)} rows={7} spellCheck={false} className="mt-1.5 w-full resize-y rounded-xl border border-white/[0.12] bg-black/20 px-3 py-2.5 font-mono text-[11px] leading-5 text-white" /></label>
-              <label className="block text-xs font-semibold text-white/60">FINALIZE JSON (overlay e audio opzionali)<textarea value={videoFinalize} onChange={(event) => setVideoFinalize(event.target.value)} rows={3} spellCheck={false} className="mt-1.5 w-full resize-y rounded-xl border border-white/[0.12] bg-black/20 px-3 py-2.5 font-mono text-[11px] leading-5 text-white" /></label>
+              <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2 text-xs leading-5 text-white/55"><p className="font-semibold text-white/70">Catena di montaggio</p><p>Brief → script → ricerca/acquisizione media → voiceover → render → assemblaggio → import del video → post e target di pubblicazione.</p><p className="mt-1 text-white/40">Ogni fase mostra lo stato restituito dal Master. Il caricamento su ciascun social viene confermato separatamente dal worker di pubblicazione; “post creato” indica solo che il contenuto è nel calendario.</p></div>
             </> : <>
             <label className="block text-xs font-semibold text-white/60">Tipo job
               <select value={type} onChange={(event) => setType(event.target.value)} disabled={loadingTypes || types.length === 0} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 text-sm text-white outline-none focus:border-white/30">
@@ -397,10 +438,10 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
             <label className="block text-xs font-semibold text-white/60">Idempotency key
               <input value={idempotencyKey} onChange={(event) => setIdempotencyKey(event.target.value)} className="mt-1.5 w-full rounded-xl border border-white/[0.12] bg-white/[0.06] px-3 py-2.5 font-mono text-xs text-white outline-none focus:border-white/30" />
             </label>
-            {mode === "video" && <button type="button" onClick={() => void submit(true)} disabled={submitting || !idempotencyKey} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/35 bg-sky-300/10 px-4 py-2.5 text-sm font-semibold text-sky-100 transition-colors hover:bg-sky-300/20 disabled:cursor-not-allowed disabled:opacity-40">
+            {mode === "video" && <button type="button" onClick={() => void submit(true)} disabled={submitting || !idempotencyKey || !videoGeneration || videoTargets.length === 0} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/35 bg-sky-300/10 px-4 py-2.5 text-sm font-semibold text-sky-100 transition-colors hover:bg-sky-300/20 disabled:cursor-not-allowed disabled:opacity-40">
               {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Programma e genera in automatico
             </button>}
-            <button type="button" onClick={() => void submit()} disabled={submitting || !idempotencyKey || (mode === "remote" && (!type || !project))} className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40">
+            <button type="button" onClick={() => void submit()} disabled={submitting || !idempotencyKey || (mode === "remote" && (!type || !project)) || (mode === "video" && (!videoGeneration || videoTargets.length === 0))} className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40">
               {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} {mode === "video" ? "Genera subito" : "Invia job"}
             </button>
           </div>
@@ -415,10 +456,12 @@ export function RemoteJobDialog({ open, onClose, onCalendarRefresh }: RemoteJobD
               <>
                 <div className="mt-4 flex items-center gap-2">
                   {terminal ? <CheckCircle2 size={18} className={status.toLowerCase().includes("fail") || status.toLowerCase() === "error" ? "text-red-300" : "text-emerald-300"} /> : <CircleDot size={18} className="animate-pulse text-amber-300" />}
-                  <span className="text-sm font-bold capitalize">{status}</span>
+                  <span className="text-sm font-bold capitalize">{statusLabel(status)}</span>
                   {progress && <span className="ml-auto text-xs text-white/50">{progress}</span>}
                 </div>
-                {timeline.length > 0 && <div className="mt-5 space-y-2 border-l border-white/[0.12] pl-3">{timeline.map((entry, index) => <div key={`${entry.label}-${index}`} className="relative text-xs"><span className="absolute -left-[18px] top-0.5 h-2 w-2 rounded-full bg-white/35" /><span className="text-white/75">{entry.label}</span><span className="ml-2 text-white/35">{entry.status}</span></div>)}</div>}
+                {timeline.length > 0 && <div className="mt-5 space-y-2 border-l border-white/[0.12] pl-3">{timeline.map((entry, index) => <div key={`${entry.label}-${index}`} className="relative text-xs"><span className="absolute -left-[18px] top-0.5 h-2 w-2 rounded-full bg-white/35" /><span className="text-white/75">{entry.label}</span><span className="ml-2 text-white/35">{statusLabel(entry.status)}</span></div>)}</div>}
+                {mode === "video" && timeline.length === 0 && <p className="mt-4 text-xs leading-5 text-white/45">Il Master non ha ancora restituito le singole fasi. Lo stato complessivo è aggiornato; i dettagli tecnici ricevuti restano consultabili qui sotto.</p>}
+                {mode === "video" && <p className="mt-4 text-[11px] leading-4 text-white/40">Voiceover, media acquisiti, render e upload sono indicati come completati solo quando il Master li restituisce nella timeline o nel payload di stato.</p>}
                 <pre className="mt-5 max-h-44 overflow-auto rounded-xl bg-black/20 p-3 text-[10px] leading-4 text-white/45">{JSON.stringify(job, null, 2)}</pre>
               </>
             )}

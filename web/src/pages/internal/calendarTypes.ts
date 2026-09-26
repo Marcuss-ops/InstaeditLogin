@@ -39,7 +39,7 @@ export type YouTubeCopyrightAlert = {
 };
 
 export type Workspace = { id: number; name: string };
-export type CalendarGroup = { id: number; name: string; workspace_id: number };
+export type CalendarGroup = { id: number; name: string; workspace_id: number; parent_group_id?: number | null; account_ids?: number[] };
 
 export type ContentMetric = {
   key: string;

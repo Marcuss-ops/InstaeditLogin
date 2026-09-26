@@ -105,6 +105,28 @@ type videoPublicationRequest struct {
 	Targets        []videoPublishTarget `json:"targets"`
 }
 
+func validateVideoGeneration(raw json.RawMessage) error {
+	var request struct {
+		Topic           string   `json:"topic"`
+		Language        string   `json:"language"`
+		DurationSeconds int      `json:"duration_seconds"`
+		MediaSources    []string `json:"media_sources"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &request) != nil || strings.TrimSpace(request.Topic) == "" || strings.TrimSpace(request.Language) == "" || request.DurationSeconds <= 0 || len(request.MediaSources) == 0 {
+		return errors.New("generation requires topic, language, positive duration_seconds, and media_sources")
+	}
+	allowed := map[string]bool{"youtube": true, "stock": true, "artlist": true}
+	seen := make(map[string]bool, len(request.MediaSources))
+	for _, source := range request.MediaSources {
+		source = strings.TrimSpace(source)
+		if !allowed[source] || seen[source] {
+			return fmt.Errorf("generation media_sources contains unsupported or duplicate source %q", source)
+		}
+		seen[source] = true
+	}
+	return nil
+}
+
 func (p *agentVideoPublisher) Publish(ctx context.Context, identity auth.Identity, workspaceID int64, runID string, step repository.AgentRunStep, remote json.RawMessage) (json.RawMessage, error) {
 	if identity == nil || identity.UserID() <= 0 || identity.WorkspaceID() != workspaceID {
 		return nil, errors.New("agent video identity does not own the run workspace")
@@ -191,7 +213,10 @@ func (p *agentVideoPublisher) Validate(ctx context.Context, identity auth.Identi
 	}
 	var plan createVideoPayload
 	if err := json.Unmarshal(payload, &plan); err != nil || len(plan.Publish) == 0 {
-		return errors.New("video payload must include publish details")
+		return errors.New("video payload must include generation and publish details")
+	}
+	if err := validateVideoGeneration(plan.Generation); err != nil {
+		return err
 	}
 	var publish videoPublicationRequest
 	if err := json.Unmarshal(plan.Publish, &publish); err != nil {
@@ -474,7 +499,7 @@ func artifactReference(raw json.RawMessage) (string, int64, error) {
 	}
 	var urlValue string
 	var size int64
-	for _, key := range []string{"artifact_url", "download_url"} {
+	for _, key := range []string{"artifact_url", "download_url", "media_url"} {
 		if json.Unmarshal(value[key], &urlValue) == nil && strings.TrimSpace(urlValue) != "" {
 			break
 		}
@@ -499,8 +524,22 @@ func artifactReference(raw json.RawMessage) (string, int64, error) {
 			size = nestedSize
 		}
 	}
+	// video.create returns a structured result. Its final video is the
+	// publication artifact; keep URL origin enforcement in DownloadArtifact.
+	if nested, ok := value["final_video"]; ok {
+		nestedURL, nestedSize, err := artifactReference(nested)
+		if err != nil {
+			return "", 0, err
+		}
+		if urlValue == "" {
+			urlValue = nestedURL
+		}
+		if size == 0 {
+			size = nestedSize
+		}
+	}
 	if urlValue == "" {
-		return "", 0, errors.New("completed render has no artifact_url")
+		return "", 0, errors.New("completed render has no artifact/download/media URL")
 	}
 	return urlValue, size, nil
 }

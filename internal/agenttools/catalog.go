@@ -47,10 +47,7 @@ func NewCatalog() Catalog {
 		{Name: "content.generate_image", RemoteType: "image.generate.google", Description: "Generate an image asset.", RequiredPermission: PermissionAutomation, Submit: true},
 		{Name: "content.render_clip", RemoteType: "clip.render", Description: "Render a clip through the execution plane.", RequiredPermission: PermissionAutomation, Submit: true},
 		{Name: "content.assemble_video", RemoteType: "video.assemble", Description: "Assemble compatible rendered clips and final audio.", RequiredPermission: PermissionAutomation, Submit: true},
-		// This tool needs a durable full-video create capability. PipelineGen's
-		// current M2M catalog intentionally exposes clip.render only; script and
-		// clip rendering do not imply that a final video can be assembled.
-		{Name: "content.create_video", RemoteType: "scene.composite.v1", Description: "Render a complete video and schedule it for publication.", RequiredPermission: PermissionAutomation, Submit: true},
+		{Name: "content.create_video", RemoteType: "video.create", Description: "Generate a complete video and schedule it for publication.", RequiredPermission: PermissionAutomation, Submit: true},
 		{Name: "publishing.create_thumbnail", Description: "Create a thumbnail on the control plane.", RequiredPermission: PermissionAutomation},
 		{Name: "publishing.attach_thumbnail", Description: "Attach a thumbnail to a publishing session.", RequiredPermission: PermissionAutomation},
 		{Name: "publishing.publish_video", Description: "Publish a prepared video through InstaEdit.", RequiredPermission: PermissionAutomation},
@@ -87,12 +84,6 @@ func (c Catalog) Available(remoteTypes json.RawMessage) ([]Definition, error) {
 			d.ResultSchema = remote.ResultSchema
 			d.ArtifactKinds = append([]string(nil), remote.ArtifactKinds...)
 			d.ResourceClass = remote.EstimatedResourceClass
-		}
-		// Do not infer a full-video assembler from script/clip primitives. The
-		// PREPARE/FINALIZE route used by this tool is not part of the configured
-		// Master M2M API, and no supported full-video contract is advertised.
-		if d.Name == "content.create_video" {
-			d.Available = false
 		}
 		out = append(out, d)
 	}

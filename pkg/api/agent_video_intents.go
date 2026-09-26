@@ -55,7 +55,7 @@ func (m *AgentRunsModule) handleCreateVideoIntent(w http.ResponseWriter, req *ht
 		}
 	}
 	if !videoReady {
-		writeError(w, http.StatusUnprocessableEntity, "scheduled video creation is unavailable: the execution plane does not advertise a full-video assembler")
+		writeError(w, http.StatusUnprocessableEntity, "scheduled video creation is unavailable: the execution plane does not advertise video.create")
 		return
 	}
 	var body createAgentVideoIntentRequest
@@ -81,8 +81,8 @@ func (m *AgentRunsModule) handleCreateVideoIntent(w http.ResponseWriter, req *ht
 		return
 	}
 	var plan createVideoPayload
-	if err := json.Unmarshal(body.Payload, &plan); err != nil || len(plan.Pre) == 0 || len(plan.Finalize) == 0 {
-		writeError(w, 400, "payload requires pre, finalize, and publish objects")
+	if err := json.Unmarshal(body.Payload, &plan); err != nil || len(plan.Generation) == 0 || len(plan.Publish) == 0 {
+		writeError(w, 400, "payload requires generation and publish objects")
 		return
 	}
 	var publish videoPublicationRequest

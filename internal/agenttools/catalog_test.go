@@ -35,7 +35,7 @@ func TestCatalogSupportsPlainTypeArray(t *testing.T) {
 	}
 }
 
-func TestCatalogHidesFullVideoUntilMasterAdvertisesAssembler(t *testing.T) {
+func TestCatalogExposesFullVideoOnlyWhenMasterAdvertisesVideoCreate(t *testing.T) {
 	got, err := NewCatalog().Available(json.RawMessage(`{"types":[{"type":"script.generate"},{"type":"clip.render"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -45,6 +45,19 @@ func TestCatalogHidesFullVideoUntilMasterAdvertisesAssembler(t *testing.T) {
 			t.Fatal("content.create_video must stay unavailable without a supported full-video endpoint")
 		}
 	}
+	got, err = NewCatalog().Available(json.RawMessage(`{"types":[{"type":"video.create","input_schema":"video.create.v1"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range got {
+		if definition.Name == "content.create_video" {
+			if !definition.Available || definition.RemoteType != "video.create" || definition.InputSchema != "video.create.v1" {
+				t.Fatalf("video.create contract not projected: %+v", definition)
+			}
+			return
+		}
+	}
+	t.Fatal("content.create_video missing from catalog")
 }
 
 func TestCatalogPreservesRemoteSchemaReferencesAndArtifacts(t *testing.T) {

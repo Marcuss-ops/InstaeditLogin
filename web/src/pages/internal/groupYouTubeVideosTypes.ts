@@ -48,6 +48,8 @@ export interface GroupYouTubeVideo {
   editor_status?: string;
   desired_privacy?: string;
   publish_at?: string;
+  /** Actual provider-reported publish time, distinct from a scheduled time. */
+  published_at?: string;
   actual_privacy?: string;
   youtube_sync_status?: string;
   phantom?: boolean;

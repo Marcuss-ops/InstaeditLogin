@@ -1,84 +1,57 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { Calendar as CalendarIcon, Cpu, Plus } from "lucide-react";
-import { type CalendarViewMode } from "./CalendarGrid";
-import { useCalendarPosts } from "./useCalendarPosts";
-import { CalendarToolbar } from "./CalendarToolbar";
-import { CalendarPostsPanel } from "./CalendarPostsPanel";
-import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
+import { useCallback, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { Calendar as CalendarIcon, Cpu, FolderTree, Plus } from "lucide-react";
+import { CalendarGroupView } from "./CalendarGroupView";
+import { CalendarScheduleView } from "./CalendarScheduleView";
 import { RemoteJobDialog } from "./RemoteJobDialog";
 
+type CalendarMode = "groups" | "calendar";
+
 export function CalendarPage() {
-  const view: CalendarViewMode = "month";
-  const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [mode, setMode] = useState<CalendarMode>("groups");
   const [jobDialogOpen, setJobDialogOpen] = useState(false);
-  const posts = useCalendarPosts();
-  const horizonEnd = new Date(currentDate);
-  horizonEnd.setDate(horizonEnd.getDate() + 29);
-  const formattedDate = `${currentDate.toLocaleDateString(undefined, { day: "numeric", month: "short" })} – ${horizonEnd.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const groupID = Number(searchParams.get("group_id"));
+  const selectedGroupID = Number.isSafeInteger(groupID) && groupID > 0 ? groupID : null;
+  const selectGroup = useCallback((id: number) => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.set("group_id", String(id));
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   return (
-    <div className="min-h-full p-4 sm:p-6 lg:p-8 bg-[#030308] text-[#e8e8ef]">
-      <div className="w-full max-w-none h-[calc(100vh-64px-2rem)] flex flex-col">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6 shrink-0">
+    <div className="min-h-full bg-[#030308] p-4 text-[#e8e8ef] sm:p-6 lg:p-8">
+      <div className="flex min-h-[calc(100vh-64px-2rem)] w-full flex-col">
+        <div className="mb-5 flex shrink-0 flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-[24px] sm:text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
-              <CalendarIcon size={28} className="text-white/40" />
-              Calendar
+            <h1 className="flex items-center gap-3 text-[24px] font-extrabold tracking-[-0.02em] text-white sm:text-[28px]">
+              {mode === "groups" ? <FolderTree size={27} className="text-white/40" /> : <CalendarIcon size={27} className="text-white/40" />}
+              Pubblicazioni YouTube
             </h1>
-            <p className="text-[14px] sm:text-[15px] text-[#9aa0aa] mt-1">
-              Video programmati per tutti i tuoi canali, in un calendario unico.
-            </p>
+            <p className="mt-1 text-[14px] text-[#9aa0aa]">Seleziona un gruppo per vedere i canali, i sottogruppi e i video pubblicati o programmati.</p>
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setJobDialogOpen(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-white/[0.12] bg-white/[0.04] text-white text-[13px] font-semibold hover:bg-white/[0.08] transition-colors"
-            >
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-xl border border-white/[0.10] bg-white/[0.03] p-1" role="group" aria-label="Vista pubblicazioni">
+              <button type="button" aria-pressed={mode === "groups"} onClick={() => setMode("groups")} className={`rounded-lg px-3 py-2 text-xs font-semibold ${mode === "groups" ? "bg-white text-black" : "text-white/60 hover:text-white"}`}><FolderTree size={14} className="mr-1.5 inline" />Gruppi</button>
+              <button type="button" aria-pressed={mode === "calendar"} onClick={() => setMode("calendar")} className={`rounded-lg px-3 py-2 text-xs font-semibold ${mode === "calendar" ? "bg-white text-black" : "text-white/60 hover:text-white"}`}><CalendarIcon size={14} className="mr-1.5 inline" />Calendario</button>
+            </div>
+            <button type="button" onClick={() => setJobDialogOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 py-2 text-[13px] font-semibold text-white hover:bg-white/[0.08]">
               <Cpu size={16} /> Invia job
             </button>
-            <Link
-              to="/app/compose"
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
-            >
+            <Link to="/app/compose" className="inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-[13px] font-semibold text-black no-underline hover:bg-white/90">
               <Plus size={16} /> Nuovo post
             </Link>
           </div>
         </div>
 
-        <CalendarToolbar
-            formattedDate={formattedDate}
-            onPrevious={() => setCurrentDate((date) => { const next = new Date(date); next.setDate(next.getDate() - 30); return next; })}
-            onNext={() => setCurrentDate((date) => { const next = new Date(date); next.setDate(next.getDate() + 30); return next; })}
-            onToday={() => setCurrentDate(new Date())}
-            statusFilter={posts.statusFilter}
-            setStatusFilter={posts.setStatusFilter}
-            groupFilter={posts.groupFilter}
-            setGroupFilter={posts.setGroupFilter}
-            groups={posts.state.kind === "ready" ? posts.state.groups : []}
-            hasActiveFilters={posts.hasActiveFilters}
-            clearFilters={posts.clearFilters}
-          />
-
-        <CalendarPostsPanel
-            state={posts.state}
-            filteredPosts={posts.filteredPosts}
-            view={view}
-            currentDate={currentDate}
-            hasActiveFilters={posts.hasActiveFilters}
-            clearFilters={posts.clearFilters}
-            load={posts.load}
-          />
-
-        {posts.groupFilter !== "all" && Number.isFinite(Number(posts.groupFilter)) && (
-          <div className="mt-4 shrink-0">
-            <GroupYouTubeVideos groupId={Number(posts.groupFilter)} />
-          </div>
-        )}
+        {mode === "groups"
+          ? <CalendarGroupView key={`groups-${refreshKey}`} selectedGroupID={selectedGroupID} onSelectGroup={selectGroup} />
+          : <CalendarScheduleView key={`calendar-${refreshKey}`} />}
       </div>
-      <RemoteJobDialog open={jobDialogOpen} onClose={() => setJobDialogOpen(false)} onCalendarRefresh={posts.load} />
+      <RemoteJobDialog open={jobDialogOpen} onClose={() => setJobDialogOpen(false)} onCalendarRefresh={() => setRefreshKey((key) => key + 1)} />
     </div>
   );
 }

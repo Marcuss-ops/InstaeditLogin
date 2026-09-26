@@ -91,7 +91,7 @@ func TestVideoIntentRejectsSchedulingWithoutFullVideoAssembler(t *testing.T) {
 		return req.WithContext(auth.WithIdentity(req.Context(), auth.NewApiKeyIdentity(9, 42, 7, []string{agenttools.PermissionAutomation})))
 	}
 	publishAt := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
-	body, _ := json.Marshal(map[string]any{"idempotency_key": "calendar-video-1", "timezone": "Europe/Rome", "payload": map[string]any{"pre": map[string]any{"scenes": []any{map[string]any{"scene_id": "s1"}}}, "finalize": map[string]any{}, "publish": map[string]any{"title": "Video", "scheduled_at": publishAt.Format(time.RFC3339), "targets": []any{map[string]any{"platform_account_id": 7}}}}})
+	body, _ := json.Marshal(map[string]any{"idempotency_key": "calendar-video-1", "timezone": "Europe/Rome", "payload": map[string]any{"generation": map[string]any{"topic": "topic", "language": "it", "duration_seconds": 60, "media_sources": []string{"youtube"}}, "publish": map[string]any{"title": "Video", "scheduled_at": publishAt.Format(time.RFC3339), "targets": []any{map[string]any{"platform_account_id": 7}}}}})
 	request := func(method, path string, body []byte) *httptest.ResponseRecorder {
 		req := withID(httptest.NewRequest(method, path, bytes.NewReader(body)))
 		w := httptest.NewRecorder()
@@ -99,7 +99,7 @@ func TestVideoIntentRejectsSchedulingWithoutFullVideoAssembler(t *testing.T) {
 		return w
 	}
 	w := request(http.MethodPost, "/api/v1/agent/video-intents", body)
-	if w.Code != http.StatusUnprocessableEntity || !bytes.Contains(w.Body.Bytes(), []byte("full-video assembler")) {
+	if w.Code != http.StatusUnprocessableEntity || !bytes.Contains(w.Body.Bytes(), []byte("video.create")) {
 		t.Fatalf("create without assembler: %d %s", w.Code, w.Body.String())
 	}
 	if len(store.byID) != 0 {
@@ -122,16 +122,16 @@ func (s intentWorkspaceStore) FindByID(id int64) (*models.Workspace, error) {
 func TestVideoIntentDispatcherFailsClosedWhenAssemblerIsUnavailable(t *testing.T) {
 	store := newFakeAgentRunStore()
 	intents := newFakeVideoIntentStore()
-	workflow := json.RawMessage(`{"pre":{"scenes":[{"scene_id":"s1"}]},"finalize":{},"publish":{"title":"Scheduled","scheduled_at":"2030-01-01T09:00:00Z","targets":[{"platform_account_id":7}]}}`)
+	workflow := json.RawMessage(`{"generation":{"topic":"topic","language":"it","duration_seconds":60,"media_sources":["youtube"]},"publish":{"title":"Scheduled","scheduled_at":"2030-01-01T09:00:00Z","targets":[{"platform_account_id":7}]}}`)
 	metadata, _ := json.Marshal(map[string]any{"agent_video_intent": true, "agent_schedule_key": "key-1", "generation_payload": workflow, "generation_status": "DISPATCHING", "generation_at": time.Now().UTC()})
 	intents.due = []models.Post{{ID: 1, WorkspaceID: 7, Title: "Scheduled", Metadata: metadata}}
-	master := &stagedVideoJobMaster{}
+	master := fakeAgentJobMaster{}
 	module := &AgentRunsModule{deps: AgentRunsModuleDeps{Store: store, Catalog: agenttools.NewCatalog(), JobMaster: master, VideoPublisher: fakeAgentVideoPublisher{}, VideoIntents: intents, Workspaces: intentWorkspaceStore{workspace: &models.Workspace{ID: 7, OwnerID: 42}}}}
 	if err := module.dispatchDueVideoIntents(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.runs) != 1 || len(store.steps) != 0 {
-		t.Fatalf("unsupported dispatch unexpectedly submitted a job: runs=%d steps=%d", len(store.runs), len(store.steps))
+		t.Fatalf("unsupported dispatch unexpectedly created a remote step: runs=%d steps=%d", len(store.runs), len(store.steps))
 	}
 	for _, run := range store.runs {
 		if run.ActorUserID != 42 || run.WorkspaceID != 7 || run.Status != "failed" {
