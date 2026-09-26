@@ -192,9 +192,9 @@ func (r *PostRepository) UpdateWorkerCalendarEventProgress(ctx context.Context, 
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE posts
 		SET metadata = COALESCE(metadata,'{}'::jsonb) || jsonb_build_object(
-			'generation_kind',$3,
-			'generation_status',$4,
-			'generation_phase',$5,
+			'generation_kind',$3::text,
+			'generation_status',$4::text,
+			'generation_phase',$5::text,
 			'generation_snapshot', jsonb_set(
 				COALESCE(metadata->'generation_snapshot','{}'::jsonb) || $7::jsonb,
 				'{worker_kinds}',
