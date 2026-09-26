@@ -96,6 +96,9 @@ func (r *PostRepository) FindWorkerCalendarEvent(ctx context.Context, workspaceI
 	if post == nil || post.WorkspaceID != workspaceID {
 		return nil, nil
 	}
+	if err := r.loadWorkerCalendarMetadata(ctx, workspaceID, id, post); err != nil {
+		return nil, fmt.Errorf("load worker calendar event metadata: %w", err)
+	}
 	return post, nil
 }
 
@@ -115,7 +118,18 @@ func (r *PostRepository) FindWorkerCalendarEventByJobID(ctx context.Context, wor
 	if post == nil || post.WorkspaceID != workspaceID {
 		return nil, nil
 	}
+	if err := r.loadWorkerCalendarMetadata(ctx, workspaceID, id, post); err != nil {
+		return nil, fmt.Errorf("load worker calendar event metadata: %w", err)
+	}
 	return post, nil
+}
+
+// FindByID intentionally omits arbitrary metadata for normal post reads. These
+// worker-only lookups need that JSONB document to expose current status and job
+// linkage and to send cancellation to the linked execution job.
+func (r *PostRepository) loadWorkerCalendarMetadata(ctx context.Context, workspaceID, id int64, post *models.Post) error {
+	return r.db.QueryRowContext(ctx, `SELECT metadata FROM posts
+		WHERE id=$1 AND workspace_id=$2 AND metadata->>'worker_calendar_event'='true'`, id, workspaceID).Scan(&post.Metadata)
 }
 
 func (r *PostRepository) CancelWorkerCalendarEvent(ctx context.Context, workspaceID int64, key string) error {
@@ -125,7 +139,7 @@ func (r *PostRepository) CancelWorkerCalendarEvent(ctx context.Context, workspac
 			updated_at=NOW()
 		WHERE workspace_id=$1 AND metadata->>'worker_event_key'=$2
 		  AND metadata->>'worker_calendar_event'='true'
-		  AND metadata->>'generation_status' NOT IN ('SUCCEEDED','COMPLETED','FAILED','CANCELLED')`, workspaceID, key)
+		  AND COALESCE(metadata->>'generation_status','QUEUED') NOT IN ('SUCCEEDED','COMPLETED','FAILED','CANCELLED')`, workspaceID, key)
 	if err != nil {
 		return fmt.Errorf("cancel worker calendar event: %w", err)
 	}
