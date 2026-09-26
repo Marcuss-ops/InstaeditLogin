@@ -148,6 +148,7 @@ func (r *Router) Setup() http.Handler {
 		JobMaster:               r.jobMasterClient,
 		VideoPublisher:          newAgentVideoPublisher(r.mediaStore, r.storageProvider, r.postStore, r.workspaceStore, r.teamStore, r.idempotencyStore, r.maxUploadBytes, r.publishHorizonDays()),
 		VideoIntents:            agentVideoIntentStoreFrom(r.postStore),
+		CalendarEvents:          workerCalendarEventStoreFrom(r.postStore),
 		Workspaces:              r.workspaceStore,
 	}))
 

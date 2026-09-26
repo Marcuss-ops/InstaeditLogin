@@ -94,6 +94,13 @@ function rowsFromEvents(value: unknown, source: string): CalendarProgressRow[] {
 export function getCalendarProgressRows(snapshot?: Record<string, unknown>): CalendarProgressRow[] {
   if (!snapshot) return [];
 
+  const workerKinds = asRecord(snapshot.worker_kinds);
+  if (workerKinds && Object.keys(workerKinds).length > 0) {
+    return Object.entries(workerKinds).slice(0, 12).map(([kind, value]) =>
+      rowFrom(displayName(kind), value, `worker-kind-${kind}`),
+    );
+  }
+
   const stages = asRecord(snapshot.stage_progress);
   if (stages && Object.keys(stages).length > 0) {
     return Object.entries(stages).slice(0, 12).map(([name, value]) =>

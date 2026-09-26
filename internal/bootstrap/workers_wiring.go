@@ -30,6 +30,7 @@ func (a *App) workerSpecs() []worker.WorkerSpec {
 		a.metadataGenerationWorkerSpec(),
 		a.tokenRefreshSweepWorkerSpec(),
 		a.snapshotRefreshSweepWorkerSpec(),
+		a.workerCalendarStaleSweepSpec(),
 	}
 	if a.Cfg != nil && a.Cfg.JobMaster.URL != "" && a.Cfg.JobMaster.M2MSecret != "" {
 		specs = append(specs, a.agentRunRecoveryWorkerSpec())

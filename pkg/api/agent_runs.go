@@ -51,7 +51,19 @@ type AgentRunsModuleDeps struct {
 	JobMaster               jobmaster.API
 	VideoPublisher          AgentVideoPublisher
 	VideoIntents            AgentVideoIntentStore
+	CalendarEvents          WorkerCalendarEventStore
 	Workspaces              WorkspaceStore
+}
+
+// WorkerCalendarEventStore lets execution workers create one Calendar draft
+// per generated video and report each remote job kind as it advances.
+type WorkerCalendarEventStore interface {
+	CreateWorkerCalendarEvent(*models.Post) (*models.Post, bool, error)
+	FindWorkerCalendarEvent(context.Context, int64, string) (*models.Post, error)
+	UpdateWorkerCalendarEvent(context.Context, int64, string, *string, *time.Time) error
+	DeleteWorkerCalendarEvent(context.Context, int64, string) error
+	UpdateWorkerCalendarEventProgress(context.Context, int64, string, string, string, string, *int, json.RawMessage) error
+	MarkStaleWorkerCalendarEvents(context.Context, time.Duration) (int64, error)
 }
 
 // AgentRunsModule mounts the /api/v1/agent/runs* routes. When Store is
@@ -71,9 +83,6 @@ var _ RouteModule = (*AgentRunsModule)(nil)
 
 // Register mounts the agent-runs routes under a protected sub-mux.
 func (m *AgentRunsModule) Register(mux chi.Router) {
-	if m.deps.Store == nil {
-		return
-	}
 	protect := m.deps.Protected
 	if protect == nil {
 		protect = func(h http.HandlerFunc) http.HandlerFunc { return h }
@@ -83,6 +92,15 @@ func (m *AgentRunsModule) Register(mux chi.Router) {
 		agentProtect = func(h http.HandlerFunc) http.HandlerFunc {
 			return m.deps.ProtectedWithPermission(agenttools.PermissionAutomation, h)
 		}
+	}
+	if m.deps.CalendarEvents != nil {
+		mux.Post("/api/v1/agent/calendar/events/batch", agentProtect(m.handleCreateWorkerCalendarEvents))
+		mux.Patch("/api/v1/agent/calendar/events/{eventKey}", agentProtect(m.handleEditWorkerCalendarEvent))
+		mux.Delete("/api/v1/agent/calendar/events/{eventKey}", agentProtect(m.handleDeleteWorkerCalendarEvent))
+		mux.Patch("/api/v1/agent/calendar/events/{eventKey}/progress", agentProtect(m.handleUpdateWorkerCalendarEventProgress))
+	}
+	if m.deps.Store == nil {
+		return
 	}
 
 	r := chi.NewRouter()

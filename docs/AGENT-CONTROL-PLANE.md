@@ -180,3 +180,15 @@ row with its outer progress envelope, preserving `current_stage`,
 Persisted event histories are bounded. The Calendar detail card shows the
 available stage progress and recent timeline/events; displayed phases are
 limited to phases the remote job actually emits.
+
+External workspace workers can also write Calendar progress directly through
+the authenticated automation API. `POST /api/v1/agent/calendar/events/batch`
+creates 1–20 draft video events in the caller's workspace and is idempotent by
+`event_key`. Workers update each event and job kind with
+`PATCH /api/v1/agent/calendar/events/{event_key}/progress`; the event records
+the latest overall phase plus per-kind status, progress and worker snapshot.
+Both routes require a workspace-scoped API key with the `automation`
+permission. This lets a worker reserve all 20 video cards up front and advance
+each card through script, stock, clip extraction, voiceover, image, render,
+assembly and video creation without waiting for the control plane to poll the
+Job Master.

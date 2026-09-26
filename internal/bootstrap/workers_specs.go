@@ -487,6 +487,30 @@ func (a *App) snapshotRefreshSweepWorkerSpec() worker.WorkerSpec {
 	}
 }
 
+func (a *App) workerCalendarStaleSweepSpec() worker.WorkerSpec {
+	return worker.WorkerSpec{
+		Name: "worker_calendar_stale_sweep",
+		Run: func(ctx context.Context) error {
+			repo := repository.NewPostRepository(a.DB)
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				count, err := repo.MarkStaleWorkerCalendarEvents(ctx, 15*time.Minute)
+				if err != nil {
+					slog.Error("worker calendar stale sweep failed", "error", err)
+				} else if count > 0 {
+					slog.Warn("worker calendar events timed out", "count", count)
+				}
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-ticker.C:
+				}
+			}
+		},
+	}
+}
+
 func (a *App) youtubeProcessingReconcilerWorkerSpec() worker.WorkerSpec {
 	return worker.WorkerSpec{
 		Name:     "youtube_processing_reconciler",

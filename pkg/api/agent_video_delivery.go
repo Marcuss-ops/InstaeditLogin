@@ -36,6 +36,11 @@ type agentVideoCalendarFinalizer interface {
 	FinalizeAgentVideoEvent(*models.Post, []*models.PostTarget) error
 }
 
+func workerCalendarEventStoreFrom(posts PostStore) WorkerCalendarEventStore {
+	store, _ := posts.(WorkerCalendarEventStore)
+	return store
+}
+
 type agentVideoAssetStore interface {
 	MediaStore
 	FindByUploadKey(context.Context, int64, string) (*models.MediaAsset, error)
