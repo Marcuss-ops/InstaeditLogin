@@ -4,14 +4,14 @@ import { authedFetch, AuthError, ApiError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
 import { coversHubReturnTo, openInstaEditorWithLaunch } from "../../features/youtube/api/editorSessionsApi";
 import { invalidateGroupVideos } from "../../features/youtube/hooks/useGroupVideosInvalidation";
-import { uploadMediaAsset } from "../../features/publishing/api/mediaApi";
+import { uploadThumbnailFile } from "../../features/youtube/api/thumbnailApi";
 import { safeAssetUrl } from "./groupYouTubeVideosVisual";
 import type { CoversLoadState, GroupCover, GroupDraft } from "./groupCoversTypes";
 
 /**
  * Resolve the signed preview URL for a cover's rendered preview media
- * asset. The media library contract (GET /api/v1/media/{id}) mints the
- * signed URL server-side; we reuse it so the covers grid never has to
+ * asset. The media library contract (GET /api/v1/media) mints signed URLs
+ * server-side in one bounded listing request; we reuse it so the covers grid never has to
  * bundle storage credentials. Both the rendered preview and the attached
  * thumbnail asset are resolved because older cover projects may have only
  * one of the two IDs.
@@ -27,6 +27,24 @@ async function resolveCoverPreview(
   } catch {
     return undefined;
   }
+}
+
+async function resolveCoverPreviews(mediaIds: string[], signal: AbortSignal): Promise<Record<string, string | undefined>> {
+  const urls: Record<string, string | undefined> = {};
+  const wanted = new Set(mediaIds);
+  try {
+    const response = await authedFetch("/api/v1/media?limit=500", { signal });
+    const data = (await response.json()) as { items?: Array<{ id: string; preview_url?: string }> };
+    for (const item of data.items ?? []) {
+      if (wanted.has(item.id)) urls[item.id] = safeAssetUrl(item.preview_url);
+    }
+  } catch {
+    // Older assets may not be present in the bounded library listing;
+    // resolve those individually below.
+  }
+  const unresolved = mediaIds.filter((id) => !(id in urls));
+  await Promise.all(unresolved.map(async (id) => { urls[id] = await resolveCoverPreview(id, signal); }));
+  return urls;
 }
 
 export function useGroupCovers(groupId: number) {
@@ -74,24 +92,6 @@ export function useGroupCovers(groupId: number) {
                 // A draft without a linked asset remains visible as a draft.
               }
             }));
-            // Standalone drafts use the same Velox project bridge as normal
-            // YouTube covers. Creating it here makes every existing draft
-            // editable immediately, including drafts created by the agent.
-            await Promise.all(groupDrafts.map(async (item) => {
-              try {
-                const bridgeResponse = await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(item.id)}/velox-bridge`, {
-                  method: "POST",
-                  body: JSON.stringify({ contract_version: "instaedit.velox.project-bridge.v1", workspace_id: workspaceID }),
-                  signal,
-                });
-                const bridge = (await bridgeResponse.json()) as { editor_url?: string; bridge?: { external_project_id?: string } };
-                item.editor_url = bridge.editor_url;
-                item.external_project_id = bridge.bridge?.external_project_id;
-              } catch {
-                // Keep the draft visible even if the editor provider is
-                // temporarily unavailable; the card can retry on refresh.
-              }
-            }));
             setDrafts(groupDrafts);
           } catch {
             setDrafts([]);
@@ -100,17 +100,11 @@ export function useGroupCovers(groupId: number) {
         // Resolve every real cover asset, not the original YouTube thumbnail.
         // A cover can be represented by either the rendered project preview
         // or the attached thumbnail media depending on its lifecycle state.
-        const previewUrls: Record<string, string | undefined> = {};
         const mediaIds = Array.from(new Set([
           ...covers.flatMap((cover) => [cover.preview_media_id, cover.thumbnail_media_id]),
           ...groupDrafts.map((draft) => draft.preview_media_id),
         ].filter((id): id is string => Boolean(id))));
-        await Promise.all(
-          mediaIds.map(async (mediaId) => {
-              const url = await resolveCoverPreview(mediaId, signal);
-              if (!signal.aborted) previewUrls[mediaId] = url;
-            }),
-        );
+        const previewUrls = await resolveCoverPreviews(mediaIds, signal);
         if (signal.aborted) return;
         setState({ kind: "ready", covers, previewUrls });
       } catch (error) {
@@ -214,6 +208,7 @@ export function useGroupCovers(groupId: number) {
   const openCoverEditor = useCallback(async (cover: GroupCover, tab?: Window | null): Promise<boolean> => {
     if (!cover.velox_project_id) {
       tab?.close();
+      toast.error("Questa copertina non è collegata a un progetto editor.");
       return false;
     }
     setOpeningCoverId(cover.project_id);
@@ -233,6 +228,7 @@ export function useGroupCovers(groupId: number) {
         return true;
       }
       tab?.close();
+      toast.error("Editor non disponibile per questa copertina. Aggiorna l'elenco e riprova.");
       return false;
     } catch (error) {
       // Any failure means the reserved tab was never navigated (the
@@ -241,12 +237,14 @@ export function useGroupCovers(groupId: number) {
       tab?.close();
       if (error instanceof AuthError) {
         navigate("/login", { replace: true });
+      } else {
+        toast.error(error instanceof Error ? error.message : "Impossibile aprire l'editor della copertina.");
       }
       return false;
     } finally {
       setOpeningCoverId(null);
     }
-  }, [groupId, navigate]);
+  }, [groupId, navigate, toast]);
 
   const openDraftEditor = useCallback(async (draft: GroupDraft, tab?: Window | null): Promise<boolean> => {
     setOpeningDraftId(draft.id);
@@ -290,8 +288,8 @@ export function useGroupCovers(groupId: number) {
           workspace_id: group.workspace_id,
           name: name.trim() || `Bozza ${new Date().toLocaleDateString("it-IT")}`,
           description: `[instaedit-group:${groupId}] Bozza creata senza video`,
-          canvas_width: 1280,
-          canvas_height: 720,
+          canvas_width: 1920,
+          canvas_height: 1080,
         }),
       });
       const draft = (await response.json()) as GroupDraft;
@@ -323,20 +321,19 @@ export function useGroupCovers(groupId: number) {
       const groupResponse = await authedFetch(`/api/v1/groups/${targetGroupId}`);
       const group = (await groupResponse.json()) as { workspace_id?: number };
       if (!group.workspace_id) throw new Error("Workspace del gruppo destinatario non disponibile.");
+      if (!Number.isSafeInteger(draft.workspace_id) || draft.workspace_id <= 0) throw new Error("Workspace della bozza non disponibile.");
       const response = await authedFetch("/api/v1/thumbnail-projects", {
         method: "POST",
-        body: JSON.stringify({ workspace_id: group.workspace_id, name: `${draft.name} · copia`, description: `[instaedit-group:${targetGroupId}] Copia da ${groupId}`, canvas_width: 1280, canvas_height: 720 }),
+        body: JSON.stringify({ workspace_id: group.workspace_id, name: `${draft.name} · copia`, description: `[instaedit-group:${targetGroupId}] Copia da ${groupId}`, canvas_width: 1920, canvas_height: 1080 }),
       });
       const copy = (await response.json()) as GroupDraft;
       try {
-        const assetsResponse = await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(draft.id)}/assets?workspace_id=${draft.workspace_id}`);
+        const assetsResponse = await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(draft.id)}/assets?workspace_id=${encodeURIComponent(String(draft.workspace_id))}`);
         const assets = (await assetsResponse.json()) as { items?: Array<{ media_id: string; role: string; object_id?: string }> };
-        for (const asset of assets.items ?? []) {
-          await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(copy.id)}/assets?workspace_id=${group.workspace_id}`, {
+        await Promise.all((assets.items ?? []).map((asset) => authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(copy.id)}/assets?workspace_id=${encodeURIComponent(String(group.workspace_id))}`, {
             method: "POST",
             body: JSON.stringify({ media_id: asset.media_id, role: asset.role, object_id: asset.object_id }),
-          });
-        }
+          })));
       } catch {
         // The project copy remains useful even when an old asset link cannot
         // be duplicated; the user can attach a new image in the editor.
@@ -353,9 +350,14 @@ export function useGroupCovers(groupId: number) {
 
   const uploadDraftAsset = useCallback(async (draft: GroupDraft, file: File): Promise<boolean> => {
     if (uploadingDraftId) return false;
+    const supportedTypes = new Set(["image/jpeg", "image/png"]);
+    if (!supportedTypes.has(file.type) || file.size <= 0 || file.size > 20 * 1024 * 1024) {
+      toast.error("Scegli un'immagine JPG o PNG valida fino a 20 MB.");
+      return false;
+    }
     setUploadingDraftId(draft.id);
     try {
-      const asset = await uploadMediaAsset(file, { contentType: file.type as "image/jpeg" | "image/png" | "image/webp" });
+      const asset = await uploadThumbnailFile(file);
       await authedFetch(`/api/v1/thumbnail-projects/${encodeURIComponent(draft.id)}/assets?workspace_id=${draft.workspace_id}`, {
         method: "POST",
         body: JSON.stringify({ media_id: asset.id, role: "background" }),

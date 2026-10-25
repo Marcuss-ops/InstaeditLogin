@@ -14,11 +14,13 @@ export function TargetRow({
   target,
   isRetrying,
   retryError,
+  channelName,
   onRetry,
 }: {
   target: PostTarget;
   isRetrying: boolean;
   retryError: string | null;
+  channelName?: string;
   onRetry: () => void;
 }) {
   const v = STATUS_VISUAL[target.status] ?? STATUS_VISUAL.failed;
@@ -61,9 +63,10 @@ export function TargetRow({
           >
             {v.label}
           </span>
-          <span className="text-xs text-[#5c6473] font-mono">
-            target_id={target.id}
+          <span className="text-xs text-white/80" data-testid={`target-channel-${target.id}`}>
+            {channelName ?? `Canale ${target.platform_account_id}`}
           </span>
+          <span className="text-xs text-[#5c6473] font-mono">target_id={target.id}</span>
         </div>
         {target.error_message && (
           <p

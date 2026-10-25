@@ -159,9 +159,9 @@ export function ConfirmationStep({
         : undefined,
       media: [{ asset_id: asset.id }],
     },
-    targets: [
-      {
-        platform_account_id: channel.channelId,
+    targets: (channel.channelIds?.length ? channel.channelIds : [channel.channelId]).map(
+      (channelId) => ({
+        platform_account_id: channelId,
         settings: {
           youtube: {
             title: channel.ytTitle.trim(),
@@ -173,8 +173,8 @@ export function ConfirmationStep({
             tags: channel.tags,
           },
         },
-      },
-    ],
+      }),
+    ),
   });
 
   /**
@@ -261,13 +261,17 @@ export function ConfirmationStep({
         {/* Workspace + channel row */}
         <SummaryRow
           icon={<Check size={16} aria-hidden="true" />}
-          title="Canale YouTube"
+          title="Canali YouTube"
           onEdit={() => onJumpToStep(2)}
           editTestId="edit-step-2-channel"
         >
           <div className="text-white" data-testid="summary-channel">
-            workspace #{channel.workspaceId} · channel #
-            {channel.channelId}
+            workspace #{channel.workspaceId} ·
+            {channel.channelNames?.length
+              ? channel.channelNames.join(", ")
+              : (channel.channelIds?.length ? channel.channelIds : [channel.channelId])
+                  .map((id) => `Canale ${id}`)
+                  .join(", ")}
           </div>
         </SummaryRow>
 

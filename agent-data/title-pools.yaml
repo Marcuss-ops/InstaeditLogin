@@ -1,0 +1,876 @@
+version: 1
+language: en
+purpose: >-
+  Editorial title ideas for Codex video creation. Treat every item as a writing
+  pattern, not as a factual claim. Replace placeholders only with details
+  supported by the source material supplied for that specific video.
+
+usage_rules:
+  - Never invent arrests, charges, verdicts, sentences, deaths, injuries, confessions, leaks, or evidence.
+  - Do not present allegations as established facts; attribute them to a named, supplied source and preserve uncertainty.
+  - Do not imply that footage, audio, messages, or documents are leaked or unseen unless the supplied source establishes that.
+  - If a pattern cannot be used accurately with the available source material, skip it and write a factual title.
+  - Keep placeholders such as X and Y until the source material identifies the people involved.
+
+placeholder_guide:
+  X: primary person, team, or institution identified in the supplied source
+  Y: another person, team, or institution identified in the supplied source
+  EVENT: verified event or topic
+  SOURCE: supplied source or publication
+  DETAIL: specific, verified detail from the source
+
+channel_rules:
+  livestreaming:
+    markets:
+      United_States:
+        max_livestreams_per_channel: 3
+        max_duration: "11h55m"
+      other_markets:
+        enabled: false
+    note: Schedule no more than three livestreams for each US channel; each stream must be shorter than 12 hours.
+
+global_pool:
+  - "What happened when X addressed EVENT?"
+  - "X responds to the latest developments in EVENT"
+  - "The key details from X's statement about EVENT"
+
+groups:
+  Reactions:
+    description: Reactions and public responses to a verified event or statement.
+    subcategories:
+      Public_reaction:
+        titles:
+          - "X reacts to DETAIL about EVENT"
+          - "X's response to EVENT gets people talking"
+      Emotional_response:
+        titles:
+          - "X gets emotional while discussing EVENT"
+          - "X shares a personal response to EVENT"
+
+  Courtroom:
+    description: Court appearances and proceedings, described according to supplied records.
+    subcategories:
+      Hearings_and_testimony:
+        titles:
+          - "What X said during the hearing about EVENT"
+          - "Y's testimony brings new details about EVENT"
+      Verdicts_and_sentencing:
+        titles:
+          - "The court's decision in X's case: what is confirmed"
+          - "X's case reaches a new stage after the court's decision"
+      Legal_team_and_judges:
+        titles:
+          - "The judge addresses DETAIL during X's hearing"
+          - "X's legal team responds to the latest development"
+      Outbursts_and_collapses:
+        titles:
+          - "BREAKING: X COLLAPSES in court after the sentence is read"
+          - "X begs the judge right after the sentence is announced"
+          - "X's FINAL WORDS before being taken away leave everyone in shock"
+          - "Tears and chaos: X's family SCREAMS as the sentence is handed down"
+          - "Courtroom ERUPTS after X's emotional breakdown during the hearing"
+          - "Judge STUNS everyone in X's case — even the prosecution wasn't expecting it"
+          - "X falls to their knees in court after the judge's decision"
+          - "Courtroom PANIC: X suffers a medical emergency right after the verdict"
+          - "X suddenly COLLAPSES in court and the hearing is halted"
+          - "X FAINTS on the stand during a brutal cross-examination"
+          - "Prosecutors reveal their final evidence — and X collapses on the spot"
+      Sentencing_and_family_reactions:
+        titles:
+          - "X PLEADS for mercy — the judge REFUSES to reduce the sentence"
+          - "X SCREAMS that it is not true as the judge reads the sentence"
+          - "Security SWARMS X after the sentence is handed down"
+          - "The judge delivers BRUTAL final words to X before the sentence"
+          - "X's chilling reaction after the sentence leaves everyone shocked"
+          - "X's lawyers WALK OUT after the judge's SHOCKING ruling"
+          - "CHAOS in court: X tries to ESCAPE after hearing the sentence"
+          - "X's family breaks down outside the courthouse after the sentence"
+          - "Victims' families confront X right after the sentence"
+          - "X is sentenced in EVENT — gasps heard across the courtroom"
+      Judge_and_legal_team_drama:
+        titles:
+          - "JUDGE LOSES PATIENCE with X over the lies"
+          - "Judge ABANDONS the courtroom after X's outrageous outburst"
+          - "Judge FREEZES all of X's accounts after finding HIDDEN money"
+          - "Judge throws the gavel and orders X OUT of the courtroom"
+          - "Courtroom EVACUATED after X makes a shocking threat against the judge"
+          - "X's lawyer is FIRED by the judge on the spot — X left stunned"
+          - "Security TACKLES X trying to confront the jury"
+          - "Power cuts out mysteriously as the evidence against X is presented"
+      Testimony_and_betrayals:
+        titles:
+          - "Y's testimony against X leaves the courtroom in shock"
+          - "X's former ally takes the stand and testifies against X"
+          - "Y reveals a secret about X that changes the entire case"
+          - "Y turns against X in court and reveals SHOCKING new details"
+          - "SURPRISE WITNESS reveals a secret about X — the courtroom erupts"
+          - "X's former bodyguard testifies against X"
+          - "Y FLIPS and takes a plea deal in the case against X"
+          - "X's own family member takes the stand against X"
+          - "X's business partner presents documents that change the case"
+          - "The housekeeper testifies about the night of EVENT"
+          - "X's financial advisor reveals secret accounts and tax schemes"
+          - "Y DROPS a bombshell in court — new evidence against X"
+          - "Face-to-face: X and Y meet for the first time in court"
+          - "X's secret alibi emerges during the first court appearance"
+          - "X says they are being framed — the courtroom gasps"
+      Evidence_and_discoveries:
+        titles:
+          - "Secret audio played in court: X's own voice incriminates them"
+          - "BOMB SQUAD called to court after a discovery in the case against X"
+          - "The FBI reveals what was REALLY inside X's property — court goes wild"
+          - "SECRET SAFE found in X's mansion with millions inside"
+          - "DNA evidence presented in court changes everything in X's case"
+          - "A secret witness from X's past DESTROYS the defense"
+          - "The FBI finds HIDDEN documents in X's lawyer's office"
+          - "Deleted voicemail RECOVERED: X threatens a key witness"
+          - "Surveillance drone footage shows X meeting with known criminals"
+          - "Divers find a weapon linked to X in the lake behind the estate"
+          - "X's burner phone records leak — incriminating calls exposed"
+          - "A hacker leaks X's entire email history to the court"
+          - "Hidden camera captures what X really did to Y"
+      Financial_consequences:
+        titles:
+          - "X declared BANKRUPT — assets SEIZED in the judge's final blow"
+          - "Authorities SEIZE X's mansion and private jet in the middle of the hearing"
+          - "FROM RICHES TO RAGS: X leaves court with only the clothes on their back"
+          - "HIDDEN FORTUNE FOUND: investigators uncover X's secret stash"
+          - "X's cards DECLINED mid-trial as the judge freezes everything"
+          - "New accounts found offshore in X's name — immediate seizure ordered"
+          - "Court auctions off X's luxury cars, jets, and jewels"
+          - "X left homeless after the mansion is seized and accounts frozen"
+          - "Judge reads the list of seized assets as X sobs"
+          - "Repossession: X loses property after loan defaults pile up"
+          - "Lien placed on X's future earnings — a financial recovery looks impossible"
+      Prison_life_and_transfers:
+        titles:
+          - "Hidden camera captures X's first night in prison"
+          - "X tries to escape during a prison transfer — caught on camera"
+          - "Leaked footage shows X's reaction inside jail"
+          - "X's final moments before being taken away, with a message for Y"
+          - "X ATTACKED by another inmate — guards rush to the scene"
+          - "X threatened by a prison gang — lockdown declared"
+          - "A fight breaks out over X's celebrity status behind bars"
+          - "X's emotional last call before the transfer — leaked audio"
+          - "X collapses in tears during the intake process"
+          - "X's secret transfer goes wrong — the van is ambushed mid-route"
+          - "BREAKING: X's escape plan revealed after the transfer attempt"
+          - "X transferred to a high-security prison after the outburst"
+          - "X's secret letter from prison leaks — disturbing new details"
+          - "X caught bribing guards for a cell phone"
+          - "X's desperate plea from prison leaks in a video call"
+          - "X placed in protective custody after a terrifying cellblock incident"
+          - "X begs the warden for a transfer"
+          - "X moved to a supermax facility — the toughest in the country"
+          - "X's final appeal denied — the last hope is crushed"
+          - "X forced into solitary confinement after the incident"
+          - "First meal in prison: X refuses the standard food"
+      Courtroom_violence:
+        titles:
+          - "Security RUSHES in as X ATTACKS the prosecutor in court"
+          - "X SNAPS and throws a chair during the hearing"
+          - "CHAOS in court: X tries to FLEE during the trial"
+          - "X screams at a key witness and interrupts the testimony"
+          - "X goes wild after the judge throws out the plea deal"
+          - "New footage of the courtroom brawl involving X goes viral"
+          - "X attacks Y in the courtroom — hidden camera footage"
+          - "Y tries to flee the courtroom and is taken down — footage goes viral"
+
+  Bodycam_and_incidents:
+    description: Incident footage, only when its origin and contents are verified.
+    subcategories:
+      Police_footage:
+        titles:
+          - "What the available police footage shows about EVENT"
+          - "A timeline of the incident involving X, based on SOURCE"
+      Public_incidents:
+        titles:
+          - "New details emerge about the incident involving X"
+          - "What is known so far about EVENT"
+      Bodycam_moments:
+        titles:
+          - "Bodycam shows the moment police tase X — footage goes viral"
+          - "Bodycam shows X shooting at officers and trying to escape arrest"
+          - "Bodycam shows the SWAT team taking X down and making the arrest"
+          - "Full bodycam footage of X's arrest released"
+          - "Video shows the men following X before the shooting"
+          - "New footage of X trying to run from the police goes viral"
+          - "New footage of X fighting the police goes viral"
+          - "Bodycam footage played in court shows X trying to bribe an officer"
+      Street_and_public_incidents:
+        titles:
+          - "X brutally attacked Y — new footage"
+          - "X in serious condition after Y's attack"
+          - "X hurt by Y backstage — footage leaks"
+          - "X attacks Y in a street fight — video goes viral"
+          - "X attacked Y at the gym"
+          - "Brutal fight in the pre-fight preview goes viral"
+          - "BREAKING: brutal fight between X and Y live on stream"
+          - "X punches Y during the press conference"
+          - "X and Y face off at the weigh-in — chaos erupts"
+          - "X humiliates Y and challenges them to a fight"
+          - "X arrested for assault after the incident with Y"
+          - "X sues Y for assault"
+          - "Full heated press conference between X and Y — face off video"
+
+  Statements_and_disclosures:
+    description: Interviews, statements, and disclosures with clear attribution.
+    subcategories:
+      Interviews:
+        titles:
+          - "X discusses EVENT in a new interview"
+          - "The details X shared about EVENT"
+      Conflicting_accounts:
+        titles:
+          - "X and Y give different accounts of EVENT"
+          - "What X and Y have said about EVENT so far"
+      Documents_and_recordings:
+        titles:
+          - "What SOURCE reports about the recording related to EVENT"
+          - "The verified details in the documents about EVENT"
+
+  Politics:
+    description: Political statements, debates, policy, and public reactions.
+    subcategories:
+      Debate_and_interviews:
+        titles:
+          - "X's answer on EVENT draws attention during the interview"
+          - "The exchange between X and Y about EVENT, explained"
+      Policy_and_court:
+        titles:
+          - "What the latest decision means for EVENT"
+          - "The confirmed details behind the new ruling on EVENT"
+      Campaign_and_public_response:
+        titles:
+          - "X responds to the latest campaign news about EVENT"
+          - "How voters and officials are responding to EVENT"
+      Scandals_and_meltdowns:
+        titles:
+          - "X throws a tantrum after Y rips them apart"
+          - "X's rant draws backlash from across the political spectrum"
+          - "Y BLASTS X over the latest controversy"
+          - "X's voters turn against them at the worst time"
+          - "X's on-camera meltdown takes an unexpected turn"
+          - "X makes a major admission at the worst possible moment"
+          - "X gets terrible news before EVENT as allies distance themselves"
+          - "X loses it after the latest setback"
+          - "X caught on camera making a mistake that rocks the campaign"
+          - "X's staff quit after the latest disaster"
+          - "X suffers an emotional collapse live on stage"
+          - "X begs for mercy after a crushing loss"
+          - "X has a full meltdown at the latest rally"
+          - "X makes a desperate move amid falling numbers"
+          - "X's new endorsement explodes into a national scandal"
+          - "X crumbles during a disastrous interview"
+          - "X goes nuclear after the scandal gets worse"
+          - "Watch X get fact-checked on stage — and lose it"
+      Charges_and_investigations:
+        titles:
+          - "X blindsided by criminal charges after the latest stunt"
+          - "More charges filed against X and Y"
+          - "X hands the prosecution a huge win with a fatal mistake"
+          - "Judge drops devastating news on X"
+          - "Reports allege X's involvement in an unlawful foreign-contact scheme"
+          - "X's past controversies resurface after the latest stunts"
+          - "SOURCE reveals the deal behind X's latest scandal"
+          - "New allegations reveal X's ties to Y"
+          - "X loses in a major legal ruling as time runs out"
+          - "The feds are alerted as X's allies make a shady move"
+          - "X's old scandals resurface right before EVENT"
+      Rallies_and_public_events:
+        titles:
+          - "Reporters uncover suspicious payments tied to X"
+          - "Watch X rant as the crowd walks out mid-speech"
+          - "X's rally met with empty seats — footage goes viral"
+          - "X's event ends in chaos — police make an announcement"
+          - "X stumbles through an off-script speech — video goes viral"
+          - "X's campaign post leaks after the incident"
+          - "The crowd turns on X during the event — footage goes viral"
+          - "X's supporters turn away after the debate"
+
+  Crime_and_public_safety:
+    description: Public-safety reporting. Use attribution and legal status precisely.
+    subcategories:
+      Investigations:
+        titles:
+          - "What authorities have confirmed about the investigation into EVENT"
+          - "X is named in reports about EVENT; here is what is confirmed"
+      Arrests_and_charges:
+        titles:
+          - "Authorities announce an arrest connected to EVENT"
+          - "The charges reported in X's case, and what they mean"
+      Historical_cases:
+        titles:
+          - "The timeline of EVENT, based on public records"
+          - "What the public record says about X's case"
+
+  Leaks_and_footage:
+    description: Material described as leaked only when that status is substantiated.
+    subcategories:
+      Verified_recordings:
+        titles:
+          - "A recording reported by SOURCE adds context to EVENT"
+          - "What the verified recording reveals about the timeline of EVENT"
+      Resurfaced_material:
+        titles:
+          - "Why this earlier clip of X is being discussed again"
+          - "The context behind the resurfaced video about EVENT"
+      Snitching_and_confessions:
+        titles:
+          - "X reveals what really happened that night"
+          - "X breaks down and explains what happened with Y"
+          - "Leaked call reveals X's role in the case against Y"
+          - "X confessed everything in a leaked call from jail"
+          - "Disturbing audio reveals how X planned the incident involving Y"
+          - "Leaked messages show X setting up Y that night"
+          - "Y breaks silence and exposes X's involvement"
+          - "X snitches on Y in a leaked prison call"
+      Leaked_audio_and_messages:
+        titles:
+          - "X's private conversation leaks — and Y reacts"
+          - "Leaked audio reveals what X said about EVENT"
+          - "Deleted footage of X resurfaces online"
+          - "X EXPOSES leaked messages involving Y"
+          - "Y's new footage will change everything"
+          - "Leaked text messages incriminate X"
+          - "Audio recordings that incriminate Y surface online"
+          - "X breaks down after Y leaks footage from the party"
+          - "Undercover audio about EVENT leaks online"
+          - "Secret recording played in court — X's own voice"
+          - "Leaked voicemail reveals X's message to Y"
+      Resurfaced_and_unearthed:
+        titles:
+          - "This resurfaced video of X is going viral again"
+          - "A video just leaked that could change everything for X"
+          - "Resurfaced clip puts X back in the spotlight"
+          - "Unearthed footage of X resurfaces at the worst time"
+          - "This old video of X is the creepiest yet"
+          - "Resurfaced footage of X that nobody wanted you to see"
+          - "An old clip of X goes viral at the worst possible moment"
+
+  Incidents_and_conflicts:
+    description: Disputes or incidents, without inventing injuries, threats, or violence.
+    subcategories:
+      Public_disputes:
+        titles:
+          - "X and Y exchange statements about EVENT"
+          - "The disagreement between X and Y, explained"
+      Event_timeline:
+        titles:
+          - "A verified timeline of the incident involving X"
+          - "What happened at EVENT, according to SOURCE"
+
+  Crime_documentaries:
+    description: Historical crime and justice topics grounded in reliable sources.
+    subcategories:
+      Case_background:
+        titles:
+          - "The case of X: a timeline of the verified facts"
+          - "What public records say about EVENT"
+      Prison_and_sentencing:
+        titles:
+          - "What is publicly known about X's sentence and custody"
+          - "The confirmed timeline after the court's decision in X's case"
+      Cartel_and_organized_crime:
+        titles:
+          - "Disturbing new video about X changes everything"
+          - "X sends a disturbing message from jail"
+          - "The last 24 hours of X before the arrest"
+          - "What happened to the deadliest hitmen of EVENT"
+          - "How women are treated inside EVENT's prisons"
+          - "Why being close to X is worse than death"
+          - "What is really happening inside X's prison"
+          - "Unseen footage from X's arrest goes viral"
+          - "What really happened to X's spouse in jail"
+          - "Why everyone was afraid of X"
+          - "How gang leaders' families are treated in prison"
+          - "Disturbing new video of X's daughter changes everything"
+          - "Prison guards speak about how X is treated in jail"
+          - "What happened to the officer who arrested X's son"
+          - "The tragic fate of the families of cartel bosses"
+          - "The secret parties thrown by cartels"
+          - "The cartel publishes a chilling video that goes viral"
+          - "X: the youngest hitman in the region"
+          - "She betrayed the cartel and regretted it"
+          - "5 times journalists messed with the wrong cartel"
+          - "What happened to celebrities who mocked the cartels"
+          - "Famous people who visited X in jail"
+          - "The harsh reality of being inside X's prison"
+          - "How cartel leaders spend their last 24 hours before arrest"
+          - "Female inmates who forgot prisons have cameras"
+          - "Why being in a cell with X is the worst thing"
+
+  Entertainment_and_relationships:
+    description: Public statements and career news; avoid unsupported intimate claims.
+    subcategories:
+      Career_and_public_statements:
+        titles:
+          - "X explains the decision behind EVENT"
+          - "What X said about the recent career news"
+      Relationships:
+        titles:
+          - "X addresses the public discussion about the relationship"
+          - "What X and Y have publicly shared about EVENT"
+      Industry_secrets_and_exposures:
+        titles:
+          - "X EXPOSES disturbing footage involving Y"
+          - "X reveals what really happened at Y's parties"
+          - "X names the celebrities who attended Y's events"
+          - "Y's former bodyguard exposes Y's secrets"
+          - "X exposes the hidden contract behind the deal"
+          - "X reveals how the gatekeepers control the industry"
+          - "X sends a warning to young talent about Y"
+          - "X exposes the dark side of the business"
+          - "X's former assistant spills details of the secret arrangement"
+          - "X reveals why the industry turned on them"
+          - "Y's assistant exposes what happened behind the scenes"
+          - "X drops a long list of names connected to Y's events"
+          - "11 celebrities who tried to warn us about Y"
+          - "X reveals the reason everyone was afraid of Y"
+          - "X reveals what they saw at Y's events"
+          - "New footage of X's private party goes viral"
+          - "X speaks out about the allegations involving Y"
+          - "X exposes how the industry pressures young talent"
+      Allegations_and_denials:
+        titles:
+          - "X denies the allegations involving Y — what is confirmed so far"
+          - "New lawsuit filed against X: the details"
+          - "X reacts to the new allegations in an exclusive statement"
+          - "X moves to settle a new lawsuit — the known details"
+          - "X breaks silence on the allegations involving Y"
+          - "X faces new claims as the investigation continues"
+          - "X's representatives respond to the reports — what we know"
+          - "The allegations against X, explained"
+      Relationship_drama:
+        titles:
+          - "X and Y address the divorce rumors"
+          - "X files for divorce amid the scandal"
+          - "X and Y: the cheating rumors, explained"
+          - "X reacts to Y's new relationship"
+          - "X and Y call it quits after the latest rumors"
+          - "X finally addresses the rumors about Y"
+          - "The old fight between X and Y — now the children confirm the rumors"
+          - "X breaks down after the rumors about Y"
+      Money_and_business_disputes:
+        titles:
+          - "X WARNS Y over the money owed"
+          - "X sends a strong message to Y over the unpaid debt"
+          - "X reveals why the business partner can't be trusted"
+          - "X goes broke after the scandals and lawsuits"
+          - "X confronts Y over the leaked deal"
+          - "X faces jail over tax evasion claims"
+          - "X's company under investigation: what is confirmed"
+
+  Deaths_and_legacy:
+    description: Respectful coverage of confirmed deaths and documented legacy.
+    subcategories:
+      Confirmed_timeline:
+        titles:
+          - "What is confirmed about the events leading up to X's death"
+          - "A respectful timeline of X's final public appearances"
+      Legacy:
+        titles:
+          - "Remembering X: the work and moments that shaped a career"
+          - "How X's work continues to influence Y"
+      Final_moments_footage:
+        titles:
+          - "Shocking last moments of X — full footage finally released"
+          - "X's final words caught on tape — disturbing video surfaces"
+          - "X's final seconds revealed — new footage goes viral"
+          - "Newly surfaced dashcam shows the moments before the incident involving X"
+          - "Disturbing new CCTV shows X's last moments — full video released"
+          - "Unseen footage of X's final hours shocks fans worldwide"
+          - "New drone footage captures the police response to the incident involving X"
+          - "Leaked dispatch audio details X's condition at the scene"
+          - "X is identified in newly released surveillance footage of the incident"
+          - "Hospital footage reveals X's last moments"
+          - "Leaked footage shows X's final moments in the hospital"
+          - "X's final moments on a hospital camera — footage sparks outrage"
+          - "X's last words to the nurses revealed"
+          - "X's final moments in the ambulance revealed — paramedic footage released"
+          - "Exclusive ambulance footage: X's critical final moments"
+          - "Leaked hospital footage of X spreads online"
+          - "In X's last interview, they spoke about their fear of Y"
+
+  WWE:
+    description: WWE coverage. Clearly distinguish scripted storylines from real-world reporting.
+    subcategories:
+      Storylines_and_rivalries:
+        titles:
+          - "X and Y's rivalry reaches a new turn on WWE"
+          - "The moment that changed X and Y's WWE storyline"
+          - "WWE storyline: X confronts Y backstage"
+          - "WWE storyline: X and Y face off after the match"
+          - "The WWE storyline between X and Y takes an unexpected turn"
+      Backstage_and_interviews:
+        titles:
+          - "X discusses the story behind the WWE segment with Y"
+          - "What X said about working with Y in WWE"
+          - "X looks back on a memorable backstage moment with Y"
+      History_and_moments:
+        titles:
+          - "The WWE moment fans are revisiting years later"
+          - "How X's WWE career changed after EVENT"
+      Backstage_brawls:
+        titles:
+          - "New footage of X attacking Y backstage goes viral"
+          - "New footage of X ambushing Y backstage goes viral"
+          - "New footage of X's team attacking Y backstage goes viral"
+          - "Brutal backstage brawl between X and Y leaks online"
+          - "Security footage shows X attacking Y in the locker room"
+          - "New video of X beating down Y backstage goes viral"
+          - "Fans shocked after X ambushes Y in the parking lot"
+          - "Leaked footage: X confronts Y backstage after their match"
+          - "X's reaction after being jumped backstage by Y"
+
+  MMA_and_combat_sports:
+    description: >-
+      Combat sports coverage: press conferences, weigh-ins, knockouts, and
+      sparring footage. Fill X, Y, and Z only with people identified by the
+      source, and keep every claim within what the source reports.
+    subcategories:
+      Press_conferences_and_faceoffs:
+        titles:
+          - "X and Y's press conference ends in chaos — full video"
+          - "X storms out of the press conference after Y's comment"
+          - "X and Y nearly come to blows at the face-off"
+          - "Security steps in as X and Y confront each other at the press conference"
+          - "X refuses to look at Y during the final face-off"
+          - "X's message to Y at the press conference goes viral"
+          - "X and Y trade insults for 20 minutes — the highlights"
+          - "X walks off stage after the question about Y"
+          - "The moment X and Y had to be separated at the press conference"
+          - "X's final words to Y before the fight — face-off video"
+      Weigh_in_and_fight_week:
+        titles:
+          - "X misses weight and the fight with Y is in danger"
+          - "X and Y separated at the weigh-in — chaos on stage"
+          - "X shows up late to the weigh-in ahead of the fight with Y"
+          - "X and Y's weigh-in staredown goes viral"
+          - "X pushes Y at the weigh-in — security rushes in"
+          - "Fight week chaos: X and Y's teams clash at the hotel"
+          - "X's team and Y's team confront each other at the open workout"
+          - "X withdraws days before the fight with Y"
+          - "The fight between X and Y is called off — here is what we know"
+          - "X reveals the reason the fight with Y was canceled"
+      KO_and_fight_night:
+        titles:
+          - "X KNOCKS OUT Y in seconds — full sequence"
+          - "X's brutal KO of Y goes viral"
+          - "Y's corner stops the fight against X — the moment"
+          - "X drops Y and the referee steps in"
+          - "X wins after the fight with Y is stopped — what happened"
+          - "Slow motion: the exact moment X caught Y"
+          - "X's celebration after the KO of Y sparks controversy"
+          - "Y's reaction after being knocked out by X"
+          - "The referee's decision in X vs Y — what the rules say"
+          - "X vs Y: how the finish unfolded, round by round"
+      Sparring_and_leaked_footage:
+        titles:
+          - "Leaked sparring footage shows X getting dropped"
+          - "X responds to the leaked footage from the sparring session with Y"
+          - "Z leaks unseen footage of X and Y's sparring session"
+          - "X was knocked down in sparring — what is confirmed"
+          - "X breaks silence on the leaked sparring video with Y"
+          - "New footage from X's training camp leaks ahead of the fight with Y"
+          - "X's team denies the leaked sparring footage — the details"
+          - "X reacts after Z posts the sparring clip involving Y"
+      Fight_announcements:
+        titles:
+          - "X and Y will finally fight — what is confirmed"
+          - "The fight between X and Y is official: date, venue, and what we know"
+          - "X's next fight is announced — Y responds"
+          - "X vs Y: the first reactions to the announcement"
+          - "X asked for the fight with Y — the details of the deal"
+      Aftermath_and_reactions:
+        titles:
+          - "X's condition after the fight with Y — what is known"
+          - "X hospitalized after the fight with Y, according to SOURCE"
+          - "X explains why the fight with Y ended that way"
+          - "Y's message to X after the fight"
+          - "X's coach speaks about the loss to Y"
+          - "X calls for the rematch with Y — the first statement"
+          - "X's team files a complaint after the fight with Y"
+          - "The judges' scorecards in X vs Y, explained"
+          - "X reveals what Y said after the fight"
+          - "New footage shows what happened after the final bell in X vs Y"
+
+  Trending_topics:
+    description: Current topics. Add the date and source to each generated brief before use.
+    subcategories:
+      News_and_announcements:
+        titles:
+          - "What was announced about EVENT, and what happens next?"
+          - "The latest confirmed details about EVENT"
+      Explainers:
+        titles:
+          - "Why EVENT is trending: the context behind the story"
+          - "What we know and what remains unconfirmed about EVENT"
+      Countdown_urgency:
+        titles:
+          - "1 minute ago: the update about X that changes everything"
+          - "Just in: new footage of X surfaces and changes everything"
+          - "5 minutes ago: X breaks their silence"
+          - "7 minutes ago: disturbing details emerge about X"
+          - "Now: X responds to the new developments"
+          - "This just came in about X"
+          - "A new hidden video changes everything about X and Y"
+          - "New footage involving X and Y goes viral"
+          - "The video of X that everyone is talking about"
+          - "What just happened to X, explained"
+      Plot_twists:
+        titles:
+          - "X is still alive? The theory, explained"
+          - "The evidence that changed the story about X"
+          - "New footage changes what we know about X and Y"
+          - "What the latest twist means for the case involving X"
+          - "The unanswered questions in the story of X"
+          - "Why people are doubting the official story about X"
+
+  Science:
+    description: Research and discoveries, attributed to the source and framed at the strength of its evidence.
+    subcategories:
+      Discoveries:
+        titles:
+          - "Researchers report a new finding about EVENT"
+          - "What the study found about EVENT, explained"
+      Space_and_technology:
+        titles:
+          - "The latest research update on EVENT"
+          - "What scientists say the new result could mean for EVENT"
+
+  Economy:
+    description: Economic news and explainers using current, attributable figures.
+    subcategories:
+      Markets_and_business:
+        titles:
+          - "What the latest figures say about EVENT"
+          - "Why the market moved after NEWS"
+      Personal_finance_and_industry:
+        titles:
+          - "How the new change could affect people following EVENT"
+          - "The business story behind EVENT, explained"
+
+  Ocean:
+    description: Ocean, marine science, exploration, and environmental reporting.
+    subcategories:
+      Exploration:
+        titles:
+          - "What researchers found during the latest exploration of EVENT"
+          - "The technology helping scientists study EVENT"
+      Marine_life_and_environment:
+        titles:
+          - "What the new research says about marine life near EVENT"
+          - "How scientists are tracking changes in EVENT"
+
+  History:
+    description: Historical stories grounded in reputable records and clearly identified interpretations.
+    subcategories:
+      People_and_events:
+        titles:
+          - "What the historical record tells us about X and EVENT"
+          - "The timeline of EVENT and why it mattered"
+      Unsolved_questions:
+        titles:
+          - "What historians know about EVENT, and what remains debated"
+          - "The evidence behind the enduring mystery of EVENT"
+
+  Television_and_cinema:
+    description: Film and television history, cast, production, and public interviews.
+    subcategories:
+      Where_are_they_now:
+        titles:
+          - "Where the cast of SHOW is today"
+          - "What X has said about life after SHOW"
+          - "Where is X now? A look at the career after SHOW"
+      Production_and_cast:
+        titles:
+          - "How SHOW was made: the story behind EVENT"
+          - "X looks back on working with Y in SHOW"
+          - "X and Y revisit a memorable moment from SHOW"
+      Career_and_legacy:
+        titles:
+          - "The roles that shaped X's career"
+          - "Why audiences still remember SHOW"
+
+  Livestream_formats:
+    description: Format ideas only; scheduling limits are defined in channel_rules.
+    subcategories:
+      News_recap:
+        titles:
+          - "A sourced recap of today's developments in EVENT"
+          - "What changed today in EVENT: verified updates and context"
+      Q_and_A:
+        titles:
+          - "Answering audience questions about EVENT"
+          - "A live explainer: what is known about EVENT"
+      Topic_discussion:
+        titles:
+          - "A live discussion of the evidence and open questions around EVENT"
+          - "What different sources say about EVENT"
+
+  Celebrity_and_public_life:
+    description: Publicly shared and sourced information about careers and personal milestones.
+    subcategories:
+      Age_and_life:
+        titles:
+          - "X reflects on a life and career at AGE"
+          - "How X's career has changed over the years"
+          - "X then and now: a look back at a public career"
+      Family_and_relationships:
+        titles:
+          - "What X has publicly shared about FAMILY or EVENT"
+          - "X and Y discuss their relationship in a public interview"
+          - "What X and Y have shared publicly about their family"
+      Career_and_colleagues:
+        titles:
+          - "X looks back on working with Y"
+          - "The story behind X's collaboration with Y"
+          - "X explains what it was like working with Y"
+      Interviews_and_revelations:
+        titles:
+          - "X discusses EVENT in a new interview with SOURCE"
+          - "What X has said about EVENT, with context"
+
+  Joe_Rogan_and_podcast_topics:
+    description: Podcast episode and guest coverage; attribute statements to the episode.
+    subcategories:
+      Guest_quotes:
+        titles:
+          - "What X said about EVENT on the podcast"
+          - "X and Y discuss EVENT: the main points from the episode"
+      Episode_context:
+        titles:
+          - "The context behind the discussion of EVENT on the latest episode"
+          - "What the episode actually says about EVENT"
+
+  Video_trends:
+    description: Reusable formats for verified viral clips and emerging stories.
+    subcategories:
+      Resurfaced_clips:
+        titles:
+          - "Why this clip of X is trending again"
+          - "The context behind the video circulating about EVENT"
+      New_developments:
+        titles:
+          - "The latest confirmed update on EVENT"
+          - "What changed in EVENT, according to SOURCE"
+      Crime_scene_formats:
+        titles:
+          - "New footage of X and Y fighting outside the courtroom goes viral"
+          - "New footage of X taking down Y in the courtroom goes viral"
+          - "Y tries to flee the courtroom — footage goes viral"
+          - "Y taken down in the courtroom — hidden camera footage"
+          - "X and Y's courtroom brawl caught on hidden camera"
+          - "Y injured in the courtroom while trying to flee"
+          - "Y reveals who paid them to target X"
+          - "Y sentenced after new footage emerges involving X"
+          - "Y collapses as new leaked footage links them to X's case"
+          - "Y tries to attack the judge after the sentence"
+          - "BREAKING: first images of X surface"
+          - "X's released video shows Y being arrested"
+          - "X's associate confronts Y in jail"
+          - "1 hour ago: a new hidden video changes everything about X and Y"
+          - "Hidden camera reveals what Y really did to X"
+        
+
+  Brazil_crime_and_public_safety:
+    language: pt-BR
+    market: Brazil
+    description: Cobertura de segurança pública no Brasil com base em fontes identificadas e fatos confirmados.
+    subcategories:
+      Police_operations:
+        titles:
+          - "O que as autoridades confirmaram sobre a operação em EVENT"
+          - "X e Y: o que se sabe oficialmente sobre a investigação"
+          - "Entenda a operação policial em EVENT e o que ainda falta confirmar"
+      Courts_and_cases:
+        titles:
+          - "O que foi decidido no caso de X: os fatos confirmados"
+          - "X e Y no processo: cronologia baseada em documentos públicos"
+          - "O que a Justiça brasileira determinou sobre EVENT"
+      Criminal_groups:
+        titles:
+          - "Como autoridades descrevem a atuação de X em EVENT"
+          - "O que fontes oficiais dizem sobre a disputa entre X e Y"
+          - "Contexto e fatos confirmados sobre EVENT no Brasil"
+      Verified_footage:
+        titles:
+          - "O que aparece nas imagens verificadas de EVENT"
+          - "Imagens de SOURCE ajudam a reconstituir a cronologia de EVENT"
+          - "O contexto por trás do vídeo de EVENT que circula online"
+      Viral_breaking_claims:
+        titles:
+          - "\"X MORTO!\" Novas imagens mostram X morto"
+          - "\"X PRESO!\" Y captura o líder de EVENT"
+          - "Chefe de EVENT, X, é preso por Y! Pena de morte entra em jogo"
+          - "Boss de EVENT, X, foi preso por Y"
+          - "Boss de EVENT \"X\" foi preso por Y"
+          - "\"CADENA DE MORTE!\" Y prendeu o chefe de EVENT, X"
+          - "Há 1 minuto: Y capturou X, o criminoso mais procurado do mundo"
+          - "X é preso por corrupção, adeus para sempre"
+      Viral_circulating_videos:
+        titles:
+          - "\"Novos vídeos do chefe de EVENT, X, morto pela polícia estão viralizando!\""
+          - "\"Novos vídeos do chefe de EVENT, X, morto por Y estão viralizando!\""
+          - "Novos vídeos de X, morto por Y, estão viralizando"
+          - "Novos vídeos de X apreendido por Y estão viralizando"
+          - "Novos vídeos de X preso por Y estão viralizando"
+          - "Novos vídeos de EVENT matando policiais viralizam!"
+          - "\"Eles mataram todos nós\": novos vídeos de EVENT matando policiais viralizam!"
+          - "Novos vídeos de EVENT sequestrando X viralizam!"
+          - "\"Novos vídeos do chefe de EVENT, X, no tribunal estão viralizando!\""
+      Escape_and_messages:
+        titles:
+          - "X foge da prisão e envia mensagem perturbadora — e o país entra em choque"
+          - "Chefe de EVENT, X, manda mensagem assustadora para a polícia!"
+          - "X escapa da prisão enquanto as forças de EVENT destroem a prisão em um ataque violento"
+      Gang_conflicts:
+        titles:
+          - "X lança um ataque mortal contra Y"
+      Documentary_formats:
+        titles:
+          - "X: a organização mais impiedosa do mundo — documentário completo"
+      Clickbait_urgency:
+        description: >-
+          Padrões de urgência para quebras e atualizações. Usar somente quando a
+          fonte identificada confirmar o fato central; nunca afirmar prisões,
+          mortes ou operações sem respaldo.
+        titles:
+          - "URGENTE: Y confirma o que aconteceu com X"
+          - "AGORA: Y prende X e as imagens acabaram de sair"
+          - "Última hora: novo capítulo no caso de X — e o país está em choque"
+          - "Não é rumor: Y confirma a captura de X em EVENT"
+          - "O país parou após EVENT envolvendo X"
+      Clickbait_open_loops:
+        description: >-
+          Ganchos de curiosidade com pergunta ou lacuna. Manter o título fiel ao
+          que a fonte mostra; não sugerir mortes, fugas ou vazamentos sem prova.
+        titles:
+          - "X está morto? O que as novas imagens mostram de verdade"
+          - "Ninguém esperava isso: o novo capítulo do caso de X depois de EVENT"
+          - "Isso mudou tudo: o que Y revelou sobre X"
+          - "O que X disse minutos antes de EVENT"
+          - "A última aparição pública de X — e o que aconteceu depois"
+          - "O vídeo de X que está parando o país — e o que ele mostra"
+          - "X e Y frente a frente: o confronto que está dividindo o país"
+          - "O que realmente aconteceu com X em EVENT: os fatos até agora"
+          - "Y fecha o cerco a X: o que já se sabe"
+          - "A mensagem de X que deixou as autoridades em alerta"
+          - "Por que todo mundo está falando de X hoje"
+
+  French_community_and_legacy:
+    language: fr
+    description: >-
+      Titres pour contenus communautaires et archives (événements jeunesse,
+      camps, conventions). Remplacer X par l'organisation ou la communauté et
+      DETAIL par l'année ou le lieu confirmés par la source.
+    subcategories:
+      Youth_events:
+        titles:
+          - "Soirée de talents — X"
+          - "X YSA : convention à EVENT"
+          - "Camp des jeunes gens X — DETAIL"
+      Archive_titles:
+        titles:
+          - "X, SDJ — archive de EVENT"

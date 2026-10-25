@@ -56,6 +56,7 @@ import { useContentPublishRetry } from "./useContentPublishRetry";
 import { AggregateBanner } from "./ContentPublishAggregateBanner";
 import { TargetRow } from "./ContentPublishTargetRow";
 import { SuccessCard } from "./ContentPublishSuccessCard";
+import { useYouTubeChannels } from "../../features/channels/hooks/useYouTubeChannels";
 
 // ─── Component ────────────────────────────────────────────────────────
 
@@ -64,6 +65,7 @@ export function ContentPublish() {
   const numericId = parsePostId(postId);
 
   const { targets, status, error, refetch } = usePostTargetStatus(numericId);
+  const { state: channelState } = useYouTubeChannels();
 
   // Stable refetch wrapper so the memoized handleRetry keeps a
   // stable identity across renders (avoids re-rendering every
@@ -187,6 +189,13 @@ export function ContentPublish() {
             <TargetRow
               key={t.id}
               target={t}
+              channelName={
+                channelState.kind === "ready"
+                  ? channelState.channels.find(
+                      (channel) => channel.id === t.platform_account_id,
+                    )?.username
+                  : undefined
+              }
               isRetrying={retryingIds.has(t.id)}
               retryError={retryErrorById[t.id] ?? null}
               onRetry={() => void handleRetry(t)}

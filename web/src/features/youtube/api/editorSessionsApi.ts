@@ -279,7 +279,14 @@ export async function generateYouTubeMetadata(
     if (Date.now() >= deadline) {
       throw new Error("Metadata generation timed out");
     }
-    await new Promise((resolve) => setTimeout(resolve, METADATA_POLL_INTERVAL_MS));
+    const signal = init.signal;
+    if (signal?.aborted) throw new DOMException("The operation was aborted", "AbortError");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(done, METADATA_POLL_INTERVAL_MS);
+      function done() { signal?.removeEventListener("abort", abort); resolve(); }
+      function abort() { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(new DOMException("The operation was aborted", "AbortError")); }
+      signal?.addEventListener("abort", abort, { once: true });
+    });
   }
 }
 

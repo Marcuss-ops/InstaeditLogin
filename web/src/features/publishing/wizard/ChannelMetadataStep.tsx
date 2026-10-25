@@ -27,7 +27,7 @@
  * On submit, fires `onComplete(ChannelMetadata)` and the parent
  * (ContentNew) advances to Step 3. Back invokes `onBack`.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ChevronRight, Lock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../../../lib/utils";
@@ -47,7 +47,11 @@ const YOUTUBE_PRIVACY_LOCKED = "private" as const;
 
 export interface ChannelMetadata {
   workspaceId: number;
+  /** First selected account retained as a compatibility alias. */
   channelId: number;
+  /** All selected YouTube accounts receive the same video and metadata. */
+  channelIds?: number[];
+  channelNames?: string[];
   /** YouTube target title — goes into post target settings.youtube.title. */
   ytTitle: string;
   description: string;
@@ -76,8 +80,12 @@ export function ChannelMetadataStep({
   const [workspaceId, setWorkspaceId] = useState<number | null>(
     initial?.workspaceId ?? null,
   );
-  const [channelId, setChannelId] = useState<number | null>(
-    initial?.channelId ?? null,
+  const [channelIds, setChannelIds] = useState<number[]>(
+    initial?.channelIds?.length
+      ? initial.channelIds
+      : initial?.channelId != null
+        ? [initial.channelId]
+        : [],
   );
   const [ytTitle, setYtTitle] = useState(initial?.ytTitle ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
@@ -86,6 +94,7 @@ export function ChannelMetadataStep({
     initial?.madeForKids ?? false,
   );
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const defaultChannelAppliedRef = useRef(false);
 
   // Auto-pick when the LoadState lands with a unique default. The
   // user's choice is preserved on subsequent re-renders (the
@@ -95,15 +104,21 @@ export function ChannelMetadataStep({
     if (workspaceId == null && state.defaultWorkspaceId != null) {
       setWorkspaceId(state.defaultWorkspaceId);
     }
-    if (channelId == null && state.defaultChannelId != null) {
-      setChannelId(state.defaultChannelId);
+    if (
+      !defaultChannelAppliedRef.current &&
+      (channelIds.length > 0 || state.defaultChannelId != null)
+    ) {
+      defaultChannelAppliedRef.current = true;
+      if (channelIds.length === 0 && state.defaultChannelId != null) {
+        setChannelIds([state.defaultChannelId]);
+      }
     }
-  }, [state, workspaceId, channelId]);
+  }, [state, workspaceId, channelIds]);
 
   const canSubmit =
     state.kind === "ready" &&
     workspaceId != null &&
-    channelId != null &&
+    channelIds.length > 0 &&
     ytTitle.trim().length > 0;
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
@@ -114,7 +129,14 @@ export function ChannelMetadataStep({
     try {
       onComplete({
         workspaceId: workspaceId!,
-        channelId: channelId!,
+        channelId: channelIds[0]!,
+        channelIds,
+        channelNames:
+          state.kind === "ready"
+            ? state.channels
+                .filter((channel) => channelIds.includes(channel.id))
+                .map((channel) => channel.username)
+            : [],
         ytTitle: ytTitle.trim(),
         description: description.trim(),
         tags,
@@ -190,29 +212,54 @@ export function ChannelMetadataStep({
               </select>
             </Field>
 
-            <Field label="Canale YouTube" htmlFor="channel-select">
-              <select
+            <Field label="Canali YouTube" htmlFor="channel-select">
+              <div
                 id="channel-select"
-                value={channelId ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setChannelId(v === "" ? null : Number(v));
-                }}
-                className={selectCls}
+                className="space-y-2"
                 data-testid="channel-select"
-                disabled={state.kind !== "ready"}
               >
-                <option value="">— seleziona —</option>
                 {state.kind === "ready" &&
-                  state.channels.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.username}
-                      {c.status !== "connected"
-                        ? ` · ${c.status}`
-                        : ""}
-                    </option>
-                  ))}
-              </select>
+                  state.channels.map((c) => {
+                    const checked = channelIds.includes(c.id);
+                    return (
+                      <label
+                        key={c.id}
+                        className={cn(
+                          "flex items-center gap-3 rounded-xl border px-3 py-2.5 cursor-pointer",
+                          checked
+                            ? "border-emerald-400/40 bg-emerald-400/[0.07]"
+                            : "border-white/[0.08] bg-white/[0.02]",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setChannelIds((current) =>
+                              checked
+                                ? current.filter((id) => id !== c.id)
+                                : [...current, c.id],
+                            )
+                          }
+                          aria-label={`Pubblica su ${c.username}`}
+                          className="accent-emerald-400"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm text-white">
+                          {c.username}
+                        </span>
+                        <span className="text-xs text-[#9aa0aa]">
+                          {c.status}
+                        </span>
+                      </label>
+                    );
+                  })}
+                {state.kind === "ready" && state.channels.length > 1 && (
+                  <p className="text-xs text-[#9aa0aa]">
+                    Selezionati: {channelIds.length}. Ogni canale riceverà una
+                    pubblicazione separata nella coda InstaEdit.
+                  </p>
+                )}
+              </div>
             </Field>
           </div>
 

@@ -18,10 +18,9 @@ import (
 )
 
 // driveTokenInfoURL is the production Google tokeninfo endpoint used
-// by VerifyDriveTokenIsReadonly (Task 3/10). Constants stay in one
-// place so a future redirect (e.g. oauth2.googleapis.com/v3 vs
-// oauth2.googleapis.com/v1) updates one symbol, not every call site.
-const driveTokenInfoURL = "https://oauth2.googleapis.com/v3/tokeninfo"
+// by VerifyDriveTokenScope. Keep the canonical endpoint in one place so
+// scope verification and OAuth callback validation cannot drift.
+const driveTokenInfoURL = "https://oauth2.googleapis.com/tokeninfo"
 
 // GoogleDriveOAuthService implements the OAuth flow for Google Drive.
 // The requested scope is deployment-configurable: readonly is used by

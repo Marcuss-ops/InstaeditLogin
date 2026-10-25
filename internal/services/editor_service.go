@@ -68,6 +68,7 @@ type RequestEditorRenderRequest struct {
 	WorkspaceID          int64
 	ApplicationProjectID string
 	RenderSpec           json.RawMessage
+	VideoName            string
 	IdempotencyKey       string
 	DeliveryPlan         veloxcontract.DeliveryPlan
 	Output               *veloxcontract.JobOutput

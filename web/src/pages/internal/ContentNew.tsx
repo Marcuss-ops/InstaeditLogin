@@ -76,7 +76,7 @@ export function ContentNew() {
         Nuovo contenuto
       </h1>
       <p className="text-sm text-[#9aa0aa] mb-8">
-        Carica il video, scegli il canale YouTube e pubblica.
+        Carica il video, scegli uno o più canali YouTube e pubblica.
         Per il vertical slice la privacy iniziale è forzata su{" "}
         <code className="px-1 rounded bg-white/[0.06] text-emerald-300 font-mono text-xs">
           private
@@ -142,8 +142,8 @@ export function ContentNew() {
             <>
               {" "}
               · target: workspace=
-              {youtubeTarget.workspaceId} channel=
-              {youtubeTarget.channelId} channelTitle=
+              {youtubeTarget.workspaceId} channels=
+              {JSON.stringify(youtubeTarget.channelIds ?? [youtubeTarget.channelId])} channelTitle=
               {JSON.stringify(youtubeTarget.ytTitle)} tags=
               {youtubeTarget.tags.length}
             </>

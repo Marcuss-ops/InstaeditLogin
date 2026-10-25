@@ -5,7 +5,7 @@ import {
 export function EditorCanvas() {
   return (
     <div
-      aria-disabled="true"
+      aria-label="Anteprima dimostrativa dell'editor"
       className="relative surface-glass rounded-3xl border border-white/15 overflow-hidden shadow-[0_30px_120px_-30px_rgba(124,58,237,0.55)] animate-fade-up animation-delay-200"
     >
       {/* Faint outer glow */}
@@ -26,7 +26,7 @@ export function EditorCanvas() {
         </div>
         <div className="w-12 h-6 rounded-md surface-card-soft flex items-center justify-center">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5" />
-          <span className="text-[10px] text-zinc-300">Live</span>
+          <span className="text-[10px] text-zinc-300">Demo</span>
         </div>
       </div>
 
@@ -45,7 +45,7 @@ export function EditorCanvas() {
           </div>
           <div className="mt-5 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.06] text-[11px] text-zinc-300 ring-1 ring-white/10">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" />
-            or paste a YouTube / Drive link
+            Anteprima illustrativa · non è un editor interattivo
           </div>
         </div>
 

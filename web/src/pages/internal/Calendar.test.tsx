@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ToastProvider } from "../../components/toast";
@@ -83,7 +83,7 @@ function setupFetchMock() {
 }
 
 function renderPage(initialUrl = "/app/calendar") {
-  return render(
+  const result = render(
     <MemoryRouter initialEntries={[initialUrl]}>
       <ToastProvider>
         <Routes>
@@ -95,6 +95,10 @@ function renderPage(initialUrl = "/app/calendar") {
       </ToastProvider>
     </MemoryRouter>,
   );
+  // These tests cover the schedule tab; the page now intentionally opens on
+  // the group overview.
+  fireEvent.click(screen.getByRole("button", { name: /Calendario/i }));
+  return result;
 }
 
 describe("CalendarPage filter", () => {

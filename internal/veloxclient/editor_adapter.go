@@ -139,7 +139,7 @@ func (a *VeloxAdapter) RequestRender(ctx context.Context, project services.Edito
 		JobType:         "editor.render",
 		TemplateID:      "editor.project",
 		TemplateVersion: 1,
-		VideoName:       project.ExternalProjectID,
+		VideoName:       editorRenderVideoName(project, req),
 		Spec:            req.RenderSpec,
 		Output:          req.Output,
 		ProjectID:       project.ExternalProjectID,
@@ -161,6 +161,23 @@ func (a *VeloxAdapter) RequestRender(ctx context.Context, project services.Edito
 		CreatedAt:         job.CreatedAt,
 		UpdatedAt:         job.UpdatedAt,
 	}, nil
+}
+
+func editorRenderVideoName(project services.EditorProject, req services.RequestEditorRenderRequest) string {
+	for _, candidate := range []string{req.VideoName, project.Name} {
+		if name := strings.TrimSpace(candidate); name != "" {
+			return name
+		}
+	}
+	var spec map[string]any
+	if json.Unmarshal(req.RenderSpec, &spec) == nil {
+		for _, key := range []string{"video_name", "script_title", "title", "project_name"} {
+			if name, ok := spec[key].(string); ok && strings.TrimSpace(name) != "" {
+				return strings.TrimSpace(name)
+			}
+		}
+	}
+	return project.ExternalProjectID
 }
 
 func (a *VeloxAdapter) putDocument(ctx context.Context, userID, workspaceID int64, projectID string, document json.RawMessage) error {

@@ -19,6 +19,9 @@ export function CalendarToolbar({
   setStatusFilter,
   groupFilter,
   setGroupFilter,
+  workspaceFilter,
+  setWorkspaceFilter,
+  workspaces,
   groups,
   hasActiveFilters,
   clearFilters,
@@ -31,6 +34,9 @@ export function CalendarToolbar({
   setStatusFilter: (value: string) => void;
   groupFilter: string;
   setGroupFilter: (value: string) => void;
+  workspaceFilter: string;
+  setWorkspaceFilter: (value: string) => void;
+  workspaces: Array<{ id: number; name: string }>;
   groups: CalendarGroup[];
   hasActiveFilters: boolean;
   clearFilters: () => void;
@@ -51,6 +57,10 @@ export function CalendarToolbar({
 
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-2">
+          {workspaces.length > 0 && <select data-testid="calendar-filter-workspace" value={workspaceFilter} onChange={(e) => setWorkspaceFilter(e.target.value)} className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-white" aria-label="Filtra per workspace">
+            <option value="all">Tutti i workspace</option>
+            {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+          </select>}
           <select
             data-testid="calendar-filter-status"
             value={statusFilter}

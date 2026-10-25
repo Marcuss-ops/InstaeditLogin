@@ -164,7 +164,20 @@ export function CoverLibraryPage() {
                 <div className="flex aspect-video items-center justify-center overflow-hidden bg-gradient-to-br from-violet-500/20 via-slate-900 to-fuchsia-500/10">
                   {previewUrls[cover.media_id] ? <img src={previewUrls[cover.media_id]} alt={`Preview ${cover.project_name}`} className="h-full w-full object-cover" loading="lazy" /> : <FileImage size={34} className="text-white/25" />}
                 </div>
-                <div className="p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="truncate text-sm font-bold text-white">{cover.project_name}</h2><p className="mt-1 font-mono text-[10px] text-[#858b99]">{cover.export_id}</p></div><span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-[10px] font-bold text-emerald-300">READY</span></div><div className="mt-4 grid grid-cols-2 gap-2 text-[11px] text-[#9aa0aa]"><span>{cover.width}×{cover.height}</span><span className="text-right">{formatBytes(cover.file_size)}</span></div><p className="mt-2 truncate font-mono text-[10px] text-[#606777]" title={cover.sha256}>sha256 {cover.sha256.slice(0, 16)}…</p></div>
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="truncate text-sm font-bold text-white">{cover.project_name}</h2>
+                      <p className="mt-1 font-mono text-[10px] text-[#858b99]">{cover.export_id}</p>
+                    </div>
+                    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-[10px] font-bold text-emerald-300">READY</span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] text-[#9aa0aa]">
+                    <span>{cover.width}×{cover.height}</span>
+                    <span className="text-right">{formatBytes(cover.file_size)}</span>
+                  </div>
+                  <p className="mt-2 truncate font-mono text-[10px] text-[#606777]" title={cover.sha256}>sha256 {cover.sha256.slice(0, 16)}…</p>
+                </div>
               </article>
             ))}
           </div>
@@ -172,8 +185,50 @@ export function CoverLibraryPage() {
 
         {tab === "templates" && (
           <>
-            {showCreate && <form onSubmit={submitTemplate} className="mb-6 grid gap-3 rounded-2xl border border-violet-400/20 bg-violet-400/[0.06] p-5 md:grid-cols-3"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome template" className="rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-400/60" /><input value={editorProjectId} onChange={(event) => setEditorProjectId(event.target.value)} placeholder="InstaEditor project ID" className="rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-400/60" /><div className="flex gap-2"><input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="Lingua (es. it)" className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-400/60" /><button disabled={creating} className="rounded-xl bg-white px-4 py-2 text-xs font-bold text-black disabled:opacity-50">{creating ? "…" : "Crea v1"}</button></div></form>}
-            {templates.length === 0 ? <EmptyState title="Nessun template" description="Crea il primo template collegando un progetto InstaEditor." icon={<Layers3 size={24} />} className="border-white/[0.08] bg-white/[0.02]" /> : <div className="space-y-3">{templates.map((template) => <article key={template.id} className="rounded-2xl border border-white/[0.09] bg-white/[0.035] p-4"><button type="button" onClick={() => void toggleVersions(template)} className="flex w-full items-center justify-between gap-4 text-left"><div><div className="flex items-center gap-2"><h2 className="font-bold text-white">{template.name}</h2><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${template.status === "active" ? "bg-emerald-400/10 text-emerald-300" : "bg-white/[0.08] text-[#9aa0aa]"}`}>{template.status}</span></div><p className="mt-1 text-xs text-[#858b99]">{template.language || "Tutte le lingue"} · versione corrente v{template.current_version_number}</p></div><span className="text-xs font-bold text-violet-300">{expandedTemplate === template.id ? "Nascondi" : "Mostra versioni"}</span></button>{expandedTemplate === template.id && <div className="mt-4 border-t border-white/[0.08] pt-4">{(versions[template.id] ?? []).map((version) => <div key={version.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-3"><div><span className="font-mono text-xs font-bold text-white">v{version.version_number}</span><span className="ml-3 text-xs text-[#9aa0aa]">InstaEditor: {version.editor_project_id}</span></div><span className="text-[10px] text-[#606777]">{new Date(version.created_at).toLocaleDateString()}</span></div>)}{(versions[template.id] ?? []).length === 0 && <p className="text-xs text-[#858b99]">Nessuna versione disponibile.</p>}</div>}</article>)}</div>}
+            {showCreate && (
+              <form onSubmit={submitTemplate} className="mb-6 grid gap-3 rounded-2xl border border-violet-400/20 bg-violet-400/[0.06] p-5 md:grid-cols-3">
+                <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome template" className="rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-400/60" />
+                <input value={editorProjectId} onChange={(event) => setEditorProjectId(event.target.value)} placeholder="InstaEditor project ID" className="rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-400/60" />
+                <div className="flex gap-2">
+                  <input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="Lingua (es. it)" className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-400/60" />
+                  <button disabled={creating} className="rounded-xl bg-white px-4 py-2 text-xs font-bold text-black disabled:opacity-50">{creating ? "…" : "Crea v1"}</button>
+                </div>
+              </form>
+            )}
+            {templates.length === 0 ? (
+              <EmptyState title="Nessun template" description="Crea il primo template collegando un progetto InstaEditor." icon={<Layers3 size={24} />} className="border-white/[0.08] bg-white/[0.02]" />
+            ) : (
+              <div className="space-y-3">
+                {templates.map((template) => (
+                  <article key={template.id} className="rounded-2xl border border-white/[0.09] bg-white/[0.035] p-4">
+                    <button type="button" onClick={() => void toggleVersions(template)} className="flex w-full items-center justify-between gap-4 text-left">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="font-bold text-white">{template.name}</h2>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${template.status === "active" ? "bg-emerald-400/10 text-emerald-300" : "bg-white/[0.08] text-[#9aa0aa]"}`}>{template.status}</span>
+                        </div>
+                        <p className="mt-1 text-xs text-[#858b99]">{template.language || "Tutte le lingue"} · versione corrente v{template.current_version_number}</p>
+                      </div>
+                      <span className="text-xs font-bold text-violet-300">{expandedTemplate === template.id ? "Nascondi" : "Mostra versioni"}</span>
+                    </button>
+                    {expandedTemplate === template.id && (
+                      <div className="mt-4 border-t border-white/[0.08] pt-4">
+                        {(versions[template.id] ?? []).map((version) => (
+                          <div key={version.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-3">
+                            <div>
+                              <span className="font-mono text-xs font-bold text-white">v{version.version_number}</span>
+                              <span className="ml-3 text-xs text-[#9aa0aa]">InstaEditor: {version.editor_project_id}</span>
+                            </div>
+                            <span className="text-[10px] text-[#606777]">{new Date(version.created_at).toLocaleDateString()}</span>
+                          </div>
+                        ))}
+                        {(versions[template.id] ?? []).length === 0 && <p className="text-xs text-[#858b99]">Nessuna versione disponibile.</p>}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>

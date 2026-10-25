@@ -223,15 +223,15 @@ func TestVerifyDriveTokenIsReadonly_RejectsDriveWrite(t *testing.T) {
 // the production code path that EVERY other test in this file
 // bypasses: when s.tokenInfoURL is empty (its zero value, i.e. the
 // production default), VerifyDriveTokenIsReadonly falls back to the
-// driveTokenInfoURL const ("https://oauth2.googleapis.com/v3/tokeninfo").
+// driveTokenInfoURL const ("https://oauth2.googleapis.com/tokeninfo").
 // Without this test, a future refactor that accidentally deletes the
 // `if target == ""` branch would pass CI silently (every other test
 // sets tokenInfoURL = test-server-URL explicitly). The mock handler
-// mounts at /v3/tokeninfo because that's what the const resolves to
+// mounts at /tokeninfo because that's what the const resolves to
 // post-tripper-rewriting.
 func TestVerifyDriveTokenIsReadonly_ConstFallbackToProductionURL(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v3/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
 		// Locks the verifier's HTTP wire contract:
 		//   (1) GET method (Google's tokeninfo endpoint is documented as GET)
 		//   (2) ?access_token=… query (NOT Authorization header)

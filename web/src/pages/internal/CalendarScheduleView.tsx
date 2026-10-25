@@ -24,6 +24,9 @@ export function CalendarScheduleView() {
       setStatusFilter={posts.setStatusFilter}
       groupFilter={posts.groupFilter}
       setGroupFilter={posts.setGroupFilter}
+      workspaceFilter={posts.workspaceFilter}
+      setWorkspaceFilter={posts.setWorkspaceFilter}
+      workspaces={posts.state.kind === "ready" ? posts.state.workspaces : []}
       groups={posts.state.kind === "ready" ? posts.state.groups : []}
       hasActiveFilters={posts.hasActiveFilters}
       clearFilters={posts.clearFilters}
